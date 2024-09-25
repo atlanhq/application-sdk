@@ -13,3 +13,8 @@ Phoenix SDK is a Python library for developing applications on Atlan Platform.
 ```bash
 poetry install
 ```
+
+
+### Usage
+
+- A sample application built using Phoenix SDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)
