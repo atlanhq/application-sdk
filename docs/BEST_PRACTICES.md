@@ -2,6 +2,7 @@
 
 ## Table of Contents
 - [Scaling in Python](#scaling-in-python)
+  - [Async functions](#async-functions)
   - [Temporal parallelism](#temporal-parallelism)
   - [Python MultiProcessing](#python-multiprocessing)
 - [Memoization](#memoization)
@@ -10,6 +11,10 @@
 ## Scaling in Python
 While python does not natively support multi-threading due to the Global Interpreter Lock (GIL), it is still possible to use multi-threading for I/O bound tasks. This is because the GIL is released when a thread is waiting for I/O operations to complete.
 We are able to leverage this in our application development along with Temporal to scale our workflows.
+
+## Async functions
+- Python 3.5 introduced the `async` and `await` keywords to allow for asynchronous programming
+- This allows us to write non-blocking code that can run concurrently
 
 ### Temporal parallelism
 - Temporal works in a worker-pool model where each worker is a separate process
