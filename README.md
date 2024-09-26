@@ -1,13 +1,14 @@
-# Phoenix Application SDK
+# Python Application SDK
 
-Phoenix Application SDK is a Python library for developing applications on Atlan Platform.
-The vision of this SDK is that it will be a single line initializer that can plug into any Python microservice application and provide all the necessary features required to run on Atlan Platform.  
+Python Application SDK is a Python library for developing applications on Atlan Platform and is a PaaS system that provides a set of tools and services to build, test and manage applications.
+The vision of this SDK is that it will be a single line initializer that can plug into any Python microservice application and provide all the necessary features required to run on the Atlan Platform.  
 
 
 ## Table of Contents
 1. [Features](#features)
 2. [Usage](#usage)
 3. [Contributing](#contributing)
+4. [Architecture](./docs/ARCHITECTURE.md)
 
 
 ## Features
@@ -17,11 +18,6 @@ The vision of this SDK is that it will be a single line initializer that can plu
 4. Providing observability and monitoring capabilities out of the box
 5. Providing a security layer to ensure that applications are secure by default
 
-## SDK Structure
-The SDK is divided into the following modules:
-1. `workflows`: Contains the classes and functions required to define and run workflows
-2. `fastapi`: Contains routers and functions specific for FastAPI applications
-3. 
 
 ## Usage
 - Install `application-sdk` as a dependency in your project using the following command:
