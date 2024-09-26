@@ -1,4 +1,5 @@
 import logging
+import os
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -63,89 +64,45 @@ class WorkflowPreflightCheckInterface(ABC):
 
 
 class WorkflowWorkerInterface(ABC):
-    METADATA_EXTRACTION_TASK_QUEUE: str = ""
-    WORKFLOW: ClassType
-    ACTIVITIES: Sequence[CallableType] = []
+    TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "localhost")
+    TEMPORAL_PORT = os.getenv("TEMPORAL_PORT", "7233")
+
+    TEMPORAL_WORKFLOW_NAME = ClassType
+    TEMPORAL_ACTIVITIES: Sequence[CallableType] = []
     PASSTHROUGH_MODULES: Sequence[str] = []
-    HOST: str = "localhost"
-    PORT: str = "7233"
-    NAMESPACE: str = "default"
 
-    def __init__(
-        self,
-        get_sql_alchemy_string_fn: Callable,
-        get_sql_alchemy_connect_args_fn: Callable,
-    ):
-        self.get_sql_alchemy_string_fn = get_sql_alchemy_string_fn
-        self.get_sql_alchemy_connect_args_fn = get_sql_alchemy_connect_args_fn
-        self.worker: Optional[Worker] = None
+    def __init__(self, application_name: str):
+        self.temporal_client = None
+        self.temporal_worker = None
+        self.application_name = application_name
+        self.TEMPORAL_WORKER_TASK_QUEUE = f"{self.application_name}"
 
-    async def run_workflow(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        workflow_payload = WorkflowRequestPayload(**workflow_args)
+        self.start_worker()
 
-        client: Client = await Client.connect(
-            f"{self.HOST}:{self.PORT}", namespace=self.NAMESPACE
-        )
-        workflow_id = str(uuid.uuid4())
-        credential_config = workflow_payload.credentials.get_credential_config()
-        credential_guid = Platform.store_credentials(credential_config)
-
-        workflow.logger.setLevel(logging.DEBUG)
-        activity.logger.setLevel(logging.DEBUG)
-
-        config = WorkflowConfig(
-            workflowId=workflow_id,
-            credentialsGUID=credential_guid,
-            includeFilterStr=workflow_payload.metadata.include_filter,
-            excludeFilterStr=workflow_payload.metadata.exclude_filter,
-            tempTableRegexStr=workflow_payload.metadata.temp_table_regex,
-            outputType="JSON",
-            outputPrefix="/tmp/output",
-            verbose=True,
-        )
-
-        try:
-            handle: WorkflowHandle[Any, Any] = await client.start_workflow(  # pyright: ignore[reportUnknownMemberType]
-                self.WORKFLOW,
-                config,
-                id=workflow_id,
-                task_queue=self.METADATA_EXTRACTION_TASK_QUEUE,
-            )
-            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
-            return {
-                "message": "Workflow started",
-                "workflow_id": handle.id,
-                "run_id": handle.result_run_id,
-            }
-
-        except WorkflowFailureError as e:
-            logger.error(f"Workflow failure: {e}")
-            raise e
-
-    async def schedule_workflow(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+    @abstractmethod
+    async def run(self, *args, **kwargs) -> Dict[str, Any]:
         raise NotImplementedError
 
-    async def run_worker(
-        self,
-    ) -> None:
-        client: Client = await Client.connect(
-            f"{self.HOST}:{self.PORT}", namespace=self.NAMESPACE
+    async def start_worker(self):
+        self.temporal_client = await Client.connect(
+            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
+            namespace=self.application_name
         )
 
-        self.worker = Worker(
-            client,
-            task_queue=self.METADATA_EXTRACTION_TASK_QUEUE,
-            workflows=[self.WORKFLOW],
-            activities=self.ACTIVITIES,
+        self.temporal_worker = Worker(
+            self.temporal_client,
+            task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
+            workflows=[self.TEMPORAL_WORKFLOW_NAME],
+            activities=self.TEMPORAL_ACTIVITIES,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
                     *self.PASSTHROUGH_MODULES
                 )
-            ),
+            )
         )
 
-        logger.info(f"Starting worker for queue: {self.METADATA_EXTRACTION_TASK_QUEUE}")
-        await self.worker.run()
+        logger.info(f"Starting worker for queue: {self.TEMPORAL_WORKER_TASK_QUEUE}")
+        await self.temporal_worker.run()
 
 
 class WorkflowBuilderInterface(ABC):
