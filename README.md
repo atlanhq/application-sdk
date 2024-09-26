@@ -9,6 +9,7 @@ The vision of this SDK is that it will be a single line initializer that can plu
 2. [Usage](#usage)
 3. [Contributing](#contributing)
 4. [Architecture](./docs/ARCHITECTURE.md)
+5. [Best Practices](./docs/BEST_PRACTICES.md)
 
 
 ## Features
