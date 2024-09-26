@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Sequence
 from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
 from sqlalchemy.orm import Session
 
-from phoenix_sdk.models import Trace
+from application_sdk.models import Trace
 
 
 class Traces:

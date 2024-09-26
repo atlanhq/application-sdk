@@ -13,9 +13,9 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from phoenix_sdk.dto.workflow import WorkflowConfig, WorkflowRequestPayload
-from phoenix_sdk.interfaces.platform import Platform
-from phoenix_sdk.logging import get_logger
+from application_sdk.dto.workflow import WorkflowConfig, WorkflowRequestPayload
+from application_sdk.interfaces.platform import Platform
+from application_sdk.logging import get_logger
 
 logger = get_logger(__name__)
 

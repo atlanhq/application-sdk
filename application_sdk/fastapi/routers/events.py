@@ -3,9 +3,9 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from phoenix_sdk.database import get_session
-from phoenix_sdk.interfaces.events import Events
-from phoenix_sdk.schemas import Event, EventCreate
+from application_sdk.database import get_session
+from application_sdk.interfaces.events import Events
+from application_sdk.schemas import Event, EventCreate
 
 router = APIRouter(
     prefix="/telemetry/v1/events",

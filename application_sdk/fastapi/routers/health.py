@@ -6,7 +6,7 @@ import uuid
 import psutil
 from fastapi import APIRouter
 
-from phoenix_sdk.logging import get_logger
+from application_sdk.logging import get_logger
 
 logger = get_logger(__name__)
 

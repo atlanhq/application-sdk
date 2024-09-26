@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 from sqlalchemy import create_engine, text
 
-from phoenix_sdk.workflows import WorkflowAuthInterface
+from application_sdk.workflows import WorkflowAuthInterface
 
 logger = logging.getLogger(__name__)
 

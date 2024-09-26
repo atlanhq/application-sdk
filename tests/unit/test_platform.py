@@ -3,9 +3,9 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from phoenix_sdk.const import OBJECT_CREATE_OPERATION, OBJECT_STORE_NAME, STATE_STORE_NAME
-from phoenix_sdk.dto.credentials import BasicCredential
-from phoenix_sdk.interfaces.platform import Platform
+from application_sdk.const import OBJECT_CREATE_OPERATION, OBJECT_STORE_NAME, STATE_STORE_NAME
+from application_sdk.dto.credentials import BasicCredential
+from application_sdk.interfaces.platform import Platform
 
 
 @pytest.fixture
@@ -16,7 +16,7 @@ def mock_dapr_client():
     Returns:
         MagicMock: A mocked instance of DaprClient.
     """
-    with patch("phoenix_sdk.interfaces.platform.DaprClient") as mock:
+    with patch("application_sdk.interfaces.platform.DaprClient") as mock:
         yield mock.return_value
 
 

@@ -1,4 +1,15 @@
-# source: https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
+"""
+Note:
+- We have activities that can run for a long time, in case of a failure (say: worker crash)
+  Temporal will not retry the activity until the configured timeout is reached.
+- We add auto_heartbeater to activities to ensure an failure is detected earlier
+  and the activity is retried.
+
+source:
+- https://temporal.io/blog/activity-timeouts
+- https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
+"""
+
 
 import asyncio
 from datetime import datetime

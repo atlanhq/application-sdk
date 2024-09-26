@@ -4,8 +4,8 @@ import uuid
 
 from dapr.clients import DaprClient
 
-from phoenix_sdk.const import OBJECT_CREATE_OPERATION, OBJECT_STORE_NAME, STATE_STORE_NAME
-from phoenix_sdk.dto.credentials import BasicCredential
+from application_sdk.const import OBJECT_CREATE_OPERATION, OBJECT_STORE_NAME, STATE_STORE_NAME
+from application_sdk.dto.credentials import BasicCredential
 
 logger = logging.getLogger(__name__)
 

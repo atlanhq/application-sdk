@@ -1,4 +1,4 @@
-from phoenix_sdk.workflows import WorkflowWorkerInterface
+from application_sdk.workflows import WorkflowWorkerInterface
 
 
 class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):

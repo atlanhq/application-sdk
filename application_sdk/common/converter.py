@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from phoenix_sdk.common.schema import (
+from application_sdk.common.schema import (
     BaseObjectEntity,
     ColumnConstraint,
     ColumnEntity,

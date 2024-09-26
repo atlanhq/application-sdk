@@ -1,6 +1,6 @@
-# Phoenix SDK
+# Phoenix Application SDK
 
-Phoenix SDK is a Python library for developing applications on Atlan Platform.
+Phoenix Application SDK is a Python library for developing applications on Atlan Platform.
 
 ## Prerequisites
 
@@ -17,10 +17,10 @@ poetry install
 
 ### Usage
 
-- Install phoenix-sdk as a dependency in your project
+- Install application-sdk as a dependency in your project
 
 ```bash
-poetry add git+ssh://git@github.com/atlanhq/phoenix-sdk.git#commit-hash
+poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 ```
 
-- A sample application built using Phoenix SDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)
+- A sample application built using Phoenix ApplicationSDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)

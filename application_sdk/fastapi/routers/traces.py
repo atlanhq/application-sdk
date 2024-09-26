@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, Request
 from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
 from sqlalchemy.orm import Session
 
-from phoenix_sdk.database import get_session
-from phoenix_sdk.interfaces.traces import Traces
-from phoenix_sdk.schemas import Trace
+from application_sdk.database import get_session
+from application_sdk.interfaces.traces import Traces
+from application_sdk.schemas import Trace
 
 router = APIRouter(
     prefix="/telemetry/v1/traces",

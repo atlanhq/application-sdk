@@ -2,8 +2,8 @@ from typing import Optional, Sequence
 
 from sqlalchemy.orm import Session
 
-from phoenix_sdk.models import Event
-from phoenix_sdk.schemas import EventCreate
+from application_sdk.models import Event
+from application_sdk.schemas import EventCreate
 
 
 class Events:

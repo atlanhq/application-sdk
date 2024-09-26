@@ -3,8 +3,8 @@ from typing import Any, Dict, List
 
 import psycopg2
 
-from phoenix_sdk.dto.credentials import CredentialPayload
-from phoenix_sdk.workflows import WorkflowMetadataInterface
+from application_sdk.dto.credentials import CredentialPayload
+from application_sdk.workflows import WorkflowMetadataInterface
 
 logger = logging.getLogger(__name__)
 

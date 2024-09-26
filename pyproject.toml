@@ -1,5 +1,5 @@
 [tool.poetry]
-name = "phoenix-sdk"
+name = "application-sdk"
 version = "0.1.0"
 description = ""
 authors = ["Nishchith Shetty <inishchith@gmail.com>"]

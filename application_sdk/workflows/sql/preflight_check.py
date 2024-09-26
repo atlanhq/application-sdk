@@ -4,10 +4,10 @@ from typing import Any, Dict, List, Set, Tuple
 
 import psycopg2
 
-from phoenix_sdk.dto.credentials import BasicCredential
-from phoenix_sdk.dto.preflight import PreflightPayload
-from phoenix_sdk.workflows import WorkflowPreflightCheckInterface
-from phoenix_sdk.workflows.sql.utils import prepare_filters
+from application_sdk.dto.credentials import BasicCredential
+from application_sdk.dto.preflight import PreflightPayload
+from application_sdk.workflows import WorkflowPreflightCheckInterface
+from application_sdk.workflows.sql.utils import prepare_filters
 
 logger = logging.getLogger(__name__)
 

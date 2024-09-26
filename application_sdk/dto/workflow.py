@@ -1,6 +1,7 @@
+from typing import Dict
 from pydantic import BaseModel, Field
 
-from phoenix_sdk.dto.credentials import CredentialPayload
+from application_sdk.dto.credentials import CredentialPayload
 
 
 class WorkflowConfig(BaseModel):

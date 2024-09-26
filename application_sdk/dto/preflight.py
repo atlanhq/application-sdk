@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from phoenix_sdk.dto.credentials import CredentialPayload
+from application_sdk.dto.credentials import CredentialPayload
 
 
 class FormData(BaseModel):

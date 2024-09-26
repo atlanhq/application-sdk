@@ -5,10 +5,10 @@ from typing import Optional
 from fastapi import APIRouter, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from phoenix_sdk import models
-from phoenix_sdk.database import get_engine
-from phoenix_sdk.fastapi.routers import events, health, logs, metrics, traces
-from phoenix_sdk.workflows import WorkflowBuilderInterface
+from application_sdk import models
+from application_sdk.database import get_engine
+from application_sdk.fastapi.routers import events, health, logs, metrics, traces
+from application_sdk.workflows import WorkflowBuilderInterface
 
 
 class AtlanApplicationBuilder(ABC):

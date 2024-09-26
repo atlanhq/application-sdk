@@ -2,17 +2,17 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
-from phoenix_sdk.workflows import (
+from application_sdk.workflows import (
     WorkflowAuthInterface,
     WorkflowBuilderInterface,
     WorkflowMetadataInterface,
     WorkflowPreflightCheckInterface,
     WorkflowWorkerInterface,
 )
-from phoenix_sdk.workflows.sql.auth import SQLWorkflowAuthInterface
-from phoenix_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-from phoenix_sdk.workflows.sql.preflight_check import SQLWorkflowPreflightCheckInterface
-from phoenix_sdk.workflows.sql.worker import SQLWorkflowWorkerInterface
+from application_sdk.workflows.sql.auth import SQLWorkflowAuthInterface
+from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
+from application_sdk.workflows.sql.preflight_check import SQLWorkflowPreflightCheckInterface
+from application_sdk.workflows.sql.worker import SQLWorkflowWorkerInterface
 
 logger = logging.getLogger(__name__)
 
