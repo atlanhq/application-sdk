@@ -82,11 +82,6 @@ class WorkflowWorkerInterface(ABC):
         self.application_name = application_name
         self.TEMPORAL_WORKER_TASK_QUEUE = f"{self.application_name}"
 
-    @abstractmethod
-    async def run(self, *args, **kwargs) -> Dict[str, Any]:
-        raise NotImplementedError
-
-
     async def workflow_execution_handler(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
