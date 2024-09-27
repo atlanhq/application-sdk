@@ -61,6 +61,14 @@ class WorkflowWorkerInterface(ABC):
         )
 
         workflow_id = str(uuid.uuid4())
+        workflow_args.update(
+            {
+                "workflow_id": workflow_id,
+                "output_prefix": "/tmp/output",
+            }
+        )
+
+
         workflow.logger.setLevel(logging.DEBUG)
         activity.logger.setLevel(logging.DEBUG)
 
@@ -100,6 +108,7 @@ class WorkflowWorkerInterface(ABC):
             )
         )
 
+        logger.info(f"Starting worker with task queue: {self.TEMPORAL_WORKER_TASK_QUEUE}")
         await self.temporal_worker.run()
 
 

@@ -1,9 +1,9 @@
+import json
 import logging
+from typing import Any, Dict
 import uuid
 
 from dapr.clients import DaprClient
-
-from application_sdk.workflows.models.credentials import BasicCredential
 
 logger = logging.getLogger(__name__)
 
@@ -13,11 +13,11 @@ class SecretStore:
     STATE_STORE_NAME = "statestore"
 
     @classmethod
-    def store_credentials(cls, config: BasicCredential) -> str:
+    def store_credentials(cls, config: Dict[str, Any]) -> str:
         """
-        Store credentials in the state store using the BasicCredential format.
+        Store credentials in the state store.
 
-        :param config: The BasicCredential object containing the credentials.
+        :param config: The credentials to store.
         :return: The generated credential GUID.
         :raises Exception: If there's an error with the Dapr client operations.
         """
@@ -27,7 +27,7 @@ class SecretStore:
             client.save_state(
                 store_name=cls.STATE_STORE_NAME,
                 key=credential_guid,
-                value=config.model_dump_json(),
+                value=json.dumps(config),
             )
             logger.info(f"Credentials stored successfully with GUID: {credential_guid}")
             return credential_guid
@@ -38,12 +38,12 @@ class SecretStore:
             client.close()
 
     @classmethod
-    def extract_credentials(cls, credential_guid: str) -> BasicCredential:
+    def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
         """
         Extract credentials from the state store using the credential GUID.
 
         :param credential_guid: The unique identifier for the credentials.
-        :return: BasicCredential object if found.
+        :return: The credentials if found.
         :raises ValueError: If the credential_guid is invalid or credentials are not found.
         :raises Exception: If there's an error with the Dapr client operations.
         """
@@ -55,7 +55,7 @@ class SecretStore:
             state = client.get_state(store_name=cls.STATE_STORE_NAME, key=credential_guid)
             if not state.data:
                 raise ValueError(f"Credentials not found for GUID: {credential_guid}")
-            return BasicCredential.model_validate_json(state.data)
+            return json.loads(state.data)
         except ValueError as e:
             logger.error(str(e))
             raise e

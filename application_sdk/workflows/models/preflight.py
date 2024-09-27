@@ -1,6 +1,5 @@
+from typing import Any, Dict
 from pydantic import BaseModel, Field
-
-from application_sdk.workflows.models.credentials import BasicCredential
 
 
 class FormData(BaseModel):
@@ -13,7 +12,7 @@ class FormData(BaseModel):
 
 
 class PreflightPayload(BaseModel):
-    credentials: BasicCredential = Field(alias="credentials")
+    credentials: Dict[str, Any] = Field(alias="credentials")
     form_data: FormData = Field(alias="formData")
 
     class Config:

@@ -19,12 +19,13 @@ Actions performed by this workflow:
 import os
 import time
 import threading
+import psycopg2
+from sqlalchemy import Connection
 from temporalio import workflow
 import asyncio
 from typing import Any, Dict
 from urllib.parse import quote_plus
 from application_sdk.logging import get_logger
-from application_sdk.workflows.models.workflow import WorkflowConfig
 from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
 from application_sdk.workflows.sql.preflight_check import SQLWorkflowPreflightCheckInterface
@@ -64,11 +65,14 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         super().__init__(application_name, *args, **kwargs)
 
     @workflow.run
-    async def run(self, config: WorkflowConfig):
-        await super().run(config)
+    async def run(self, workflow_args: Dict[str, Any]):
+        await super().run(workflow_args)
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
+    def get_sql_engine(self, credentials: Dict[str, Any]) -> Connection:
+        return psycopg2.connect(**credentials)
+
     def get_sqlalchemy_connect_args(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 

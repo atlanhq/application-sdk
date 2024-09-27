@@ -18,7 +18,6 @@ from temporalio import activity, workflow
 from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
 from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.paas.objectstore import ObjectStore
-from application_sdk.workflows.models.workflow import WorkflowConfig
 from application_sdk.paas.secretstore import SecretStore
 
 from application_sdk.workflows.sql.utils import prepare_filters
@@ -51,8 +50,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     async def run_workflow(self, workflow_args: Any) -> Dict[str, Any]:
         credentials = workflow_args["credentials"]
+
         credential_guid = SecretStore.store_credentials(credentials)
-        workflow_args["credentialGuid"] = credential_guid
+        del workflow_args["credentials"]
+
+        workflow_args["credential_guid"] = credential_guid
         return await super().run_workflow(workflow_args)
 
     @staticmethod
@@ -94,16 +96,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         
         logger.info(f"Query execution completed")
 
-    async def fetch_and_process_data(self, config: WorkflowConfig, query: str):
-        credentials = SecretStore.extract_credentials(config.credentialsGUID)
+    async def fetch_and_process_data(self, workflow_args: Dict[str, Any], query: str, typename: str):
+        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         connection = None
         summary = {"raw": 0, "transformed": 0, "errored": 0}
         chunk_number = 0
-        typename = "database"
-        output_path = config.outputPath
+        output_path = workflow_args["output_path"]
 
         try:
-            connection = self.get_sql_engine(credentials.model_dump())
+            connection = self.get_sql_engine(credentials)
             async for batch in SQLWorkflowWorkerInterface.run_query_in_batch(connection, query):
                 # Process each batch here
                 await SQLWorkflowWorkerInterface._process_batch(batch, typename, output_path, summary, chunk_number)
@@ -171,27 +172,26 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @activity.defn
     @auto_heartbeater
     @staticmethod
-    async def fetch_databases(workflow_args: Dict[str, Any]):
-        config = WorkflowConfig(**workflow_args["config"])
-        sql_query = workflow_args["sql_query"]
-        return await SQLWorkflowWorkerInterface.fetch_and_process_data(config, sql_query)
+    async def fetch_databases(self, workflow_args: Dict[str, Any]):
+        return await self.fetch_and_process_data(workflow_args, self.DATABASE_SQL, "database")
 
     @activity.defn
     @auto_heartbeater
     @staticmethod
-    async def fetch_schemas(self, credentialGuid: str, config: WorkflowConfig):
+    async def fetch_schemas(self, workflow_args: Dict[str, Any]):
         normalized_include_regex, normalized_exclude_regex, exclude_table = (
             prepare_filters(
-                config.includeFilterStr,
-                config.excludeFilterStr,
-                config.tempTableRegexStr,
+                workflow_args["include-filter"],
+                workflow_args["exclude-filter"],
+                workflow_args["temp-table-regex"],
             )
         )
         schema_sql_query = SQLWorkflowWorkerInterface.SCHEMA_SQL.format(
-                normalized_include_regex=normalized_include_regex,
-                normalized_exclude_regex=normalized_exclude_regex,
-            )
-        return await self.fetch_and_process_data(credentialGuid, schema_sql_query)
+            normalized_include_regex=normalized_include_regex,
+            normalized_exclude_regex=normalized_exclude_regex,
+        )
+        workflow_args["query"] = schema_sql_query
+        return await self.fetch_and_process_data(workflow_args, schema_sql_query, "schema")
 
     @activity.defn
     @auto_heartbeater
@@ -219,33 +219,35 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         activity.logger.info(f"Created output directory: {output_prefix}")
 
     @workflow.run
-    async def run(self, config: WorkflowConfig):
-        workflow.logger.info(f"Starting extraction workflow for {config.workflowId}")
+    async def run(self, workflow_args: Dict[str, Any]):
+        workflow_id = workflow_args["workflow_id"]
+        workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
         )
 
         workflow_run_id = workflow.info().run_id
-        config.outputPath = (
-            f"{config.outputPrefix}/{config.workflowId}/{workflow_run_id}"
+        output_prefix = workflow_args["output_prefix"]
+        output_path = (
+            f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         )
+        workflow_args["output_path"] = output_path
 
         # Create output directory
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
             SQLWorkflowWorkerInterface.setup_output_directory,
-            config.outputPath,
+            output_path,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=5),
         )
 
         # run activities in parallel
         activities: List[Coroutine[Any, Any, Any]] = []
-        logger.info(f"Fetching databases: {self.DATABASE_SQL}")
         activities.append(
             workflow.execute_activity(
-                SQLWorkflowWorkerInterface.fetch_databases,
-                {"config": config, "sql_query": self.DATABASE_SQL},
+                self.fetch_databases,
+                workflow_args,
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
             )
@@ -260,7 +262,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         # Push results to object store
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
             SQLWorkflowWorkerInterface.push_results_to_object_store,
-            {"output_prefix": config.outputPrefix, "output_path": config.outputPath},
+            {"output_prefix": workflow_args["output_prefix"], "output_path": output_path},
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(minutes=10),
         )
@@ -268,11 +270,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         # cleanup output directory
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
             SQLWorkflowWorkerInterface.teardown_output_directory,
-            config.outputPath,
+            output_path,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=5),
         )
-        workflow.logger.info(f"Extraction workflow completed for {config.workflowId}")
+        workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
         workflow.logger.info(f"Extraction results summary: {extraction_results}")
 
 
