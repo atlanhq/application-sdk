@@ -1,9 +1,9 @@
 import logging
 from typing import Any, Dict, List
 
-import psycopg2
+from sqlalchemy import create_engine
 
-from application_sdk.dto.credentials import CredentialPayload
+from application_sdk.dto.credentials import BasicCredential
 from application_sdk.workflows import WorkflowMetadataInterface
 
 logger = logging.getLogger(__name__)
@@ -19,8 +19,14 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
         connection = None
         cursor = None
         try:
-            basic_credential = CredentialPayload(**credential).get_credential_config()
-            connection = psycopg2.connect(**basic_credential.model_dump())
+            engine = create_engine(
+                self.get_sql_alchemy_string_fn(credential),
+                connect_args=self.get_sql_alchemy_connect_args_fn(credential),
+                pool_pre_ping=True,
+            )
+            connection = engine.connect()
+
+            connection = self.get_connection(credential)
             cursor = connection.cursor()
             cursor.execute(self.METADATA_SQL)
 

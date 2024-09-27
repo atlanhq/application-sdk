@@ -17,6 +17,8 @@ opentelemetry-proto = "^1.27.0"
 psutil = "^6.0.0"
 fastapi = {extras = ["standard"], version = "^0.115.0"}
 temporalio = "^1.7.1"
+aiofiles = "^24.1.0"
+psycopg2 = "^2.9.9"
 
 
 [tool.poetry.group.test.dependencies]

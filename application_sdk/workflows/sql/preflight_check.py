@@ -2,7 +2,7 @@ import json
 import logging
 from typing import Any, Dict, List, Set, Tuple
 
-import psycopg2
+from sqlalchemy import create_engine
 
 from application_sdk.dto.credentials import BasicCredential
 from application_sdk.dto.preflight import PreflightPayload
@@ -17,6 +17,13 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
     TABLES_CHECK_SQL = ""
     DATABASE_KEY = "TABLE_CATALOG"
     SCHEMA_KEY = "TABLE_SCHEMA"
+
+    def get_connection(self, credential: Dict[str, Any]):
+        return create_engine(
+            self.get_sql_alchemy_string_fn(credential),
+            connect_args=self.get_sql_alchemy_connect_args_fn(credential),
+            pool_pre_ping=True,
+        )
 
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         preflight_payload = PreflightPayload(**payload)
@@ -38,7 +45,7 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
         connection = None
         cursor = None
         try:
-            connection = psycopg2.connect(**credentials.model_dump())
+            connection = self.get_connection(credentials)
             cursor = connection.cursor()
             cursor.execute(self.METADATA_SQL)
 
@@ -144,7 +151,7 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
             )
 
             credentials = payload.credentials.get_credential_config()
-            connection = psycopg2.connect(**credentials.model_dump())
+            connection = self.get_connection(credentials)
             cursor = connection.cursor()
             query = self.TABLES_CHECK_SQL.format(
                 exclude_table=exclude_table,

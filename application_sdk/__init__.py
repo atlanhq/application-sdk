@@ -74,7 +74,8 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             self.workflow_builder_interface
             and self.workflow_builder_interface.worker_interface
         ):
-            asyncio.run(self.workflow_builder_interface.worker_interface.run_worker())
+            # Start worker in a separate thread
+            asyncio.run(self.workflow_builder_interface.worker_interface.start_worker())
 
     async def test_auth(self, credential: dict):
         if (
@@ -168,7 +169,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 status_code=500, detail="Worker interface not implemented"
             )
         try:
-            await self.workflow_builder_interface.worker_interface.run_workflow(
+            await self.workflow_builder_interface.worker_interface.workflow_execution_handler(
                 workflow_args
             )
             return JSONResponse(

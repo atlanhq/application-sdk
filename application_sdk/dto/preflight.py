@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from application_sdk.dto.credentials import CredentialPayload
+from application_sdk.dto.credentials import BasicCredential
 
 
 class FormData(BaseModel):
@@ -13,7 +13,7 @@ class FormData(BaseModel):
 
 
 class PreflightPayload(BaseModel):
-    credentials: CredentialPayload = Field(alias="credentials")
+    credentials: BasicCredential = Field(alias="credentials")
     form_data: FormData = Field(alias="formData")
 
     class Config:

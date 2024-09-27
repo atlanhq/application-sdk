@@ -1,11 +1,9 @@
-import logging
 import os
-import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import Any, Dict, List, Optional, Sequence
 
-from temporalio import activity, workflow
+from sqlalchemy import create_engine
 from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
@@ -44,6 +42,13 @@ class WorkflowMetadataInterface(ABC):
         self.get_sql_alchemy_string_fn = get_sql_alchemy_string_fn
         self.get_sql_alchemy_connect_args_fn = get_sql_alchemy_connect_args_fn
 
+    def get_connection(self, credential: Dict[str, Any]):
+        return create_engine(
+            self.get_sql_alchemy_string_fn(credential),
+            connect_args=self.get_sql_alchemy_connect_args_fn(credential),
+            pool_pre_ping=True,
+        )
+
     @abstractmethod
     def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
         raise NotImplementedError
@@ -77,16 +82,19 @@ class WorkflowWorkerInterface(ABC):
         self.application_name = application_name
         self.TEMPORAL_WORKER_TASK_QUEUE = f"{self.application_name}"
 
-        self.start_worker()
-
     @abstractmethod
     async def run(self, *args, **kwargs) -> Dict[str, Any]:
+        raise NotImplementedError
+
+
+    async def workflow_execution_handler(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
     async def start_worker(self):
         self.temporal_client = await Client.connect(
             f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
-            namespace=self.application_name
+            namespace="default"
+            # FIXME: causes issue with namespace other than default, To be reviewed.
         )
 
         self.temporal_worker = Worker(

@@ -1,7 +1,7 @@
 from typing import Dict
 from pydantic import BaseModel, Field
 
-from application_sdk.dto.credentials import CredentialPayload
+from application_sdk.dto.credentials import BasicCredential
 
 
 class WorkflowConfig(BaseModel):
@@ -42,7 +42,7 @@ class ConnectionPayload(BaseModel):
 
 
 class WorkflowRequestPayload(BaseModel):
-    credentials: CredentialPayload = Field(alias="credentials")
+    credentials: BasicCredential = Field(alias="credentials")
     connection: ConnectionPayload
     metadata: MetadataPayload
 
