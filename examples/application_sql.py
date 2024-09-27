@@ -16,7 +16,7 @@ Actions performed by this workflow:
     - Clean up output directory
     - Push results to object store
 """
-
+import os
 import time
 import threading
 from temporalio import workflow
@@ -115,11 +115,11 @@ if __name__ == "__main__":
     asyncio.run(builder.worker_interface.run_workflow(
         {
             "credentials": {
-                "host": "host",
-                "port": 5432,
-                "user": "postgres",
-                "password": "password",
-                "database": "assets_100k"
+                "host": os.getenv("POSTGRES_HOST", "localhost"),
+                "port": os.getenv("POSTGRES_PORT", "5432"),
+                "user": os.getenv("POSTGRES_USER", "postgres"),
+                "password": os.getenv("POSTGRES_PASSWORD", "password"),
+                "database": os.getenv("POSTGRES_DATABASE", "postgres")
             },
             "connection": {
                 "connection": "dev"
