@@ -3,14 +3,15 @@ import os
 
 from dapr.clients import DaprClient
 
-from application_sdk.paas.const import (OBJECT_CREATE_OPERATION, OBJECT_STORE_NAME)
-
 logger = logging.getLogger(__name__)
 
 
 class ObjectStore:
-    @staticmethod
-    def push_to_object_store(output_prefix: str, output_path: str) -> None:
+    OBJECT_STORE_NAME = "objectstore"
+    OBJECT_CREATE_OPERATION = "create"
+
+    @classmethod
+    def push_to_object_store(cls, output_prefix: str, output_path: str) -> None:
         """
         Push files from a directory to the object store.
 
@@ -42,8 +43,8 @@ class ObjectStore:
 
                     try:
                         client.invoke_binding(
-                            binding_name=OBJECT_STORE_NAME,
-                            operation=OBJECT_CREATE_OPERATION,
+                            binding_name=cls.OBJECT_STORE_NAME,
+                            operation=cls.OBJECT_CREATE_OPERATION,
                             data=file_content,
                             binding_metadata=metadata,
                         )

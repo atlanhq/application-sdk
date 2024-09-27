@@ -3,15 +3,17 @@ import uuid
 
 from dapr.clients import DaprClient
 
-from application_sdk.paas.const import STATE_STORE_NAME
 from application_sdk.workflows.models.credentials import BasicCredential
 
 logger = logging.getLogger(__name__)
 
 
 class SecretStore:
-    @staticmethod
-    def store_credentials(config: BasicCredential) -> str:
+
+    STATE_STORE_NAME = "statestore"
+
+    @classmethod
+    def store_credentials(cls, config: BasicCredential) -> str:
         """
         Store credentials in the state store using the BasicCredential format.
 
@@ -23,7 +25,7 @@ class SecretStore:
         try:
             credential_guid = f"credential_{str(uuid.uuid4())}"
             client.save_state(
-                store_name=STATE_STORE_NAME,
+                store_name=cls.STATE_STORE_NAME,
                 key=credential_guid,
                 value=config.model_dump_json(),
             )
@@ -35,8 +37,8 @@ class SecretStore:
         finally:
             client.close()
 
-    @staticmethod
-    def extract_credentials(credential_guid: str) -> BasicCredential:
+    @classmethod
+    def extract_credentials(cls, credential_guid: str) -> BasicCredential:
         """
         Extract credentials from the state store using the credential GUID.
 
@@ -50,7 +52,7 @@ class SecretStore:
 
         client = DaprClient()
         try:
-            state = client.get_state(store_name=STATE_STORE_NAME, key=credential_guid)
+            state = client.get_state(store_name=cls.STATE_STORE_NAME, key=credential_guid)
             if not state.data:
                 raise ValueError(f"Credentials not found for GUID: {credential_guid}")
             return BasicCredential.model_validate_json(state.data)

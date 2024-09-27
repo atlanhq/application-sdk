@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from application_sdk.common.schema import (
+from application_sdk.workflows.transformers.phoenix.schema import (
     BaseObjectEntity,
     ColumnConstraint,
     ColumnEntity,
