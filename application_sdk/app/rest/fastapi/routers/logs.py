@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, Request
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
 
-from application_sdk.database import get_session
-from application_sdk.interfaces.logs import Logs
-from application_sdk.schemas import Log
+from application_sdk.app.rest.database import get_session
+from application_sdk.paas.logs import Logs
+from application_sdk.app.rest.schemas import Log
 
 router = APIRouter(
     prefix="/telemetry/v1/logs",

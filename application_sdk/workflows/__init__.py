@@ -1,53 +1,27 @@
+import logging
 import os
+import uuid
 from abc import ABC, abstractmethod
-from collections.abc import Callable
 from typing import Any, Dict, List, Optional, Sequence
 
-from sqlalchemy import create_engine
-from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
+from temporalio import workflow, activity
+from temporalio.client import Client, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
-from temporalio.worker.workflow_sandbox import (
-    SandboxedWorkflowRunner,
-    SandboxRestrictions,
-)
+from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
 
-from application_sdk.dto.workflow import WorkflowConfig, WorkflowRequestPayload
-from application_sdk.interfaces.platform import Platform
 from application_sdk.logging import get_logger
 
 logger = get_logger(__name__)
 
 
 class WorkflowAuthInterface(ABC):
-    def __init__(
-        self,
-        get_sql_alchemy_string_fn: Callable[[Dict[str, Any]], str],
-        get_sql_alchemy_connect_args_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
-    ):
-        self.get_sql_alchemy_string_fn = get_sql_alchemy_string_fn
-        self.get_sql_alchemy_connect_args_fn = get_sql_alchemy_connect_args_fn
-
     @abstractmethod
     def test_auth(self, credential: Dict[str, Any]) -> bool:
         raise NotImplementedError
 
 
 class WorkflowMetadataInterface(ABC):
-    def __init__(
-        self,
-        get_sql_alchemy_string_fn: Callable[[Dict[str, Any]], str],
-        get_sql_alchemy_connect_args_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
-    ):
-        self.get_sql_alchemy_string_fn = get_sql_alchemy_string_fn
-        self.get_sql_alchemy_connect_args_fn = get_sql_alchemy_connect_args_fn
-
-    def get_connection(self, credential: Dict[str, Any]):
-        return create_engine(
-            self.get_sql_alchemy_string_fn(credential),
-            connect_args=self.get_sql_alchemy_connect_args_fn(credential),
-            pool_pre_ping=True,
-        )
 
     @abstractmethod
     def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
@@ -55,13 +29,6 @@ class WorkflowMetadataInterface(ABC):
 
 
 class WorkflowPreflightCheckInterface(ABC):
-    def __init__(
-        self,
-        get_sql_alchemy_string_fn: Callable[[Dict[str, Any]], str],
-        get_sql_alchemy_connect_args_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
-    ):
-        self.get_sql_alchemy_string_fn = get_sql_alchemy_string_fn
-        self.get_sql_alchemy_connect_args_fn = get_sql_alchemy_connect_args_fn
 
     @abstractmethod
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -72,9 +39,9 @@ class WorkflowWorkerInterface(ABC):
     TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "localhost")
     TEMPORAL_PORT = os.getenv("TEMPORAL_PORT", "7233")
 
-    TEMPORAL_WORKFLOW_NAME = ClassType
+    TEMPORAL_WORKFLOW_CLASS = ClassType
     TEMPORAL_ACTIVITIES: Sequence[CallableType] = []
-    PASSTHROUGH_MODULES: Sequence[str] = []
+    PASSTHROUGH_MODULES: Sequence[str] = ["application_sdk"]
 
     def __init__(self, application_name: str):
         self.temporal_client = None
@@ -83,15 +50,57 @@ class WorkflowWorkerInterface(ABC):
         self.TEMPORAL_WORKER_TASK_QUEUE = f"{self.application_name}"
 
     @abstractmethod
-    async def run(self, *args, **kwargs) -> Dict[str, Any]:
+    async def run(self, *args, **kwargs):
         raise NotImplementedError
 
+    async def run_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+        client = await Client.connect(
+            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
+            namespace="default"
+            # FIXME: causes issue with different namespace, TBR.
+        )
 
-    async def workflow_execution_handler(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError
+        workflow_id = str(uuid.uuid4())
+        workflow.logger.setLevel(logging.DEBUG)
+        activity.logger.setLevel(logging.DEBUG)
+
+        try:
+            handle = await client.start_workflow(
+                self.TEMPORAL_WORKFLOW_CLASS,
+                workflow_args,
+                id=workflow_id,
+                task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
+            )
+            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
+            return {
+                "message": "Workflow started",
+                "workflow_id": handle.id,
+                "run_id": handle.result_run_id,
+            }
+        except WorkflowFailureError as e:
+            logger.error(f"Workflow failure: {e}")
+            raise e
 
     async def start_worker(self):
-        raise NotImplementedError
+        self.temporal_client = await Client.connect(
+            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
+            namespace="default"
+            # FIXME: causes issue with namespace other than default, To be reviewed.
+        )
+
+        self.temporal_worker = Worker(
+            self.temporal_client,
+            task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
+            workflows=[self.TEMPORAL_WORKFLOW_CLASS],
+            activities=self.TEMPORAL_ACTIVITIES,
+            workflow_runner=SandboxedWorkflowRunner(
+                restrictions=SandboxRestrictions.default.with_passthrough_modules(
+                    *self.PASSTHROUGH_MODULES
+                )
+            )
+        )
+
+        await self.temporal_worker.run()
 
 
 class WorkflowBuilderInterface(ABC):

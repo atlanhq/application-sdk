@@ -1,9 +1,7 @@
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Callable
 
-from sqlalchemy import create_engine
-
-from application_sdk.dto.credentials import BasicCredential
+from sqlalchemy import Engine
 from application_sdk.workflows import WorkflowMetadataInterface
 
 logger = logging.getLogger(__name__)
@@ -14,21 +12,18 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
     DATABASE_KEY = "TABLE_CATALOG"
     SCHEMA_KEY = "TABLE_SCHEMA"
 
+    def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        self.create_engine_fn = create_engine_fn
+
     # FIXME: duplicate with SQLWorkflowPreflightCheckInterface
     def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
         connection = None
         cursor = None
         try:
-            engine = create_engine(
-                self.get_sql_alchemy_string_fn(credential),
-                connect_args=self.get_sql_alchemy_connect_args_fn(credential),
-                pool_pre_ping=True,
-            )
+            engine = self.create_engine_fn(credential)
             connection = engine.connect()
 
-            connection = self.get_connection(credential)
-            cursor = connection.cursor()
-            cursor.execute(self.METADATA_SQL)
+            connection.execute(self.METADATA_SQL)
 
             result: List[Dict[str, str]] = []
             while True:

@@ -1,11 +1,10 @@
 import json
 import logging
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple, Callable
 
-from sqlalchemy import create_engine
+from sqlalchemy import Engine
 
-from application_sdk.dto.credentials import BasicCredential
-from application_sdk.dto.preflight import PreflightPayload
+from application_sdk.workflows.models.preflight import PreflightPayload
 from application_sdk.workflows import WorkflowPreflightCheckInterface
 from application_sdk.workflows.sql.utils import prepare_filters
 
@@ -18,12 +17,9 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
     DATABASE_KEY = "TABLE_CATALOG"
     SCHEMA_KEY = "TABLE_SCHEMA"
 
-    def get_connection(self, credential: Dict[str, Any]):
-        return create_engine(
-            self.get_sql_alchemy_string_fn(credential),
-            connect_args=self.get_sql_alchemy_connect_args_fn(credential),
-            pool_pre_ping=True,
-        )
+    def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        self.create_engine_fn = create_engine_fn
+
 
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         preflight_payload = PreflightPayload(**payload)
@@ -41,11 +37,11 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
         return results
 
     # FIXME: duplicate with SQLWorkflowMetadataInterface
-    def fetch_metadata(self, credentials: BasicCredential) -> List[Dict[str, str]]:
+    def fetch_metadata(self, credentials: Dict) -> List[Dict[str, str]]:
         connection = None
         cursor = None
         try:
-            connection = self.get_connection(credentials)
+            connection = self.create_engine_fn(credentials).connect()
             cursor = connection.cursor()
             cursor.execute(self.METADATA_SQL)
 
@@ -151,7 +147,7 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
             )
 
             credentials = payload.credentials.get_credential_config()
-            connection = self.get_connection(credentials)
+            connection = self.create_engine_fn(credentials).connect()
             cursor = connection.cursor()
             query = self.TABLES_CHECK_SQL.format(
                 exclude_table=exclude_table,

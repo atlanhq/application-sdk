@@ -2,6 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from sqlalchemy import create_engine, Engine
 
 from application_sdk.workflows import (
     WorkflowAuthInterface,
@@ -29,6 +30,13 @@ class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
     ) -> Dict[str, Any]:
         pass
 
+    def get_sql_engine(self, credentials: Dict[str, Any]) -> Engine:
+        return create_engine(
+            self.get_sqlalchemy_connection_string(credentials),
+            connect_args=self.get_sqlalchemy_connect_args(credentials),
+            pool_pre_ping=True,
+        )
+
     def __init__(
         self,
         auth_interface: Optional[WorkflowAuthInterface] = None,
@@ -38,26 +46,22 @@ class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
     ):
         if not auth_interface:
             auth_interface = SQLWorkflowAuthInterface(
-                self.get_sqlalchemy_connection_string,
-                self.get_sqlalchemy_connect_args,
+                self.get_sql_engine,
             )
 
         if not metadata_interface:
             metadata_interface = SQLWorkflowMetadataInterface(
-                self.get_sqlalchemy_connection_string,
-                self.get_sqlalchemy_connect_args,
+                self.get_sql_engine,
             )
 
         if not preflight_check_interface:
             preflight_check_interface = SQLWorkflowPreflightCheckInterface(
-                self.get_sqlalchemy_connection_string,
-                self.get_sqlalchemy_connect_args,
+                self.get_sql_engine,
             )
 
         if not worker_interface:
             worker_interface = SQLWorkflowWorkerInterface(
-                self.get_sqlalchemy_connection_string,
-                self.get_sqlalchemy_connect_args,
+                get_sql_engine=self.get_sql_engine,
             )
 
         super().__init__(

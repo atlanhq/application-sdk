@@ -1,7 +1,7 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Callable
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, text, Engine
 
 from application_sdk.workflows import WorkflowAuthInterface
 
@@ -11,13 +11,12 @@ logger = logging.getLogger(__name__)
 class SQLWorkflowAuthInterface(WorkflowAuthInterface):
     TEST_AUTHENTICATION_SQL = "SELECT 1;"
 
+    def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        self.create_engine_fn = create_engine_fn
+
     def test_auth(self, credential: Dict[str, Any]) -> bool:
         try:
-            engine = create_engine(
-                self.get_sql_alchemy_string_fn(credential),
-                connect_args=self.get_sql_alchemy_connect_args_fn(credential),
-                pool_pre_ping=True,
-            )
+            engine = self.create_engine_fn(credential)
             with engine.connect() as connection:
                 connection.execute(text(self.TEST_AUTHENTICATION_SQL))
             return True

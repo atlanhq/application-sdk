@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from application_sdk.dto.credentials import BasicCredential
+from application_sdk.workflows.models.credentials import BasicCredential
 
 
 class FormData(BaseModel):

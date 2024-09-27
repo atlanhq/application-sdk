@@ -8,18 +8,18 @@ import json
 import logging
 import os
 import uuid
-from typing import Any, Coroutine, Dict, List
+from typing import Any, Coroutine, Dict, List, Callable
 
-import psycopg2
-from sqlalchemy import Connection
+from sqlalchemy import Connection, Engine
 
 from temporalio.common import RetryPolicy
 from temporalio import activity, workflow
 
 from application_sdk.common.converter import transform_metadata
 from application_sdk.common.schema import PydanticJSONEncoder
-from application_sdk.dto.workflow import WorkflowConfig
-from application_sdk.interfaces.platform import Platform
+from application_sdk.paas.objectstore import ObjectStore
+from application_sdk.workflows.models.workflow import WorkflowConfig
+from application_sdk.paas.secretstore import SecretStore
 
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.utils.activity import auto_heartbeater
@@ -34,16 +34,28 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     TABLE_SQL = ""
     COLUMN_SQL = ""
 
+
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
     def __init__(self,
-        application_name: str = "sql-connector"
+        application_name: str = "sql-connector",
+        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
     ):
+        self.get_sql_engine = get_sql_engine
+        self.TEMPORAL_ACTIVITIES = [
+            self.setup_output_directory,
+            self.fetch_databases,
+            self.teardown_output_directory,
+            self.push_results_to_object_store
+        ]
         super().__init__(application_name)
 
-    def get_connection(credential: Dict[str, Any]):
-        # FIXME: this has to be a generic driver connect rather than pg based
-        return psycopg2.connect(**credential)
+    async def run_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+        credentials = workflow_args["credentials"]
+        credential_guid = SecretStore.store_credentials(credentials)
+        workflow_args["credentialGuid"] = credential_guid
+        return await super().run_workflow(workflow_args)
 
+    @staticmethod
     async def run_query_in_batch(connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with server-side cursor.
@@ -82,9 +94,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         
         logger.info(f"Query execution completed")
 
-    @staticmethod
-    async def fetch_and_process_data(config: WorkflowConfig, query: str):
-        credentials = Platform.extract_credentials(config.credentialsGUID)
+    async def fetch_and_process_data(self, config: WorkflowConfig, query: str):
+        credentials = SecretStore.extract_credentials(config.credentialsGUID)
         connection = None
         summary = {"raw": 0, "transformed": 0, "errored": 0}
         chunk_number = 0
@@ -92,7 +103,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = config.outputPath
 
         try:
-            connection = SQLWorkflowWorkerInterface.get_connection(credentials.model_dump())
+            connection = self.get_sql_engine(credentials.model_dump())
             async for batch in SQLWorkflowWorkerInterface.run_query_in_batch(connection, query):
                 # Process each batch here
                 await SQLWorkflowWorkerInterface._process_batch(batch, typename, output_path, summary, chunk_number)
@@ -159,13 +170,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_databases( workflow_args: Dict[str, Any]):
+    @staticmethod
+    async def fetch_databases(workflow_args: Dict[str, Any]):
         config = WorkflowConfig(**workflow_args["config"])
         sql_query = workflow_args["sql_query"]
         return await SQLWorkflowWorkerInterface.fetch_and_process_data(config, sql_query)
 
     @activity.defn
     @auto_heartbeater
+    @staticmethod
     async def fetch_schemas(self, credentialGuid: str, config: WorkflowConfig):
         normalized_include_regex, normalized_exclude_regex, exclude_table = (
             prepare_filters(
@@ -192,7 +205,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_sql(self, sql: str):
+    @staticmethod
+    async def fetch_sql(sql: str):
         pass
 
     @staticmethod
@@ -204,8 +218,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         activity.logger.info(f"Created output directory: {output_prefix}")
 
-
-    async def run(self, config: WorkflowConfig) -> Dict[str, Any]:
+    @workflow.run
+    async def run(self, config: WorkflowConfig):
         workflow.logger.info(f"Starting extraction workflow for {config.workflowId}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
@@ -271,7 +285,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 output_config["output_prefix"],
                 output_config["output_path"],
             )
-            Platform.push_to_object_store(output_prefix, output_path)
+            ObjectStore.push_to_object_store(output_prefix, output_path)
         except Exception as e:
             activity.logger.error(f"Error pushing results to object store: {e}")
             raise e
