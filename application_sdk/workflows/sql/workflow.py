@@ -15,8 +15,8 @@ from sqlalchemy import Connection, Engine
 from temporalio.common import RetryPolicy
 from temporalio import activity, workflow
 
-from application_sdk.common.converter import transform_metadata
-from application_sdk.common.schema import PydanticJSONEncoder
+from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
+from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.paas.objectstore import ObjectStore
 from application_sdk.workflows.models.workflow import WorkflowConfig
 from application_sdk.paas.secretstore import SecretStore
