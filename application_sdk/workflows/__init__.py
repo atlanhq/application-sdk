@@ -91,26 +91,7 @@ class WorkflowWorkerInterface(ABC):
         raise NotImplementedError
 
     async def start_worker(self):
-        self.temporal_client = await Client.connect(
-            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
-            namespace="default"
-            # FIXME: causes issue with namespace other than default, To be reviewed.
-        )
-
-        self.temporal_worker = Worker(
-            self.temporal_client,
-            task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
-            workflows=[self.TEMPORAL_WORKFLOW_NAME],
-            activities=self.TEMPORAL_ACTIVITIES,
-            workflow_runner=SandboxedWorkflowRunner(
-                restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                    *self.PASSTHROUGH_MODULES
-                )
-            )
-        )
-
-        logger.info(f"Starting worker for queue: {self.TEMPORAL_WORKER_TASK_QUEUE}")
-        await self.temporal_worker.run()
+        raise NotImplementedError
 
 
 class WorkflowBuilderInterface(ABC):

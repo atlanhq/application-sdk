@@ -17,14 +17,23 @@ Actions performed by this workflow:
     - Push results to object store
 """
 
-# from datetime import time
+import logging
 import time
 import threading
-from temporalio import activity, workflow
+import uuid
+from temporalio import workflow, activity
+from temporalio.worker import Worker
+from temporalio.client import Client, WorkflowFailureError, WorkflowHandle
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, Self, TypeVar
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 from urllib.parse import quote_plus
-from application_sdk.dto.workflow import WorkflowConfig
+from application_sdk.dto.workflow import WorkflowConfig, WorkflowRequestPayload
+from application_sdk.interfaces.platform import Platform
+from application_sdk.logging import get_logger
 from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
 from application_sdk.workflows.sql.preflight_check import SQLWorkflowPreflightCheckInterface
@@ -32,6 +41,8 @@ from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
 
 APPLICATION_NAME = "sample-sql-workflow"
 
+
+logger = get_logger(__name__)
 
 class SampleSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
     METADATA_SQL = """
@@ -51,12 +62,11 @@ class SampleSQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
     """
 
 
+@workflow.defn
 class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
-    # FIXME: this is not picked up currently
     DATABASE_SQL = """
     SELECT * FROM pg_database WHERE datname = current_database();
     """
-    TEMPORAL_WORKFLOW_NAME = SQLWorkflowWorkerInterface
     TEMPORAL_ACTIVITIES = [
         SQLWorkflowWorkerInterface.setup_output_directory,
         SQLWorkflowWorkerInterface.fetch_databases,
@@ -65,6 +75,74 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
     ]
     PASSTHROUGH_MODULES = ["application_sdk"]
 
+    @workflow.run
+    async def run(self, config: WorkflowConfig) -> Dict[str, Any]:
+        return await super().run(config)
+
+    async def start_worker(self):
+        self.temporal_client = await Client.connect(
+            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
+            namespace="default"
+            # FIXME: causes issue with namespace other than default, To be reviewed.
+        )
+
+        self.temporal_worker = Worker(
+            self.temporal_client,
+            task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
+            workflows=[SampleSQLWorkflowWorker],
+            activities=self.TEMPORAL_ACTIVITIES,
+            workflow_runner=SandboxedWorkflowRunner(
+                restrictions=SandboxRestrictions.default.with_passthrough_modules(
+                    *self.PASSTHROUGH_MODULES
+                )
+            )
+        )
+
+        await self.temporal_worker.run()
+
+    async def workflow_execution_handler(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+        # FIXME: This has to contain the workflow execution logic 
+        workflow_payload = WorkflowRequestPayload(**workflow_args)
+
+        client = await Client.connect(
+            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
+            namespace="default"
+            # FIXME: causes issue with different namespace, TBR.
+        )
+
+        workflow_id = str(uuid.uuid4())
+        credential_guid = Platform.store_credentials(workflow_payload.credentials)
+
+        workflow.logger.setLevel(logging.DEBUG)
+        activity.logger.setLevel(logging.DEBUG)
+
+        config = WorkflowConfig(
+            workflowId=workflow_id,
+            credentialsGUID=credential_guid,
+            includeFilterStr=workflow_payload.metadata.include_filter,
+            excludeFilterStr=workflow_payload.metadata.exclude_filter,
+            tempTableRegexStr=workflow_payload.metadata.temp_table_regex,
+            outputType="JSON",
+            outputPrefix="/tmp/output",
+            verbose=True,
+        )
+
+        try:
+            handle: WorkflowHandle[Any, Any] = await client.start_workflow(  # pyright: ignore[reportUnknownMemberType]
+                SampleSQLWorkflowWorker,
+                config,
+                id=workflow_id,
+                task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
+            )
+            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
+            return {
+                "message": "Workflow started",
+                "workflow_id": handle.id,
+                "run_id": handle.result_run_id,
+            }
+        except WorkflowFailureError as e:
+            logger.error(f"Workflow failure: {e}")
+            raise e
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
@@ -118,7 +196,6 @@ if __name__ == "__main__":
     # wait for the worker to start
     time.sleep(3)
 
-    print("Start workflow")
 
     asyncio.run(builder.worker_interface.workflow_execution_handler(
         {
