@@ -1,11 +1,11 @@
-# Dapr Application Components
+# Atlan Sample Applications
 
-This repository contains Dapr components for various services.
+This folder contains sample applications that demonstrate how to use the Atlan SDK to build applications on the Atlan Platform.
 
 ## Requirements
 - Install [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
 
-## Components
+## Dapr PaaS Components
 1. State store - Uses SQLite as the state store at `/tmp/dapr/statestore.db`
 2. Object store - Uses local file system at `/tmp/dapr/objectstore`
 3. Secret store - Uses system environment variables
