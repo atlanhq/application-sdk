@@ -20,6 +20,7 @@ Actions performed by this workflow:
 import os
 import time
 import threading
+from types import ModuleType
 import psycopg2
 from sqlalchemy import Connection
 from temporalio import workflow
@@ -95,7 +96,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    def __init__(self, application_name=APPLICATION_NAME, *args, **kwargs):
+    def __init__(self, application_name:str=APPLICATION_NAME, *args:Any, **kwargs:Any):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
         super().__init__(application_name, *args, **kwargs)
 
@@ -105,8 +106,8 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
-    def get_sql_engine(self, credentials: Dict[str, Any]) -> Connection:
-        return psycopg2.connect(**credentials)
+    # def get_sql_engine(self, credentials: Dict[str, Any]) -> ModuleType:
+    #     return psycopg2
 
     def get_sqlalchemy_connect_args(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         return {}

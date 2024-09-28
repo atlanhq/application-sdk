@@ -2,8 +2,8 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 
-from application_sdk.app.rest import models
-from application_sdk.app.rest.database import get_engine
+from application_sdk.app import models
+from application_sdk.app.database import get_engine
 from application_sdk.workflows import WorkflowBuilderInterface
 
 

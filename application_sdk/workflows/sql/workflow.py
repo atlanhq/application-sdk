@@ -10,7 +10,7 @@ import os
 import uuid
 from typing import Any, Coroutine, Dict, List, Callable
 
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, text
 
 from temporalio.common import RetryPolicy
 from temporalio import activity, workflow
@@ -63,18 +63,46 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @staticmethod
     async def run_query_in_batch(connection: Connection, query: str, batch_size: int = 100000):
         """
+        Run a query in a batch mode with client-side cursor.
+        """
+        loop = asyncio.get_running_loop()
+    
+        with ThreadPoolExecutor() as pool:
+            try:
+                cursor = await loop.run_in_executor(pool, connection.execute, text(query))
+                column_names: List[str] = []
+
+                while True:
+                    rows = await loop.run_in_executor(pool, cursor.fetchmany, batch_size)
+                    if not column_names:
+                        column_names = [desc[0] for desc in cursor.cursor.description]
+
+                    if not rows:
+                        break
+
+                    results = [dict(zip(column_names, row)) for row in rows]
+                    yield results
+            except Exception as e:
+                logger.error(f"Error running query in batch: {e}")
+                raise e
+        
+        logger.info(f"Query execution completed")
+
+    @staticmethod
+    async def run_query_in_batch_with_server_side_cursor(connection: Connection, query: str, batch_size: int = 100000):
+        """
         Run a query in a batch mode with server-side cursor.
         """
         loop = asyncio.get_running_loop()
 
         with ThreadPoolExecutor() as pool:
-            # Use a unique name for the server-side cursor
-            cursor_name = f"cursor_{uuid.uuid4()}"
-            cursor = await loop.run_in_executor(
-                pool, lambda: connection.cursor(name=cursor_name)
-            )
-
             try:
+            # Use a unique name for the server-side cursor
+                cursor_name = f"cursor_{uuid.uuid4()}"
+                cursor = await loop.run_in_executor(
+                    pool, lambda: connection.cursor(name=cursor_name)
+                )
+
                 # Execute the query
                 await loop.run_in_executor(pool, cursor.execute, query)
                 column_names: List[str] = []
@@ -103,25 +131,22 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         connection = None
         summary = {"raw": 0, "transformed": 0, "errored": 0}
-        chunk_number = 0
         output_path = workflow_args["output_path"]
 
         try:
-            connection = self.get_sql_engine(credentials)
-            async for batch in SQLWorkflowWorkerInterface.run_query_in_batch(connection, query):
-                # Process each batch here
-                await SQLWorkflowWorkerInterface._process_batch(batch, typename, output_path, summary, chunk_number)
-                chunk_number += 1
-            
+            chunk_number = 0
+            engine = self.get_sql_engine(credentials)
+            with engine.connect() as connection:
+                async for batch in SQLWorkflowWorkerInterface.run_query_in_batch(connection, query):
+                    # Process each batch here
+                    await SQLWorkflowWorkerInterface._process_batch(batch, typename, output_path, summary, chunk_number)
+                    chunk_number += 1
             chunk_meta_file = os.path.join(output_path, f"{typename}-chunks.txt")
             async with aiofiles.open(chunk_meta_file, "w") as chunk_meta_f:
                 await chunk_meta_f.write(str(chunk_number))
         except Exception as e:
             logger.error(f"Error fetching databases: {e}")
             raise e
-        finally:
-            if connection:
-                connection.close()
 
         return {typename: summary}
 
