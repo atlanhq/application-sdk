@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, Callable
 
-from sqlalchemy import create_engine, text, Engine
+from sqlalchemy import text, Engine
 
 from application_sdk.workflows import WorkflowAuthInterface
 

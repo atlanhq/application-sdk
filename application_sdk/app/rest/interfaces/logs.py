@@ -5,7 +5,7 @@ from typing import List, Optional, Sequence
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
 
-from application_sdk.app.rest.models import Log
+from application_sdk.app.models import Log
 
 
 class Logs:

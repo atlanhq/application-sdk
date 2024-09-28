@@ -3,7 +3,7 @@ from datetime import datetime
 from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.types import JSON
 
-from application_sdk.app.rest.database import Base
+from application_sdk.app.database import Base
 
 
 class Event(Base):

@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from application_sdk.app.rest.database import get_session
+from application_sdk.app.database import get_session
 from application_sdk.paas.events import Events
 from application_sdk.app.rest.schemas import Event, EventCreate
 

@@ -6,7 +6,7 @@ from google.protobuf.json_format import MessageToDict
 from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
 from sqlalchemy.orm import Session
 
-from application_sdk.app.rest.models import Metric
+from application_sdk.app.models import Metric
 
 
 class Metrics:

@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends, Request
 from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
 from sqlalchemy.orm import Session
 
-from application_sdk.app.rest.database import get_session
-from application_sdk.paas.metrics import Metrics
+from application_sdk.app.database import get_session
+from application_sdk.app.rest.interfaces.metrics import Metrics
 from application_sdk.app.rest.schemas import Metric
 
 router = APIRouter(
