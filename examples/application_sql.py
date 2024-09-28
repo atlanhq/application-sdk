@@ -1,5 +1,6 @@
 """
 This examples demonstrates how to connect to a SQL database and extract metadata from it.
+In this example, we are using a postgres database, but the same can be done for other databases like mysql, etc.
 
 Usage Instructions:
 - Set the usage credentials.
@@ -58,6 +59,40 @@ class SampleSQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
 class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
     DATABASE_SQL = """
     SELECT * FROM pg_database WHERE datname = current_database();
+    """
+
+    SCHEMA_SQL = """
+    SELECT
+        s.*
+    FROM
+        information_schema.schemata s
+    WHERE
+        s.schema_name NOT LIKE 'pg_%'
+        AND s.schema_name != 'information_schema'
+        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}'
+        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
+    """
+
+    TABLE_SQL = """
+    SELECT
+        t.*
+    FROM
+        information_schema.tables t
+    WHERE
+        concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}'
+        AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}'
+        AND t.table_name !~ '{exclude_table}';
+    """
+
+    COLUMN_SQL = """
+    SELECT
+        c.*
+    FROM
+        information_schema.columns c
+    WHERE
+        concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}'
+        AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
+        AND c.table_name !~ '{exclude_table}';
     """
 
     def __init__(self, application_name=APPLICATION_NAME, *args, **kwargs):

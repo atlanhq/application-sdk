@@ -43,6 +43,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         self.TEMPORAL_ACTIVITIES = [
             self.setup_output_directory,
             self.fetch_databases,
+            self.fetch_schemas,
+            self.fetch_tables,
+            self.fetch_columns,
             self.teardown_output_directory,
             self.push_results_to_object_store
         ]
@@ -120,7 +123,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             if connection:
                 connection.close()
 
-        return summary
+        return {typename: summary}
 
     @staticmethod
     async def _process_batch(
@@ -179,29 +182,61 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @auto_heartbeater
     @staticmethod
     async def fetch_schemas(self, workflow_args: Dict[str, Any]):
-        normalized_include_regex, normalized_exclude_regex, exclude_table = (
+        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        normalized_include_regex, normalized_exclude_regex, _ = (
             prepare_filters(
-                workflow_args["include-filter"],
-                workflow_args["exclude-filter"],
-                workflow_args["temp-table-regex"],
+                include_filter,
+                exclude_filter,
+                temp_table_regex,
             )
         )
-        schema_sql_query = SQLWorkflowWorkerInterface.SCHEMA_SQL.format(
+        schema_sql_query = self.SCHEMA_SQL.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
         )
-        workflow_args["query"] = schema_sql_query
         return await self.fetch_and_process_data(workflow_args, schema_sql_query, "schema")
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_tables(self):
-        pass
+    async def fetch_tables(self, workflow_args: Dict[str, Any]):
+        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        normalized_include_regex, normalized_exclude_regex, exclude_table = (
+            prepare_filters(
+                include_filter,
+                exclude_filter,
+                temp_table_regex,
+            )
+        )
+        table_sql_query = self.TABLE_SQL.format(
+            normalized_include_regex=normalized_include_regex,
+            normalized_exclude_regex=normalized_exclude_regex,
+            exclude_table=exclude_table,
+        )
+        return await self.fetch_and_process_data(workflow_args, table_sql_query, "table")
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_columns(self):
-        pass
+    async def fetch_columns(self, workflow_args: Dict[str, Any]):
+        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        normalized_include_regex, normalized_exclude_regex, exclude_table = (
+            prepare_filters(
+                include_filter,
+                exclude_filter,
+                temp_table_regex,
+            )
+        )
+        column_sql_query = self.COLUMN_SQL.format(
+            normalized_include_regex=normalized_include_regex,
+            normalized_exclude_regex=normalized_exclude_regex,
+            exclude_table=exclude_table,
+        )
+        return await self.fetch_and_process_data(workflow_args, column_sql_query, "column")
 
     @activity.defn
     @auto_heartbeater
@@ -243,15 +278,32 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         )
 
         # run activities in parallel
-        activities: List[Coroutine[Any, Any, Any]] = []
-        activities.append(
+        activities: List[Coroutine[Any, Any, Any]] = [
             workflow.execute_activity(
                 self.fetch_databases,
                 workflow_args,
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
-            )
-        )
+            ),
+            workflow.execute_activity(
+                self.fetch_schemas,
+                workflow_args,
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            ),
+            workflow.execute_activity(
+                self.fetch_tables,
+                workflow_args,
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            ),
+            workflow.execute_activity(
+                self.fetch_columns,
+                workflow_args,
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            ),
+        ]
 
         # Wait for all activities to complete
         results = await asyncio.gather(*activities)
