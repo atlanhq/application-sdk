@@ -14,8 +14,12 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 ## Running examples
 1. Create virtual environment using `virtualenv .venv`
 2. Activate the virtual environment using `source .venv/bin/activate`
-3. Install the dependencies using `poetry install`
+3. Install the dependencies using `poetry install --group examples`
 4. cd into the example directory `cd examples`
 5. Make sure you start the Dapr runtime before running the examples `dapr run --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path ./components`
 6. Start the temporal server `temporal server start-dev`
 7. You can now run any of the examples using `python <example>.py`
+
+
+## Examples
+1. [SQL Application](./application_sql.py) - Demonstrates how to build a SQL application using the Atlan SDK

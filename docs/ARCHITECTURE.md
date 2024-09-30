@@ -20,8 +20,10 @@ While Dapr is used to abstract the underlying infrastructure and provide a set o
 ## SDK Structure
 The SDK is divided into the following modules:
 1. **Application SDK**: This module is used to interact with the Atlan Platform APIs and services. It provides a set of tools and services to build, test and manage applications.
-   1. `app` - This module contains the core functionality of the SDK. It provides a consistent way to develop applications on the Atlan Platform.
-   2. `common` - This module contains common utilities and functions that are used across the SDK. 
-   3. `paas` - This module contains the PaaS system that provides a set of tools and services to interact with the Atlan Platform APIs and services.
-   4. `workflows` - This module contains the interfaces that are used to schedule and execute the workflow.
+   1. [`app`](../application_sdk/app/README.md) - This module contains the core functionality of the SDK. It provides a consistent way to develop applications on the Atlan Platform.
+   2. [`common`](../application_sdk/common/README.md) - This module contains common utilities and functions that are used across the SDK. 
+   3. [`paas`](../application_sdk/paas/README.md) - This module contains the PaaS system that provides a set of tools and services to interact with the Atlan Platform APIs and services.
+   4. [`workflows`](../application_sdk/workflows/README.md) - This module contains the interfaces that are used to schedule and execute the workflow.
+      - [`sql`](../application_sdk/workflows/sql/README.md) - This module contains the SQL workflow interface that is used to schedule and execute SQL based workflows.
+      - [`transformers`](../application_sdk/workflows/transformers/README.md) - This module contains the transformers that are used to transform the data in the workflow.
 2. **Examples**: This module contains examples of how to use the SDK to build applications on the Atlan Platform.

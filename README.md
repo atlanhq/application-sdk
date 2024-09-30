@@ -40,18 +40,20 @@ The SDK once integrated will automatically generate API routes for the applicati
     - `/workflow/v1/auth` - To authenticate the credentials for the workflow
     - `/workflow/v1/ui` - UI to setup the workflows
 - SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses AQLAlchemy for this purpose.
-  - Query Interface to run adhic SQL queries on `POST /sql/v1/query`
+  - Query Interface to run adhoc SQL queries on `POST /sql/v1/query`
 
 **Note**: The SDK is in active development and currently only supports FastAPI applications. Support for other frameworks will be added in the future.
 
 ## Usage
+**A production grade SQL application built using Phoenix Application SDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)**
+
+For using the SDK in your project from scratch:
 - Install `application-sdk` as a dependency in your project using the following command:
 ```bash
 poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 ```
-- Refer to the [Examples](./examples/README.md) to see how to use the SDK to build applications on the Atlan Platform
-
-**A production grade SQL application built using Phoenix ApplicationSDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)**
+- Refer to the [Detailed Usage Guide](./docs/USAGE.md) to see how to use the SDK and all its features
+- Refer to the [Examples](./examples/README.md) section to see how to use the SDK for various use cases
 
 ## Contributing
 Want to contribute to the SDK? Here's how you can get started:
