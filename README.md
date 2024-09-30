@@ -25,7 +25,8 @@ The vision of this SDK is that it will be a single line initializer that can plu
 ```bash
 poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 ```
-- A sample SQL application built using Phoenix ApplicationSDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)
+- Refer to the [Examples](./examples/README.md) to see how to use the SDK to build applications on the Atlan Platform
+- A production grade SQL application built using Phoenix ApplicationSDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)
 
 ## Contributing
 - Slack - #collab-phoenix

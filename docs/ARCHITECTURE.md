@@ -19,6 +19,9 @@ While Dapr is used to abstract the underlying infrastructure and provide a set o
 
 ## SDK Structure
 The SDK is divided into the following modules:
-1. `workflows`: Contains the classes and functions required to define and run workflows
-2. `fastapi`: Contains routers and functions specific for FastAPI applications
-3. 
+1. **Application SDK**: This module is used to interact with the Atlan Platform APIs and services. It provides a set of tools and services to build, test and manage applications.
+   1. `app` - This module contains the core functionality of the SDK. It provides a consistent way to develop applications on the Atlan Platform.
+   2. `common` - This module contains common utilities and functions that are used across the SDK. 
+   3. `paas` - This module contains the PaaS system that provides a set of tools and services to interact with the Atlan Platform APIs and services.
+   4. `workflows` - This module contains the interfaces that are used to schedule and execute the workflow.
+2. **Examples**: This module contains examples of how to use the SDK to build applications on the Atlan Platform.

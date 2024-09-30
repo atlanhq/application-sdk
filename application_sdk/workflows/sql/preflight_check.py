@@ -1,11 +1,10 @@
 import json
 import logging
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple, Callable
 
-import psycopg2
+from sqlalchemy import Engine, text
 
-from application_sdk.dto.credentials import BasicCredential
-from application_sdk.dto.preflight import PreflightPayload
+from application_sdk.workflows.models.preflight import PreflightPayload
 from application_sdk.workflows import WorkflowPreflightCheckInterface
 from application_sdk.workflows.sql.utils import prepare_filters
 
@@ -17,6 +16,10 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
     TABLES_CHECK_SQL = ""
     DATABASE_KEY = "TABLE_CATALOG"
     SCHEMA_KEY = "TABLE_SCHEMA"
+
+    def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        self.create_engine_fn = create_engine_fn
+
 
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         preflight_payload = PreflightPayload(**payload)
@@ -34,26 +37,25 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
         return results
 
     # FIXME: duplicate with SQLWorkflowMetadataInterface
-    def fetch_metadata(self, credentials: BasicCredential) -> List[Dict[str, str]]:
+    def fetch_metadata(self, credential: Dict) -> List[Dict[str, str]]:
         connection = None
         cursor = None
         try:
-            connection = psycopg2.connect(**credentials.model_dump())
-            cursor = connection.cursor()
-            cursor.execute(self.METADATA_SQL)
-
-            result: List[Dict[str, str]] = []
-            while True:
-                rows = cursor.fetchmany(1000)  # Fetch 1000 rows at a time
-                if not rows:
-                    break
-                for schema_name, catalog_name in rows:
-                    result.append(
-                        {
-                            self.DATABASE_KEY: catalog_name,
-                            self.SCHEMA_KEY: schema_name,
-                        }
-                    )
+            engine = self.create_engine_fn(credential)
+            with engine.connect() as connection:
+                cursor = connection.execute(text(self.METADATA_SQL))
+                result: List[Dict[str, str]] = []
+                while True:
+                    rows = cursor.fetchmany(1000)  # Fetch 1000 rows at a time
+                    if not rows:
+                        break
+                    for schema_name, catalog_name in rows:
+                        result.append(
+                            {
+                                self.DATABASE_KEY: catalog_name,
+                                self.SCHEMA_KEY: schema_name,
+                            }
+                        )
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e
@@ -70,7 +72,7 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
         connection = None
         try:
             schemas_results: List[Dict[str, str]] = self.fetch_metadata(
-                payload.credentials.get_credential_config()
+                payload.credentials
             )
 
             include_filter = json.loads(payload.form_data.include_filter)
@@ -142,17 +144,17 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
                     payload.form_data.temp_table_regex,
                 )
             )
-
-            credentials = payload.credentials.get_credential_config()
-            connection = psycopg2.connect(**credentials.model_dump())
-            cursor = connection.cursor()
             query = self.TABLES_CHECK_SQL.format(
                 exclude_table=exclude_table,
                 normalized_exclude_regex=normalized_exclude_regex,
                 normalized_include_regex=normalized_include_regex,
             )
-            cursor.execute(query)
-            result = cursor.fetchone()[0]
+
+            credentials = payload.credentials
+            engine = self.create_engine_fn(credentials)
+            with engine.connect() as connection:
+                cursor = connection.execute(text(query))
+                result = cursor.fetchone()[0]
 
             return {
                 "success": True,
