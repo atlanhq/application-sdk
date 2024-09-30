@@ -17,6 +17,37 @@ While Dapr is used to abstract the underlying infrastructure and provide a set o
 2. [Temporal](https://learn.temporal.io/getting_started/python/hello_world_in_python/)
 
 
+## Features
+![SDK Features](../docs/images/Phoenix%20-%20SDK%20Featureset.png)
+
+- Observability and Supportability. The SDK integrated with [OTel](https://opentelemetry.io/) and provides the below features out of the box:
+  - [Metrics](../application_sdk/app/rest/interfaces/metrics.py) at `/telemetry/v1/metrics`
+  - [Tracing](../application_sdk/app/rest/interfaces/traces.py) at `/telemetry/v1/traces`
+  - [Logging](../application_sdk/app/rest/interfaces/logs.py) at `/telemetry/v1/logs`
+  - UI to view the metrics, traces and logs at `/telemetry/v1/ui`
+- Application health checks at `/system/health` and `/system/ready`
+- PaaS System integration. The SDK integrates with the PaaS system and provides the below features:
+  - Secrets Manager
+  - Object Store
+  - State Store
+  - Workflow Manager
+  - Event Store
+- Workflows. Interfaces to create boilerplate code for workflows that can be scheduled and executed using the Temporal engine.
+  - [SQL Workflow Interface](../application_sdk/workflows/sql/workflow.py) - A single line initializer to create SQL based workflows
+  - _BI Workflow Interface(In development)- A single line initializer to create BI based workflows_
+  - _Data Quality Workflow Interface(In development) - A single line initializer to create Data Quality based workflows_
+  - _Profiling Workflow Interface(In development) - A single line initializer to create Profiling based workflows_
+  - _Open Lineage Workflow Interface(In development) - A single line initializer to create Open Lineage based workflows_
+  - It also exposes endpoints for workflow setup
+    - `/workflow/v1/preflight` - To check if the workflow can be executed
+    - `/workflow/v1/auth` - To authenticate the credentials for the workflow
+    - `/workflow/v1/ui` - UI to setup the workflows
+- SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses AQLAlchemy for this purpose.
+  - Query Interface to run adhoc SQL queries on `POST /sql/v1/query`
+
+**Note**: The SDK is in active development and currently only supports FastAPI applications. Support for other frameworks will be added in the future.
+
+
 ## SDK Structure
 The SDK is divided into the following modules:
 1. **Application SDK**: This module is used to interact with the Atlan Platform APIs and services. It provides a set of tools and services to build, test and manage applications.
@@ -27,3 +58,4 @@ The SDK is divided into the following modules:
       - [`sql`](../application_sdk/workflows/sql/README.md) - This module contains the SQL workflow interface that is used to schedule and execute SQL based workflows.
       - [`transformers`](../application_sdk/workflows/transformers/README.md) - This module contains the transformers that are used to transform the data in the workflow.
 2. **Examples**: This module contains examples of how to use the SDK to build applications on the Atlan Platform.
+

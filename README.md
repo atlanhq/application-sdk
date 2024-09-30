@@ -18,31 +18,11 @@ The SDK once integrated will automatically generate API routes for the applicati
 ![SDK Features](./docs/images/Phoenix%20-%20SDK%20Featureset.png)
 
 - Observability and Supportability. The SDK integrated with [OTel](https://opentelemetry.io/) and provides the below features out of the box:
-  - [Metrics](application_sdk/app/rest/interfaces/metrics.py) at `/telemetry/v1/metrics`
-  - [Tracing](application_sdk/app/rest/interfaces/traces.py) at `/telemetry/v1/traces`
-  - [Logging](application_sdk/app/rest/interfaces/logs.py) at `/telemetry/v1/logs`
-  - UI to view the metrics, traces and logs at `/telemetry/v1/ui`
-- Application health checks at `/system/health` and `/system/ready`
-- PaaS System integration. The SDK integrates with the PaaS system and provides the below features:
-  - Secrets Manager
-  - Object Store
-  - State Store
-  - Workflow Manager
-  - Event Store
+- Application health checks
+- PaaS System integration. The SDK integrates with the Atlan PaaS system and provides the below features:
 - Workflows. Interfaces to create boilerplate code for workflows that can be scheduled and executed using the Temporal engine.
-  - [SQL Workflow Interface](./application_sdk/workflows/sql/workflow.py) - A single line initializer to create SQL based workflows
-  - _BI Workflow Interface(In development)- A single line initializer to create BI based workflows_
-  - _Data Quality Workflow Interface(In development) - A single line initializer to create Data Quality based workflows_
-  - _Profiling Workflow Interface(In development) - A single line initializer to create Profiling based workflows_
-  - _Open Lineage Workflow Interface(In development) - A single line initializer to create Open Lineage based workflows_
-  - It also exposes endpoints for workflow setup
-    - `/workflow/v1/preflight` - To check if the workflow can be executed
-    - `/workflow/v1/auth` - To authenticate the credentials for the workflow
-    - `/workflow/v1/ui` - UI to setup the workflows
-- SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses AQLAlchemy for this purpose.
-  - Query Interface to run adhoc SQL queries on `POST /sql/v1/query`
-
-**Note**: The SDK is in active development and currently only supports FastAPI applications. Support for other frameworks will be added in the future.
+- SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses SQLAlchemy for this purpose.
+Head over to the [Architecture doc](./docs/ARCHITECTURE.md) for detailed information on the features and how they work.
 
 ## Usage
 **A production grade SQL application built using Phoenix Application SDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)**
