@@ -1,7 +1,7 @@
 # Python Application SDK
 
 Python Application SDK is a Python library for developing applications on the Atlan Platform and is a PaaS system that provides a set of tools and services to build, test and manage applications.
-The vision of this SDK is that it will be a single line initializer that can plug into any Python microservice application and provide all the necessary features required to run it on the Atlan Platform.  
+The SDK also focuses on empowering developers to build applications that are scalable, secure, reliable and easy to maintain.  
 
 
 ## Table of Contents
@@ -35,6 +35,12 @@ The SDK once integrated will automatically generate API routes for the applicati
   - _Data Quality Workflow Interface(In development) - A single line initializer to create Data Quality based workflows_
   - _Profiling Workflow Interface(In development) - A single line initializer to create Profiling based workflows_
   - _Open Lineage Workflow Interface(In development) - A single line initializer to create Open Lineage based workflows_
+  - It also exposes endpoints for workflow setup
+    - `/workflow/v1/preflight` - To check if the workflow can be executed
+    - `/workflow/v1/auth` - To authenticate the credentials for the workflow
+    - `/workflow/v1/ui` - UI to setup the workflows
+- SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses AQLAlchemy for this purpose.
+  - Query Interface to run adhic SQL queries on `POST /sql/v1/query`
 
 **Note**: The SDK is in active development and currently only supports FastAPI applications. Support for other frameworks will be added in the future.
 
@@ -44,8 +50,10 @@ The SDK once integrated will automatically generate API routes for the applicati
 poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 ```
 - Refer to the [Examples](./examples/README.md) to see how to use the SDK to build applications on the Atlan Platform
-- A production grade SQL application built using Phoenix ApplicationSDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)
+
+**A production grade SQL application built using Phoenix ApplicationSDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)**
 
 ## Contributing
-- Slack - _#collab-phoenix_
-- Refer to the [Development and Quickstart Guide](./docs/DEVELOPMENT.md) on how to add features to the SDK
+Want to contribute to the SDK? Here's how you can get started:
+- Communication - Use _#collab-phoenix_ to ask questions to the team.
+- Development - Refer to the [Development and Quickstart Guide](./docs/DEVELOPMENT.md) on how to add features to the SDK
