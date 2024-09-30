@@ -296,7 +296,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         # Create output directory
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            SQLWorkflowWorkerInterface.setup_output_directory,
+            self.setup_output_directory,
             output_path,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=5),
@@ -338,7 +338,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         
         # Push results to object store
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            SQLWorkflowWorkerInterface.push_results_to_object_store,
+            self.push_results_to_object_store,
             {"output_prefix": workflow_args["output_prefix"], "output_path": output_path},
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(minutes=10),
@@ -346,7 +346,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         # cleanup output directory
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            SQLWorkflowWorkerInterface.teardown_output_directory,
+            self.teardown_output_directory,
             output_path,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=5),
