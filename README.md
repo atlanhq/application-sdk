@@ -15,7 +15,6 @@ The vision of this SDK is that it will be a single line initializer that can plu
 ## Features
 The SDK once integrated will automatically generate API routes for the application and provide a set of features that are common across all applications on Atlan Platform.
 
-# Add image from docs folder
 ![SDK Features](./docs/images/Phoenix%20-%20SDK%20Featureset.png)
 
 - Observability and Supportability. The SDK integrated with [OTel](https://opentelemetry.io/) and provides the below features out of the box:
