@@ -58,4 +58,5 @@ The SDK is divided into the following modules:
       - [`sql`](../application_sdk/workflows/sql/README.md) - This module contains the SQL workflow interface that is used to schedule and execute SQL based workflows.
       - [`transformers`](../application_sdk/workflows/transformers/README.md) - This module contains the transformers that are used to transform the data in the workflow.
 2. **Examples**: This module contains examples of how to use the SDK to build applications on the Atlan Platform.
+3. **Components**: This module contains the components that are used by the SDK to interact with the Atlan Platform APIs and services.
 
