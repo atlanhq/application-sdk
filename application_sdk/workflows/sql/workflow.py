@@ -52,6 +52,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         super().__init__(application_name)
 
     async def run_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+        """
+        Run the workflow.
+
+        :param workflow_args: The workflow arguments.
+        :return: The workflow results.
+        """
         credentials = workflow_args["credentials"]
 
         credential_guid = SecretStore.store_credentials(credentials)
@@ -64,6 +70,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     async def run_query_in_batch(connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with client-side cursor.
+
+        :param connection: The database connection.
+        :param query: The query to run.
+        :param batch_size: The batch size.
+        :return: The query results.
+        :raises Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
     
@@ -92,6 +104,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     async def run_query_in_batch_with_server_side_cursor(connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with server-side cursor.
+
+        :param connection: The database connection.
+        :param query: The query to run.
+        :param batch_size: The batch size.
+        :return: The query results.
+        :raises Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
 
@@ -128,6 +146,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         logger.info(f"Query execution completed")
 
     async def fetch_and_process_data(self, workflow_args: Dict[str, Any], query: str, typename: str):
+        """
+        Fetch and process data from the database.
+
+        :param workflow_args: The workflow arguments.
+        :param query: The query to run.
+        :param typename: The type of data to fetch.
+        :return: The fetched data.
+        :raises Exception: If the data cannot be fetched.
+        """
         credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         connection = None
         summary = {"raw": 0, "transformed": 0, "errored": 0}
@@ -158,6 +185,16 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         summary: Dict[str, int],
         chunk_number: int,
     ) -> None:
+        """
+        Process a batch of results.
+
+        :param results: The batch of results.
+        :param typename: The type of data to fetch.
+        :param output_path: The output path.
+        :param summary: The summary of the results.
+        :param chunk_number: The chunk number.
+        :raises Exception: If the results cannot be processed.
+        """
         raw_batch: List[str] = []
         transformed_batch: List[str] = []
 
@@ -201,12 +238,24 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @auto_heartbeater
     @staticmethod
     async def fetch_databases(self, workflow_args: Dict[str, Any]):
+        """
+        Fetch and process databases from the database.
+
+        :param workflow_args: The workflow arguments.
+        :return: The fetched databases.
+        """
         return await self.fetch_and_process_data(workflow_args, self.DATABASE_SQL, "database")
 
     @activity.defn
     @auto_heartbeater
     @staticmethod
     async def fetch_schemas(self, workflow_args: Dict[str, Any]):
+        """
+        Fetch and process schemas from the database.
+
+        :param workflow_args: The workflow arguments.
+        :return: The fetched schemas.
+        """
         include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
         exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
         temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
@@ -226,6 +275,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @activity.defn
     @auto_heartbeater
     async def fetch_tables(self, workflow_args: Dict[str, Any]):
+        """
+        Fetch and process tables from the database.
+
+        :param workflow_args: The workflow arguments.
+        :return: The fetched tables.
+        """
         include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
         exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
         temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
@@ -246,6 +301,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @activity.defn
     @auto_heartbeater
     async def fetch_columns(self, workflow_args: Dict[str, Any]):
+        """
+        Fetch and process columns from the database.
+
+        :param workflow_args: The workflow arguments.
+        :return: The fetched columns.
+        """
         include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
         exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
         temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
@@ -267,11 +328,22 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @auto_heartbeater
     @staticmethod
     async def fetch_sql(sql: str):
+        """
+        Fetch data from the database using a custom SQL query.
+
+        :param sql: The SQL query to run.
+        :return: The fetched data.
+        """
         pass
 
     @staticmethod
     @activity.defn
     async def setup_output_directory(output_prefix: str) -> None:
+        """
+        Setup the output directory.
+
+        :param output_prefix: The output prefix.
+        """
         os.makedirs(output_prefix, exist_ok=True)
         os.makedirs(os.path.join(output_prefix, "raw"), exist_ok=True)
         os.makedirs(os.path.join(output_prefix, "transformed"), exist_ok=True)
@@ -280,6 +352,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
+        """
+        Run the workflow.
+
+        :param workflow_args: The workflow arguments.
+        """
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
@@ -358,6 +435,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @staticmethod
     @activity.defn
     async def push_results_to_object_store(output_config: Dict[str, str]) -> None:
+        """
+        Push the results to the object store.
+
+        :param output_config: The output configuration.
+        """
         activity.logger.info("Pushing results to object store")
         try:
             output_prefix, output_path = (
@@ -372,5 +454,10 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     @staticmethod
     @activity.defn
     async def teardown_output_directory(output_prefix: str) -> None:
+        """
+        Teardown the output directory.
+
+        :param output_prefix: The output prefix.
+        """
         activity.logger.info(f"Tearing down output directory: {output_prefix}")
         shutil.rmtree(output_prefix)

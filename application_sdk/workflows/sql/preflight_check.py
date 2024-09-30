@@ -4,7 +4,6 @@ from typing import Any, Dict, List, Set, Tuple, Callable
 
 from sqlalchemy import Engine, text
 
-from application_sdk.workflows.models.preflight import PreflightPayload
 from application_sdk.workflows import WorkflowPreflightCheckInterface
 from application_sdk.workflows.sql.utils import prepare_filters
 
@@ -22,14 +21,13 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
 
 
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        preflight_payload = PreflightPayload(**payload)
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
             results["databaseSchemaCheck"] = self.check_schemas_and_databases(
-                preflight_payload
+                payload
             )
-            results["tablesCheck"] = self.tables_check(preflight_payload)
+            results["tablesCheck"] = self.tables_check(payload)
             logger.info("Preflight check completed successfully")
         except Exception as e:
             logger.error("Error during preflight check", exc_info=True)
@@ -67,15 +65,15 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
 
         return result
 
-    def check_schemas_and_databases(self, payload: PreflightPayload) -> Dict[str, Any]:
+    def check_schemas_and_databases(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting schema and database check")
         connection = None
         try:
             schemas_results: List[Dict[str, str]] = self.fetch_metadata(
-                payload.credentials
+                payload.get("credentials", {})
             )
 
-            include_filter = json.loads(payload.form_data.include_filter)
+            include_filter = json.loads(payload.get("form_data", {}).get("include_filter", "{}"))
             allowed_databases, allowed_schemas = self.extract_allowed_schemas(
                 schemas_results
             )
@@ -133,15 +131,15 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
                     return False, f"{db}.{sch} schema"
         return True, ""
 
-    def tables_check(self, payload: PreflightPayload) -> Dict[str, Any]:
+    def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting tables check")
         connection = None
         try:
             normalized_include_regex, normalized_exclude_regex, exclude_table = (
                 prepare_filters(
-                    payload.form_data.include_filter,
-                    payload.form_data.exclude_filter,
-                    payload.form_data.temp_table_regex,
+                    payload.get("form_data", {}).get("include_filter", ""),
+                    payload.get("form_data", {}).get("exclude_filter", ""),
+                    payload.get("form_data", {}).get("temp_table_regex", ""),
                 )
             )
             query = self.TABLES_CHECK_SQL.format(
@@ -150,7 +148,7 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
                 normalized_include_regex=normalized_include_regex,
             )
 
-            credentials = payload.credentials
+            credentials = payload.get("credentials", {})
             engine = self.create_engine_fn(credentials)
             with engine.connect() as connection:
                 cursor = connection.execute(text(query))

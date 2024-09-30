@@ -1,3 +1,4 @@
+"""Router for handling health-related API endpoints."""
 import platform
 import re
 import socket
@@ -19,6 +20,11 @@ router = APIRouter(
 
 @router.get("/health")
 async def health():
+    """
+    Check the health of the system.
+
+    :return: A dictionary containing system information.
+    """
     info = {
         "platform": platform.system(),
         "platform_release": platform.release(),
@@ -30,10 +36,15 @@ async def health():
         "processor": platform.processor(),
         "ram": str(round(psutil.virtual_memory().total / (1024.0**3))) + " GB",
     }
-    logger.info("Health")
+    logger.info("Health check passed")
     return info
 
 
 @router.get("/ready")
 async def ready():
+    """
+    Check if the system is ready.
+
+    :return: A dictionary containing the status "ok".
+    """
     return {"status": "ok"}

@@ -8,13 +8,10 @@ def prepare_filters(
     """
     Prepare the filters for the SQL query.
 
-    Args:
-        include_filter_str (str): The include filter string.
-        exclude_filter_str (str): The exclude filter string.
-        temp_table_regex_str (str): The temporary table regex string.
-
-    Returns:
-        Tuple[str, str, str]: The normalized include regex, the normalized exclude regex, and the exclude table.
+    :param include_filter_str: The include filter string.
+    :param exclude_filter_str: The exclude filter string.
+    :param temp_table_regex_str: The temporary table regex string.
+    :return: The normalized include regex, the normalized exclude regex, and the exclude table.
     """
     include_filter = json.loads(include_filter_str)
     exclude_filter = json.loads(exclude_filter_str)
@@ -42,12 +39,9 @@ def normalize_filters(filter_dict: Dict[str, List[str]], is_include: bool) -> Li
     """
     Normalize the filters for the SQL query.
 
-    Args:
-        filter_dict (Dict[str, List[str]]): The filter dictionary.
-        is_include (bool): Whether the filter is an include filter.
-
-    Returns:
-        List[str]: The normalized filter list.
+    :param filter_dict: The filter dictionary.
+    :param is_include: Whether the filter is an include filter.
+    :return: The normalized filter list.
     """
     normalized_filter_list: List[str] = []
     for filtered_db, filtered_schemas in filter_dict.items():

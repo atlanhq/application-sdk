@@ -1,6 +1,7 @@
+"""Router for handling metric-related API endpoints."""
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
 from sqlalchemy.orm import Session
 
@@ -21,12 +22,35 @@ async def read_metrics(
     to_timestamp: Optional[int] = None,
     session: Session = Depends(get_session),
 ):
-    return Metrics.get_metrics(session, from_timestamp, to_timestamp)
+    """
+    Retrieve a list of metrics.
+
+    :param from_timestamp: Start timestamp for metric retrieval.
+    :param to_timestamp: End timestamp for metric retrieval.
+    :param session: Database session.
+    :return: A list of Metric objects.
+    :raises HTTPException: If there's an error with the database operations.
+    """
+    try:
+        return Metrics.get_metrics(session, from_timestamp, to_timestamp)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("", response_model=List[Metric])
 async def create_metrics(request: Request, session: Session = Depends(get_session)):
-    body = await request.body()
-    metric_message = MetricsData()
-    metric_message.ParseFromString(body)
-    return Metrics.create_metrics(session, metric_message)
+    """
+    Create metrics from a protobuf message.
+
+    :param request: FastAPI request object.
+    :param session: Database session.
+    :return: A list of Metric objects.
+    :raises HTTPException: If there's an error with the database operations.
+    """
+    try:
+        body = await request.body()
+        metric_message = MetricsData()
+        metric_message.ParseFromString(body)
+        return Metrics.create_metrics(session, metric_message)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

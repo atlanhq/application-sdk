@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 @lru_cache(maxsize=None)
 def get_engine():
+    """Get the database engine."""
     sqlalchemy_database_url = (
         os.getenv("SQLALCHEMY_DATABASE_URL") or "sqlite:////tmp/app.db"
     )
@@ -24,6 +25,7 @@ def get_engine():
 
 
 def get_session():
+    """Get the database session."""
     session = sessionmaker(autocommit=False, autoflush=False, bind=get_engine())()
     try:
         yield session

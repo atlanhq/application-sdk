@@ -1,28 +1,32 @@
 """
-This examples demonstrates how to connect to a SQL database and extract metadata from it.
-In this example, we are using a postgres database, but the same can be done for other databases like mysql, etc.
+This example demonstrates how to create a SQL workflow for extracting metadata from a PostgreSQL database.
+It uses the Temporal workflow engine to manage the extraction process.
 
-Usage Instructions:
-- Set the usage credentials.
+Key components:
+- SampleSQLWorkflowMetadata: Defines metadata extraction queries
+- SampleSQLWorkflowPreflight: Performs preflight checks
+- SampleSQLWorkflowWorker: Implements the main workflow logic
+- SampleSQLWorkflowBuilder: Configures and builds the workflow
 
-Actions performed by this workflow:
-- Perform preflight checks
-- Spawns a temporal workflow to execute the following activities
-- Workflow Activities
-    - Create an output directory
-    - Fetch databases
-    - Fetch schemas
-    - Fetch tables
-    - Fetch columns
-    - Clean up output directory
-    - Push results to object store
+Workflow steps:
+1. Perform preflight checks
+2. Create an output directory
+3. Fetch database information
+4. Fetch schema information
+5. Fetch table information
+6. Fetch column information
+7. Clean up the output directory
+8. Push results to object store
+
+Usage:
+1. Set the PostgreSQL connection credentials as environment variables
+2. Run the script to start the Temporal worker and execute the workflow
+
+Note: This example is specific to PostgreSQL but can be adapted for other SQL databases.
 """
 import os
 import time
 import threading
-from types import ModuleType
-import psycopg2
-from sqlalchemy import Connection
 from temporalio import workflow
 import asyncio
 from typing import Any, Dict

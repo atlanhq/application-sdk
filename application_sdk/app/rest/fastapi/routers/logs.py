@@ -1,6 +1,8 @@
+"""Router for handling log-related API endpoints."""
+
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
 
@@ -24,13 +26,39 @@ async def read_logs(
     to_timestamp: Optional[int] = None,
     session: Session = Depends(get_session),
 ):
-    return Logs.get_logs(session, skip, limit, keyword, from_timestamp, to_timestamp)
+    """
+    Retrieve a list of logs.
+
+    :param skip: Number of logs to skip (for pagination).
+    :param limit: Maximum number of logs to return.
+    :param keyword: Keyword to filter logs.
+    :param from_timestamp: Start timestamp for log retrieval.
+    :param to_timestamp: End timestamp for log retrieval.
+    :param session: Database session.
+    :return: A list of Log objects.
+    :raises HTTPException: If there's an error with the database operations.
+    """
+    try:
+        return Logs.get_logs(session, skip, limit, keyword, from_timestamp, to_timestamp)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("", response_model=List[Log])
 async def create_logs(request: Request, session: Session = Depends(get_session)):
-    # Convert the request body to a protobuf message
-    body = await request.body()
-    log_message = LogsData()
-    log_message.ParseFromString(body)
-    return Logs.create_logs(session, log_message)
+    """
+    Create logs from a protobuf message.
+
+    :param request: FastAPI request object.
+    :param session: Database session.
+    :return: A list of Log objects.
+    :raises HTTPException: If there's an error with the database operations.
+    """
+    try:
+        # Convert the request body to a protobuf message
+        body = await request.body()
+        log_message = LogsData()
+        log_message.ParseFromString(body)
+        return Logs.create_logs(session, log_message)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

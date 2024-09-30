@@ -22,6 +22,12 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
 def auto_heartbeater(fn: F) -> F:
+    """
+    Auto-heartbeater for activities.
+
+    :param fn: The activity function.
+    :return: The activity function.
+    """
     # We want to ensure that the type hints from the original callable are
     # available via our wrapper, so we use the functools wraps decorator
     @wraps(fn)
@@ -52,6 +58,12 @@ def auto_heartbeater(fn: F) -> F:
 
 
 async def heartbeat_every(delay: float, *details: Any) -> None:
+    """
+    Heartbeat every so often while not cancelled
+
+    :param delay: The delay between heartbeats.
+    :param details: The details to heartbeat.
+    """
     # Heartbeat every so often while not cancelled
     while True:
         await asyncio.sleep(delay)

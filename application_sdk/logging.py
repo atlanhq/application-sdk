@@ -2,6 +2,13 @@ import logging
 
 
 def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
+    """
+    Get a logger with the given name and level.
+
+    :param name: The name of the logger.
+    :param level: The level of the logger.
+    :return: The logger.
+    """
     logger = logging.getLogger(name)
     logger.setLevel(level)
 

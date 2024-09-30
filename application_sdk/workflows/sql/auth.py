@@ -15,6 +15,13 @@ class SQLWorkflowAuthInterface(WorkflowAuthInterface):
         self.create_engine_fn = create_engine_fn
 
     def test_auth(self, credential: Dict[str, Any]) -> bool:
+        """
+        Test the authentication credentials.
+
+        :param credential: Credentials to test.
+        :return: True if the credentials are valid, False otherwise.
+        :raises Exception: If the credentials are invalid.
+        """
         try:
             engine = self.create_engine_fn(credential)
             with engine.connect() as connection:

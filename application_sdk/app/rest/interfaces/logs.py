@@ -1,3 +1,4 @@
+"""Interface for handling log-related API endpoints."""
 import time
 from datetime import UTC, datetime
 from typing import List, Optional, Sequence
@@ -10,8 +11,15 @@ from application_sdk.app.models import Log
 
 class Logs:
     @staticmethod
-    def get_log(session: Session, event_id: int) -> Optional[Log]:
-        return session.query(Log).filter(Log.id == event_id).first()
+    def get_log(session: Session, log_id: int) -> Optional[Log]:
+        """
+        Get a log by ID.
+
+        :param session: Database session.
+        :param log_id: ID of the log to retrieve.
+        :return: An Log object.
+        """
+        return session.query(Log).filter(Log.id == log_id).first()
 
     @staticmethod
     def get_logs(
@@ -22,6 +30,17 @@ class Logs:
         from_timestamp: int = 0,
         to_timestamp: Optional[int] = None,
     ) -> Sequence[Log]:
+        """
+        Get logs with optional filtering by keyword and timestamp range.
+
+        :param session: Database session.
+        :param skip: Number of logs to skip (for pagination).
+        :param limit: Maximum number of logs to return.
+        :param keyword: Keyword to filter logs.
+        :param from_timestamp: Start timestamp for log retrieval.
+        :param to_timestamp: End timestamp for log retrieval.
+        :return: A list of Log objects.
+        """
         if to_timestamp is None:
             to_timestamp = int(time.time())
         return (
@@ -39,6 +58,13 @@ class Logs:
 
     @staticmethod
     def create_logs(session: Session, logs_data: LogsData) -> List[Log]:
+        """
+        Create logs from a protobuf message.
+
+        :param session: Database session.
+        :param logs_data: LogsData object containing log data.
+        :return: A list of Log objects.
+        """
         logs: List[Log] = []
         for resource_log in logs_data.resource_logs:
             resource_attributes = {}

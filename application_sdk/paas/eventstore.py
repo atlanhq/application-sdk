@@ -1,3 +1,5 @@
+"""Event store for the application."""
+
 import logging
 
 logger = logging.getLogger(__name__)

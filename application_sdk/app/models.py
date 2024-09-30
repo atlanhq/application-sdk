@@ -1,3 +1,4 @@
+"""Models for the database."""
 from datetime import datetime
 
 from sqlalchemy import Column, DateTime, Integer, String

@@ -1,3 +1,4 @@
+"""Object store interface for the application."""
 import logging
 import os
 

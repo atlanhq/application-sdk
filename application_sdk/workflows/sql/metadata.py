@@ -17,6 +17,13 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
 
     # FIXME: duplicate with SQLWorkflowPreflightCheckInterface
     def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
+        """
+        Fetch metadata from the database.
+
+        :param credential: Credentials to use.
+        :return: List of metadata.
+        :raises Exception: If the metadata cannot be fetched.
+        """
         connection = None
         cursor = None
         try:

@@ -1,3 +1,4 @@
+"""Interface for handling metric-related API endpoints."""
 import time
 from datetime import datetime
 from typing import List, Optional, Sequence, Type
@@ -12,12 +13,27 @@ from application_sdk.app.models import Metric
 class Metrics:
     @staticmethod
     def get_metric(session: Session, metric_id: int) -> Optional[Metric]:
+        """
+        Get a metric by ID.
+
+        :param session: Database session.
+        :param metric_id: ID of the metric to retrieve.
+        :return: An Metric object.
+        """
         return session.query(Metric).filter(Metric.id == metric_id).first()
 
     @staticmethod
     def get_metrics(
         session: Session, from_timestamp: int = 0, to_timestamp: Optional[int] = None
     ) -> dict:
+        """
+        Get metrics with optional filtering by timestamp range.
+
+        :param session: Database session.
+        :param from_timestamp: Start timestamp for metric retrieval.
+        :param to_timestamp: End timestamp for metric retrieval.
+        :return: A dictionary of metrics.
+        """
         if to_timestamp is None:
             to_timestamp = int(time.time())
         metrics = (
@@ -44,6 +60,13 @@ class Metrics:
 
     @staticmethod
     def create_metrics(session: Session, metrics_data: MetricsData) -> List[Metric]:
+        """
+        Create metrics from a protobuf message.
+
+        :param session: Database session.
+        :param metrics_data: MetricsData object containing metric data.
+        :return: A list of Metric objects.
+        """
         metrics: List[Metric] = []
         for resource_metric in metrics_data.resource_metrics:
             resource_attributes = {}
