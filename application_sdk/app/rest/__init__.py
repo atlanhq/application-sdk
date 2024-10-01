@@ -8,7 +8,7 @@ from typing import Optional
 
 class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     workflows_router: APIRouter = APIRouter(
-        prefix="/workflows",
+        prefix="/workflows/v1",
         tags=["workflows"],
         responses={404: {"description": "Not found"}},
     )
@@ -149,28 +149,28 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
 
     def add_workflows_router(self):
         self.workflows_router.add_api_route(
-            path="/test-authentication",
+            path="/auth",
             endpoint=self.test_auth,
             methods=["POST"],
             response_model=bool,
         )
 
         self.workflows_router.add_api_route(
-            path="/fetch-metadata",
+            path="/metadata",
             endpoint=self.fetch_metadata,
             methods=["POST"],
             response_model=dict,
         )
 
         self.workflows_router.add_api_route(
-            path="/preflight-check",
+            path="/check",
             endpoint=self.preflight_check,
             methods=["POST"],
             response_model=dict,
         )
 
         self.workflows_router.add_api_route(
-            path="/start-workflow",
+            path="/start",
             endpoint=self.start_workflow,
             methods=["POST"],
             response_model=dict,
