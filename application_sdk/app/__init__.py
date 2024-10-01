@@ -17,9 +17,6 @@ class AtlanApplicationBuilder(ABC):
     def add_telemetry_routes(self) -> None:
         raise NotImplementedError
 
-    @abstractmethod
-    def add_event_routes(self) -> None:
-        raise NotImplementedError
 
     def on_api_service_start(self):
         models.Base.metadata.create_all(bind=get_engine())

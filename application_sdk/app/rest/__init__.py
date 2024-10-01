@@ -1,5 +1,5 @@
 from application_sdk.app import AtlanApplicationBuilder, WorkflowBuilderInterface
-from application_sdk.app.rest.fastapi.routers import events, health, logs, metrics, traces
+from application_sdk.app.rest.fastapi.routers import health, logs, metrics, traces
 
 from fastapi import APIRouter, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -27,8 +27,6 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         self.app.include_router(metrics.router)
         self.app.include_router(traces.router)
 
-    def add_event_routes(self) -> None:
-        self.app.include_router(events.router)
 
     def on_api_service_start(self):
         super().on_api_service_start()
