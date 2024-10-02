@@ -31,7 +31,7 @@ def transform_metadata(
     Usage:
         >>> transform_metadata("redshift", "sql", "table", {"table_name": "instacart_orders", "table_schema": "public", "table_catalog": "dev"})
     """
-    connector_temp = f"{connector_name}_{connector_type}"
+    connector_temp = f"{connector_name}-{connector_type}"
     namespace = Namespace(
         id=connector_temp,
         name=connector_temp,

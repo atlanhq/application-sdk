@@ -7,7 +7,6 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
-import uuid
 from typing import Any, Coroutine, Dict, List, Callable, Sequence
 
 from sqlalchemy import Connection, Engine, text
@@ -164,8 +163,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         return {typename: summary}
 
-    @staticmethod
     async def _process_batch(
+        self,
         results: List[Dict[str, Any]],
         typename: str,
         output_path: str,
@@ -191,7 +190,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 summary["raw"] += 1
 
                 transformed_data = transform_metadata(
-                    "CONNECTOR_NAME", "CONNECTOR_TYPE", typename, row
+                    self.application_name, "sql", typename, row
                 )
                 if transformed_data is not None:
                     transformed_batch.append(
