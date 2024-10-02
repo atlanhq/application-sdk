@@ -110,9 +110,6 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
-    # def get_sql_engine(self, credentials: Dict[str, Any]) -> ModuleType:
-    #     return psycopg2
-
     def get_sqlalchemy_connect_args(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 

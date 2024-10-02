@@ -66,8 +66,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         workflow_args["credential_guid"] = credential_guid
         return await super().run_workflow(workflow_args)
 
-    @staticmethod
-    async def run_query_in_batch(connection: Connection, query: str, batch_size: int = 100000):
+    async def run_query_in_batch(self, connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with client-side cursor.
 
@@ -100,8 +99,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         
         logger.info(f"Query execution completed")
 
-    @staticmethod
-    async def run_query_in_batch_with_server_side_cursor(connection: Connection, query: str, batch_size: int = 100000):
+    async def run_query_in_batch_with_server_side_cursor(self, connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with server-side cursor.
 
@@ -164,9 +162,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             chunk_number = 0
             engine = self.get_sql_engine(credentials)
             with engine.connect() as connection:
-                async for batch in SQLWorkflowWorkerInterface.run_query_in_batch(connection, query):
+                async for batch in self.run_query_in_batch(connection, query):
                     # Process each batch here
-                    await SQLWorkflowWorkerInterface._process_batch(batch, typename, output_path, summary, chunk_number)
+                    await self._process_batch(batch, typename, output_path, summary, chunk_number)
                     chunk_number += 1
             chunk_meta_file = os.path.join(output_path, f"{typename}-chunks.txt")
             async with aiofiles.open(chunk_meta_file, "w") as chunk_meta_f:
@@ -403,6 +401,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_columns,
                 workflow_args,
                 retry_policy=retry_policy,
+                heartbeat_timeout=timedelta(seconds=10),
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
         ]
