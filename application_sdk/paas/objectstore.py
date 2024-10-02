@@ -21,6 +21,9 @@ class ObjectStore:
         :raises ValueError: If the output_path doesn't exist or is not a directory.
         :raises IOError: If there's an error reading files.
         :raises Exception: If there's an error with the Dapr client operations.
+
+        Usage:
+            >>> ObjectStore.push_to_object_store("logs", "/tmp/logs")
         """
         if not os.path.isdir(output_path):
             raise ValueError(

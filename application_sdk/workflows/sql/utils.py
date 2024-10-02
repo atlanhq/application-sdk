@@ -42,6 +42,10 @@ def normalize_filters(filter_dict: Dict[str, List[str]], is_include: bool) -> Li
     :param filter_dict: The filter dictionary.
     :param is_include: Whether the filter is an include filter.
     :return: The normalized filter list.
+
+    Usage:
+        >>> normalize_filters({"db1": ["schema1", "schema2"], "db2": ["schema3"]}, True)
+        ["db1.schema1", "db1.schema2", "db2.schema3"]
     """
     normalized_filter_list: List[str] = []
     for filtered_db, filtered_schemas in filter_dict.items():

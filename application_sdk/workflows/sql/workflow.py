@@ -7,13 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
-import uuid
-from typing import Any, Coroutine, Dict, List, Callable
+from typing import Any, Coroutine, Dict, List, Callable, Sequence
 
 from sqlalchemy import Connection, Engine, text
 
 from temporalio.common import RetryPolicy
 from temporalio import activity, workflow
+from temporalio.types import CallableType
 
 from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
 from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
@@ -28,30 +28,59 @@ logger = logging.getLogger(__name__)
 
 
 class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
+    """
+    Base class for SQL workflow workers implementing the Template Method pattern.
+
+    This class provides a default implementation for the workflow, with hooks
+    for subclasses to customize specific behaviors.
+
+    Attributes:
+        DATABASE_SQL (str): SQL query to fetch database information.
+        SCHEMA_SQL (str): SQL query to fetch schema information.
+        TABLE_SQL (str): SQL query to fetch table information.
+        COLUMN_SQL (str): SQL query to fetch column information.
+
+    Usage:
+        Subclass this class and override the SQL query attributes and any methods
+        that need custom behavior. Then use the subclass to create a workflow builder
+        and run the workflow.
+    """
     DATABASE_SQL = ""
     SCHEMA_SQL = ""
     TABLE_SQL = ""
     COLUMN_SQL = ""
 
-
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
     def __init__(self,
         application_name: str = "sql-connector",
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
+        TEMPORAL_ACTIVITIES: Sequence[CallableType] = []
     ):
+        """
+        Initialize the SQL workflow worker.
+
+        :param application_name: The name of the application.
+        :param get_sql_engine: A callable that returns an SQLAlchemy engine.
+        """
         self.get_sql_engine = get_sql_engine
-        self.TEMPORAL_ACTIVITIES = [
-            self.setup_output_directory,
-            self.fetch_databases,
-            self.fetch_schemas,
-            self.fetch_tables,
-            self.fetch_columns,
-            self.teardown_output_directory,
-            self.push_results_to_object_store
-        ]
+
+        if not TEMPORAL_ACTIVITIES:
+            # default activities
+            self.TEMPORAL_ACTIVITIES = [
+                self.setup_output_directory,
+                self.fetch_databases,
+                self.fetch_schemas,
+                self.fetch_tables,
+                self.fetch_columns,
+                self.teardown_output_directory,
+                self.push_results_to_object_store
+            ]
+        else:
+            self.TEMPORAL_ACTIVITIES = TEMPORAL_ACTIVITIES
+
         super().__init__(application_name)
 
-    async def run_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+    async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
         """
         Run the workflow.
 
@@ -64,12 +93,14 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         del workflow_args["credentials"]
 
         workflow_args["credential_guid"] = credential_guid
-        return await super().run_workflow(workflow_args)
+        return await super().start_workflow(workflow_args)
 
-    @staticmethod
-    async def run_query_in_batch(connection: Connection, query: str, batch_size: int = 100000):
+    async def run_query(self, connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with client-side cursor.
+
+        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
+        If yield_per is not supported by the database, the method will fallback to client-side cursor.
 
         :param connection: The database connection.
         :param query: The query to run.
@@ -78,7 +109,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :raises Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
-    
+        connection.execution_options(yield_per=batch_size)
         with ThreadPoolExecutor() as pool:
             try:
                 cursor = await loop.run_in_executor(pool, connection.execute, text(query))
@@ -86,62 +117,17 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
                 while True:
                     rows = await loop.run_in_executor(pool, cursor.fetchmany, batch_size)
-                    if not column_names:
-                        column_names = [desc[0] for desc in cursor.cursor.description]
-
                     if not rows:
                         break
+
+                    if not column_names:
+                        column_names = rows[0]._fields
 
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
                 logger.error(f"Error running query in batch: {e}")
                 raise e
-        
-        logger.info(f"Query execution completed")
-
-    @staticmethod
-    async def run_query_in_batch_with_server_side_cursor(connection: Connection, query: str, batch_size: int = 100000):
-        """
-        Run a query in a batch mode with server-side cursor.
-
-        :param connection: The database connection.
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
-        """
-        loop = asyncio.get_running_loop()
-
-        with ThreadPoolExecutor() as pool:
-            try:
-            # Use a unique name for the server-side cursor
-                cursor_name = f"cursor_{uuid.uuid4()}"
-                cursor = await loop.run_in_executor(
-                    pool, lambda: connection.cursor(name=cursor_name)
-                )
-
-                # Execute the query
-                await loop.run_in_executor(pool, cursor.execute, query)
-                column_names: List[str] = []
-
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not column_names:
-                        column_names = [desc[0] for desc in cursor.description]
-
-                    if not rows:
-                        break
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            except Exception as e:
-                logger.error(f"Error running query in batch: {e}")
-                raise e
-            finally:
-                await loop.run_in_executor(pool, cursor.close)
         
         logger.info(f"Query execution completed")
 
@@ -164,9 +150,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             chunk_number = 0
             engine = self.get_sql_engine(credentials)
             with engine.connect() as connection:
-                async for batch in SQLWorkflowWorkerInterface.run_query_in_batch(connection, query):
+                async for batch in self.run_query(connection, query):
                     # Process each batch here
-                    await SQLWorkflowWorkerInterface._process_batch(batch, typename, output_path, summary, chunk_number)
+                    await self._process_batch(batch, typename, output_path, summary, chunk_number)
                     chunk_number += 1
             chunk_meta_file = os.path.join(output_path, f"{typename}-chunks.txt")
             async with aiofiles.open(chunk_meta_file, "w") as chunk_meta_f:
@@ -177,8 +163,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         return {typename: summary}
 
-    @staticmethod
     async def _process_batch(
+        self,
         results: List[Dict[str, Any]],
         typename: str,
         output_path: str,
@@ -204,7 +190,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 summary["raw"] += 1
 
                 transformed_data = transform_metadata(
-                    "CONNECTOR_NAME", "CONNECTOR_TYPE", typename, row
+                    self.application_name, "sql", typename, row
                 )
                 if transformed_data is not None:
                     transformed_batch.append(
@@ -403,6 +389,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_columns,
                 workflow_args,
                 retry_policy=retry_policy,
+                heartbeat_timeout=timedelta(seconds=10),
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
         ]

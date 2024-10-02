@@ -27,6 +27,12 @@ def auto_heartbeater(fn: F) -> F:
 
     :param fn: The activity function.
     :return: The activity function.
+
+    Usage:
+        >>> @activity.defn
+        >>> @auto_heartbeater
+        >>> async def my_activity():
+        >>>     pass
     """
     # We want to ensure that the type hints from the original callable are
     # available via our wrapper, so we use the functools wraps decorator
@@ -67,5 +73,4 @@ async def heartbeat_every(delay: float, *details: Any) -> None:
     # Heartbeat every so often while not cancelled
     while True:
         await asyncio.sleep(delay)
-        print(f"Heartbeating at {datetime.now()}")
         activity.heartbeat(*details)

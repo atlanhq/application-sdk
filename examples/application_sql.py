@@ -102,6 +102,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
 
     def __init__(self, application_name:str=APPLICATION_NAME, *args:Any, **kwargs:Any):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
+        # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
         super().__init__(application_name, *args, **kwargs)
 
     @workflow.run
@@ -110,9 +111,6 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
-    # def get_sql_engine(self, credentials: Dict[str, Any]) -> ModuleType:
-    #     return psycopg2
-
     def get_sqlalchemy_connect_args(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
@@ -156,7 +154,7 @@ if __name__ == "__main__":
     # wait for the worker to start
     time.sleep(3)
 
-    asyncio.run(builder.worker_interface.run_workflow(
+    asyncio.run(builder.worker_interface.start_workflow(
         {
             "credentials": {
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
