@@ -51,7 +51,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     TABLE_SQL = ""
     COLUMN_SQL = ""
 
-
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
     def __init__(self,
         application_name: str = "sql-connector",
@@ -97,9 +96,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         workflow_args["credential_guid"] = credential_guid
         return await super().start_workflow(workflow_args)
 
-    async def run_query_in_batch(self, connection: Connection, query: str, batch_size: int = 100000):
+    async def run_query(self, connection: Connection, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with client-side cursor.
+
+        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
+        If yield_per is not supported by the database, the method will fallback to client-side cursor.
 
         :param connection: The database connection.
         :param query: The query to run.
@@ -108,7 +110,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :raises Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
-    
+        connection.execution_options(yield_per=batch_size)
         with ThreadPoolExecutor() as pool:
             try:
                 cursor = await loop.run_in_executor(pool, connection.execute, text(query))
@@ -116,61 +118,17 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
                 while True:
                     rows = await loop.run_in_executor(pool, cursor.fetchmany, batch_size)
-                    if not column_names:
-                        column_names = [desc[0] for desc in cursor.cursor.description]
-
                     if not rows:
                         break
+
+                    if not column_names:
+                        column_names = rows[0]._fields
 
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
                 logger.error(f"Error running query in batch: {e}")
                 raise e
-        
-        logger.info(f"Query execution completed")
-
-    async def run_query_in_batch_with_server_side_cursor(self, connection: Connection, query: str, batch_size: int = 100000):
-        """
-        Run a query in a batch mode with server-side cursor.
-
-        :param connection: The database connection.
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
-        """
-        loop = asyncio.get_running_loop()
-
-        with ThreadPoolExecutor() as pool:
-            try:
-            # Use a unique name for the server-side cursor
-                cursor_name = f"cursor_{uuid.uuid4()}"
-                cursor = await loop.run_in_executor(
-                    pool, lambda: connection.cursor(name=cursor_name)
-                )
-
-                # Execute the query
-                await loop.run_in_executor(pool, cursor.execute, query)
-                column_names: List[str] = []
-
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not column_names:
-                        column_names = [desc[0] for desc in cursor.description]
-
-                    if not rows:
-                        break
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            except Exception as e:
-                logger.error(f"Error running query in batch: {e}")
-                raise e
-            finally:
-                await loop.run_in_executor(pool, cursor.close)
         
         logger.info(f"Query execution completed")
 
@@ -193,7 +151,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             chunk_number = 0
             engine = self.get_sql_engine(credentials)
             with engine.connect() as connection:
-                async for batch in self.run_query_in_batch(connection, query):
+                async for batch in self.run_query(connection, query):
                     # Process each batch here
                     await self._process_batch(batch, typename, output_path, summary, chunk_number)
                     chunk_number += 1

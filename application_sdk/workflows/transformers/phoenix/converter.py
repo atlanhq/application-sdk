@@ -29,7 +29,7 @@ def transform_metadata(
     :return: The transformed object.
 
     Usage:
-        >>> transform_metadata("redshift", "sql", "table", {"table_name": "instacart_orders", "table_schema": "public", "table_cat": "dev"})
+        >>> transform_metadata("redshift", "sql", "table", {"table_name": "instacart_orders", "table_schema": "public", "table_catalog": "dev"})
     """
     connector_temp = f"{connector_name}_{connector_type}"
     namespace = Namespace(
@@ -73,8 +73,8 @@ def transform_metadata(
     elif typename.upper() == "TABLE":
         try:
             assert data["table_name"] is not None, "Table name cannot be None"
-            assert data["table_cat"] is not None, "Table catalog cannot be None"
-            assert data["table_schem"] is not None, "Table schema cannot be None"
+            assert data["table_catalog"] is not None, "Table catalog cannot be None"
+            assert data["table_schema"] is not None, "Table schema cannot be None"
 
             if data.get("table_type") == "VIEW":
                 return ViewEntity(
@@ -82,7 +82,7 @@ def transform_metadata(
                     package=package,
                     typeName="VIEW",
                     name=data["table_name"],
-                    URI=f"/{connector_name}/{connector_type}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}",
+                    URI=f"/{connector_name}/{connector_type}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}",
                 )
             else:
                 return TableEntity(
@@ -90,7 +90,7 @@ def transform_metadata(
                     package=package,
                     typeName="TABLE",
                     name=data["table_name"],
-                    URI=f"/{connector_name}/{connector_type}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}",
+                    URI=f"/{connector_name}/{connector_type}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}",
                     isPartition=data.get("is_partition") or False,
                 )
         except AssertionError as e:
@@ -100,8 +100,8 @@ def transform_metadata(
     elif typename.upper() == "COLUMN":
         try:
             assert data["column_name"] is not None, "Column name cannot be None"
-            assert data["table_cat"] is not None, "Table catalog cannot be None"
-            assert data["table_schem"] is not None, "Table schema cannot be None"
+            assert data["table_catalog"] is not None, "Table catalog cannot be None"
+            assert data["table_schema"] is not None, "Table schema cannot be None"
             assert data["table_name"] is not None, "Table name cannot be None"
             assert (
                 data["ordinal_position"] is not None
@@ -113,7 +113,7 @@ def transform_metadata(
                 package=package,
                 typeName="COLUMN",
                 name=data["column_name"],
-                URI=f"/{connector_name}/{connector_type}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}/{data['column_name']}",
+                URI=f"/{connector_name}/{connector_type}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}/{data['column_name']}",
                 order=data["ordinal_position"],
                 dataType=data["data_type"],
                 constraints=ColumnConstraint(
