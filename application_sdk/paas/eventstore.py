@@ -20,6 +20,9 @@ class EventStore:
 
         :param event: Event data.
         :param topic_name: Topic name to publish the event to.
+
+        Usage:
+            >>> EventStore.create_generic_event(GenericEvent(event_type="test", data={"test": "test"}))
         """
         with DaprClient() as client:
             client.publish_event(

@@ -21,6 +21,10 @@ class SecretStore:
         :param config: The credentials to store.
         :return: The generated credential GUID.
         :raises Exception: If there's an error with the Dapr client operations.
+
+        Usage:
+            >>> SecretStore.store_credentials({"username": "admin", "password": "password"})
+            "credential_1234567890"
         """
         client = DaprClient()
         try:
@@ -47,6 +51,10 @@ class SecretStore:
         :return: The credentials if found.
         :raises ValueError: If the credential_guid is invalid or credentials are not found.
         :raises Exception: If there's an error with the Dapr client operations.
+
+        Usage:
+            >>> SecretStore.extract_credentials("credential_1234567890")
+            {"username": "admin", "password": "password"}
         """
         if not credential_guid or not credential_guid.startswith("credential_"):
             raise ValueError("Invalid credential GUID provided.")

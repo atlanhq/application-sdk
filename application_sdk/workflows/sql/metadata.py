@@ -8,9 +8,30 @@ logger = logging.getLogger(__name__)
 
 
 class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
-    METADATA_SQL = ""
-    DATABASE_KEY = "TABLE_CATALOG"
-    SCHEMA_KEY = "TABLE_SCHEMA"
+    """
+    SQL Workflow Metadata Interface
+
+    This interface is used to fetch metadata from the database.
+
+    Attributes:
+        METADATA_SQL (str): The SQL query to fetch the metadata.
+        DATABASE_KEY (str): The key to fetch the database name.
+        SCHEMA_KEY (str): The key to fetch the schema name.
+
+    Usage:
+        Subclass this interface and implement the required attributes and any methods
+        that need custom behavior (ex. fetch_metadata).
+
+        >>> class MySQLWorkflowMetadataInterface(SQLWorkflowMetadataInterface):
+        >>>     METADATA_SQL = "SELECT * FROM information_schema.schemata"
+        >>>     DATABASE_KEY = "TABLE_CATALOG"
+        >>>     SCHEMA_KEY = "TABLE_SCHEMA"
+        >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        >>>         super().__init__(create_engine_fn)
+    """
+    METADATA_SQL: str = ""
+    DATABASE_KEY: str = "TABLE_CATALOG"
+    SCHEMA_KEY: str = "TABLE_SCHEMA"
 
     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         self.create_engine_fn = create_engine_fn

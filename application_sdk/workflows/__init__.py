@@ -16,26 +16,46 @@ logger = get_logger(__name__)
 
 
 class WorkflowAuthInterface(ABC):
+    """
+    Base class for workflow auth interfaces
+    """
     @abstractmethod
     def test_auth(self, credential: Dict[str, Any]) -> bool:
         raise NotImplementedError
 
 
 class WorkflowMetadataInterface(ABC):
-
+    """
+    Base class for workflow metadata interfaces
+    """
     @abstractmethod
     def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
         raise NotImplementedError
 
 
 class WorkflowPreflightCheckInterface(ABC):
-
+    """
+    Base class for workflow preflight check interfaces
+    """
     @abstractmethod
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
 
 class WorkflowWorkerInterface(ABC):
+    """
+    Base class for workflow workers
+
+    This class provides a default implementation for the workflow, with hooks
+    for subclasses to customize specific behaviors.
+
+    Attributes:
+        TEMPORAL_HOST: The host of the Temporal server.
+        TEMPORAL_PORT: The port of the Temporal server.
+        TEMPORAL_WORKFLOW_CLASS: The workflow class.
+        TEMPORAL_ACTIVITIES: The activities to run.
+        PASSTHROUGH_MODULES: The modules to pass through in the worker sandbox.
+    """
     TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "localhost")
     TEMPORAL_PORT = os.getenv("TEMPORAL_PORT", "7233")
 
@@ -51,9 +71,25 @@ class WorkflowWorkerInterface(ABC):
 
     @abstractmethod
     async def run(self, *args, **kwargs):
+        """
+        Run the workflow
+
+        This method defines the workflow execution logic with references to the
+        activities and child workflows that are defined in the subclass.
+        """
         raise NotImplementedError
 
-    async def run_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+    async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+        """
+        Start the workflow
+        This method is the request handler/client that starts the workflow.
+
+        Args:
+            workflow_args: The arguments to pass to the workflow.
+
+        Returns:
+            The workflow execution metadata.
+        """
         client = await Client.connect(
             f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
             namespace="default"
@@ -90,6 +126,12 @@ class WorkflowWorkerInterface(ABC):
             raise e
 
     async def start_worker(self):
+        """
+        Start the worker
+
+        This method connects to the Temporal server and starts the worker.
+        A worker is required to execute workflows and activities.
+        """
         self.temporal_client = await Client.connect(
             f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
             namespace="default"
@@ -113,6 +155,18 @@ class WorkflowWorkerInterface(ABC):
 
 
 class WorkflowBuilderInterface(ABC):
+    """
+    Base class for workflow builder interfaces
+
+    This class provides a default implementation for the workflow builder, with hooks
+    for subclasses to customize specific behaviors.
+
+    Attributes:
+        auth_interface: The auth interface.
+        metadata_interface: The metadata interface.
+        preflight_check_interface: The preflight check interface.
+        worker_interface: The worker interface.
+    """
     def __init__(
         self,
         auth_interface: Optional[WorkflowAuthInterface] = None,

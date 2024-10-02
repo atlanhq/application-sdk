@@ -27,6 +27,9 @@ def transform_metadata(
     :param typename: The type of the object.
     :param data: The data to transform.
     :return: The transformed object.
+
+    Usage:
+        >>> transform_metadata("redshift", "sql", "table", {"table_name": "instacart_orders", "table_schema": "public", "table_cat": "dev"})
     """
     connector_temp = f"{connector_name}_{connector_type}"
     namespace = Namespace(

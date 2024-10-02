@@ -8,6 +8,10 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     :param name: The name of the logger.
     :param level: The level of the logger.
     :return: The logger.
+
+    Usage:
+        >>> logger = get_logger(__name__)
+        >>> logger.info("Hello, World!")
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)

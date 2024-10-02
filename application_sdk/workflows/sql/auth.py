@@ -9,7 +9,26 @@ logger = logging.getLogger(__name__)
 
 
 class SQLWorkflowAuthInterface(WorkflowAuthInterface):
-    TEST_AUTHENTICATION_SQL = "SELECT 1;"
+    """
+    SQL Workflow Auth Interface
+
+    This interface is used to authenticate the SQL workflow. For example, if the SQL workflow
+    is used to connect to a database, the `test_auth` method is used to test the authentication
+    credentials.
+
+    Attributes:
+        TEST_AUTHENTICATION_SQL(str): The SQL query to test the authentication credentials.
+
+    Usage:
+        Subclass this interface and implement the required attributes and any methods
+        that need custom behavior (ex. test_auth).
+
+        >>> class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
+        >>>     TEST_AUTHENTICATION_SQL = "SELECT 1;"
+        >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        >>>         super().__init__(create_engine_fn)
+    """
+    TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 
     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         self.create_engine_fn = create_engine_fn

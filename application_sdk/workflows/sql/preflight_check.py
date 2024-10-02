@@ -11,10 +11,33 @@ logger = logging.getLogger(__name__)
 
 
 class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
-    METADATA_SQL = ""
-    TABLES_CHECK_SQL = ""
-    DATABASE_KEY = "TABLE_CATALOG"
-    SCHEMA_KEY = "TABLE_SCHEMA"
+    """
+    SQL Workflow Preflight Check Interface
+
+    This interface is used to perform preflight checks on the SQL workflow.
+
+    Attributes:
+        METADATA_SQL (str): The SQL query to fetch the metadata.
+        TABLES_CHECK_SQL (str): The SQL query to fetch the tables.
+        DATABASE_KEY (str): The key to fetch the database name.
+        SCHEMA_KEY (str): The key to fetch the schema name.
+
+    Usage:
+        Subclass this interface and implement the required attributes and any methods
+        that need custom behavior.
+
+        >>> class MySQLWorkflowPreflightCheckInterface(SQLWorkflowPreflightCheckInterface):
+        >>>     METADATA_SQL = "SELECT * FROM information_schema.tables"
+        >>>     TABLES_CHECK_SQL = "SELECT COUNT(*) FROM information_schema.tables"
+        >>>     DATABASE_KEY = "TABLE_CATALOG"
+        >>>     SCHEMA_KEY = "TABLE_SCHEMA"
+        >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
+        >>>         super().__init__(create_engine_fn)
+    """
+    METADATA_SQL: str = ""
+    TABLES_CHECK_SQL: str = ""
+    DATABASE_KEY: str = "TABLE_CATALOG"
+    SCHEMA_KEY: str = "TABLE_SCHEMA"
 
     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         self.create_engine_fn = create_engine_fn
