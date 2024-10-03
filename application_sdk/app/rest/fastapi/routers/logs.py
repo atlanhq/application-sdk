@@ -39,7 +39,9 @@ async def read_logs(
     :raises HTTPException: If there's an error with the database operations.
     """
     try:
-        return Logs.get_logs(session, skip, limit, keyword, from_timestamp, to_timestamp)
+        return Logs.get_logs(
+            session, skip, limit, keyword, from_timestamp, to_timestamp
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

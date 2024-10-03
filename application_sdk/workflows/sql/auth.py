@@ -1,7 +1,7 @@
 import logging
-from typing import Any, Dict, Callable
+from typing import Any, Callable, Dict
 
-from sqlalchemy import text, Engine
+from sqlalchemy import Engine, text
 
 from application_sdk.workflows import WorkflowAuthInterface
 
@@ -28,6 +28,7 @@ class SQLWorkflowAuthInterface(WorkflowAuthInterface):
         >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         >>>         super().__init__(create_engine_fn)
     """
+
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 
     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):

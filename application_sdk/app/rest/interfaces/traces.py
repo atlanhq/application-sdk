@@ -1,4 +1,5 @@
 """Interface for handling trace-related API endpoints."""
+
 import time
 from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional, Sequence

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 def transform_metadata(
     connector_name: str, connector_type: str, typename: str, data: Dict[str, Any]
 ) -> Optional[BaseObjectEntity]:
-    """Transform metadata to Atlan Open Spec. 
+    """Transform metadata to Atlan Open Spec.
 
     :param connector_name: The name of the connector.
     :param connector_type: The type of the connector.

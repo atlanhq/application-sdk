@@ -20,6 +20,10 @@ temporalio = "^1.7.1"
 aiofiles = "^24.1.0"
 sqlalchemy = "^2.0.35"
 
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^3.8.0"
+isort = "^5.13.2"
+
 [tool.poetry.group.test.dependencies]
 pytest = "^8.3.3"
 coverage = "^7.6.1"
@@ -31,3 +35,8 @@ psycopg2-binary = "^2.9.9"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "strict"

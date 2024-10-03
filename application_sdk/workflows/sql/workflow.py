@@ -1,28 +1,25 @@
-
 import asyncio
-from datetime import timedelta
-import shutil
-import aiofiles
-from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import os
-from typing import Any, Coroutine, Dict, List, Callable, Sequence
+import shutil
+from concurrent.futures import ThreadPoolExecutor
+from datetime import timedelta
+from typing import Any, Callable, Coroutine, Dict, List, Sequence
 
+import aiofiles
 from sqlalchemy import Connection, Engine, text
-
-from temporalio.common import RetryPolicy
 from temporalio import activity, workflow
+from temporalio.common import RetryPolicy
 from temporalio.types import CallableType
 
-from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
-from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.paas.objectstore import ObjectStore
 from application_sdk.paas.secretstore import SecretStore
-
-from application_sdk.workflows.sql.utils import prepare_filters
-from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows import WorkflowWorkerInterface
+from application_sdk.workflows.sql.utils import prepare_filters
+from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
+from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
+from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
 
@@ -45,16 +42,18 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         that need custom behavior. Then use the subclass to create a workflow builder
         and run the workflow.
     """
+
     DATABASE_SQL = ""
     SCHEMA_SQL = ""
     TABLE_SQL = ""
     COLUMN_SQL = ""
 
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
-    def __init__(self,
+    def __init__(
+        self,
         application_name: str = "sql-connector",
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
-        TEMPORAL_ACTIVITIES: Sequence[CallableType] = []
+        TEMPORAL_ACTIVITIES: Sequence[CallableType] = [],
     ):
         """
         Initialize the SQL workflow worker.
@@ -73,7 +72,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_tables,
                 self.fetch_columns,
                 self.teardown_output_directory,
-                self.push_results_to_object_store
+                self.push_results_to_object_store,
             ]
         else:
             self.TEMPORAL_ACTIVITIES = TEMPORAL_ACTIVITIES
@@ -95,7 +94,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         workflow_args["credential_guid"] = credential_guid
         return await super().start_workflow(workflow_args)
 
-    async def run_query(self, connection: Connection, query: str, batch_size: int = 100000):
+    async def run_query(
+        self, connection: Connection, query: str, batch_size: int = 100000
+    ):
         """
         Run a query in a batch mode with client-side cursor.
 
@@ -112,11 +113,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         connection.execution_options(yield_per=batch_size)
         with ThreadPoolExecutor() as pool:
             try:
-                cursor = await loop.run_in_executor(pool, connection.execute, text(query))
+                cursor = await loop.run_in_executor(
+                    pool, connection.execute, text(query)
+                )
                 column_names: List[str] = []
 
                 while True:
-                    rows = await loop.run_in_executor(pool, cursor.fetchmany, batch_size)
+                    rows = await loop.run_in_executor(
+                        pool, cursor.fetchmany, batch_size
+                    )
                     if not rows:
                         break
 
@@ -128,10 +133,12 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             except Exception as e:
                 logger.error(f"Error running query in batch: {e}")
                 raise e
-        
-        logger.info(f"Query execution completed")
 
-    async def fetch_and_process_data(self, workflow_args: Dict[str, Any], query: str, typename: str):
+        logger.info("Query execution completed")
+
+    async def fetch_and_process_data(
+        self, workflow_args: Dict[str, Any], query: str, typename: str
+    ):
         """
         Fetch and process data from the database.
 
@@ -152,7 +159,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             with engine.connect() as connection:
                 async for batch in self.run_query(connection, query):
                     # Process each batch here
-                    await self._process_batch(batch, typename, output_path, summary, chunk_number)
+                    await self._process_batch(
+                        batch, typename, output_path, summary, chunk_number
+                    )
                     chunk_number += 1
             chunk_meta_file = os.path.join(output_path, f"{typename}-chunks.txt")
             async with aiofiles.open(chunk_meta_file, "w") as chunk_meta_f:
@@ -230,7 +239,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        return await self.fetch_and_process_data(workflow_args, self.DATABASE_SQL, "database")
+        return await self.fetch_and_process_data(
+            workflow_args, self.DATABASE_SQL, "database"
+        )
 
     @activity.defn
     @auto_heartbeater
@@ -245,18 +256,18 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
         exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
         temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
-        normalized_include_regex, normalized_exclude_regex, _ = (
-            prepare_filters(
-                include_filter,
-                exclude_filter,
-                temp_table_regex,
-            )
+        normalized_include_regex, normalized_exclude_regex, _ = prepare_filters(
+            include_filter,
+            exclude_filter,
+            temp_table_regex,
         )
         schema_sql_query = self.SCHEMA_SQL.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
         )
-        return await self.fetch_and_process_data(workflow_args, schema_sql_query, "schema")
+        return await self.fetch_and_process_data(
+            workflow_args, schema_sql_query, "schema"
+        )
 
     @activity.defn
     @auto_heartbeater
@@ -282,7 +293,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
         )
-        return await self.fetch_and_process_data(workflow_args, table_sql_query, "table")
+        return await self.fetch_and_process_data(
+            workflow_args, table_sql_query, "table"
+        )
 
     @activity.defn
     @auto_heartbeater
@@ -308,7 +321,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
         )
-        return await self.fetch_and_process_data(workflow_args, column_sql_query, "column")
+        return await self.fetch_and_process_data(
+            workflow_args, column_sql_query, "column"
+        )
 
     @activity.defn
     @auto_heartbeater
@@ -352,9 +367,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         workflow_run_id = workflow.info().run_id
         output_prefix = workflow_args["output_prefix"]
-        output_path = (
-            f"{output_prefix}/{workflow_id}/{workflow_run_id}"
-        )
+        output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
         # Create output directory
@@ -399,11 +412,14 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         extraction_results: Dict[str, Any] = {}
         for result in results:
             extraction_results.update(result)
-        
+
         # Push results to object store
         await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
             self.push_results_to_object_store,
-            {"output_prefix": workflow_args["output_prefix"], "output_path": output_path},
+            {
+                "output_prefix": workflow_args["output_prefix"],
+                "output_path": output_path,
+            },
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(minutes=10),
         )
@@ -417,7 +433,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         )
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
         workflow.logger.info(f"Extraction results summary: {extraction_results}")
-
 
     @staticmethod
     @activity.defn

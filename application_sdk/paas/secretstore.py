@@ -1,8 +1,9 @@
 """Secret store for the application."""
+
 import json
 import logging
-from typing import Any, Dict
 import uuid
+from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
@@ -10,7 +11,6 @@ logger = logging.getLogger(__name__)
 
 
 class SecretStore:
-
     STATE_STORE_NAME = "statestore"
 
     @classmethod
@@ -61,7 +61,9 @@ class SecretStore:
 
         client = DaprClient()
         try:
-            state = client.get_state(store_name=cls.STATE_STORE_NAME, key=credential_guid)
+            state = client.get_state(
+                store_name=cls.STATE_STORE_NAME, key=credential_guid
+            )
             if not state.data:
                 raise ValueError(f"Credentials not found for GUID: {credential_guid}")
             return json.loads(state.data)

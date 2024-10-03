@@ -1,7 +1,8 @@
 import logging
-from typing import Any, Dict, List, Callable
+from typing import Any, Callable, Dict, List
 
 from sqlalchemy import Engine, text
+
 from application_sdk.workflows import WorkflowMetadataInterface
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
         >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         >>>         super().__init__(create_engine_fn)
     """
+
     METADATA_SQL: str = ""
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"

@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List, Set, Tuple, Callable
+from typing import Any, Callable, Dict, List, Set, Tuple
 
 from sqlalchemy import Engine, text
 
@@ -34,6 +34,7 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
         >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         >>>         super().__init__(create_engine_fn)
     """
+
     METADATA_SQL: str = ""
     TABLES_CHECK_SQL: str = ""
     DATABASE_KEY: str = "TABLE_CATALOG"
@@ -42,14 +43,11 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         self.create_engine_fn = create_engine_fn
 
-
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
-            results["databaseSchemaCheck"] = self.check_schemas_and_databases(
-                payload
-            )
+            results["databaseSchemaCheck"] = self.check_schemas_and_databases(payload)
             results["tablesCheck"] = self.tables_check(payload)
             logger.info("Preflight check completed successfully")
         except Exception as e:
@@ -96,7 +94,9 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
                 payload.get("credentials", {})
             )
 
-            include_filter = json.loads(payload.get("form_data", {}).get("include_filter", "{}"))
+            include_filter = json.loads(
+                payload.get("form_data", {}).get("include_filter", "{}")
+            )
             allowed_databases, allowed_schemas = self.extract_allowed_schemas(
                 schemas_results
             )

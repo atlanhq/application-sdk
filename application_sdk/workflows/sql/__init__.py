@@ -2,7 +2,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
-from sqlalchemy import create_engine, Engine
+from sqlalchemy import Engine, create_engine
 
 from application_sdk.workflows import (
     WorkflowAuthInterface,
@@ -13,7 +13,9 @@ from application_sdk.workflows import (
 )
 from application_sdk.workflows.sql.auth import SQLWorkflowAuthInterface
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-from application_sdk.workflows.sql.preflight_check import SQLWorkflowPreflightCheckInterface
+from application_sdk.workflows.sql.preflight_check import (
+    SQLWorkflowPreflightCheckInterface,
+)
 from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
 
 logger = logging.getLogger(__name__)

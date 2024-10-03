@@ -1,7 +1,7 @@
 # Python Application SDK
 
 Python Application SDK is a Python library for developing applications on the Atlan Platform and is a PaaS system that provides a set of tools and services to build, test and manage applications.
-The SDK also focuses on empowering developers to build applications that are scalable, secure, reliable and easy to maintain.  
+The SDK also focuses on empowering developers to build applications that are scalable, secure, reliable and easy to maintain.
 
 
 ## Table of Contents

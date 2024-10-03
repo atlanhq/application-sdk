@@ -1,4 +1,5 @@
 """Router for handling health-related API endpoints."""
+
 import platform
 import re
 import socket

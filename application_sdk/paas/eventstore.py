@@ -1,9 +1,11 @@
 """Event store for the application."""
+
 import json
 import logging
 
-from application_sdk.paas.models import GenericEvent, ApplicationEvent
 from dapr.clients import DaprClient
+
+from application_sdk.paas.models import ApplicationEvent, GenericEvent
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +30,8 @@ class EventStore:
             client.publish_event(
                 pubsub_name=cls.EVENT_STORE_NAME,
                 topic_name=topic_name,
-                data=json.dumps(event.model_dump(mode='json')),
-                data_content_type='application/json',
+                data=json.dumps(event.model_dump(mode="json")),
+                data_content_type="application/json",
             )
 
     @classmethod

@@ -4,11 +4,14 @@ import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Sequence
 
-from temporalio import workflow, activity
+from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
-from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 
 from application_sdk.logging import get_logger
 
@@ -19,6 +22,7 @@ class WorkflowAuthInterface(ABC):
     """
     Base class for workflow auth interfaces
     """
+
     @abstractmethod
     def test_auth(self, credential: Dict[str, Any]) -> bool:
         raise NotImplementedError
@@ -28,6 +32,7 @@ class WorkflowMetadataInterface(ABC):
     """
     Base class for workflow metadata interfaces
     """
+
     @abstractmethod
     def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
         raise NotImplementedError
@@ -37,6 +42,7 @@ class WorkflowPreflightCheckInterface(ABC):
     """
     Base class for workflow preflight check interfaces
     """
+
     @abstractmethod
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
@@ -56,6 +62,7 @@ class WorkflowWorkerInterface(ABC):
         TEMPORAL_ACTIVITIES: The activities to run.
         PASSTHROUGH_MODULES: The modules to pass through in the worker sandbox.
     """
+
     TEMPORAL_HOST = os.getenv("TEMPORAL_HOST", "localhost")
     TEMPORAL_PORT = os.getenv("TEMPORAL_PORT", "7233")
 
@@ -70,7 +77,7 @@ class WorkflowWorkerInterface(ABC):
         self.TEMPORAL_WORKER_TASK_QUEUE = f"{self.application_name}"
 
     @abstractmethod
-    async def run(self, *args, **kwargs):
+    async def run(self, *args: Any, **kwargs: Any) -> None:
         """
         Run the workflow
 
@@ -92,7 +99,7 @@ class WorkflowWorkerInterface(ABC):
         """
         client = await Client.connect(
             f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
-            namespace="default"
+            namespace="default",
             # FIXME: causes issue with different namespace, TBR.
         )
 
@@ -103,7 +110,6 @@ class WorkflowWorkerInterface(ABC):
                 "output_prefix": "/tmp/output",
             }
         )
-
 
         workflow.logger.setLevel(logging.DEBUG)
         activity.logger.setLevel(logging.DEBUG)
@@ -134,7 +140,7 @@ class WorkflowWorkerInterface(ABC):
         """
         self.temporal_client = await Client.connect(
             f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
-            namespace="default"
+            namespace="default",
             # FIXME: causes issue with namespace other than default, To be reviewed.
         )
 
@@ -147,10 +153,12 @@ class WorkflowWorkerInterface(ABC):
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
                     *self.PASSTHROUGH_MODULES
                 )
-            )
+            ),
         )
 
-        logger.info(f"Starting worker with task queue: {self.TEMPORAL_WORKER_TASK_QUEUE}")
+        logger.info(
+            f"Starting worker with task queue: {self.TEMPORAL_WORKER_TASK_QUEUE}"
+        )
         await self.temporal_worker.run()
 
 
@@ -167,6 +175,7 @@ class WorkflowBuilderInterface(ABC):
         preflight_check_interface: The preflight check interface.
         worker_interface: The worker interface.
     """
+
     def __init__(
         self,
         auth_interface: Optional[WorkflowAuthInterface] = None,

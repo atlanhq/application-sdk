@@ -1,10 +1,12 @@
 """Interface for handling metric-related API endpoints."""
+
 import time
 from datetime import datetime
-from typing import List, Optional, Sequence, Type
+from typing import Any, Dict, List, Optional
 
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
+from sqlalchemy import Column
 from sqlalchemy.orm import Session
 
 from application_sdk.app.models import Metric
@@ -25,7 +27,7 @@ class Metrics:
     @staticmethod
     def get_metrics(
         session: Session, from_timestamp: int = 0, to_timestamp: Optional[int] = None
-    ) -> dict:
+    ) -> Dict[Column[str], Any]:
         """
         Get metrics with optional filtering by timestamp range.
 
@@ -44,10 +46,10 @@ class Metrics:
             )
             .all()
         )
-        metrics_response = {}
+        metrics_response: Dict[Column[str], Any] = {}
         for metric in metrics:
             metric_name = metric.name
-            if metric_name not in metrics_response:
+            if metric_name not in metrics_response.keys():
                 metrics_response[metric_name] = {
                     "resource_attributes": metric.resource_attributes,
                     "scope_name": metric.scope_name,

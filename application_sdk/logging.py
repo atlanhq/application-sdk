@@ -21,7 +21,7 @@ def get_logger(name: str, level: int = logging.DEBUG) -> logging.Logger:
     ch.setLevel(logger.level)
 
     # create formatter
-    formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(name)s: %(message)s')
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 
     # add formatter to ch
     ch.setFormatter(formatter)

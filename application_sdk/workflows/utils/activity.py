@@ -10,9 +10,7 @@ source:
 - https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
 """
 
-
 import asyncio
-from datetime import datetime
 from functools import wraps
 from typing import Any, Awaitable, Callable, TypeVar, cast
 
@@ -34,6 +32,7 @@ def auto_heartbeater(fn: F) -> F:
         >>> async def my_activity():
         >>>     pass
     """
+
     # We want to ensure that the type hints from the original callable are
     # available via our wrapper, so we use the functools wraps decorator
     @wraps(fn)
@@ -41,7 +40,7 @@ def auto_heartbeater(fn: F) -> F:
         heartbeat_task = None
         try:
             heartbeat_timeout = activity.info().heartbeat_timeout
-        except RuntimeError as e:
+        except RuntimeError:
             heartbeat_timeout = None
 
         if heartbeat_timeout:

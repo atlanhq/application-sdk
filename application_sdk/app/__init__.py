@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 from typing import Optional
 
-
 from application_sdk.app import models
 from application_sdk.app.database import get_engine
 from application_sdk.workflows import WorkflowBuilderInterface
@@ -17,7 +16,6 @@ class AtlanApplicationBuilder(ABC):
     def add_telemetry_routes(self) -> None:
         raise NotImplementedError
 
-
     def on_api_service_start(self):
         models.Base.metadata.create_all(bind=get_engine())
 
@@ -32,4 +30,3 @@ class AtlanApplicationBuilder(ABC):
     @abstractmethod
     def start_worker(self) -> None:
         raise NotImplementedError
-

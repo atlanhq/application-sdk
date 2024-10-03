@@ -1,10 +1,12 @@
-from application_sdk.app import AtlanApplicationBuilder, WorkflowBuilderInterface
-from application_sdk.app.rest.fastapi.routers import health, logs, metrics, traces
+import asyncio
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
-import asyncio
-from typing import Optional
+
+from application_sdk.app import AtlanApplicationBuilder, WorkflowBuilderInterface
+from application_sdk.app.rest.fastapi.routers import health, logs, metrics, traces
+
 
 class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     workflows_router: APIRouter = APIRouter(
@@ -27,7 +29,6 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         self.app.include_router(metrics.router)
         self.app.include_router(traces.router)
 
-
     def on_api_service_start(self):
         super().on_api_service_start()
         # FastAPIInstrumentor.instrument_app(self.app)  # pyright: ignore[reportUnknownMemberType]
@@ -40,7 +41,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             # Start worker in a separate thread
             asyncio.run(self.workflow_builder_interface.worker_interface.start_worker())
 
-    async def test_auth(self, credential: dict):
+    async def test_auth(self, credential: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
             or not self.workflow_builder_interface.auth_interface
@@ -67,7 +68,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 },
             )
 
-    async def fetch_metadata(self, credential: dict):
+    async def fetch_metadata(self, credential: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
             or not self.workflow_builder_interface.metadata_interface
@@ -95,7 +96,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 },
             )
 
-    async def preflight_check(self, form_data: dict):
+    async def preflight_check(self, form_data: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
             or not self.workflow_builder_interface.preflight_check_interface
@@ -123,7 +124,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 },
             )
 
-    async def start_workflow(self, workflow_args: dict):
+    async def start_workflow(self, workflow_args: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
             or not self.workflow_builder_interface.worker_interface
