@@ -53,17 +53,21 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         self,
         application_name: str = "sql-connector",
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
-        TEMPORAL_ACTIVITIES: Sequence[CallableType] = [],
+        use_server_side_cursor: bool = False,
+        temporal_activities: Sequence[CallableType] = [],
     ):
         """
         Initialize the SQL workflow worker.
 
-        :param application_name: The name of the application.
-        :param get_sql_engine: A callable that returns an SQLAlchemy engine.
+        :param application_name: The name of the application (default: "sql-connector")
+        :param get_sql_engine: A callable that returns an SQLAlchemy engine (default: None)
+        :param use_server_side_cursor: Whether to use server-side cursor (default: False)
+        :param temporal_activities: The temporal activities to run (default: [], parent class activities)
         """
         self.get_sql_engine = get_sql_engine
+        self.use_server_side_cursor = use_server_side_cursor
 
-        if not TEMPORAL_ACTIVITIES:
+        if not temporal_activities:
             # default activities
             self.TEMPORAL_ACTIVITIES = [
                 self.setup_output_directory,
@@ -75,7 +79,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.push_results_to_object_store,
             ]
         else:
-            self.TEMPORAL_ACTIVITIES = TEMPORAL_ACTIVITIES
+            self.TEMPORAL_ACTIVITIES = temporal_activities
 
         super().__init__(application_name)
 
@@ -106,11 +110,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param connection: The database connection.
         :param query: The query to run.
         :param batch_size: The batch size.
+        :param use_server_side_cursor: Whether to use server-side cursor.
         :return: The query results.
         :raises Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
-        connection.execution_options(yield_per=batch_size)
+
+        if self.use_server_side_cursor:
+            connection.execution_options(yield_per=batch_size)
+
         with ThreadPoolExecutor() as pool:
             try:
                 cursor = await loop.run_in_executor(
@@ -231,7 +239,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @activity.defn
     @auto_heartbeater
-    @staticmethod
     async def fetch_databases(self, workflow_args: Dict[str, Any]):
         """
         Fetch and process databases from the database.
@@ -245,7 +252,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @activity.defn
     @auto_heartbeater
-    @staticmethod
     async def fetch_schemas(self, workflow_args: Dict[str, Any]):
         """
         Fetch and process schemas from the database.
@@ -327,8 +333,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @activity.defn
     @auto_heartbeater
-    @staticmethod
-    async def fetch_sql(sql: str):
+    async def fetch_sql(self, sql: str):
         """
         Fetch data from the database using a custom SQL query.
 
@@ -380,25 +385,25 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         # run activities in parallel
         activities: List[Coroutine[Any, Any, Any]] = [
-            workflow.execute_activity(
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
                 self.fetch_databases,
                 workflow_args,
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
-            workflow.execute_activity(
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
                 self.fetch_schemas,
                 workflow_args,
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
-            workflow.execute_activity(
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
                 self.fetch_tables,
                 workflow_args,
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
-            workflow.execute_activity(
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
                 self.fetch_columns,
                 workflow_args,
                 retry_policy=retry_policy,

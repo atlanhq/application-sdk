@@ -20,6 +20,46 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 6. Start the temporal server `temporal server start-dev`
 7. You can now run any of the examples using `python <example>.py`
 
+### Run and Debug examples via VSCode or Cursor
+1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables and run the configuration
+```json
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Run SQL Connector",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/application_sql.py",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": false,
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}",
+                "POSTGRES_HOST": "host",
+                "POSTGRES_PORT": "5432",
+                "POSTGRES_USER": "postgres",
+                "POSTGRES_PASSWORD": "password",
+                "POSTGRES_DATABASE": "postgres",
+            }
+        },
+        {
+            "name": "Python: Debug Tests",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/.venv/bin/pytest",
+            "args": [
+                "-v",
+            ],
+            "cwd": "${workspaceFolder}/tests/unit/paas",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}"
+            },
+        },
+    ]
+}
+```
+- You can navigate to the Run and Debug section in the IDE to run the configurations of your choice.
+
 
 ## Examples
 1. [SQL Application](./application_sql.py) - Demonstrates how to build a SQL application using the Atlan SDK
