@@ -17,7 +17,8 @@ from application_sdk.paas.objectstore import ObjectStore
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.workflows import WorkflowWorkerInterface
 from application_sdk.workflows.sql.utils import prepare_filters
-from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
+from application_sdk.workflows.transformers import TransformerInterface
+from application_sdk.workflows.transformers.phoenix import PhoenixTransformer
 from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
@@ -55,6 +56,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
         use_server_side_cursor: bool = False,
         temporal_activities: Sequence[CallableType] = [],
+        transformer: TransformerInterface = PhoenixTransformer(),
     ):
         """
         Initialize the SQL workflow worker.
@@ -63,9 +65,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param get_sql_engine: A callable that returns an SQLAlchemy engine (default: None)
         :param use_server_side_cursor: Whether to use server-side cursor (default: False)
         :param temporal_activities: The temporal activities to run (default: [], parent class activities)
+        :param transformer: The transformer to use (default: PhoenixTransformer)
         """
         self.get_sql_engine = get_sql_engine
         self.use_server_side_cursor = use_server_side_cursor
+        self.transformer = transformer
 
         if not temporal_activities:
             # default activities
@@ -206,7 +210,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 raw_batch.append(json.dumps(row))
                 summary["raw"] += 1
 
-                transformed_data = transform_metadata(
+                transformed_data = self.transformer.transform_metadata(
                     self.application_name, "sql", typename, row
                 )
                 if transformed_data is not None:
