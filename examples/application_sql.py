@@ -34,6 +34,7 @@ from urllib.parse import quote_plus
 
 from temporalio import workflow
 
+from application_sdk.common.sql_handler import SQLHandler
 from application_sdk.logging import get_logger
 from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface

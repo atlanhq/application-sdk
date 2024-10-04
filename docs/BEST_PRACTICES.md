@@ -44,3 +44,9 @@ This allows us to achieve concurrency at both workflow and activity level based 
 - You can use the `auto_heartbeater` decorator on top of the activity definition ([example](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/workflows/sql/workflow.py#L238)) to automatically heartbeat the activity. This will heartbeat the activity 3 times per heartbeat_timeout interval by default.
 
 > Read more about activity timeouts [here](https://temporal.io/blog/activity-timeouts)
+
+
+## SQLAlchemy
+
+### Server Side Cursors
+Use server side cursors for large result sets to avoid loading the entire result set into memory. Refer to the [SQLAlchemy documentation](https://docs.sqlalchemy.org/en/20/core/connections.html#using-server-side-cursors-a-k-a-stream-results) for more information.

@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional
 
 from sqlalchemy import Engine, create_engine
 
+from application_sdk.common.sql_handler import SQLHandler
 from application_sdk.workflows import (
     WorkflowAuthInterface,
     WorkflowBuilderInterface,
@@ -65,6 +66,8 @@ class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
             worker_interface = SQLWorkflowWorkerInterface(
                 get_sql_engine=self.get_sql_engine,
             )
+
+        self.sql_handler = SQLHandler()
 
         super().__init__(
             auth_interface,

@@ -20,8 +20,41 @@ from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
 from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.workflows.utils.activity import auto_heartbeater
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import ConsoleSpanExporter, BatchSpanProcessor
+
+
+from opentelemetry.trace import format_trace_id
+
+class OTELLogFormatter(logging.Formatter):
+    def format(self, record):
+        span_context = trace.get_current_span().get_span_context()
+        if span_context.is_valid:
+            record.trace_id = format_trace_id(span_context.trace_id)
+            record.span_id = format_trace_id(span_context.span_id)
+        else:
+            record.trace_id = None
+            record.span_id = None
+        return super().format(record)
+
+# Apply the custom formatter
+formatter = OTELLogFormatter('%(asctime)s [%(trace_id)s, %(span_id)s] %(levelname)s: %(message)s')
+handler = logging.StreamHandler()
+handler.setFormatter(formatter)
 
 logger = logging.getLogger(__name__)
+logger.handlers = [handler]
+
+
+trace.set_tracer_provider(TracerProvider())
+tracer = trace.get_tracer(__name__)
+# Set up the span exporter and processor
+span_exporter = ConsoleSpanExporter()
+span_processor = BatchSpanProcessor(span_exporter)
+trace.get_tracer_provider().add_span_processor(span_processor)
+
+
 
 
 class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
@@ -363,8 +396,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         :param workflow_args: The workflow arguments.
         """
+        with tracer.start_as_current_span("main_operation"):
+            logger.info("This log will include the trace context")
+
         workflow_id = workflow_args["workflow_id"]
-        workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
+        logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
@@ -436,6 +472,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=5),
         )
+
+        with tracer.start_as_current_span("main_operation"):
+            logger.info("This log will include the trace context")
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
         workflow.logger.info(f"Extraction results summary: {extraction_results}")
 
