@@ -53,7 +53,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         self,
         application_name: str = "sql-connector",
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
-        use_server_side_cursor: bool = False,
+        use_server_side_cursor: bool = True,
         temporal_activities: Sequence[CallableType] = [],
     ):
         """
@@ -61,7 +61,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         :param application_name: The name of the application (default: "sql-connector")
         :param get_sql_engine: A callable that returns an SQLAlchemy engine (default: None)
-        :param use_server_side_cursor: Whether to use server-side cursor (default: False)
+        :param use_server_side_cursor: Whether to use server-side cursor (default: True)
         :param temporal_activities: The temporal activities to run (default: [], parent class activities)
         """
         self.get_sql_engine = get_sql_engine

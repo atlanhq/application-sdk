@@ -111,7 +111,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
     ):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
         # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
-        super().__init__(application_name, use_server_side_cursor=True, *args, **kwargs)
+        super().__init__(application_name, *args, **kwargs)
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
