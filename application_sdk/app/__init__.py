@@ -26,7 +26,3 @@ class AtlanApplicationBuilder(ABC):
     @abstractmethod
     def add_workflows_router(self) -> None:
         raise NotImplementedError
-
-    @abstractmethod
-    def start_worker(self) -> None:
-        raise NotImplementedError

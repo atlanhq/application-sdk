@@ -33,14 +33,6 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         super().on_api_service_start()
         # FastAPIInstrumentor.instrument_app(self.app)  # pyright: ignore[reportUnknownMemberType]
 
-    def start_worker(self):
-        if (
-            self.workflow_builder_interface
-            and self.workflow_builder_interface.worker_interface
-        ):
-            # Start worker in a separate thread
-            asyncio.run(self.workflow_builder_interface.worker_interface.start_worker())
-
     async def test_auth(self, credential: Dict[str, Any]):
         if (
             not self.workflow_builder_interface

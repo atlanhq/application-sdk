@@ -143,15 +143,11 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
         )
 
 
-def run_worker(worker_interface):
-    asyncio.run(worker_interface.start_worker())
-
-
 if __name__ == "__main__":
     builder = SampleSQLWorkflowBuilder()
     # Start the temporal worker in a separate thread
     worker_thread = threading.Thread(
-        target=run_worker, args=(builder.worker_interface,), daemon=True
+        target=builder.start_worker, args=(), daemon=True
     )
     worker_thread.start()
 
