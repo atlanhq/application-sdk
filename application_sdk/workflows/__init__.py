@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import uuid
@@ -187,3 +188,8 @@ class WorkflowBuilderInterface(ABC):
         self.metadata_interface = metadata_interface
         self.preflight_check_interface = preflight_check_interface
         self.worker_interface = worker_interface
+
+    def start_worker(self):
+        if not self.worker_interface:
+            raise NotImplementedError("Worker interface not implemented")
+        asyncio.run(self.worker_interface.start_worker())
