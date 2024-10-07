@@ -41,8 +41,9 @@ from application_sdk.workflows.sql.preflight_check import (
     SQLWorkflowPreflightCheckInterface,
 )
 from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
+from application_sdk.workflows.transformers.atlas import AtlasTransformer
 
-APPLICATION_NAME = "sample-sql-workflow"
+APPLICATION_NAME = "postgres"
 
 
 logger = get_logger(__name__)
@@ -106,12 +107,21 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         AND c.table_name !~ '{exclude_table}';
     """
 
+    # PASSTHROUGH_MODULES: Sequence[str] = ["application_sdk", "time"]
+
     def __init__(
         self, application_name: str = APPLICATION_NAME, *args: Any, **kwargs: Any
     ):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
         # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
-        super().__init__(application_name, use_server_side_cursor=True, *args, **kwargs)
+        current_epoch = "1234567890"
+        super().__init__(
+            application_name,
+            use_server_side_cursor=True,
+            transformer=AtlasTransformer(timestamp=current_epoch),
+            *args,
+            **kwargs,
+        )
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
@@ -128,7 +138,7 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
         encoded_password = quote_plus(credentials["password"])
         return f"postgresql+psycopg2://{credentials['user']}:{encoded_password}@{credentials['host']}:{credentials['port']}/{credentials['database']}"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any):
         self.metadata_interface = SampleSQLWorkflowMetadata(self.get_sql_engine)
         self.preflight_interface = SampleSQLWorkflowPreflight(self.get_sql_engine)
         self.worker_interface = SampleSQLWorkflowWorker(
@@ -143,7 +153,7 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
         )
 
 
-def run_worker(worker_interface):
+def run_worker(worker_interface: SQLWorkflowWorkerInterface):
     asyncio.run(worker_interface.start_worker())
 
 

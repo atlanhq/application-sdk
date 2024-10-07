@@ -1,11 +1,12 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
+from pydantic.v1 import BaseModel
+
 
 class TransformerInterface(ABC):
-    @staticmethod
     @abstractmethod
     def transform_metadata(
-        connector_name: str, connector_type: str, typename: str, data: Dict[str, Any]
-    ) -> Optional[Any]:
+        self, connector_name: str, typename: str, data: Dict[str, Any], **kwargs: Any
+    ) -> Optional[BaseModel]:
         raise NotImplementedError

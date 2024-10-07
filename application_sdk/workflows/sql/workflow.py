@@ -5,9 +5,10 @@ import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Any, Callable, Coroutine, Dict, List, Sequence
+from typing import Any, Callable, Coroutine, Dict, List, Optional, Sequence
 
 import aiofiles
+from pydantic.v1 import BaseModel
 from sqlalchemy import Connection, Engine, text
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -19,7 +20,6 @@ from application_sdk.workflows import WorkflowWorkerInterface
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.transformers.phoenix import PhoenixTransformer
-from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
@@ -210,15 +210,13 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 raw_batch.append(json.dumps(row))
                 summary["raw"] += 1
 
-                transformed_data = self.transformer.transform_metadata(
-                    self.application_name, "sql", typename, row
+                transformed_data: Optional[BaseModel] = (
+                    self.transformer.transform_metadata(
+                        self.application_name, typename, row
+                    )
                 )
                 if transformed_data is not None:
-                    transformed_batch.append(
-                        json.dumps(
-                            transformed_data.model_dump(), cls=PydanticJSONEncoder
-                        )
-                    )
+                    transformed_batch.append(transformed_data.json())
                     summary["transformed"] += 1
                 else:
                     activity.logger.warning(f"Skipped invalid {typename} data: {row}")
