@@ -12,12 +12,12 @@ logger = logging.getLogger(__name__)
 class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
     def __init__(self, local_file_prefix: str, upload_file_prefix: str, chunk_size: int=100000,
-                 parquet_writer_options: Dict[str, Any] = {}):
+                 schema: pq.ParquetSchema = None, parquet_writer_options: Dict[str, Any] = {}):
         super().__init__(local_file_prefix, upload_file_prefix, chunk_size)
-        self.schema = None
+        self.schema = schema
         self.parquet_writer_options = parquet_writer_options
 
-    def update_schema(self, new_schema: pq.ParquetSchema):
+    async def update_schema(self, new_schema: pq.ParquetSchema):
         if self.schema is None:
             self.schema = new_schema
         else:
@@ -36,7 +36,7 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
             table = pa.Table.from_pydict(data)
             new_schema = table.schema
 
-            self.update_schema(new_schema)
+            await self.update_schema(new_schema)
             # Ensure the table conforms to the current schema
             table = table.cast(self.schema)
             self.current_file.write_table(table)
