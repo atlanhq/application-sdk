@@ -5,7 +5,7 @@ It uses the Temporal workflow engine to manage the extraction process.
 Key components:
 - SampleSQLWorkflowMetadata: Defines metadata extraction queries
 - SampleSQLWorkflowPreflight: Performs preflight checks
-- SampleSQLWorkflowWorker: Implements the main workflow logic
+- SampleSQLWorkflowWorker: Implements the main workflow logic (including extraction and transformation)
 - SampleSQLWorkflowBuilder: Configures and builds the workflow
 
 Workflow steps:
@@ -15,8 +15,9 @@ Workflow steps:
 4. Fetch schema information
 5. Fetch table information
 6. Fetch column information
-7. Clean up the output directory
-8. Push results to object store
+7. Transform the metadata into Atlas entities
+8. Clean up the output directory
+9. Push results to object store
 
 Usage:
 1. Set the PostgreSQL connection credentials as environment variables
@@ -117,7 +118,6 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         current_epoch = "1234567890"
         super().__init__(
             application_name,
-            use_server_side_cursor=True,
             transformer=AtlasTransformer(timestamp=current_epoch),
             *args,
             **kwargs,

@@ -21,6 +21,22 @@ logger = logging.getLogger(__name__)
 
 
 class PhoenixTransformer(TransformerInterface):
+    """
+    PhoenixTransformer is a class that transforms metadata into Phoenix entities.
+    It uses the pyatlan library to create the entities.
+
+    Attributes:
+        timestamp (str): The timestamp of the metadata.
+
+    Usage:
+        Subclass this class and override the transform_metadata method to customize the transformation process.
+        Then use the subclass as an argument to the SQLWorkflowWorker.
+
+        >>> class CustomPhoenixTransformer(PhoenixTransformer):
+        >>>     def transform_metadata(self, connector_name: str, typename: str, data: Dict[str, Any], **kwargs: Any) -> Optional[BaseModel]:
+        >>>         # Custom logic here
+    """
+
     def __init__(self, **kwargs: Any):
         pass
 
