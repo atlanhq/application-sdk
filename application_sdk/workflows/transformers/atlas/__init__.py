@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any, Callable, Dict, Optional, Union
 
 from pyatlan.model.assets import Column, Database, Schema, Table, View
 from pydantic.v1 import BaseModel
@@ -23,21 +23,24 @@ class AtlasTransformer(TransformerInterface):
         Then use the subclass as an argument to the SQLWorkflowWorker.
 
         >>> class CustomAtlasTransformer(AtlasTransformer):
-        >>>     def transform_metadata(self, connector_name: str, typename: str, data: Dict[str, Any], **kwargs: Any) -> Optional[BaseModel]:
+        >>>     def transform_metadata(self, typename: str, data: Dict[str, Any], **kwargs: Any) -> Optional[str]:
         >>>         # Custom logic here
     """
 
-    def __init__(self, **kwargs: Any):
-        self.timestamp = kwargs.get("timestamp", "0")
+    def __init__(self, connector_name: str, **kwargs: Any):
+        self.current_epoch = kwargs.get("current_epoch", "0")
+        self.connector_name = connector_name
 
     def transform_metadata(
-        self, connector_name: str, typename: str, data: Dict[str, Any], **kwargs: Any
-    ) -> Optional[BaseModel]:
+        self, typename: str, data: Dict[str, Any], **kwargs: Any
+    ) -> Optional[str]:
         base_qualified_name = kwargs.get(
-            "base_qualified_name", f"default/{connector_name}/{self.timestamp}"
+            "base_qualified_name", f"default/{self.connector_name}/{self.current_epoch}"
         )
 
-        entity_creators = {
+        entity_creators: Dict[
+            str, Callable[[Dict[str, Any], str], Optional[BaseModel]]
+        ] = {
             "DATABASE": self._create_database_entity,
             "SCHEMA": self._create_schema_entity,
             "TABLE": self._create_table_entity,
@@ -46,7 +49,8 @@ class AtlasTransformer(TransformerInterface):
 
         creator = entity_creators.get(typename.upper())
         if creator:
-            return creator(data, base_qualified_name)
+            entity = creator(data, base_qualified_name)
+            return entity.json()
         else:
             logger.error(f"Unknown typename: {typename}")
             return None
@@ -94,18 +98,19 @@ class AtlasTransformer(TransformerInterface):
             assert data["table_name"] is not None, "Table name cannot be None"
             assert data["table_catalog"] is not None, "Table catalog cannot be None"
             assert data["table_schema"] is not None, "Table schema cannot be None"
+            sql_table = None
 
-            if data.get("table_type") == "VIEW":
-                sql_table = View.creator(
+            if data.get("table_type") == "TABLE":
+                sql_table: Table = Table.creator(
+                    name=data["table_name"],
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                )
+            else:
+                sql_table: View = View.creator(
                     name=data["table_name"],
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
                 sql_table.attributes.definition = data.get("VIEW_DEFINITION", "")
-            else:
-                sql_table = Table.creator(
-                    name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
-                )
             sql_table.attributes.atlan_schema = Schema.creator(
                 name=data["table_schema"],
                 database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",

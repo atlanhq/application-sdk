@@ -42,7 +42,7 @@ from application_sdk.workflows.sql.preflight_check import (
     SQLWorkflowPreflightCheckInterface,
 )
 from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
+from application_sdk.workflows.transformers.phoenix import PhoenixTransformer
 
 APPLICATION_NAME = "postgres"
 
@@ -115,10 +115,12 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
     ):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
         # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
-        current_epoch = "1234567890"
+        phoenix_transformer = PhoenixTransformer(
+            connector_name=application_name, connector_type="sql"
+        )
         super().__init__(
-            application_name,
-            transformer=AtlasTransformer(timestamp=current_epoch),
+            transformer=phoenix_transformer,
+            application_name=application_name,
             *args,
             **kwargs,
         )

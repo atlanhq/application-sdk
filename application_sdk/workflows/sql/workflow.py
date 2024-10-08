@@ -8,7 +8,6 @@ from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Sequence
 
 import aiofiles
-from pydantic.v1 import BaseModel
 from sqlalchemy import Connection, Engine, text
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -19,7 +18,6 @@ from application_sdk.paas.secretstore import SecretStore
 from application_sdk.workflows import WorkflowWorkerInterface
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
-from application_sdk.workflows.transformers.phoenix import PhoenixTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
@@ -52,11 +50,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
     def __init__(
         self,
+        transformer: TransformerInterface,
         application_name: str = "sql-connector",
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
         use_server_side_cursor: bool = True,
         temporal_activities: Sequence[CallableType] = [],
-        transformer: TransformerInterface = PhoenixTransformer(),
     ):
         """
         Initialize the SQL workflow worker.
@@ -210,13 +208,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 raw_batch.append(json.dumps(row))
                 summary["raw"] += 1
 
-                transformed_data: Optional[BaseModel] = (
-                    self.transformer.transform_metadata(
-                        self.application_name, typename, row
-                    )
+                transformed_metadata_str: Optional[str] = (
+                    self.transformer.transform_metadata(typename, row)
                 )
-                if transformed_data is not None:
-                    transformed_batch.append(transformed_data.json())
+                if transformed_metadata_str is not None:
+                    transformed_batch.append(transformed_metadata_str)
                     summary["transformed"] += 1
                 else:
                     activity.logger.warning(f"Skipped invalid {typename} data: {row}")
@@ -409,7 +405,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_columns,
                 workflow_args,
                 retry_policy=retry_policy,
-                heartbeat_timeout=timedelta(seconds=10),
+                heartbeat_timeout=timedelta(seconds=120),
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
         ]
