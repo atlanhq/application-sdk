@@ -2,7 +2,6 @@ import asyncio
 import json
 import logging
 import os
-import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence
@@ -70,12 +69,10 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         if not temporal_activities:
             # default activities
             self.TEMPORAL_ACTIVITIES = [
-                self.setup_output_directory,
                 self.fetch_databases,
                 self.fetch_schemas,
                 self.fetch_tables,
                 self.fetch_columns,
-                self.teardown_output_directory,
                 self.push_results_to_object_store,
             ]
         else:
@@ -157,7 +154,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :raises Exception: If the data cannot be fetched.
         """
         credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
-        connection = None
         summary = {"raw": 0, "transformed": 0, "errored": 0}
         output_path = workflow_args["output_path"]
 
@@ -171,7 +167,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                         batch, typename, output_path, summary, chunk_number
                     )
                     chunk_number += 1
-            chunk_meta_file = os.path.join(output_path, f"{typename}-chunks.txt")
+            chunk_meta_file = os.path.join(output_path, "transformed", f"{typename}-chunks.txt")
+            os.makedirs(os.path.dirname(chunk_meta_file), exist_ok=True)
             async with aiofiles.open(chunk_meta_file, "w") as chunk_meta_f:
                 await chunk_meta_f.write(str(chunk_number))
         except Exception as e:
@@ -227,9 +224,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         # Write batches to files
         raw_file = os.path.join(output_path, "raw", f"{typename}-{chunk_number}.json")
+        os.makedirs(os.path.dirname(raw_file), exist_ok=True)
         transformed_file = os.path.join(
             output_path, "transformed", f"{typename}-{chunk_number}.json"
         )
+        os.makedirs(os.path.dirname(transformed_file), exist_ok=True)
 
         async with aiofiles.open(raw_file, "a") as raw_f:
             await raw_f.write("\n".join(raw_batch) + "\n")
@@ -342,20 +341,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         """
         pass
 
-    @staticmethod
-    @activity.defn
-    async def setup_output_directory(output_prefix: str) -> None:
-        """
-        Setup the output directory.
-
-        :param output_prefix: The output prefix.
-        """
-        os.makedirs(output_prefix, exist_ok=True)
-        os.makedirs(os.path.join(output_prefix, "raw"), exist_ok=True)
-        os.makedirs(os.path.join(output_prefix, "transformed"), exist_ok=True)
-
-        activity.logger.info(f"Created output directory: {output_prefix}")
-
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
         """
@@ -374,14 +359,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
-
-        # Create output directory
-        await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            self.setup_output_directory,
-            output_path,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=5),
-        )
 
         # run activities in parallel
         activities: List[Coroutine[Any, Any, Any]] = [
@@ -428,14 +405,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(minutes=10),
         )
-
-        # cleanup output directory
-        await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            self.teardown_output_directory,
-            output_path,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=5),
-        )
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
         workflow.logger.info(f"Extraction results summary: {extraction_results}")
 
@@ -457,14 +426,3 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         except Exception as e:
             activity.logger.error(f"Error pushing results to object store: {e}")
             raise e
-
-    @staticmethod
-    @activity.defn
-    async def teardown_output_directory(output_prefix: str) -> None:
-        """
-        Teardown the output directory.
-
-        :param output_prefix: The output prefix.
-        """
-        activity.logger.info(f"Tearing down output directory: {output_prefix}")
-        shutil.rmtree(output_prefix)

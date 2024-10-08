@@ -13,12 +13,12 @@ class ObjectStore:
     OBJECT_CREATE_OPERATION = "create"
 
     @classmethod
-    def push_to_object_store(cls, output_prefix: str, output_path: str) -> None:
+    def push_to_object_store(cls, output_prefix: str, input_files_path: str) -> None:
         """
         Push files from a directory to the object store.
 
         :param output_prefix: The base path to calculate relative paths.
-        :param output_path: The path to the directory containing files to push.
+        :param input_files_path: The path to the directory containing files to push.
         :raises ValueError: If the output_path doesn't exist or is not a directory.
         :raises IOError: If there's an error reading files.
         :raises Exception: If there's an error with the Dapr client operations.
@@ -26,14 +26,14 @@ class ObjectStore:
         Usage:
             >>> ObjectStore.push_to_object_store("logs", "/tmp/logs")
         """
-        if not os.path.isdir(output_path):
+        if not os.path.isdir(input_files_path):
             raise ValueError(
-                f"The provided output_path '{output_path}' is not a valid directory."
+                f"The provided output_path '{input_files_path}' is not a valid directory."
             )
 
         client = DaprClient()
         try:
-            for root, _, files in os.walk(output_path):
+            for root, _, files in os.walk(input_files_path):
                 for file in files:
                     file_path = os.path.join(root, file)
                     try:
@@ -60,7 +60,7 @@ class ObjectStore:
                         )
                         raise e
 
-            logger.info(f"Completed pushing data from {output_path} to object store")
+            logger.info(f"Completed pushing data from {input_files_path} to object store")
         except Exception as e:
             logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
