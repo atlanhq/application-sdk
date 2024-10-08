@@ -1,8 +1,7 @@
 import logging
 from typing import Any, Callable, Dict, Optional, Union
 
-from pyatlan.model.assets import Column, Database, Schema, Table, View
-from pydantic.v1 import BaseModel
+from pyatlan.model.assets import SQL, Column, Database, Schema, Table, View
 
 from application_sdk.workflows.transformers import TransformerInterface
 
@@ -38,9 +37,7 @@ class AtlasTransformer(TransformerInterface):
             "base_qualified_name", f"default/{self.connector_name}/{self.current_epoch}"
         )
 
-        entity_creators: Dict[
-            str, Callable[[Dict[str, Any], str], Optional[BaseModel]]
-        ] = {
+        entity_creators: Dict[str, Callable[[Dict[str, Any], str], Optional[SQL]]] = {
             "DATABASE": self._create_database_entity,
             "SCHEMA": self._create_schema_entity,
             "TABLE": self._create_table_entity,
