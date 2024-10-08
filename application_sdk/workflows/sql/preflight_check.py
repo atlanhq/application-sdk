@@ -57,8 +57,6 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
 
     # FIXME: duplicate with SQLWorkflowMetadataInterface
     def fetch_metadata(self, credential: Dict) -> List[Dict[str, str]]:
-        connection = None
-        cursor = None
         try:
             engine = self.create_engine_fn(credential)
             with engine.connect() as connection:
@@ -78,17 +76,11 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e
-        finally:
-            if cursor:
-                cursor.close()
-            if connection:
-                connection.close()
 
         return result
 
     def check_schemas_and_databases(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting schema and database check")
-        connection = None
         try:
             schemas_results: List[Dict[str, str]] = self.fetch_metadata(
                 payload.get("credentials", {})
@@ -121,9 +113,6 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
                 "failureMessage": "Schemas and Databases check failed",
                 "error": str(e),
             }
-        finally:
-            if connection:
-                connection.close()
 
     def extract_allowed_schemas(
         self,
@@ -156,7 +145,6 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
 
     def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting tables check")
-        connection = None
         try:
             normalized_include_regex, normalized_exclude_regex, exclude_table = (
                 prepare_filters(
@@ -190,6 +178,3 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
                 "failureMessage": "Tables check failed",
                 "error": str(e),
             }
-        finally:
-            if connection:
-                connection.close()
