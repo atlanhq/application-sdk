@@ -1,0 +1,55 @@
+import asyncio
+import os
+import logging
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List
+from application_sdk.paas.objectstore import ObjectStore
+
+
+logger = logging.getLogger(__name__)
+
+class ChunkedObjectStoreWriterInterface(ABC):
+    def __init__(self, local_file_prefix: str, upload_file_prefix: str, chunk_size: int=10000):
+        self.local_file_prefix = local_file_prefix
+        self.upload_file_prefix = upload_file_prefix
+        self.chunk_size = chunk_size
+        self.lock = asyncio.Lock()
+        self.current_file = None
+        self.current_file_name = None
+        self.current_file_number = 0
+        self.current_record_count = 0
+        self.total_record_count = 0
+
+        os.makedirs(os.path.dirname(self.local_file_prefix), exist_ok=True)
+
+    @abstractmethod
+    async def write(self, data: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    async def write_list(self, data: List[Dict[str, Any]]) -> None:
+        for record in data:
+            await self.write(record)
+
+    @abstractmethod
+    async def close(self) -> None:
+        raise NotImplementedError
+
+    async def close_current_file(self):
+        if not self.current_file:
+            return
+
+        await self.current_file.close()
+        await self.upload_file(self.current_file_name)
+        # os.unlink(self.current_file_name)
+        logger.info(f"Uploaded file: {self.current_file_name} and removed local copy")
+
+    async def upload_file(self, local_file_path: str):
+        logger.info(f"Uploading file: {local_file_path} to {self.upload_file_prefix}")
+        await ObjectStore.push_file_to_object_store(self.upload_file_prefix, local_file_path)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback):
+        await self.close()
+        return False
