@@ -13,8 +13,10 @@ class ObjectStore:
     OBJECT_CREATE_OPERATION = "create"
 
     @classmethod
-    async def push_file_to_object_store(cls, output_prefix: str, file_path: str) -> None:
-        client = DaprClient()
+    async def push_file_to_object_store(
+        cls, output_prefix: str, file_path: str
+    ) -> None:
+        client: DaprClient = DaprClient()
         try:
             with open(file_path, "rb") as f:
                 file_content = f.read()
@@ -38,10 +40,13 @@ class ObjectStore:
                 f"Error pushing file {relative_path} to object store: {str(e)}"
             )
             raise e
-
+        finally:
+            client.close()
 
     @classmethod
-    async def push_to_object_store(cls, output_prefix: str, input_files_path: str) -> None:
+    async def push_to_object_store(
+        cls, output_prefix: str, input_files_path: str
+    ) -> None:
         """
         Push files from a directory to the object store.
 
@@ -59,18 +64,17 @@ class ObjectStore:
                 f"The provided output_path '{input_files_path}' is not a valid directory."
             )
 
-        client = DaprClient()
         try:
             for root, _, files in os.walk(input_files_path):
                 for file in files:
                     file_path = os.path.join(root, file)
                     await cls.push_file_to_object_store(output_prefix, file_path)
 
-            logger.info(f"Completed pushing data from {input_files_path} to object store")
+            logger.info(
+                f"Completed pushing data from {input_files_path} to object store"
+            )
         except Exception as e:
             logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e
-        finally:
-            client.close()
