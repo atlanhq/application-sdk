@@ -67,7 +67,8 @@ jobs:
 
       - name: Publish Trivy Output to Summary
         run: |
-          cat trivy.txt
+          set -e;
+          cat trivy.txt;
           if [[ -s trivy.txt ]]; then
             {
               echo "### Security Output"
