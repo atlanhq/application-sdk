@@ -1,5 +1,6 @@
 import os
 import shutil
+from unittest.mock import patch
 
 import pytest
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
@@ -10,13 +11,15 @@ class TestJSONChunkedObjectStoreWriter:
     @pytest.fixture
     def writer():
         shutil.rmtree("/tmp/test", ignore_errors=True)
-        writer = JSONChunkedObjectStoreWriter(
-            local_file_prefix="/tmp/test/test",
-            upload_file_prefix="test",
-            chunk_size=2,
-            buffer_size=1024,
-        )
-        return writer
+
+        with patch.object(JSONChunkedObjectStoreWriter, 'upload_file', return_value=None):
+            writer = JSONChunkedObjectStoreWriter(
+                local_file_prefix="/tmp/test/test",
+                upload_file_prefix="test",
+                chunk_size=2,
+                buffer_size=1024,
+            )
+            yield writer
 
     @staticmethod
     async def test_write(writer):
