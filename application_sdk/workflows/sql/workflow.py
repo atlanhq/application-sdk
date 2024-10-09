@@ -351,7 +351,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_columns,
                 workflow_args,
                 retry_policy=retry_policy,
-                heartbeat_timeout=timedelta(seconds=10),
+                heartbeat_timeout=timedelta(seconds=120),
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
         ]
