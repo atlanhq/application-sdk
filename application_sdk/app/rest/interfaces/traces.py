@@ -28,8 +28,8 @@ class Traces:
         return (
             session.query(Trace)
             .filter(
-                Trace.start_time >= datetime.fromtimestamp(from_timestamp),
-                Trace.end_time <= datetime.fromtimestamp(to_timestamp),
+                Trace.start_time >= datetime.fromtimestamp(from_timestamp, tz=UTC),
+                Trace.end_time <= datetime.fromtimestamp(to_timestamp, tz=UTC),
             )
             .order_by(Trace.start_time.desc())
             .offset(skip)

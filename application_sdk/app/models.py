@@ -1,6 +1,6 @@
 """Models for the database."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import Column, DateTime, Integer, String
 from sqlalchemy.types import JSON
@@ -17,8 +17,8 @@ class Log(Base):
     severity = Column(String, nullable=False)
 
     severity_number = Column(Integer, nullable=False)
-    observed_timestamp = Column(DateTime, nullable=False, default=datetime.now)
-    timestamp = Column(DateTime, nullable=False, default=datetime.now)
+    observed_timestamp = Column(DateTime, nullable=False, default=datetime.now(UTC))
+    timestamp = Column(DateTime, nullable=False, default=datetime.now(UTC))
     body = Column(String, nullable=True)
 
     trace_id = Column(String, nullable=True)
@@ -34,8 +34,8 @@ class Metric(Base):
     description = Column(String, nullable=True)
 
     scope_name = Column(String, nullable=True)
-    observed_timestamp = Column(DateTime, nullable=False, default=datetime.now)
-    timestamp = Column(DateTime, nullable=False, default=datetime.now)
+    observed_timestamp = Column(DateTime, nullable=False, default=datetime.now(UTC))
+    timestamp = Column(DateTime, nullable=False, default=datetime.now(UTC))
     resource_attributes = Column(JSON(), nullable=True)
     unit = Column(String, nullable=True)
     data_points = Column(JSON(), nullable=False)
@@ -51,8 +51,8 @@ class Trace(Base):
     name = Column(String, nullable=False)
     kind = Column(String, nullable=False)
 
-    start_time = Column(DateTime, nullable=False, default=datetime.now)
-    end_time = Column(DateTime, nullable=False, default=datetime.now)
+    start_time = Column(DateTime, nullable=False, default=datetime.now(UTC))
+    end_time = Column(DateTime, nullable=False, default=datetime.now(UTC))
     resource_attributes = Column(JSON(), nullable=True)
     attributes = Column(JSON(), nullable=True)
     events = Column(JSON(), nullable=True)
