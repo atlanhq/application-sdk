@@ -29,6 +29,7 @@ isort = "^5.13.2"
 [tool.poetry.group.test.dependencies]
 pytest = "^8.3.3"
 coverage = "^7.6.1"
+pytest-asyncio = "^0.24.0"
 
 [tool.poetry.group.examples.dependencies]
 psycopg2-binary = "^2.9.9"
@@ -42,3 +43,6 @@ build-backend = "poetry.core.masonry.api"
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
