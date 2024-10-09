@@ -8,7 +8,7 @@ from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 
 class TestJSONChunkedObjectStoreWriter:
     @staticmethod
-    @pytest.fixture
+    @pytest.fixture()
     def writer():
         shutil.rmtree("/tmp/test", ignore_errors=True)
 
@@ -20,6 +20,7 @@ class TestJSONChunkedObjectStoreWriter:
                 buffer_size=1024,
             )
             yield writer
+        writer.close()
 
     @staticmethod
     async def test_write(writer):
