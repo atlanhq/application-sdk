@@ -34,20 +34,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-#      - name: Run Trivy vulnerability scanner in repo mode
-#        uses: aquasecurity/trivy-action@0.20.0
-#        with:
-#          scan-type: 'fs'
-#          ignore-unfixed: true
-#          format: 'sarif'
-#          output: 'trivy-results.sarif'
-#          severity: 'CRITICAL'
-
-#      - name: Upload Trivy scan results to GitHub Security tab
-#        uses: github/codeql-action/upload-sarif@v3
-#        with:
-#          sarif_file: 'trivy-results.sarif'
-
       - name: Set up Python 3.11
         uses: actions/setup-python@v1
         with:
@@ -58,25 +44,15 @@ jobs:
           pip install poetry
           poetry install
 
-      - name: Run Trivy scanner
+      - name: Run Trivy vulnerability scanner in repo mode
         uses: aquasecurity/trivy-action@0.20.0
         with:
-          scan-type: fs
-          hide-progress: false
-          output: trivy.txt
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
 
-      - name: Publish Trivy Output to Summary
-        run: |
-          set -e;
-          cat trivy.txt;
-          if [[ -s trivy.txt ]]; then
-            {
-              echo "### Security Output"
-              echo "<details><summary>Click to expand</summary>"
-              echo ""
-              echo '```terraform'
-              cat trivy.txt
-              echo '```'
-              echo "</details>"
-            } >> $GITHUB_STEP_SUMMARY
-          fi
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: 'trivy-results.sarif'
