@@ -3,6 +3,7 @@ import shutil
 from unittest.mock import patch
 
 import pytest
+
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 
 
@@ -12,7 +13,9 @@ class TestJSONChunkedObjectStoreWriter:
     def writer():
         shutil.rmtree("/tmp/test", ignore_errors=True)
 
-        with patch.object(JSONChunkedObjectStoreWriter, 'upload_file', return_value=None):
+        with patch.object(
+            JSONChunkedObjectStoreWriter, "upload_file", return_value=None
+        ):
             writer = JSONChunkedObjectStoreWriter(
                 local_file_prefix="/tmp/test/test",
                 upload_file_prefix="test",
@@ -35,12 +38,14 @@ class TestJSONChunkedObjectStoreWriter:
 
     @staticmethod
     async def test_close(writer):
-        await writer.write_list([
-            {"test": "test"},
-            {"test": "test"},
-            {"test": "test"},
-            {"test": "test"},
-        ])
+        await writer.write_list(
+            [
+                {"test": "test"},
+                {"test": "test"},
+                {"test": "test"},
+                {"test": "test"},
+            ]
+        )
         await writer.close()
         # 3 files should be created in /tmp/test
         files = os.listdir("/tmp/test")

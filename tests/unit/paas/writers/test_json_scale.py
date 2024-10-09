@@ -4,6 +4,7 @@ import time
 from unittest.mock import patch
 
 import pytest
+
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 
 
@@ -12,7 +13,9 @@ class TestJSONChunkedObjectStoreWriterScale:
     @pytest.fixture
     def writer():
         shutil.rmtree("/tmp/test", ignore_errors=True)
-        with patch.object(JSONChunkedObjectStoreWriter, 'upload_file', return_value=None):
+        with patch.object(
+            JSONChunkedObjectStoreWriter, "upload_file", return_value=None
+        ):
             writer = JSONChunkedObjectStoreWriter(
                 local_file_prefix="/tmp/test/test",
                 upload_file_prefix="test",
@@ -38,7 +41,6 @@ class TestJSONChunkedObjectStoreWriterScale:
             metadata = f.read()
             assert metadata == '{"total_record_count":1000,"chunk_count":1}\n'
 
-
     @classmethod
     async def test_100k(cls, writer):
         start_time = time.time()
@@ -48,7 +50,7 @@ class TestJSONChunkedObjectStoreWriterScale:
         end_time = time.time()
 
         print(f"Time taken: {int(end_time - start_time)} seconds")
-        assert end_time - start_time < 5 # should take less than 5 seconds
+        assert end_time - start_time < 5  # should take less than 5 seconds
 
         files = os.listdir("/tmp/test")
         assert len(files) == 6
@@ -56,7 +58,6 @@ class TestJSONChunkedObjectStoreWriterScale:
         with open("/tmp/test/test-metadata.json", "r") as f:
             metadata = f.read()
             assert metadata == '{"total_record_count":100000,"chunk_count":5}\n'
-
 
     @classmethod
     async def test_1m(cls, writer):
@@ -67,7 +68,7 @@ class TestJSONChunkedObjectStoreWriterScale:
         end_time = time.time()
 
         print(f"Time taken: {int(end_time - start_time)} seconds")
-        assert end_time - start_time < 50 # should take less than 50 seconds
+        assert end_time - start_time < 50  # should take less than 50 seconds
 
         files = os.listdir("/tmp/test")
         assert len(files) == 51
@@ -75,5 +76,3 @@ class TestJSONChunkedObjectStoreWriterScale:
         with open("/tmp/test/test-metadata.json", "r") as f:
             metadata = f.read()
             assert metadata == '{"total_record_count":1000000,"chunk_count":50}\n'
-
-

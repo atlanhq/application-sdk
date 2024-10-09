@@ -1,16 +1,22 @@
 import asyncio
-import os
 import logging
+import os
 from abc import ABC, abstractmethod
-from typing import Dict, Any, List
-from application_sdk.paas.objectstore import ObjectStore
+from typing import Any, Dict, List
 
+from application_sdk.paas.objectstore import ObjectStore
 
 logger = logging.getLogger(__name__)
 
+
 class ChunkedObjectStoreWriterInterface(ABC):
-    def __init__(self, local_file_prefix: str, upload_file_prefix: str, chunk_size: int=30000,
-                 buffer_size: int = 1024 * 1024 * 10):  # 10MB buffer by default
+    def __init__(
+        self,
+        local_file_prefix: str,
+        upload_file_prefix: str,
+        chunk_size: int = 30000,
+        buffer_size: int = 1024 * 1024 * 10,
+    ):  # 10MB buffer by default
         self.local_file_prefix = local_file_prefix
         self.upload_file_prefix = upload_file_prefix
         self.chunk_size = chunk_size
@@ -50,7 +56,9 @@ class ChunkedObjectStoreWriterInterface(ABC):
 
     async def upload_file(self, local_file_path: str):
         logger.info(f"Uploading file: {local_file_path} to {self.upload_file_prefix}")
-        await ObjectStore.push_file_to_object_store(self.upload_file_prefix, local_file_path)
+        await ObjectStore.push_file_to_object_store(
+            self.upload_file_prefix, local_file_path
+        )
 
     async def __aenter__(self):
         return self

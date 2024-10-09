@@ -152,24 +152,30 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
-        raw_files_output_prefix = os.path.join(workflow_args["output_prefix"], "raw", f"{typename}")
+        raw_files_output_prefix = os.path.join(
+            workflow_args["output_prefix"], "raw", f"{typename}"
+        )
 
         transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        transform_files_output_prefix = os.path.join(workflow_args["output_prefix"], "transformed", f"{typename}")
+        transform_files_output_prefix = os.path.join(
+            workflow_args["output_prefix"], "transformed", f"{typename}"
+        )
 
         try:
             engine = self.get_sql_engine(credentials)
             with engine.connect() as connection:
                 async with (
-                  JSONChunkedObjectStoreWriter(raw_files_prefix, raw_files_output_prefix) as raw_writer,
-                  JSONChunkedObjectStoreWriter(transform_files_prefix, transform_files_output_prefix) as transformed_writer
-                  ):
+                    JSONChunkedObjectStoreWriter(
+                        raw_files_prefix, raw_files_output_prefix
+                    ) as raw_writer,
+                    JSONChunkedObjectStoreWriter(
+                        transform_files_prefix, transform_files_output_prefix
+                    ) as transformed_writer,
+                ):
                     async for batch in self.run_query(connection, query):
                         # Write raw data
                         await raw_writer.write_list(batch)
-                        await self._transform_batch(
-                            batch, typename, transformed_writer
-                        )
+                        await self._transform_batch(batch, typename, transformed_writer)
         except Exception as e:
             logger.error(f"Error fetching databases: {e}")
             raise e
@@ -178,7 +184,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         self,
         results: List[Dict[str, Any]],
         typename: str,
-        writer: JSONChunkedObjectStoreWriter
+        writer: JSONChunkedObjectStoreWriter,
     ) -> None:
         """
         Process a batch of results.

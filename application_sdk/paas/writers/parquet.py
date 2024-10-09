@@ -1,18 +1,24 @@
-import orjson
 import logging
+from typing import Any, Dict
+
+import orjson
 import pyarrow as pa
 import pyarrow.parquet as pq
-from typing import Dict, Any
 
 from application_sdk.paas.writers import ChunkedObjectStoreWriterInterface
 
-
 logger = logging.getLogger(__name__)
 
-class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
-    def __init__(self, local_file_prefix: str, upload_file_prefix: str, chunk_size: int=100000,
-                 schema: pq.ParquetSchema = None, parquet_writer_options: Dict[str, Any] = {}):
+class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
+    def __init__(
+        self,
+        local_file_prefix: str,
+        upload_file_prefix: str,
+        chunk_size: int = 100000,
+        schema: pq.ParquetSchema = None,
+        parquet_writer_options: Dict[str, Any] = {},
+    ):
         super().__init__(local_file_prefix, upload_file_prefix, chunk_size)
         self.schema = schema
         self.parquet_writer_options = parquet_writer_options
@@ -30,7 +36,10 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
     async def write(self, data: Dict[str, Any]) -> None:
         async with self.lock:
-            if self.current_file is None or self.current_record_count >= self.chunk_size:
+            if (
+                self.current_file is None
+                or self.current_record_count >= self.chunk_size
+            ):
                 await self._create_new_file()
 
             table = pa.Table.from_pydict(data)
@@ -48,22 +57,25 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         await self.close_current_file()
 
         # Write number of chunks
-        with open(f"{self.local_file_prefix}-metadata.json", mode='w') as f:
-            f.write(orjson.dumps(
-                {
-                    "total_record_count": self.total_record_count,
-                    "chunk_count": self.current_file_number
-                },
-                option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+        with open(f"{self.local_file_prefix}-metadata.json", mode="w") as f:
+            f.write(
+                orjson.dumps(
+                    {
+                        "total_record_count": self.total_record_count,
+                        "chunk_count": self.current_file_number,
+                    },
+                    option=orjson.OPT_APPEND_NEWLINE,
+                ).decode("utf-8")
             )
         await self.upload_file(f"{self.local_file_prefix}-metadata.json")
-
 
     async def _create_new_file(self):
         await self.close_current_file()
 
         self.current_file_number += 1
-        self.current_file_name = f"{self.local_file_prefix}_{self.current_file_number}.parquet"
+        self.current_file_name = (
+            f"{self.local_file_prefix}_{self.current_file_number}.parquet"
+        )
         self.current_file = pq.ParquetWriter(
             self.current_file_name, self.schema, **self.parquet_writer_options
         )
