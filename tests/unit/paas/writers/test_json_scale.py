@@ -19,7 +19,6 @@ class TestJSONChunkedObjectStoreWriterScale:
                 chunk_size=20000,
             )
             yield writer
-        writer.close()
 
     @staticmethod
     def generate_records(num: int):

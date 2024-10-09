@@ -20,7 +20,6 @@ class TestJSONChunkedObjectStoreWriter:
                 buffer_size=1024,
             )
             yield writer
-        writer.close()
 
     @staticmethod
     async def test_write(writer):
