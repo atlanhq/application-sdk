@@ -9,6 +9,7 @@ class TestJSONChunkedObjectStoreWriter:
     @staticmethod
     @pytest.fixture
     def writer():
+        shutil.rmtree("/tmp/test", ignore_errors=True)
         writer = JSONChunkedObjectStoreWriter(
             local_file_prefix="/tmp/test/test",
             upload_file_prefix="test",
@@ -44,3 +45,15 @@ class TestJSONChunkedObjectStoreWriter:
         assert "test-metadata.json" in files
         assert "test-1.json" in files
         assert "test-2.json" in files
+
+        with open("/tmp/test/test-metadata.json", "r") as f:
+            metadata = f.read()
+            assert metadata == '{"total_record_count":4,"chunk_count":2}\n'
+
+        with open("/tmp/test/test-1.json", "r") as f:
+            data = f.read()
+            assert data == '{"test":"test"}\n{"test":"test"}\n'
+
+        with open("/tmp/test/test-2.json", "r") as f:
+            data = f.read()
+            assert data == '{"test":"test"}\n{"test":"test"}\n'
