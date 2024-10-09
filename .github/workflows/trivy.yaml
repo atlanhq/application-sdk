@@ -48,6 +48,16 @@ jobs:
 #        with:
 #          sarif_file: 'trivy-results.sarif'
 
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v1
+        with:
+          python-version: "3.11"
+
+      - name: Install poetry and dependencies
+        run: |
+          pip install poetry
+          poetry install
+
       - name: Run Trivy scanner
         uses: aquasecurity/trivy-action@0.20.0
         with:
