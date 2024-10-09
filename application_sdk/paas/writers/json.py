@@ -16,15 +16,29 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                 self.current_file is None
                 or self.current_record_count >= self.chunk_size
             ):
+                await self._flush_buffer()
                 await self._create_new_file()
 
-            await self.current_file.write(
-                orjson.dumps(data, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
-            )
+            record = orjson.dumps(data, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+            self.buffer.append(record)
+            self.current_buffer_size += len(record)
             self.current_record_count += 1
             self.total_record_count += 1
 
+            if self.current_buffer_size >= self.buffer_size:
+                await self._flush_buffer()
+
+    async def _flush_buffer(self):
+        if not self.buffer or not self.current_buffer_size:
+            return
+
+        await self.current_file.write("".join(self.buffer))
+        await self.current_file.flush()
+        self.buffer.clear()
+        self.current_buffer_size = 0
+
     async def close(self) -> None:
+        await self._flush_buffer()
         await self.close_current_file()
 
         # Write number of chunks
@@ -45,7 +59,7 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
         self.current_file_number += 1
         self.current_file_name = (
-            f"{self.local_file_prefix}_{self.current_file_number}.json"
+            f"{self.local_file_prefix}-{self.current_file_number}.json"
         )
         self.current_file = await aiofiles.open(self.current_file_name, mode="w")
 

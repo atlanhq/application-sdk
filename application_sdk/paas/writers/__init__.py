@@ -9,7 +9,8 @@ from application_sdk.paas.objectstore import ObjectStore
 logger = logging.getLogger(__name__)
 
 class ChunkedObjectStoreWriterInterface(ABC):
-    def __init__(self, local_file_prefix: str, upload_file_prefix: str, chunk_size: int=10000):
+    def __init__(self, local_file_prefix: str, upload_file_prefix: str, chunk_size: int=30000,
+                 buffer_size: int = 1024 * 1024 * 10):  # 10MB buffer by default
         self.local_file_prefix = local_file_prefix
         self.upload_file_prefix = upload_file_prefix
         self.chunk_size = chunk_size
@@ -19,6 +20,10 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self.current_file_number = 0
         self.current_record_count = 0
         self.total_record_count = 0
+
+        self.buffer: List[str] = []
+        self.buffer_size = buffer_size
+        self.current_buffer_size = 0
 
         os.makedirs(os.path.dirname(self.local_file_prefix), exist_ok=True)
 
