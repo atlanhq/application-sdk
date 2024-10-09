@@ -11,8 +11,9 @@ source:
 """
 
 import asyncio
+from datetime import timedelta
 from functools import wraps
-from typing import Any, Awaitable, Callable, TypeVar, cast
+from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
@@ -37,17 +38,24 @@ def auto_heartbeater(fn: F) -> F:
     # available via our wrapper, so we use the functools wraps decorator
     @wraps(fn)
     async def wrapper(*args, **kwargs):
-        heartbeat_task = None
-        try:
-            heartbeat_timeout = activity.info().heartbeat_timeout
-        except RuntimeError:
-            heartbeat_timeout = None
+        heartbeat_timeout: Optional[timedelta] = None
 
-        if heartbeat_timeout:
-            # Heartbeat twice as often as the timeout
-            heartbeat_task = asyncio.create_task(
-                heartbeat_every(heartbeat_timeout.total_seconds() / 3)
+        # Default to 2 minutes if no heartbeat timeout is set
+        default_heartbeat_timeout = timedelta(seconds=120)
+        try:
+            activity_heartbeat_timeout = activity.info().heartbeat_timeout
+            heartbeat_timeout = (
+                activity_heartbeat_timeout
+                if activity_heartbeat_timeout
+                else default_heartbeat_timeout
             )
+        except RuntimeError:
+            heartbeat_timeout = default_heartbeat_timeout
+
+        # Heartbeat thrice as often as the timeout
+        heartbeat_task = asyncio.create_task(
+            heartbeat_every(heartbeat_timeout.total_seconds() / 3)
+        )
         try:
             return await fn(*args, **kwargs)
         except Exception as e:
