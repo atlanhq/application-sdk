@@ -48,7 +48,6 @@ jobs:
         uses: aquasecurity/trivy-action@0.20.0
         with:
           scan-type: 'fs'
-          ignore-unfixed: true
           format: 'sarif'
           output: 'trivy-results.sarif'
 
