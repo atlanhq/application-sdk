@@ -1,10 +1,11 @@
 import os
 import shutil
-from typing import Dict, Any, List
+from typing import Any, Dict, List
 from unittest.mock import patch
-from hypothesis import given, strategies as st
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 
@@ -16,7 +17,7 @@ class TestJSONChunkedObjectStoreWriter:
         shutil.rmtree("/tmp/test", ignore_errors=True)
 
         with patch.object(
-                JSONChunkedObjectStoreWriter, "upload_file", return_value=None
+            JSONChunkedObjectStoreWriter, "upload_file", return_value=None
         ):
             writer = JSONChunkedObjectStoreWriter(
                 local_file_prefix="/tmp/test/test",
@@ -44,7 +45,6 @@ class TestJSONChunkedObjectStoreWriter:
             await w.write(data)
             assert w.current_record_count == 1
             assert w.total_record_count == 1
-
 
     @staticmethod
     async def test_write_list(writer):
