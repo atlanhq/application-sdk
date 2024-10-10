@@ -13,11 +13,11 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.types import CallableType
 
+from application_sdk.common.logger_adaptors import OpenTelemetryLoggerAdapter
 from application_sdk.paas.objectstore import ObjectStore
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.workflows import WorkflowWorkerInterface
 from application_sdk.workflows.sql.utils import prepare_filters
-from application_sdk.common.logger_adaptors import OpenTelemetryLoggerAdapter
 from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
 from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.workflows.utils.activity import auto_heartbeater

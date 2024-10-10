@@ -1,11 +1,11 @@
-from typing import Tuple, MutableMapping, Any
 import logging
+from typing import Any, MutableMapping, Tuple
+
 from temporalio import activity, workflow
 
+
 class OpenTelemetryLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
-    def __init__(
-        self, logger: logging.Logger
-    ) -> None:
+    def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter."""
         super().__init__(logger, {})
 
@@ -32,9 +32,9 @@ class OpenTelemetryLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
                 extra["activity_id"] = activity_info.activity_id
         except Exception:
             pass
-        
+
         kwargs["extra"] = extra
-        
+
         return (msg, kwargs)
 
     def isEnabledFor(self, level: int) -> bool:
@@ -47,4 +47,3 @@ class OpenTelemetryLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
         handlers/formatters.
         """
         return self.logger
-

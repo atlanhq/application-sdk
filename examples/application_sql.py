@@ -146,9 +146,7 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
 if __name__ == "__main__":
     builder = SampleSQLWorkflowBuilder()
     # Start the temporal worker in a separate thread
-    worker_thread = threading.Thread(
-        target=builder.start_worker, args=(), daemon=True
-    )
+    worker_thread = threading.Thread(target=builder.start_worker, args=(), daemon=True)
     worker_thread.start()
 
     # wait for the worker to start
