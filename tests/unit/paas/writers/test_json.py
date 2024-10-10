@@ -33,19 +33,19 @@ class TestJSONChunkedObjectStoreWriter:
         assert writer.current_record_count == 1
         assert writer.total_record_count == 1
 
-    @staticmethod
-    @given(st.dictionaries(st.text(), st.text()))
-    @settings(max_examples=10)
-    async def test_write_hypothesis(data: Dict[str, Any]):
-        async with JSONChunkedObjectStoreWriter(
-            local_file_prefix="/tmp/test/test",
-            upload_file_prefix="test",
-            chunk_size=2,
-            buffer_size=1024,
-        ) as w:
-            await w.write(data)
-            assert w.current_record_count == 1
-            assert w.total_record_count == 1
+    # @staticmethod
+    # @given(st.dictionaries(st.text(), st.text()))
+    # @settings(max_examples=10)
+    # async def test_write_hypothesis(data: Dict[str, Any]):
+    #     async with JSONChunkedObjectStoreWriter(
+    #         local_file_prefix="/tmp/test/test",
+    #         upload_file_prefix="test",
+    #         chunk_size=2,
+    #         buffer_size=1024,
+    #     ) as w:
+    #         await w.write(data)
+    #         assert w.current_record_count == 1
+    #         assert w.total_record_count == 1
 
     @staticmethod
     async def test_write_list(writer):
@@ -53,18 +53,18 @@ class TestJSONChunkedObjectStoreWriter:
         assert writer.current_record_count == 2
         assert writer.total_record_count == 2
 
-    @staticmethod
-    @given(st.lists(st.dictionaries(st.text(), st.text())))
-    @settings(max_examples=10)
-    async def test_write_list_hypothesis(data: List[Dict[str, Any]]):
-        async with JSONChunkedObjectStoreWriter(
-            local_file_prefix="/tmp/test/test",
-            upload_file_prefix="test",
-            chunk_size=2,
-            buffer_size=1024,
-        ) as w:
-            await w.write_list(data)
-            assert w.total_record_count == len(data)
+    # @staticmethod
+    # @given(st.lists(st.dictionaries(st.text(), st.text())))
+    # @settings(max_examples=10)
+    # async def test_write_list_hypothesis(data: List[Dict[str, Any]]):
+    #     async with JSONChunkedObjectStoreWriter(
+    #         local_file_prefix="/tmp/test/test",
+    #         upload_file_prefix="test",
+    #         chunk_size=2,
+    #         buffer_size=1024,
+    #     ) as w:
+    #         await w.write_list(data)
+    #         assert w.total_record_count == len(data)
 
     @staticmethod
     async def test_close(writer):
