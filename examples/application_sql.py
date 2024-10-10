@@ -172,7 +172,7 @@ if __name__ == "__main__":
                     "port": os.getenv("POSTGRES_PORT", "5432"),
                     "user": os.getenv("POSTGRES_USER", "postgres"),
                     "password": os.getenv("POSTGRES_PASSWORD", "password"),
-                    "database": os.getenv("POSTGRES_DATABASE", "postgres"),
+                    "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
                 },
                 "connection": {"connection": "dev"},
                 "metadata": {
@@ -190,4 +190,4 @@ if __name__ == "__main__":
     )
 
     # wait for the workflow to finish
-    time.sleep(100)
+    time.sleep(300)

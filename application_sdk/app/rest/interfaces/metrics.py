@@ -1,7 +1,7 @@
 """Interface for handling metric-related API endpoints."""
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Dict, List, Optional
 
 from google.protobuf.json_format import MessageToDict
@@ -41,8 +41,10 @@ class Metrics:
         metrics = (
             session.query(Metric)
             .filter(
-                Metric.observed_timestamp >= datetime.fromtimestamp(from_timestamp),
-                Metric.observed_timestamp <= datetime.fromtimestamp(to_timestamp),
+                Metric.observed_timestamp
+                >= datetime.fromtimestamp(from_timestamp, tz=UTC),
+                Metric.observed_timestamp
+                <= datetime.fromtimestamp(to_timestamp, tz=UTC),
             )
             .all()
         )

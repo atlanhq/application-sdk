@@ -47,15 +47,13 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
         :return: List of metadata.
         :raises Exception: If the metadata cannot be fetched.
         """
-        connection = None
-        cursor = None
         try:
             engine = self.create_engine_fn(credential)
             with engine.connect() as connection:
                 cursor = connection.execute(text(self.METADATA_SQL))
                 result: List[Dict[str, str]] = []
                 while True:
-                    rows = cursor.fetchmany(1000)  # Fetch 1000 rows at a time
+                    rows = cursor.fetchmany(1000)
                     if not rows:
                         break
                     for schema_name, catalog_name in rows:
@@ -68,10 +66,4 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataInterface):
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e
-        finally:
-            if cursor:
-                cursor.close()
-            if connection:
-                connection.close()
-
         return result

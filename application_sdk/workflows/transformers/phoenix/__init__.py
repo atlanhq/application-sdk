@@ -43,7 +43,7 @@ class PhoenixTransformer(TransformerInterface):
 
     def transform_metadata(
         self, typename: str, data: Dict[str, Any], **kwargs: Any
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Transform metadata to Atlan Open Spec.
 
@@ -66,12 +66,12 @@ class PhoenixTransformer(TransformerInterface):
         if transform_method:
             entity = transform_method[type_name](data)
             if entity:
-                return entity.model_dump_json()
+                return entity.model_dump()
             else:
                 return None
         else:
             logger.error(f"Unknown typename: {typename}")
-            return self._transform_default(type_name, data).model_dump_json()
+            return self._transform_default(type_name, data).model_dump()
 
     def _transform_database(self, data: Dict[str, Any]) -> Optional[DatabaseEntity]:
         try:
@@ -108,17 +108,7 @@ class PhoenixTransformer(TransformerInterface):
             self._assert_not_none(data, "table_catalog", "Table catalog")
             self._assert_not_none(data, "table_schema", "Table schema")
 
-            if data.get("table_type") == "VIEW":
-                return ViewEntity(
-                    namespace=self.namespace,
-                    package=self.package,
-                    typeName="TABLE",
-                    name=data["table_name"],
-                    URI=self._build_uri(
-                        data["table_catalog"], data["table_schema"], data["table_name"]
-                    ),
-                )
-            else:
+            if data.get("table_type") == "TABLE":
                 return TableEntity(
                     namespace=self.namespace,
                     package=self.package,
@@ -128,6 +118,16 @@ class PhoenixTransformer(TransformerInterface):
                         data["table_catalog"], data["table_schema"], data["table_name"]
                     ),
                     isPartition=data.get("is_partition") or False,
+                )
+            else:
+                return ViewEntity(
+                    namespace=self.namespace,
+                    package=self.package,
+                    typeName="TABLE",
+                    name=data["table_name"],
+                    URI=self._build_uri(
+                        data["table_catalog"], data["table_schema"], data["table_name"]
+                    ),
                 )
         except AssertionError as e:
             logger.error(f"Error creating TableEntity: {str(e)}")

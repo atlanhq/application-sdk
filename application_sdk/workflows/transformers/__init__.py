@@ -6,7 +6,7 @@ class TransformerInterface(ABC):
     @abstractmethod
     def transform_metadata(
         self, typename: str, data: Dict[str, Any], **kwargs: Any
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Transform the metadata into a json string.
 

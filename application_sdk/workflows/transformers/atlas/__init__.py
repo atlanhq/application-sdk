@@ -32,7 +32,7 @@ class AtlasTransformer(TransformerInterface):
 
     def transform_metadata(
         self, typename: str, data: Dict[str, Any], **kwargs: Any
-    ) -> Optional[str]:
+    ) -> Optional[Dict[str, Any]]:
         base_qualified_name = kwargs.get(
             "base_qualified_name", f"default/{self.connector_name}/{self.current_epoch}"
         )
@@ -47,7 +47,7 @@ class AtlasTransformer(TransformerInterface):
         creator = entity_creators.get(typename.upper())
         if creator:
             entity = creator(data, base_qualified_name)
-            return entity.json()
+            return entity.dict()
         else:
             logger.error(f"Unknown typename: {typename}")
             return None
