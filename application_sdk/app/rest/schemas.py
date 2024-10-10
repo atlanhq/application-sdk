@@ -29,6 +29,7 @@ class Event(EventBase):
 
 class LogBase(BaseModel):
     resource_attributes: Dict[str, Any]
+    attributes: Dict[str, Any]
     scope_name: str
     severity: str
     severity_number: int

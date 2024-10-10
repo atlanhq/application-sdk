@@ -17,11 +17,15 @@ from application_sdk.paas.objectstore import ObjectStore
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.workflows import WorkflowWorkerInterface
 from application_sdk.workflows.sql.utils import prepare_filters
+from application_sdk.workflows.sql.logger_adaptors import OTLPWorkflowLoggerAdapter, OTLPActivityLoggerAdapter
 from application_sdk.workflows.transformers.phoenix.converter import transform_metadata
 from application_sdk.workflows.transformers.phoenix.schema import PydanticJSONEncoder
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
+
+workflow.logger = OTLPWorkflowLoggerAdapter(logging.getLogger(__name__))
+activity.logger = OTLPActivityLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
@@ -142,7 +146,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 logger.error(f"Error running query in batch: {e}")
                 raise e
 
-        logger.info("Query execution completed")
+        activity.logger.info("Query execution completed")
 
     async def fetch_and_process_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
