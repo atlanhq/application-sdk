@@ -1,6 +1,7 @@
 """Router for handling log-related API endpoints."""
 
 from typing import List, Optional
+import json
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
@@ -23,6 +24,7 @@ async def read_logs(
     limit: int = 100,
     keyword: str = "",
     from_timestamp: int = 0,
+    query_filters: str = "[]",
     to_timestamp: Optional[int] = None,
     session: Session = Depends(get_session),
 ):
@@ -34,13 +36,14 @@ async def read_logs(
     :param keyword: Keyword to filter logs.
     :param from_timestamp: Start timestamp for log retrieval.
     :param to_timestamp: End timestamp for log retrieval.
+    :param query_filters: Filters for logs.
     :param session: Database session.
     :return: A list of Log objects.
     :raises HTTPException: If there's an error with the database operations.
     """
     try:
         return Logs.get_logs(
-            session, skip, limit, keyword, from_timestamp, to_timestamp
+            session, skip, limit, keyword, from_timestamp, to_timestamp, json.loads(query_filters)
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

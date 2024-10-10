@@ -2,7 +2,7 @@
 
 import time
 from datetime import UTC, datetime
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, MutableMapping
 
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
@@ -30,6 +30,7 @@ class Logs:
         keyword: str = "",
         from_timestamp: int = 0,
         to_timestamp: Optional[int] = None,
+        filters: Optional[Sequence[MutableMapping[str, str]]] = None,
     ) -> Sequence[Log]:
         """
         Get logs with optional filtering by keyword and timestamp range.
@@ -44,18 +45,32 @@ class Logs:
         """
         if to_timestamp is None:
             to_timestamp = int(time.time())
-        return (
-            session.query(Log)
+        output = (session.query(Log)
             .filter(Log.body.contains(keyword))
             .filter(
                 Log.timestamp >= datetime.fromtimestamp(from_timestamp, tz=UTC),
                 Log.timestamp <= datetime.fromtimestamp(to_timestamp, tz=UTC),
-            )
+            ))
+        
+        filters = filters or []
+        
+        for filter_ in filters:
+            logAttribute = filter_["key"].split(".")[0]
+            logKey = ".".join(filter_["key"].split(".")[1:])
+            operation = filter_["op"]
+            value = filter_["value"]
+
+            column = getattr(Log, logAttribute)
+            
+            if logKey:
+                output = output.filter(getattr(column[logKey], operation)("\"" + value + "\""))
+            else:
+                output = output.filter(getattr(column, operation)(value))
+        
+        return (output
             .order_by(Log.timestamp.desc())
             .offset(skip)
-            .limit(limit)
-            .all()
-        )
+            .limit(limit).all())
 
     @staticmethod
     def create_logs(session: Session, logs_data: LogsData) -> List[Log]:
