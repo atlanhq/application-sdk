@@ -1,6 +1,6 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException, status
+from fastapi import APIRouter, FastAPI, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 
 from application_sdk.app import AtlanApplicationBuilder, WorkflowBuilderInterface
@@ -137,6 +137,30 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
+    async def list_workflows(self, namespace: str = Query(default="default")):
+        if (
+            not self.workflow_builder_interface
+            or not self.workflow_builder_interface.worker_interface
+        ):
+            raise HTTPException(
+                status_code=500, detail="Worker interface not implemented"
+            )
+        try:
+            workflows = (
+                await self.workflow_builder_interface.worker_interface.list_workflows(
+                    namespace
+                )
+            )
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "success": True,
+                    "data": workflows,
+                },
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
     def add_workflows_router(self):
         self.workflows_router.add_api_route(
             path="/auth",
@@ -164,6 +188,13 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             endpoint=self.start_workflow,
             methods=["POST"],
             response_model=dict,
+        )
+
+        self.workflows_router.add_api_route(
+            path="/list",
+            endpoint=self.list_workflows,
+            methods=["GET"],
+            response_model=List[Dict[str, Any]],
         )
 
         self.app.include_router(self.workflows_router)

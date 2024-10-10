@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Sequence
 
 from temporalio import activity, workflow
-from temporalio.client import Client, WorkflowFailureError
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
@@ -86,6 +86,36 @@ class WorkflowWorkerInterface(ABC):
         activities and child workflows that are defined in the subclass.
         """
         raise NotImplementedError
+
+    async def list_workflows(self, namespace: str) -> List[Dict[str, Any]]:
+        client = await Client.connect(
+            f"{self.TEMPORAL_HOST}:{self.TEMPORAL_PORT}",
+            namespace=namespace,
+            # FIXME: causes issue with different namespace, TBR.
+        )
+        workflows: List[Dict[str, Any]] = []
+        async for workflow_metadata in client.list_workflows():
+            start_time = (
+                workflow_metadata.start_time.isoformat()
+                if workflow_metadata.start_time
+                else None
+            )
+            close_time = (
+                workflow_metadata.close_time.isoformat()
+                if workflow_metadata.close_time
+                else None
+            )
+            workflows.append(
+                {
+                    "workflow_id": workflow_metadata.id,
+                    "run_id": workflow_metadata.run_id,
+                    "status": WorkflowExecutionStatus(workflow_metadata.status).name,
+                    "workflow_type": workflow_metadata.workflow_type,
+                    "start_time": start_time,
+                    "close_time": close_time,
+                }
+            )
+        return workflows
 
     async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
         """
