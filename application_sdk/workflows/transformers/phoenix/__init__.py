@@ -123,7 +123,7 @@ class PhoenixTransformer(TransformerInterface):
                 return ViewEntity(
                     namespace=self.namespace,
                     package=self.package,
-                    typeName="TABLE",
+                    typeName="VIEW",
                     name=data["table_name"],
                     URI=self._build_uri(
                         data["table_catalog"], data["table_schema"], data["table_name"]
