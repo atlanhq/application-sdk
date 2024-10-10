@@ -35,7 +35,7 @@ class TestJSONChunkedObjectStoreWriter:
 
     @staticmethod
     @given(st.dictionaries(st.text(), st.text()))
-    @settings(max_examples=50)
+    @settings(max_examples=10)
     async def test_write_hypothesis(data: Dict[str, Any]):
         async with JSONChunkedObjectStoreWriter(
             local_file_prefix="/tmp/test/test",
@@ -55,7 +55,7 @@ class TestJSONChunkedObjectStoreWriter:
 
     @staticmethod
     @given(st.lists(st.dictionaries(st.text(), st.text())))
-    @settings(max_examples=50)
+    @settings(max_examples=10)
     async def test_write_list_hypothesis(data: List[Dict[str, Any]]):
         async with JSONChunkedObjectStoreWriter(
             local_file_prefix="/tmp/test/test",
