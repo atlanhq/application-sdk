@@ -12,13 +12,11 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 4. Event store - Uses in-memory event store
 
 ## Running examples
-1. Create virtual environment using `virtualenv .venv`
-2. Activate the virtual environment using `source .venv/bin/activate`
-3. Install the dependencies using `poetry install --group examples`
-4. Make sure you start the Dapr runtime before running the examples `dapr run --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path ./components`
-5. cd into the example directory `cd examples`
-6. Start the temporal server `temporal server start-dev`
-7. You can now run any of the examples using `python <example>.py`
+1. Configure poetry to use the virtual environment `poetry config virtualenvs.in-project true`
+2. Install the dependencies using `poetry install`
+3. Activate the virtual environment using `source .venv/bin/activate`
+4. Run `make start-all` to start the Dapr runtime and Temporal server
+5. Run the example using `python application_sql.py` or using the VSCode launch configuration provided in the next section.
 
 ### Run and Debug examples via VSCode or Cursor
 1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables and run the configuration
