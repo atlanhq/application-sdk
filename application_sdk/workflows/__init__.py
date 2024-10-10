@@ -117,6 +117,10 @@ class WorkflowWorkerInterface(ABC):
             )
         return workflows
 
+    async def create_schedule(self, workflow_args: Any) -> Dict[str, Any]:
+        """Create schedule definition"""
+        pass
+
     async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
         """
         Start the workflow
@@ -151,6 +155,7 @@ class WorkflowWorkerInterface(ABC):
                 workflow_args,
                 id=workflow_id,
                 task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
+                cron_schedule=workflow_args.get("cron_schedule", ""),
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
             return {
