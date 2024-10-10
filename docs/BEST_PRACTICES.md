@@ -7,6 +7,8 @@
   - [Python MultiProcessing](#python-multiprocessing)
 - [Memoization](#memoization)
 - [Reliability](#reliability)
+- [Temporal](#temporal)
+  - [Activities and timeouts](#activities-and-timeouts)
 
 
 ## Scaling in Python
@@ -44,3 +46,14 @@ This allows us to achieve concurrency at both workflow and activity level based 
 - You can use the `auto_heartbeater` decorator on top of the activity definition ([example](https://github.com/atlanhq/application-sdk/blob/main/application_sdk/workflows/sql/workflow.py#L238)) to automatically heartbeat the activity. This will heartbeat the activity 3 times per heartbeat_timeout interval by default.
 
 > Read more about activity timeouts [here](https://temporal.io/blog/activity-timeouts)
+
+
+## Temporal
+### Activities and timeouts
+Great [read](https://temporal.io/blog/activity-timeouts)
+
+**TLDR;**
+- Always set `StartToCloseTimeout` - Maximum time the activity can run
+- Set `HeartbeatTimeout` - Maximum time between heartbeats. Use this to report progress and keep the activity alive
+  - Great for long-running activities
+  - Send periodic heartbeat from code and if the activity fails to heartbeat based on the timeout, it will be retried
