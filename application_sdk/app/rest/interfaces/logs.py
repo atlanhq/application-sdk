@@ -55,15 +55,15 @@ class Logs:
         query_filters = query_filters or []
         
         for query_filter in query_filters:
-            logAttribute = query_filter["key"].split(".")[0]
-            logKey = ".".join(query_filter["key"].split(".")[1:])
+            log_attribute = query_filter["key"].split(".")[0]
+            log_key = ".".join(query_filter["key"].split(".")[1:])
             operation = query_filter["op"]
             value = query_filter["value"]
 
-            column = getattr(Log, logAttribute)
+            column = getattr(Log, log_attribute)
             
-            if logKey:
-                output = output.filter(getattr(column[logKey], operation)("\"" + value + "\""))
+            if log_key:
+                output = output.filter(getattr(column[log_key], operation)("\"" + value + "\""))
             else:
                 output = output.filter(getattr(column, operation)(value))
         
