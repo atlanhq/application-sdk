@@ -30,7 +30,7 @@ class Logs:
         keyword: str = "",
         from_timestamp: int = 0,
         to_timestamp: Optional[int] = None,
-        filters: Optional[Sequence[MutableMapping[str, str]]] = None,
+        query_filters: Optional[Sequence[MutableMapping[str, str]]] = None,
     ) -> Sequence[Log]:
         """
         Get logs with optional filtering by keyword and timestamp range.
@@ -52,13 +52,13 @@ class Logs:
                 Log.timestamp <= datetime.fromtimestamp(to_timestamp, tz=UTC),
             ))
         
-        filters = filters or []
+        query_filters = query_filters or []
         
-        for filter_ in filters:
-            logAttribute = filter_["key"].split(".")[0]
-            logKey = ".".join(filter_["key"].split(".")[1:])
-            operation = filter_["op"]
-            value = filter_["value"]
+        for query_filter in query_filters:
+            logAttribute = query_filter["key"].split(".")[0]
+            logKey = ".".join(query_filter["key"].split(".")[1:])
+            operation = query_filter["op"]
+            value = query_filter["value"]
 
             column = getattr(Log, logAttribute)
             
