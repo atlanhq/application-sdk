@@ -47,7 +47,13 @@ class Logs:
             log_attribute = path.split(".")[0]
             log_key = ".".join(path.split(".")[1:])
 
-            operation = "__".join(key.split("__")[1:])
+            operation = key.split("__")[1]
+
+            # Conversion to method names in SQLAlchemy
+            # https://docs.sqlalchemy.org/en/20/core/operators.html#comparison-operators
+            if operation in ["eq", "ne", "lt", "gt"]:
+                operation = "__" + operation + "__"
+
             value = query_dict[key]
             column = getattr(Log, log_attribute)
 

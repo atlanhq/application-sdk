@@ -33,10 +33,10 @@ async def read_logs(
     :param session: Database session.
     :param [attribute]__[operation]: Filters based on attribute and operation from query parameters.
         Supported operations:
-        - __eq__: Equal to
-        - __ne__: Not equal to
-        - __lt__: Less than
-        - __gt__: Greater than
+        - eq: Equal to
+        - ne: Not equal to
+        - lt: Less than
+        - gt: Greater than
         - contains: Substring containment
         - ilike: Case-insensitive LIKE
         - like: SQL LIKE
