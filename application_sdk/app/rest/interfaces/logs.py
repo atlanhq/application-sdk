@@ -41,10 +41,7 @@ class Logs:
         :return: A list of Log objects.
         """
         output = session.query(Log)
-
-        if "timestamp____lt__" not in query_dict:
-            query_dict["timestamp____lt__"] = str(int(time.time()))
-
+        
         for key in query_dict:
             path = key.split("__")[0]
             log_attribute = path.split(".")[0]

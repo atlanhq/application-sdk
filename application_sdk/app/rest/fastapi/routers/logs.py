@@ -30,11 +30,16 @@ async def read_logs(
 
     :param skip: Number of logs to skip (for pagination).
     :param limit: Maximum number of logs to return.
-    :param keyword: Keyword to filter logs.
-    :param from_timestamp: Start timestamp for log retrieval.
-    :param to_timestamp: End timestamp for log retrieval.
-    :param query_filters: Filters for logs.
     :param session: Database session.
+    :param [attribute]__[operation]: Filters based on attribute and operation from query parameters.
+        Supported operations:
+        - __eq__: Equal to
+        - __ne__: Not equal to
+        - __lt__: Less than
+        - __gt__: Greater than
+        - contains: Substring containment
+        - ilike: Case-insensitive LIKE
+        - like: SQL LIKE
     :return: A list of Log objects.
     :raises HTTPException: If there's an error with the database operations.
     """
