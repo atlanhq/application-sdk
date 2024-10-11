@@ -1,39 +1,19 @@
-import json
-from typing import Any, Dict
-
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
-class BaseSchemaModel(BaseModel):
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        json_encoders={
-            # Add any custom type encoders here if needed
-        },
-    )
-
-    def model_dump(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
-        kwargs.setdefault("by_alias", True)
-        return super().model_dump(*args, **kwargs)
-
-    def json(self, *args: Any, **kwargs: Any) -> str:
-        kwargs.setdefault("by_alias", True)
-        return super().model_dump_json(*args, **kwargs)
-
-
-class Namespace(BaseSchemaModel):
+class Namespace(BaseModel):
     id: str
     name: str
     version: int = 1
 
 
-class Package(BaseSchemaModel):
+class Package(BaseModel):
     id: str
     name: str
     version: int = 1
 
 
-class BaseObjectEntity(BaseSchemaModel):
+class BaseObjectEntity(BaseModel):
     typeName: str
     name: str
     URI: str
@@ -79,7 +59,7 @@ class ViewEntity(BaseObjectEntity):
 ## Column
 
 
-class ColumnConstraint(BaseSchemaModel):
+class ColumnConstraint(BaseModel):
     notNull: bool = False
     autoIncrement: bool = False
     primaryKey: bool = False
@@ -93,10 +73,3 @@ class ColumnEntity(BaseObjectEntity):
     isSearchable: bool = True
     namespace: Namespace
     package: Package
-
-
-class PydanticJSONEncoder(json.JSONEncoder):
-    def default(self, o: Any) -> Any:
-        if isinstance(o, BaseModel):
-            return o.model_dump()
-        return super().default(o)

@@ -1,10 +1,15 @@
 import os
 import shutil
+
+# from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
 
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
+
+# from hypothesis import given, settings
+# from hypothesis import strategies as st
 
 
 class TestJSONChunkedObjectStoreWriter:
@@ -32,6 +37,7 @@ class TestJSONChunkedObjectStoreWriter:
 
     # @staticmethod
     # @given(st.dictionaries(st.text(), st.text()))
+    # @settings(max_examples=10)
     # async def test_write_hypothesis(data: Dict[str, Any]):
     #     async with JSONChunkedObjectStoreWriter(
     #         local_file_prefix="/tmp/test/test",
@@ -51,6 +57,7 @@ class TestJSONChunkedObjectStoreWriter:
 
     # @staticmethod
     # @given(st.lists(st.dictionaries(st.text(), st.text())))
+    # @settings(max_examples=10)
     # async def test_write_list_hypothesis(data: List[Dict[str, Any]]):
     #     async with JSONChunkedObjectStoreWriter(
     #         local_file_prefix="/tmp/test/test",

@@ -5,7 +5,7 @@ It uses the Temporal workflow engine to manage the extraction process.
 Key components:
 - SampleSQLWorkflowMetadata: Defines metadata extraction queries
 - SampleSQLWorkflowPreflight: Performs preflight checks
-- SampleSQLWorkflowWorker: Implements the main workflow logic
+- SampleSQLWorkflowWorker: Implements the main workflow logic (including extraction and transformation)
 - SampleSQLWorkflowBuilder: Configures and builds the workflow
 
 Workflow steps:
@@ -15,8 +15,9 @@ Workflow steps:
 4. Fetch schema information
 5. Fetch table information
 6. Fetch column information
-7. Clean up the output directory
-8. Push results to object store
+7. Transform the metadata into Atlas entities
+8. Clean up the output directory
+9. Push results to object store
 
 Usage:
 1. Set the PostgreSQL connection credentials as environment variables
@@ -41,8 +42,9 @@ from application_sdk.workflows.sql.preflight_check import (
     SQLWorkflowPreflightCheckInterface,
 )
 from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
+from application_sdk.workflows.transformers.phoenix import PhoenixTransformer
 
-APPLICATION_NAME = "sample-sql-workflow"
+APPLICATION_NAME = "postgres"
 
 
 logger = get_logger(__name__)
@@ -106,12 +108,22 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         AND c.table_name !~ '{exclude_table}';
     """
 
+    # PASSTHROUGH_MODULES: Sequence[str] = ["application_sdk", "time"]
+
     def __init__(
         self, application_name: str = APPLICATION_NAME, *args: Any, **kwargs: Any
     ):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
         # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
-        super().__init__(application_name, *args, **kwargs)
+        phoenix_transformer = PhoenixTransformer(
+            connector_name=application_name, connector_type="sql"
+        )
+        super().__init__(
+            transformer=phoenix_transformer,
+            application_name=application_name,
+            *args,
+            **kwargs,
+        )
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
@@ -128,7 +140,7 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
         encoded_password = quote_plus(credentials["password"])
         return f"postgresql+psycopg2://{credentials['user']}:{encoded_password}@{credentials['host']}:{credentials['port']}/{credentials['database']}"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: Any, **kwargs: Any):
         self.metadata_interface = SampleSQLWorkflowMetadata(self.get_sql_engine)
         self.preflight_interface = SampleSQLWorkflowPreflight(self.get_sql_engine)
         self.worker_interface = SampleSQLWorkflowWorker(
@@ -178,4 +190,4 @@ if __name__ == "__main__":
     )
 
     # wait for the workflow to finish
-    time.sleep(100)
+    time.sleep(300)
