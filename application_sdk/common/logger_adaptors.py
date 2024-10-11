@@ -4,7 +4,7 @@ from typing import Any, MutableMapping, Tuple
 from temporalio import activity, workflow
 
 
-class OpenTelemetryLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
+class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter."""
         super().__init__(logger, {})
@@ -23,7 +23,7 @@ class OpenTelemetryLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
         except Exception:
             pass
 
-        # Fetch activity information if within the workflow context
+        # Fetch activity information if within the activity context
         try:
             activity_info = activity.info()
             if activity_info:
