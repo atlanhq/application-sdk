@@ -34,9 +34,19 @@ class Logs:
         :param session: Database session.
         :param skip: Number of logs to skip (for pagination).
         :param limit: Maximum number of logs to return.
-        :param keyword: Keyword to filter logs.
-        :param from_timestamp: Start timestamp for log retrieval.
-        :param to_timestamp: End timestamp for log retrieval.
+        :param query_dict: Dynamically filter logs using query parameters. Filters are specified as 
+            `attribute__operation=value` where:
+            - `attribute` is the field you want to filter (e.g., 'timestamp', 'severity', etc.).
+            - `operation` is the filter operation (e.g., `eq`, `lt`, `gt`, `contains`, `ilike`, `like`).
+            Supported operations:
+            - eq: Equal to
+            - ne: Not equal to
+            - lt: Less than
+            - gt: Greater than
+            - contains: Substring containment
+            - ilike: Case-insensitive LIKE
+            - like: SQL LIKE
+        :return: A list of Log objects.
         :return: A list of Log objects.
         """
         output = session.query(Log)
