@@ -68,7 +68,7 @@ class Logs:
 
             if str(column.type) == "DATETIME":
                 value = datetime.fromtimestamp(int(value), tz=UTC)
-            
+
             if log_key:
                 output = output.filter(getattr(column[log_key], operation)(value))
             else:
