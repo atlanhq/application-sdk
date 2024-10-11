@@ -1,7 +1,7 @@
 """Interface for handling log-related API endpoints."""
 
 from datetime import UTC, datetime
-from typing import List, Dict, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
@@ -40,7 +40,7 @@ class Logs:
         :return: A list of Log objects.
         """
         output = session.query(Log)
-        
+
         for key in query_dict:
             path = key.split("__")[0]
             log_attribute = path.split(".")[0]
@@ -60,9 +60,7 @@ class Logs:
                 value = datetime.fromtimestamp(int(value), tz=UTC)
             
             if log_key:
-                output = output.filter(
-                    getattr(column[log_key], operation)(value)
-                )
+                output = output.filter(getattr(column[log_key], operation)(value))
             else:
                 output = output.filter(getattr(column, operation)(value))
 
