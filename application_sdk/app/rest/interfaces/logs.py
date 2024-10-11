@@ -1,6 +1,5 @@
 """Interface for handling log-related API endpoints."""
 
-import time
 from datetime import UTC, datetime
 from typing import List, Dict, Optional, Sequence
 

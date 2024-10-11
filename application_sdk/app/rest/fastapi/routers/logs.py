@@ -1,7 +1,6 @@
 """Router for handling log-related API endpoints."""
 
-import json
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
