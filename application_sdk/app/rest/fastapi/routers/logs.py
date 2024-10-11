@@ -25,6 +25,7 @@ async def read_logs(
     from_timestamp: int = 0,
     to_timestamp: Optional[int] = None,
     session: Session = Depends(get_session),
+    client_tz: Optional[str] = None,
 ):
     """
     Retrieve a list of logs.
@@ -35,12 +36,13 @@ async def read_logs(
     :param from_timestamp: Start timestamp for log retrieval.
     :param to_timestamp: End timestamp for log retrieval.
     :param session: Database session.
+    :param client_tz: IANA time zone name
     :return: A list of Log objects.
     :raises HTTPException: If there's an error with the database operations.
     """
     try:
         return Logs.get_logs(
-            session, skip, limit, keyword, from_timestamp, to_timestamp
+            session, skip, limit, keyword, from_timestamp, to_timestamp, client_tz
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

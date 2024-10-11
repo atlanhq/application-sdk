@@ -4,6 +4,7 @@ import time
 from datetime import UTC, datetime
 from typing import List, Optional, Sequence
 
+import pytz
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
 
@@ -30,6 +31,7 @@ class Logs:
         keyword: str = "",
         from_timestamp: int = 0,
         to_timestamp: Optional[int] = None,
+        client_tz: Optional[str] = None,
     ) -> Sequence[Log]:
         """
         Get logs with optional filtering by keyword and timestamp range.
@@ -40,11 +42,12 @@ class Logs:
         :param keyword: Keyword to filter logs.
         :param from_timestamp: Start timestamp for log retrieval.
         :param to_timestamp: End timestamp for log retrieval.
+        :param client_tz: IANA time zone name
         :return: A list of Log objects.
         """
         if to_timestamp is None:
             to_timestamp = int(time.time())
-        return (
+        logs = (
             session.query(Log)
             .filter(Log.body.contains(keyword))
             .filter(
@@ -56,6 +59,20 @@ class Logs:
             .limit(limit)
             .all()
         )
+
+        if client_tz:
+            for log in logs:
+                log.timestamp = pytz.timezone("UTC").localize(log.timestamp)
+                log.timestamp = log.timestamp.astimezone(pytz.timezone(client_tz))
+
+                log.observed_timestamp = pytz.timezone("UTC").localize(
+                    log.observed_timestamp
+                )
+                log.observed_timestamp = log.observed_timestamp.astimezone(
+                    pytz.timezone(client_tz)
+                )
+
+        return logs
 
     @staticmethod
     def create_logs(session: Session, logs_data: LogsData) -> List[Log]:
