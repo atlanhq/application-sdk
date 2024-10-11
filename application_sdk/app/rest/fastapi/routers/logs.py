@@ -20,12 +20,9 @@ router = APIRouter(
 
 @router.get("", response_model=list[Log])
 async def read_logs(
+    req: Request,
     skip: int = 0,
     limit: int = 100,
-    keyword: str = "",
-    from_timestamp: int = 0,
-    query_filters: str = "[]",
-    to_timestamp: Optional[int] = None,
     session: Session = Depends(get_session),
 ):
     """
@@ -46,10 +43,7 @@ async def read_logs(
             session,
             skip,
             limit,
-            keyword,
-            from_timestamp,
-            to_timestamp,
-            json.loads(query_filters),
+            dict(req.query_params),
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -2,7 +2,7 @@
 
 import time
 from datetime import UTC, datetime
-from typing import List, MutableMapping, Optional, Sequence
+from typing import List, Dict, Optional, Sequence
 
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
@@ -27,10 +27,7 @@ class Logs:
         session: Session,
         skip: int = 0,
         limit: int = 100,
-        keyword: str = "",
-        from_timestamp: int = 0,
-        to_timestamp: Optional[int] = None,
-        query_filters: Optional[Sequence[MutableMapping[str, str]]] = None,
+        query_dict: Dict[str, str] = {},
     ) -> Sequence[Log]:
         """
         Get logs with optional filtering by keyword and timestamp range.
@@ -43,30 +40,26 @@ class Logs:
         :param to_timestamp: End timestamp for log retrieval.
         :return: A list of Log objects.
         """
-        if to_timestamp is None:
-            to_timestamp = int(time.time())
-        output = (
-            session.query(Log)
-            .filter(Log.body.contains(keyword))
-            .filter(
-                Log.timestamp >= datetime.fromtimestamp(from_timestamp, tz=UTC),
-                Log.timestamp <= datetime.fromtimestamp(to_timestamp, tz=UTC),
-            )
-        )
+        output = session.query(Log)
 
-        query_filters = query_filters or []
+        if "timestamp____lt__" not in query_dict:
+            query_dict["timestamp____lt__"] = str(int(time.time()))
 
-        for query_filter in query_filters:
-            log_attribute = query_filter["key"].split(".")[0]
-            log_key = ".".join(query_filter["key"].split(".")[1:])
-            operation = query_filter["op"]
-            value = query_filter["value"]
+        for key in query_dict:
+            path = key.split("__")[0]
+            log_attribute = path.split(".")[0]
+            log_key = ".".join(path.split(".")[1:])
 
+            operation = "__".join(key.split("__")[1:])
+            value = query_dict[key]
             column = getattr(Log, log_attribute)
 
+            if str(column.type) == "DATETIME":
+                value = datetime.fromtimestamp(int(value), tz=UTC)
+            
             if log_key:
                 output = output.filter(
-                    getattr(column[log_key], operation)('"' + value + '"')
+                    getattr(column[log_key], operation)(value)
                 )
             else:
                 output = output.filter(getattr(column, operation)(value))
