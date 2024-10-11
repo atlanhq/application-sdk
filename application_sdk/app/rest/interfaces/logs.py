@@ -34,7 +34,7 @@ class Logs:
         :param session: Database session.
         :param skip: Number of logs to skip (for pagination).
         :param limit: Maximum number of logs to return.
-        :param query_dict: Dynamically filter logs using query parameters. Filters are specified as 
+        :param query_dict: Dynamically filter logs using query parameters. Filters are specified as
             `attribute__operation=value` where:
             - `attribute` is the field you want to filter (e.g., 'timestamp', 'severity', etc.).
             - `operation` is the filter operation (e.g., `eq`, `lt`, `gt`, `contains`, `ilike`, `like`).

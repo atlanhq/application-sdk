@@ -30,7 +30,7 @@ async def read_logs(
     :param skip: Number of logs to skip (for pagination).
     :param limit: Maximum number of logs to return.
     :param session: Database session.
-    :param [attribute]__[operation]: Dynamically filter logs using query parameters. Filters are specified as 
+    :param [attribute]__[operation]: Dynamically filter logs using query parameters. Filters are specified as
         `attribute__operation=value` where:
         - `attribute` is the field you want to filter (e.g., 'timestamp', 'severity', etc.).
         - `operation` is the filter operation (e.g., `eq`, `lt`, `gt`, `contains`, `ilike`, `like`).
