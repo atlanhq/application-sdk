@@ -20,6 +20,9 @@ class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
             if workflow_info:
                 extra["run_id"] = workflow_info.run_id
                 extra["workflow_id"] = workflow_info.workflow_id
+                extra["workflow_namespace"] = workflow_info.namespace
+                extra["task_queue"] = workflow_info.task_queue
+                extra["workflow_type"] = workflow_info.workflow_type
         except Exception:
             pass
 
@@ -30,6 +33,9 @@ class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
                 extra["workflow_id"] = activity_info.workflow_id
                 extra["run_id"] = activity_info.workflow_run_id
                 extra["activity_id"] = activity_info.activity_id
+                extra["activity_type"] = activity_info.activity_type
+                extra["workflow_namespace"] = activity_info.workflow_namespace
+                extra["task_queue"] = activity_info.task_queue
         except Exception:
             pass
 
