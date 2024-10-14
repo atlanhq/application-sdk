@@ -6,6 +6,7 @@ from typing import List, Optional, Sequence
 
 import pytz
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from application_sdk.app.models import Log
@@ -47,30 +48,56 @@ class Logs:
         """
         if to_timestamp is None:
             to_timestamp = int(time.time())
-        logs = (
-            session.query(Log)
+
+        client_timezone = UTC
+        if client_tz:
+            client_timezone = pytz.timezone(client_tz)
+            tz_offset = (
+                client_timezone.utcoffset(datetime.utcnow()).total_seconds() / 3600.0
+            )
+        else:
+            tz_offset = 0  # Default to UTC if no client timezone is provided
+
+        query_response = (
+            session.query(
+                Log,
+            )
+            .add_columns(
+                # Convert timestamp and observed_timestamp to client's timezone
+                func.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    func.datetime(Log.timestamp, f"{tz_offset} hours"),
+                ).label("timestamp"),
+                func.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    func.datetime(Log.observed_timestamp, f"{tz_offset} hours"),
+                ).label("observed_timestamp"),
+            )
             .filter(Log.body.contains(keyword))
             .filter(
-                Log.timestamp >= datetime.fromtimestamp(from_timestamp, tz=UTC),
-                Log.timestamp <= datetime.fromtimestamp(to_timestamp, tz=UTC),
+                func.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    func.datetime(Log.timestamp, f"{tz_offset} hours"),
+                ).label("timestamp")
+                >= datetime.fromtimestamp(from_timestamp, tz=client_timezone),
+                func.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    func.datetime(Log.timestamp, f"{tz_offset} hours"),
+                ).label("timestamp")
+                <= datetime.fromtimestamp(to_timestamp, tz=client_timezone),
             )
             .order_by(Log.timestamp.desc())
             .offset(skip)
             .limit(limit)
             .all()
         )
+        logs = []
 
-        if client_tz:
-            for log in logs:
-                log.timestamp = pytz.timezone("UTC").localize(log.timestamp)
-                log.timestamp = log.timestamp.astimezone(pytz.timezone(client_tz))
-
-                log.observed_timestamp = pytz.timezone("UTC").localize(
-                    log.observed_timestamp
-                )
-                log.observed_timestamp = log.observed_timestamp.astimezone(
-                    pytz.timezone(client_tz)
-                )
+        for row in query_response:
+            # row is a tuple of Log, timestamp, and observed_timestamp
+            row[0].timestamp = row[1]
+            row[0].observed_timestamp = row[2]
+            logs.append(row[0])
 
         return logs
 
