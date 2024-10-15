@@ -69,7 +69,8 @@ def test_get_logs_within_timestamp_range(session: Session, setup_logs: List[Log]
     to_timestamp = str(int(datetime(2023, 1, 7, tzinfo=UTC).timestamp()))
 
     logs = Logs.get_logs(
-        session, query_dict={"timestamp__ge": from_timestamp, "timestamp__le": to_timestamp}
+        session,
+        query_dict={"timestamp__ge": from_timestamp, "timestamp__le": to_timestamp},
     )
 
     assert len(logs) == 2
