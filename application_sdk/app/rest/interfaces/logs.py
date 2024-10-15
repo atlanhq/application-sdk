@@ -60,7 +60,7 @@ class Logs:
 
             # Conversion to method names in SQLAlchemy
             # https://docs.sqlalchemy.org/en/20/core/operators.html#comparison-operators
-            if operation in ["eq", "ne", "lt", "gt"]:
+            if operation in ["eq", "ne", "lt", "gt", "le", "ge"]:
                 operation = "__" + operation + "__"
 
             value = query_dict[key]

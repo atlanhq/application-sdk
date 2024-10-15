@@ -65,11 +65,11 @@ def setup_logs(session: Session):
 
 def test_get_logs_within_timestamp_range(session: Session, setup_logs: List[Log]):
     """Test retrieving logs within a specific timestamp range."""
-    from_timestamp = int(datetime(2023, 1, 1, tzinfo=UTC).timestamp())
-    to_timestamp = int(datetime(2023, 1, 7, tzinfo=UTC).timestamp())
+    from_timestamp = str(int(datetime(2023, 1, 1, tzinfo=UTC).timestamp()))
+    to_timestamp = str(int(datetime(2023, 1, 7, tzinfo=UTC).timestamp()))
 
     logs = Logs.get_logs(
-        session, from_timestamp=from_timestamp, to_timestamp=to_timestamp
+        session, query_dict={"timestamp__ge": from_timestamp, "timestamp__le": to_timestamp}
     )
 
     assert len(logs) == 2
@@ -80,7 +80,7 @@ def test_get_logs_within_timestamp_range(session: Session, setup_logs: List[Log]
 def test_get_logs_with_keyword_filter(session: Session, setup_logs: List[Log]):
     """Test retrieving logs filtered by a keyword."""
     keyword = "Error"
-    logs = Logs.get_logs(session, keyword=keyword)
+    logs = Logs.get_logs(session, query_dict={"body__contains": keyword})
 
     assert len(logs) == 1
     assert str(logs[0].body) == "Error: something went wrong"
