@@ -1,15 +1,18 @@
-import pytest
 import json
+from datetime import UTC, datetime
 from typing import List
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from datetime import datetime, UTC
-from application_sdk.app.models import Metric, Base
-from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
-from application_sdk.app.rest.interfaces.metrics import Metrics
-from google.protobuf import json_format
 
-@pytest.fixture(scope='function')
+import pytest
+from google.protobuf import json_format
+from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from application_sdk.app.models import Base, Metric
+from application_sdk.app.rest.interfaces.metrics import Metrics
+
+
+@pytest.fixture(scope="function")
 def session():
     """Fixture for setting up a database session for testing."""
     # Create an in-memory SQLite database
@@ -28,7 +31,7 @@ def session():
     Base.metadata.drop_all(engine)
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def setup_metrics(session: Session):
     """Fixture to insert mock metrics into the test database."""
     # Add sample metric data
@@ -58,20 +61,24 @@ def setup_metrics(session: Session):
             observed_timestamp=datetime(2023, 1, 10, tzinfo=UTC),
         ),
     ]
-    
+
     session.add_all(metrics)
     session.commit()
 
     return metrics
 
 
-def test_get_metrics_within_timestamp_range(session: Session, setup_metrics: List[Metric]):
+def test_get_metrics_within_timestamp_range(
+    session: Session, setup_metrics: List[Metric]
+):
     """Test retrieving metrics within a specific timestamp range."""
     from_timestamp = int(datetime(2023, 1, 1, tzinfo=UTC).timestamp())
     to_timestamp = int(datetime(2023, 1, 7, tzinfo=UTC).timestamp())
 
-    metrics_response = Metrics.get_metrics(session, from_timestamp=from_timestamp, to_timestamp=to_timestamp)
-    
+    metrics_response = Metrics.get_metrics(
+        session, from_timestamp=from_timestamp, to_timestamp=to_timestamp
+    )
+
     assert len(metrics_response) == 2
     assert "cpu_usage" in metrics_response
     assert "memory_usage" in metrics_response
@@ -79,29 +86,38 @@ def test_get_metrics_within_timestamp_range(session: Session, setup_metrics: Lis
 
 def test_create_metrics(session: Session):
     mock_metrics_data = {
-        "resource_metrics": [{
-            "resource": {
-                "attributes": [
-
-                ]
-            },
-            "scope_metrics": [{
-                "metrics": [{
-                    "name": "cpu_usage",
-                    "description": "CPU usage over time",
-                    "unit": "percentage",
-                    "gauge": {
-                        "data_points": [{
-                            "as_int": 50,
-                            "time_unix_nano": int(datetime(2023, 1, 1, tzinfo=UTC).timestamp() * 1e9)
-                        }]
+        "resource_metrics": [
+            {
+                "resource": {"attributes": []},
+                "scope_metrics": [
+                    {
+                        "metrics": [
+                            {
+                                "name": "cpu_usage",
+                                "description": "CPU usage over time",
+                                "unit": "percentage",
+                                "gauge": {
+                                    "data_points": [
+                                        {
+                                            "as_int": 50,
+                                            "time_unix_nano": int(
+                                                datetime(
+                                                    2023, 1, 1, tzinfo=UTC
+                                                ).timestamp()
+                                                * 1e9
+                                            ),
+                                        }
+                                    ]
+                                },
+                            }
+                        ],
+                        "scope": {
+                            "name": "cpu_usage",
+                        },
                     }
-                }],
-                "scope": {
-                    "name": "cpu_usage",
-                }
-            }]
-        }]
+                ],
+            }
+        ]
     }
 
     metric_message = MetricsData()
@@ -113,7 +129,7 @@ def test_create_metrics(session: Session):
     # Assert the correct metric was created
     assert len(created_metrics) == 1
     assert str(created_metrics[0].name) == "cpu_usage"
-    
+
 
 def test_get_metric_by_id(session: Session, setup_metrics: List[Metric]):
     """Test retrieving a specific metric by ID."""

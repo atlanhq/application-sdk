@@ -1,15 +1,18 @@
-import pytest
-from typing import List
 import json
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, Session
-from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
-from datetime import datetime, UTC
-from application_sdk.app.models import Trace, Base
-from application_sdk.app.rest.interfaces.traces import Traces
-from google.protobuf import json_format
+from datetime import UTC, datetime
+from typing import List
 
-@pytest.fixture(scope='function')
+import pytest
+from google.protobuf import json_format
+from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
+from sqlalchemy import create_engine
+from sqlalchemy.orm import Session, sessionmaker
+
+from application_sdk.app.models import Base, Trace
+from application_sdk.app.rest.interfaces.traces import Traces
+
+
+@pytest.fixture(scope="function")
 def session():
     """Fixture for setting up a database session for testing."""
     # Create an in-memory SQLite database
@@ -28,7 +31,7 @@ def session():
     Base.metadata.drop_all(engine)
 
 
-@pytest.fixture(scope='function')
+@pytest.fixture(scope="function")
 def setup_traces(session: Session):
     """Fixture to insert mock traces into the test database."""
     # Add sample trace data
@@ -60,7 +63,7 @@ def setup_traces(session: Session):
             events=[],
         ),
     ]
-    
+
     session.add_all(traces)
     session.commit()
 
@@ -80,9 +83,13 @@ def test_get_traces_within_timestamp_range(session: Session, setup_traces: List[
     from_timestamp = int(datetime(2023, 1, 1, 0, 0, 0, tzinfo=UTC).timestamp())
     to_timestamp = int(datetime(2023, 1, 1, 23, 59, 59, tzinfo=UTC).timestamp())
 
-    traces = Traces.get_traces(session, from_timestamp=from_timestamp, to_timestamp=to_timestamp)
+    traces = Traces.get_traces(
+        session, from_timestamp=from_timestamp, to_timestamp=to_timestamp
+    )
 
-    assert len(traces) == 1  # Only the trace with start time on Jan 1 should be returned
+    assert (
+        len(traces) == 1
+    )  # Only the trace with start time on Jan 1 should be returned
     assert str(traces[0].name) == "trace_1"
     assert str(traces[0].trace_id) == "1234abcd"
 
@@ -94,7 +101,10 @@ def test_create_traces(session: Session):
             {
                 "resource": {
                     "attributes": [
-                        {"key": "service.name", "value": {"string_value": "example-service"}}
+                        {
+                            "key": "service.name",
+                            "value": {"string_value": "example-service"},
+                        }
                     ]
                 },
                 "scope_spans": [
@@ -109,32 +119,66 @@ def test_create_traces(session: Session):
                                 "parent_span_id": "1234567890abcdef",
                                 "name": "example-span",
                                 "kind": 1,  # Assuming 1 = SPAN_KIND_INTERNAL, based on OpenTelemetry spec
-                                "start_time_unix_nano": int(datetime(2023, 1, 1, 0, 0, tzinfo=UTC).timestamp() * 1e9),
-                                "end_time_unix_nano": int(datetime(2023, 1, 1, 0, 5, tzinfo=UTC).timestamp() * 1e9),
+                                "start_time_unix_nano": int(
+                                    datetime(2023, 1, 1, 0, 0, tzinfo=UTC).timestamp()
+                                    * 1e9
+                                ),
+                                "end_time_unix_nano": int(
+                                    datetime(2023, 1, 1, 0, 5, tzinfo=UTC).timestamp()
+                                    * 1e9
+                                ),
                                 "attributes": [
-                                    {"key": "http.method", "value": {"string_value": "GET"}},
-                                    {"key": "http.url", "value": {"string_value": "https://example.com"}}
+                                    {
+                                        "key": "http.method",
+                                        "value": {"string_value": "GET"},
+                                    },
+                                    {
+                                        "key": "http.url",
+                                        "value": {
+                                            "string_value": "https://example.com"
+                                        },
+                                    },
                                 ],
                                 "events": [
                                     {
-                                        "time_unix_nano": int(datetime(2023, 1, 1, 0, 1, tzinfo=UTC).timestamp() * 1e9),
+                                        "time_unix_nano": int(
+                                            datetime(
+                                                2023, 1, 1, 0, 1, tzinfo=UTC
+                                            ).timestamp()
+                                            * 1e9
+                                        ),
                                         "name": "request_received",
                                         "attributes": [
-                                            {"key": "event.attribute.key", "value": {"string_value": "event.attribute.value"}}
-                                        ]
+                                            {
+                                                "key": "event.attribute.key",
+                                                "value": {
+                                                    "string_value": "event.attribute.value"
+                                                },
+                                            }
+                                        ],
                                     },
                                     {
-                                        "time_unix_nano": int(datetime(2023, 1, 1, 0, 2, tzinfo=UTC).timestamp() * 1e9),
+                                        "time_unix_nano": int(
+                                            datetime(
+                                                2023, 1, 1, 0, 2, tzinfo=UTC
+                                            ).timestamp()
+                                            * 1e9
+                                        ),
                                         "name": "response_sent",
                                         "attributes": [
-                                            {"key": "response.attribute.key", "value": {"string_value": "response.attribute.value"}}
-                                        ]
-                                    }
-                                ]
+                                            {
+                                                "key": "response.attribute.key",
+                                                "value": {
+                                                    "string_value": "response.attribute.value"
+                                                },
+                                            }
+                                        ],
+                                    },
+                                ],
                             }
-                        ]
+                        ],
                     }
-                ]
+                ],
             }
         ]
     }
@@ -148,7 +192,10 @@ def test_create_traces(session: Session):
     # Assert the correct trace was created
     assert len(created_traces) == 1
     assert str(created_traces[0].name) == "example-span"
-    assert str(created_traces[0].trace_id) == "d76df8e7aefcf7469b71d79fd76df8e7aefcf7469b71d79f"
+    assert (
+        str(created_traces[0].trace_id)
+        == "d76df8e7aefcf7469b71d79fd76df8e7aefcf7469b71d79f"
+    )
     assert str(created_traces[0].events[0]["name"]) == "request_received"
 
 
