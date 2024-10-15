@@ -1,12 +1,13 @@
 import pytest
+import json
 from typing import List
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, Session
 from datetime import datetime, UTC
 from application_sdk.app.models import Metric, Base
+from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
 from application_sdk.app.rest.interfaces.metrics import Metrics
-import mock
-
+from google.protobuf import json_format
 
 @pytest.fixture(scope='function')
 def session():
@@ -76,34 +77,42 @@ def test_get_metrics_within_timestamp_range(session: Session, setup_metrics: Lis
     assert "memory_usage" in metrics_response
 
 
-# def test_create_metrics(session: Session):
-#     """Test creating metrics from a protobuf message."""
-#     # Create a mock MetricsData object
-#     mock_metrics_data = mock.Mock()
-    
-#     mock_metric_record = mock.Mock(
-#         name="cpu_usage",
-#         description="CPU usage over time",
-#         unit="percentage",
-#     )
-    
-#     mock_metric_record.gauge = mock.Mock()
-#     mock_metric_record.gauge.data_points = [{
-#         "value": 50,
-#         "time_unix_nano": int(datetime(2023, 1, 1, tzinfo=UTC).timestamp() * 1e9)
-#     }]
-    
+def test_create_metrics(session: Session):
+    mock_metrics_data = {
+        "resource_metrics": [{
+            "resource": {
+                "attributes": [
 
-#     mock_scope_metric = mock.Mock(metrics=[mock_metric_record])
-#     mock_resource_metric = mock.Mock(resource=mock.Mock(attributes=[]), scope_metrics=[mock_scope_metric])
-#     mock_metrics_data.resource_metrics = [mock_resource_metric]
+                ]
+            },
+            "scope_metrics": [{
+                "metrics": [{
+                    "name": "cpu_usage",
+                    "description": "CPU usage over time",
+                    "unit": "percentage",
+                    "gauge": {
+                        "data_points": [{
+                            "as_int": 50,
+                            "time_unix_nano": int(datetime(2023, 1, 1, tzinfo=UTC).timestamp() * 1e9)
+                        }]
+                    }
+                }],
+                "scope": {
+                    "name": "cpu_usage",
+                }
+            }]
+        }]
+    }
 
-#     # Call the method
-#     created_metrics = Metrics.create_metrics(session, mock_metrics_data)
+    metric_message = MetricsData()
+    json_format.Parse(json.dumps(mock_metrics_data), metric_message)
 
-#     # Assert the correct metric was created
-#     assert len(created_metrics) == 1
-#     assert str(created_metrics[0].name) == "cpu_usage"
+    # Call the method
+    created_metrics = Metrics.create_metrics(session, metric_message)
+
+    # Assert the correct metric was created
+    assert len(created_metrics) == 1
+    assert str(created_metrics[0].name) == "cpu_usage"
     
 
 def test_get_metric_by_id(session: Session, setup_metrics: List[Metric]):
