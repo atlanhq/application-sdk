@@ -70,7 +70,7 @@ def test_get_logs_within_timestamp_range(session: Session, setup_logs: List[Log]
 
     logs = Logs.get_logs(
         session,
-        query_dict={"timestamp__ge": from_timestamp, "timestamp__le": to_timestamp},
+        query_filters={"timestamp__ge": from_timestamp, "timestamp__le": to_timestamp},
     )
 
     assert len(logs) == 2
@@ -81,7 +81,7 @@ def test_get_logs_within_timestamp_range(session: Session, setup_logs: List[Log]
 def test_get_logs_with_keyword_filter(session: Session, setup_logs: List[Log]):
     """Test retrieving logs filtered by a keyword."""
     keyword = "Error"
-    logs = Logs.get_logs(session, query_dict={"body__contains": keyword})
+    logs = Logs.get_logs(session, query_filters={"body__contains": keyword})
 
     assert len(logs) == 1
     assert str(logs[0].body) == "Error: something went wrong"

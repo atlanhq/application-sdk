@@ -46,11 +46,15 @@ async def read_logs(
     :raises HTTPException: If there's an error with the database operations.
     """
     try:
+        query_filters = dict(req.query_params)
+        del query_filters["skip"]
+        del query_filters["limit"]
+
         return Logs.get_logs(
             session,
             skip,
             limit,
-            dict(req.query_params),
+            query_filters=query_filters,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

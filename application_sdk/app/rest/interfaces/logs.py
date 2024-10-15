@@ -26,7 +26,7 @@ class Logs:
         session: Session,
         skip: int = 0,
         limit: int = 100,
-        query_dict: Dict[str, str] = {},
+        query_filters: Dict[str, str] = {},
     ) -> Sequence[Log]:
         """
         Get logs with optional filtering by keyword and timestamp range.
@@ -51,7 +51,7 @@ class Logs:
         """
         output = session.query(Log)
 
-        for key in query_dict:
+        for key in query_filters:
             path = key.split("__")[0]
             log_attribute = path.split(".")[0]
             log_key = ".".join(path.split(".")[1:])
@@ -63,7 +63,7 @@ class Logs:
             if operation in ["eq", "ne", "lt", "gt", "le", "ge"]:
                 operation = "__" + operation + "__"
 
-            value = query_dict[key]
+            value = query_filters[key]
             column = getattr(Log, log_attribute)
 
             if str(column.type) == "DATETIME":
