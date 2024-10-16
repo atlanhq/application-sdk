@@ -9,7 +9,7 @@ import plotly.express as px
 
 from sqlalchemy import create_engine
 
-dash.register_page(__name__)
+dash.register_page(__name__, name="📡Telemetry")
 
 engine = create_engine("sqlite:////tmp/app.db")
 
@@ -60,7 +60,6 @@ FROM metrics
 WHERE json_extract(data_points, '$.histogram') IS NOT NULL
 ORDER BY start_time DESC
 """, con=engine)
-
 
 
 layout = html.Div([

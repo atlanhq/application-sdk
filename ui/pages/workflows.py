@@ -12,7 +12,7 @@ import dash_bootstrap_components as dbc
 import pygwalker as pyg
 import dash_dangerously_set_inner_html
 
-dash.register_page(__name__)
+dash.register_page(__name__, name="🏗️Workflows")
 
 
 async def fetch_workflows_list():
