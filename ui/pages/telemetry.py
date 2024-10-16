@@ -1,3 +1,5 @@
+import json
+
 from dash import html, dcc, callback, Output, Input
 import dash
 import pandas as pd
@@ -40,6 +42,26 @@ sums_metrics_df = pd.read_sql(
     WHERE json_extract(data_points, '$.sum') IS NOT NULL
     ORDER BY start_time DESC
     """, con=engine)
+
+histogram_metrics_df = pd.read_sql(
+"""
+SELECT
+    name,
+    description,
+    datetime(CAST(json_extract(data_points, '$.histogram.startTimeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as start_time,
+    datetime(CAST(json_extract(data_points, '$.histogram.timeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as end_time,
+    CAST(json_extract(data_points, '$.histogram.count') AS INTEGER) as count,
+    CAST(json_extract(data_points, '$.histogram.sum') AS FLOAT) as sum,
+    CAST(json_extract(data_points, '$.histogram.min') AS FLOAT) as min,
+    CAST(json_extract(data_points, '$.histogram.max') AS FLOAT) as max,
+    json_extract(data_points, '$.histogram.bucketCounts') as bucketCounts,
+    json_extract(data_points, '$.histogram.explicitBounds') as explicitBounds
+FROM metrics
+WHERE json_extract(data_points, '$.histogram') IS NOT NULL
+ORDER BY start_time DESC
+""", con=engine)
+
+
 
 layout = html.Div([
     dbc.Container([
@@ -85,6 +107,23 @@ def return_ag_grid(df, table_id):
         className="dbc"
     )
 
+def sum_each_index(list_of_lists):
+  """Sums the elements at each index across all sublists."""
+
+  result = []
+  if not list_of_lists:
+    return result
+
+  max_length = max(len(sublist) for sublist in list_of_lists)
+
+  for i in range(max_length):
+    index_sum = 0
+    for sublist in list_of_lists:
+      if i < len(sublist):
+        index_sum += int(sublist[i])
+    result.append(index_sum)
+
+  return result
 
 @callback(
     Output("card-content", "children"),
@@ -102,19 +141,46 @@ def render_content(active_tab):
         # Get all the metric names in the df
         metric_names = sums_metrics_df['name'].unique()
         data = []
-        for metric_name in metric_names:
-            df = sums_metrics_df[sums_metrics_df['name'] == metric_name]
+        for sum_metric_name in metric_names:
+            df = sums_metrics_df[sums_metrics_df['name'] == sum_metric_name]
             metric_description = df['description'].iloc[0]
             card = dbc.Card([
-                dbc.CardHeader(metric_name),
+                dbc.CardHeader(sum_metric_name),
                 dbc.CardBody([
                     html.P(metric_description),
                     dcc.Graph(
-                        id=f"{metric_name}-graph",
+                        id=f"{sum_metric_name}-graph",
                         figure=px.line(
                             df,
                             x="start_time",
                             y="value",
+                        )
+                    )
+                ])
+            ])
+            data.append(card)
+
+        # Get all the histogram metric names in the df
+        histogram_metric_names = histogram_metrics_df['name'].unique()
+        for histogram_metric_name in histogram_metric_names:
+            df = histogram_metrics_df[histogram_metrics_df['name'] == histogram_metric_name]
+            metric_description = df['description'].iloc[0]
+
+            # aggregate data
+            bucket_counts = df['bucketCounts'].apply(lambda x: json.loads(x)).tolist()
+            explicit_bounds = df['explicitBounds'].apply(lambda x: json.loads(x)).tolist()
+
+            agg_bucket_counts = sum_each_index(bucket_counts)
+            card = dbc.Card([
+                dbc.CardHeader(histogram_metric_name),
+                dbc.CardBody([
+                    html.P(metric_description),
+                    dcc.Graph(
+                        id=f"{histogram_metric_name}-graph",
+                        figure=px.bar(
+                            x=explicit_bounds[0],
+                            y=agg_bucket_counts[1:],
+                            labels={"x": "Bucket Bounds", "y": "Count"}
                         )
                     )
                 ])
