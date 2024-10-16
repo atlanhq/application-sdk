@@ -102,6 +102,8 @@ layout = html.Div([
 )
 def refresh_workflows_table(n_clicks):
     workflow_list = asyncio.run(fetch_workflows_list(), debug=True)
+    if not workflow_list:
+        return
     df = pd.DataFrame(workflow_list)
     del df["data_converter"]
     del df["raw_info"]
