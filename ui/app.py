@@ -7,22 +7,19 @@ app = Dash(__name__, use_pages=True, assets_folder="assets", external_stylesheet
 app.title = "Atlan Application Dashboard"
 
 app.layout = html.Div([
-    dbc.Container([
-        html.H1('Atlan Application Dashboard', className="p-2 mb-2 text-center"),
-        dbc.Nav(
-            [
-                dbc.NavItem(dbc.NavLink(
-                    page['name'],
-                    href=page['relative_path'],
-                    active="exact"
-                )
-                ) for page in dash.page_registry.values()
-            ],
-            pills=True, justified=True
-        ),
-        dash.page_container
-    ], fluid=True)
+    dbc.NavbarSimple(
+        children=[
+            dbc.NavItem(dbc.NavLink(page['name'], href=page['relative_path']))
+            for page in dash.page_registry.values()
+        ],
+        brand="Atlan Application Dashboard",
+        brand_href="#",
+        color="primary",
+        dark=True,
+        sticky="top",
+    ),
+    dash.page_container
 ])
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run(debug=True)

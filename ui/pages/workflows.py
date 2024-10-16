@@ -26,8 +26,8 @@ async def fetch_workflows_list():
 
 workflows_df = pd.DataFrame([])
 layout = html.Div([
-    html.H1('Workflows'),
     dbc.Container([
+        html.H1('Workflows Dashboard'),
         dbc.Button("Refresh", id="refresh-button", class_name="icon-refresh"),
         dag.AgGrid(
             id='workflows-table',
