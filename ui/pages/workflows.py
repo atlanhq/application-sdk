@@ -6,7 +6,7 @@ import dash
 import pandas as pd
 from dash import html, callback
 from dash.dependencies import Input, Output
-from temporalio.client import Client
+from temporalio.client import Client, WorkflowExecutionStatus
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import pygwalker as pyg
@@ -109,18 +109,45 @@ def refresh_workflows_table(n_clicks):
 
     df["run_time"] = df["close_time"] - df["execution_time"]
     df["run_time"] = df["run_time"].dt.total_seconds()
-    df["run_link"] = "http://localhost:8233/namespaces/default/workflows/" + df["id"] + "/" + df["run_id"] + "/history"
+    df["run_id"] = "[" + df['run_id'] + "](http://localhost:8233/namespaces/default/workflows/" + df["id"] + "/" + df["run_id"] + "/history)"
+    df["status"] = df["status"].apply(lambda x: WorkflowExecutionStatus(x).name)
+
+    df = df.filter([
+        "id", "status", "run_id", "workflow_type", "run_time", "execution_time", "start_time", "close_time", "task_queue",
+    ])
 
     column_defs = []
     for column in df.columns:
-        if column == "run_link":
+        if column == "run_id":
             column_defs.append({
                 "field": column,
-                "cellRenderer": "WorkflowLink"
+                "headerName": column,
+                "linkTarget": "_blank",
+                "cellRenderer": "markdown"
+            })
+        elif column == "status":
+            column_defs.append({
+                "field": column,
+                "cellStyle": {
+                    "styleConditions": [
+                        {
+                            "condition": f"params.value == '{WorkflowExecutionStatus.RUNNING.name}'",
+                            "style": { "backgroundColor": "blue", "color": "white" }
+                        },
+                        {
+                            "condition": f"params.value == '{WorkflowExecutionStatus.COMPLETED.name}'",
+                            "style": { "backgroundColor": "green", "color": "white" }
+                        },
+                        {
+                            "condition": f"params.value == '{WorkflowExecutionStatus.FAILED.name}'",
+                            "style": { "backgroundColor": "red", "color": "white" }
+                        }
+                    ]
+                }
             })
         else:
             column_defs.append({"field": column})
-    return df.to_dict("records"), [{"field": i} for i in df.columns]
+    return df.to_dict("records"), column_defs
 
 
 async def fetch_history(workflow_id, run_id):
@@ -138,7 +165,8 @@ def workflow_selected(selected_rows):
     if not selected_rows:
         return [], []
     workflow_id = selected_rows[0]["id"]
-    run_id = selected_rows[0]["run_id"]
+    run_id_markdown = selected_rows[0]["run_id"]
+    run_id = run_id_markdown[1:run_id_markdown.index("]")]
     history = asyncio.run(fetch_history(workflow_id, run_id), debug=True)
     df = pd.DataFrame(history['events'])
     return df.to_dict("records"), [{"field": i} for i in df.columns]
@@ -154,7 +182,8 @@ def file_listing(selected_rows):
 
     files = []
     workflow_id = selected_rows[0]["id"]
-    run_id = selected_rows[0]["run_id"]
+    run_id_markdown = selected_rows[0]["run_id"]
+    run_id = run_id_markdown[1:run_id_markdown.index("]")]
     for root, dirs, filenames in os.walk(f"/tmp/dapr/objectstore/{workflow_id}/{run_id}"):
         if not filenames:
             continue
