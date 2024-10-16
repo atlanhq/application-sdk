@@ -3,6 +3,7 @@ import dash
 import pandas as pd
 import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
+import plotly.express as px
 
 from sqlalchemy import create_engine
 
@@ -27,6 +28,18 @@ logs_df = pd.read_sql("""
 
 traces_df = pd.read_sql_table("traces", con=engine)
 metrics_df = pd.read_sql_table("metrics", con=engine)
+sums_metrics_df = pd.read_sql(
+    """
+    SELECT 
+        name,
+        description,
+        datetime(CAST(json_extract(data_points, '$.sum.startTimeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as start_time,
+        datetime(CAST(json_extract(data_points, '$.sum.timeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as end_time,
+        CAST(json_extract(data_points, '$.sum.asInt') AS INTEGER) as value
+    FROM metrics
+    WHERE json_extract(data_points, '$.sum') IS NOT NULL
+    ORDER BY start_time DESC
+    """, con=engine)
 
 layout = html.Div([
     dbc.Container([
@@ -85,4 +98,26 @@ def render_content(active_tab):
     elif active_tab == 'traces-tab':
         return return_ag_grid(traces_df, 'traces-table')
     elif active_tab == 'metrics-tab':
-        return return_ag_grid(metrics_df, 'metrics-table')
+        # sums_df = metrics_df.filter()
+        # Get all the metric names in the df
+        metric_names = sums_metrics_df['name'].unique()
+        data = []
+        for metric_name in metric_names:
+            df = sums_metrics_df[sums_metrics_df['name'] == metric_name]
+            metric_description = df['description'].iloc[0]
+            card = dbc.Card([
+                dbc.CardHeader(metric_name),
+                dbc.CardBody([
+                    html.P(metric_description),
+                    dcc.Graph(
+                        id=f"{metric_name}-graph",
+                        figure=px.line(
+                            df,
+                            x="start_time",
+                            y="value",
+                        )
+                    )
+                ])
+            ])
+            data.append(card)
+        return data
