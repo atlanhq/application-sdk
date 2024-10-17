@@ -9,7 +9,7 @@ layout = html.Div(
         dbc.Container(
             [
                 html.H1("Deployment"),
-                dbc.Card([dbc.CardBody([html.Div("Deploy settings go here")])]),
+                dbc.Card([dbc.CardBody([html.Div("Page is WIP")])]),
             ],
             fluid=True,
         )
