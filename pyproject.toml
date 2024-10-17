@@ -37,6 +37,16 @@ hypothesis = "^6.114.0"
 [tool.poetry.group.examples.dependencies]
 psycopg2-binary = "^2.9.9"
 
+[tool.poetry.group.ui.dependencies]
+dash = "^2.18.1"
+sqlalchemy = "^2.0.35"
+pandas = "^2.2.3"
+dash-ag-grid = "^31.2.0"
+temporalio = "^1.8.0"
+dash-bootstrap-components = "^1.6.0"
+pygwalker = "^0.4.9.10"
+dash-dangerously-set-inner-html = "^0.0.2"
+
 
 [build-system]
 requires = ["poetry-core"]
