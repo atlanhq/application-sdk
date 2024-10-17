@@ -1,64 +1,83 @@
-import asyncio
-import os
-from dataclasses import asdict
-
 import dash
-import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
 import dash_dangerously_set_inner_html
 import pandas as pd
 import pygwalker as pyg
 from dash import callback, html
 from dash.dependencies import Input, Output
-from temporalio.client import Client, WorkflowExecutionStatus
+
+from ui.pages.interfaces.workflow import WorkflowInterface
 
 dash.register_page(__name__, name="🏗️Workflows")
 
+workflow_interface = WorkflowInterface()
 
-async def fetch_workflows_list():
-    client = await Client.connect("0.0.0.0:7233")
-    workflows = client.list_workflows()
-    workflow_list = []
-    async for workflow in workflows:
-        workflow_list.append(asdict(workflow))
-    return workflow_list
-
-
-workflows_df = pd.DataFrame([])
 layout = html.Div(
     [
         dbc.Container(
             [
-                html.H1("Workflows Dashboard"),
-                dbc.Button("Refresh", id="refresh-button", class_name="icon-refresh"),
-                dag.AgGrid(
-                    id="workflows-table",
-                    columnDefs=[{"field": i} for i in workflows_df.columns],
-                    rowData=workflows_df.to_dict("records"),
-                    columnSize="sizeToFit",
-                    defaultColDef={
-                        "filter": True,
-                        "tooltipComponent": "CustomTooltipSimple",
-                    },
-                    dashGridOptions={
-                        "pagination": True,
-                        "animateRows": False,
-                        "tooltipShowDelay": 0,
-                        "tooltipHideDelay": 2000,
-                        "rowSelection": "single",
-                    },
-                    className="ag-theme-balham compact dbc-ag-grid",
-                ),
-                html.Br(),
-                html.H2("Workflow Analysis"),
+                html.H1("🏗️Workflows Dashboard"),
                 dbc.Row(
                     [
                         dbc.Col(
                             [
                                 dbc.Card(
                                     [
+                                        dbc.CardHeader("Workflow List"),
+                                        dbc.CardBody(
+                                            [
+                                                dbc.Button(
+                                                    "Refresh",
+                                                    id="refresh-button",
+                                                    class_name="icon-refresh",
+                                                ),
+                                                workflow_interface.create_ag_grid(
+                                                    grid_id="workflows-table",
+                                                    row_df=None,
+                                                ),
+                                            ]
+                                        ),
+                                    ]
+                                ),
+                            ],
+                            width=6,
+                        ),
+                        dbc.Col(
+                            [
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader("Workflow Logs"),
+                                        dbc.CardBody(
+                                            [
+                                                workflow_interface.create_ag_grid(
+                                                    grid_id="workflows-logs",
+                                                    row_df=None,
+                                                )
+                                            ]
+                                        ),
+                                    ]
+                                )
+                            ],
+                            width=6,
+                        ),
+                    ]
+                ),
+                dbc.Row(
+                    [
+                        html.H2("Workflow Analysis"),
+                        dbc.Col(
+                            [
+                                dbc.Card(
+                                    [
                                         dbc.CardHeader("Output Files"),
-                                        dbc.CardBody([], id="output-files"),
+                                        dbc.CardBody(
+                                            [
+                                                workflow_interface.create_ag_grid(
+                                                    grid_id="output-files",
+                                                    row_df=None,
+                                                )
+                                            ]
+                                        ),
                                     ]
                                 )
                             ],
@@ -77,28 +96,27 @@ layout = html.Div(
                         ),
                     ]
                 ),
-                html.Br(),
-                dbc.Accordion(
+                dbc.Row(
                     [
-                        dbc.AccordionItem(
+                        html.H2("Workflow History"),
+                        dbc.Col(
                             [
-                                dag.AgGrid(
-                                    id="history-table",
-                                    columnDefs=[],
-                                    rowData=[],
-                                    columnSize="sizeToFit",
-                                    defaultColDef={"filter": True},
-                                    dashGridOptions={
-                                        "pagination": True,
-                                        "animateRows": True,
-                                        "tooltipShowDelay": 0,
-                                        "tooltipHideDelay": 2000,
-                                    },
-                                    className="ag-theme-balham compact dbc-ag-grid",
-                                )
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader("Workflow History"),
+                                        dbc.CardBody(
+                                            [
+                                                workflow_interface.create_ag_grid(
+                                                    grid_id="history-table",
+                                                    row_df=None,
+                                                )
+                                            ]
+                                        ),
+                                    ]
+                                ),
                             ],
-                            title="Workflow History",
-                        )
+                            width=12,
+                        ),
                     ]
                 ),
             ],
@@ -117,162 +135,62 @@ layout = html.Div(
     [Input("refresh-button", "n_clicks")],
 )
 def refresh_workflows_table(n_clicks):
-    workflow_list = asyncio.run(fetch_workflows_list(), debug=True)
-    if not workflow_list:
-        return
-    df = pd.DataFrame(workflow_list)
-    del df["data_converter"]
-    del df["raw_info"]
-    del df["typed_search_attributes"]
-
-    df["run_time"] = df["close_time"] - df["execution_time"]
-    df["run_time"] = df["run_time"].dt.total_seconds()
-    df["run_id"] = (
-        "["
-        + df["run_id"]
-        + "](http://localhost:8233/namespaces/default/workflows/"
-        + df["id"]
-        + "/"
-        + df["run_id"]
-        + "/history)"
-    )
-    df["status"] = df["status"].apply(lambda x: WorkflowExecutionStatus(x).name)
-
-    df = df.filter(
-        [
-            "id",
-            "status",
-            "run_id",
-            "workflow_type",
-            "run_time",
-            "execution_time",
-            "start_time",
-            "close_time",
-            "task_queue",
-        ]
-    )
-
-    column_defs = []
-    for column in df.columns:
-        if column == "run_id":
-            column_defs.append(
-                {
-                    "field": column,
-                    "headerName": column,
-                    "linkTarget": "_blank",
-                    "cellRenderer": "markdown",
-                }
-            )
-        elif column == "status":
-            column_defs.append(
-                {
-                    "field": column,
-                    "cellStyle": {
-                        "styleConditions": [
-                            {
-                                "condition": f"params.value == '{WorkflowExecutionStatus.RUNNING.name}'",
-                                "style": {"backgroundColor": "blue", "color": "white"},
-                            },
-                            {
-                                "condition": f"params.value == '{WorkflowExecutionStatus.COMPLETED.name}'",
-                                "style": {"backgroundColor": "green", "color": "white"},
-                            },
-                            {
-                                "condition": f"params.value == '{WorkflowExecutionStatus.FAILED.name}'",
-                                "style": {"backgroundColor": "red", "color": "white"},
-                            },
-                        ]
-                    },
-                }
-            )
-        else:
-            column_defs.append({"field": column})
+    df, column_defs = workflow_interface.fetch_workflows_df()
     return df.to_dict("records"), column_defs
 
 
-async def fetch_history(workflow_id, run_id):
-    client = await Client.connect("0.0.0.0:7233")
-    history_obj = await client.get_workflow_handle(
-        workflow_id, run_id=run_id
-    ).fetch_history()
-    return history_obj.to_json_dict()
-
-
 @callback(
-    Output("history-table", "rowData"),
-    Output("history-table", "columnDefs"),
+    [Output("workflows-logs", "rowData"), Output("workflows-logs", "columnDefs")],
     [Input("workflows-table", "selectedRows")],
+    prevent_initial_call=True,
 )
-def workflow_selected(selected_rows):
+def show_workflow_logs(selected_rows):
     if not selected_rows:
         return [], []
-    workflow_id = selected_rows[0]["id"]
-    run_id_markdown = selected_rows[0]["run_id"]
-    run_id = run_id_markdown[1 : run_id_markdown.index("]")]
-    history = asyncio.run(fetch_history(workflow_id, run_id), debug=True)
-    df = pd.DataFrame(history["events"])
+    workflow_id, run_id = workflow_interface.fetch_workflow_info(selected_rows)
+    df = workflow_interface.get_workflow_logs_df(workflow_id, run_id)
     return df.to_dict("records"), [{"field": i} for i in df.columns]
 
 
 @callback(
-    Output("output-files", "children"),
+    [
+        Output("history-table", "rowData"),
+        Output("history-table", "columnDefs"),
+    ],
+    [Input("workflows-table", "selectedRows")],
+    prevent_initial_call=True,
+)
+def show_workflow_events(selected_rows):
+    if not selected_rows:
+        return [], []
+    workflow_id, run_id = workflow_interface.fetch_workflow_info(selected_rows)
+    df = workflow_interface.fetch_workflow_events_df(workflow_id, run_id)
+    return df.to_dict("records"), [{"field": i} for i in df.columns]
+
+
+@callback(
+    Output("output-files", "rowData"),
+    Output("output-files", "columnDefs"),
     [Input("workflows-table", "selectedRows")],
     prevent_initial_call=True,
 )
 def file_listing(selected_rows):
     if not selected_rows:
-        return []
+        return [], []
 
-    files = []
-    workflow_id = selected_rows[0]["id"]
-    run_id_markdown = selected_rows[0]["run_id"]
-    run_id = run_id_markdown[1 : run_id_markdown.index("]")]
-    for root, dirs, filenames in os.walk(
-        f"/tmp/dapr/objectstore/{workflow_id}/{run_id}"
-    ):
-        if not filenames:
-            continue
-
-        file_dir = os.path.relpath(
-            root, f"/tmp/dapr/objectstore/{workflow_id}/{run_id}"
-        )
-        for filename in filenames:
-            files.append(
-                {
-                    "dir": file_dir,
-                    "filename": filename,
-                    "full_path": os.path.join(root, filename),
-                }
-            )
-    files_df = pd.DataFrame(files)
-    return [
-        html.Div(f"Displaying files from /tmp/dapr/objectstore/{workflow_id}/{run_id}"),
-        dag.AgGrid(
-            id="files-table",
-            columnDefs=[{"field": i} for i in files_df.columns],
-            rowData=files_df.to_dict("records"),
-            columnSize="sizeToFit",
-            defaultColDef={"filter": True, "tooltipComponent": "CustomTooltipSimple"},
-            dashGridOptions={
-                "pagination": True,
-                "animateRows": False,
-                "tooltipShowDelay": 0,
-                "tooltipHideDelay": 2000,
-                "rowSelection": "single",
-            },
-            className="ag-theme-balham compact dbc-ag-grid",
-        ),
-    ]
+    workflow_id, run_id = workflow_interface.fetch_workflow_info(selected_rows)
+    files_df = workflow_interface.fetch_files_df(workflow_id, run_id)
+    return files_df.to_dict("records"), [{"field": i} for i in files_df.columns]
 
 
 @callback(
     Output("file-analysis", "children"),
-    [Input("files-table", "selectedRows")],
+    [Input("output-files", "selectedRows")],
     prevent_initial_call=True,
 )
 def debug_file(selected_rows):
     if not selected_rows:
-        return
+        return []
     selected_file = selected_rows[0]
     if not selected_file["filename"].endswith(".json"):
         print("Not a JSON file")
