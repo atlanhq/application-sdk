@@ -5,7 +5,7 @@ from dash import Input, Output, callback, html
 from ui.pages.interfaces.telemetry import TelemetryInterface
 from ui.pages.interfaces.utils import create_ag_grid
 
-dash.register_page(__name__, name="📡Telemetry")
+dash.register_page(__name__, name="📡 Telemetry")
 
 telemetry_interface = TelemetryInterface()
 
