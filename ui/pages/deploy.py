@@ -1,18 +1,17 @@
-from dash import html
 import dash
 import dash_bootstrap_components as dbc
+from dash import html
 
-dash.register_page(__name__, name='🚀Deployment')
+dash.register_page(__name__, name="🚀Deployment")
 
-layout = html.Div([
-    dbc.Container([
-        html.H1("Deployment"),
-        dbc.Card(
+layout = html.Div(
+    [
+        dbc.Container(
             [
-                dbc.CardBody([
-                    html.Div("Deploy settings go here")
-                ])
-            ]
+                html.H1("Deployment"),
+                dbc.Card([dbc.CardBody([html.Div("Deploy settings go here")])]),
+            ],
+            fluid=True,
         )
-    ], fluid=True)
-])
+    ]
+)
