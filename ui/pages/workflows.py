@@ -6,6 +6,7 @@ import pygwalker as pyg
 from dash import callback, html
 from dash.dependencies import Input, Output
 
+from ui.pages.interfaces.utils import create_ag_grid
 from ui.pages.interfaces.workflow import WorkflowInterface
 
 dash.register_page(__name__, name="🏗️Workflows")
@@ -31,7 +32,7 @@ layout = html.Div(
                                                     id="refresh-button",
                                                     class_name="icon-refresh",
                                                 ),
-                                                workflow_interface.create_ag_grid(
+                                                create_ag_grid(
                                                     grid_id="workflows-table",
                                                     row_df=None,
                                                 ),
@@ -49,7 +50,7 @@ layout = html.Div(
                                         dbc.CardHeader("Workflow Logs"),
                                         dbc.CardBody(
                                             [
-                                                workflow_interface.create_ag_grid(
+                                                create_ag_grid(
                                                     grid_id="workflows-logs",
                                                     row_df=None,
                                                 )
@@ -72,7 +73,7 @@ layout = html.Div(
                                         dbc.CardHeader("Output Files"),
                                         dbc.CardBody(
                                             [
-                                                workflow_interface.create_ag_grid(
+                                                create_ag_grid(
                                                     grid_id="output-files",
                                                     row_df=None,
                                                 )
@@ -106,7 +107,7 @@ layout = html.Div(
                                         dbc.CardHeader("Workflow History"),
                                         dbc.CardBody(
                                             [
-                                                workflow_interface.create_ag_grid(
+                                                create_ag_grid(
                                                     grid_id="history-table",
                                                     row_df=None,
                                                 )

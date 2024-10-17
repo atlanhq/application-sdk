@@ -1,78 +1,22 @@
 import json
 
 import dash
-import dash_ag_grid as dag
 import dash_bootstrap_components as dbc
-import pandas as pd
 import plotly.express as px
 from dash import Input, Output, callback, dcc, html
-from sqlalchemy import create_engine
+
+from ui.pages.interfaces.telemetry import TelemetryInterface
+from ui.pages.interfaces.utils import create_ag_grid
 
 dash.register_page(__name__, name="📡Telemetry")
 
-engine = create_engine("sqlite:////tmp/app.db")
-
-logs_df = pd.read_sql(
-    """
-    SELECT
-        severity,
-        observed_timestamp,
-        body,
-        JSON_EXTRACT(attributes, '$.workflow_id') as workflow_id,
-        JSON_EXTRACT(attributes, '$.run_id') as run_id,
-        JSON_EXTRACT(attributes, '$.activity_id') as activity_id,
-        attributes,
-        trace_id,
-        span_id
-    FROM logs
-    ORDER BY observed_timestamp DESC
-""",
-    con=engine,
-)
-
-traces_df = pd.read_sql_table("traces", con=engine)
-metrics_df = pd.read_sql_table("metrics", con=engine)
-sums_metrics_df = pd.read_sql(
-    """
-    SELECT
-        name,
-        description,
-        datetime(CAST(json_extract(data_points, '$.sum.startTimeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as start_time,
-        datetime(CAST(json_extract(data_points, '$.sum.timeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as end_time,
-        CAST(json_extract(data_points, '$.sum.asInt') AS INTEGER) as value
-    FROM metrics
-    WHERE json_extract(data_points, '$.sum') IS NOT NULL
-    ORDER BY start_time DESC
-    """,
-    con=engine,
-)
-
-histogram_metrics_df = pd.read_sql(
-    """
-SELECT
-    name,
-    description,
-    datetime(CAST(json_extract(data_points, '$.histogram.startTimeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as start_time,
-    datetime(CAST(json_extract(data_points, '$.histogram.timeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as end_time,
-    CAST(json_extract(data_points, '$.histogram.count') AS INTEGER) as count,
-    CAST(json_extract(data_points, '$.histogram.sum') AS FLOAT) as sum,
-    CAST(json_extract(data_points, '$.histogram.min') AS FLOAT) as min,
-    CAST(json_extract(data_points, '$.histogram.max') AS FLOAT) as max,
-    json_extract(data_points, '$.histogram.bucketCounts') as bucketCounts,
-    json_extract(data_points, '$.histogram.explicitBounds') as explicitBounds
-FROM metrics
-WHERE json_extract(data_points, '$.histogram') IS NOT NULL
-ORDER BY start_time DESC
-""",
-    con=engine,
-)
-
+telemetry_interface = TelemetryInterface()
 
 layout = html.Div(
     [
         dbc.Container(
             [
-                html.H1("Telemetry Dashboard"),
+                html.H1("📡 Telemetry Dashboard"),
                 dbc.Card(
                     [
                         dbc.CardHeader(
@@ -94,29 +38,6 @@ layout = html.Div(
         )
     ]
 )
-
-
-def return_ag_grid(df, table_id):
-    return dbc.Container(
-        [
-            dag.AgGrid(
-                id=table_id,
-                columnDefs=[{"field": i} for i in df.columns],
-                rowData=df.to_dict("records"),
-                columnSize="sizeToFit",
-                defaultColDef={"filter": True},
-                dashGridOptions={
-                    "pagination": True,
-                    "animateRows": True,
-                    "tooltipShowDelay": 0,
-                    "tooltipHideDelay": 2000,
-                },
-                className="ag-theme-balham compact dbc-ag-grid",
-            )
-        ],
-        fluid=True,
-        className="dbc",
-    )
 
 
 def sum_each_index(list_of_lists):
@@ -141,69 +62,51 @@ def sum_each_index(list_of_lists):
 @callback(Output("card-content", "children"), [Input("card-tabs", "active_tab")])
 def render_content(active_tab):
     if active_tab == "logs-tab":
-        return return_ag_grid(logs_df, "logs-table")
+        logs_df = telemetry_interface.get_logs_df()
+        column_defs = []
+        for column in logs_df.columns:
+            if column == "run_id":
+                column_defs.append(
+                    {
+                        "field": column,
+                        "headerName": column,
+                        "linkTarget": "_blank",
+                        "cellRenderer": "markdown",
+                    }
+                )
+            else:
+                column_defs.append({"field": column})
+        return create_ag_grid("logs-table", logs_df, column_defs)
     elif active_tab == "traces-tab":
-        return return_ag_grid(traces_df, "traces-table")
+        return create_ag_grid("traces-table", telemetry_interface.get_traces_df())
     elif active_tab == "metrics-tab":
         # sums_df = metrics_df.filter()
         # Get all the metric names in the df
-        metric_names = sums_metrics_df["name"].unique()
-        data = []
-        for sum_metric_name in metric_names:
-            df = sums_metrics_df[sums_metrics_df["name"] == sum_metric_name]
-            metric_description = df["description"].iloc[0]
-            card = dbc.Card(
-                [
-                    dbc.CardHeader(sum_metric_name),
-                    dbc.CardBody(
-                        [
-                            html.P(metric_description),
-                            dcc.Graph(
-                                id=f"{sum_metric_name}-graph",
-                                figure=px.line(
-                                    df,
-                                    x="start_time",
-                                    y="value",
-                                ),
-                            ),
-                        ]
-                    ),
-                ]
+        sums_cards = telemetry_interface.create_sum_metrics_cards()
+        rows = []
+        for x, y in zip(sums_cards[::2], sums_cards[1::2]):
+            rows.append(
+                dbc.Row(
+                    [
+                        dbc.Col([x], width=6),
+                        dbc.Col([y], width=6),
+                    ]
+                )
             )
-            data.append(card)
+        if len(sums_cards) % 2 != 0:
+            rows.append(dbc.Row([dbc.Col([sums_cards[-1]], width=6)]))
 
-        # Get all the histogram metric names in the df
-        histogram_metric_names = histogram_metrics_df["name"].unique()
-        for histogram_metric_name in histogram_metric_names:
-            df = histogram_metrics_df[
-                histogram_metrics_df["name"] == histogram_metric_name
-            ]
-            metric_description = df["description"].iloc[0]
-
-            # aggregate data
-            bucket_counts = df["bucketCounts"].apply(lambda x: json.loads(x)).tolist()
-            explicit_bounds = (
-                df["explicitBounds"].apply(lambda x: json.loads(x)).tolist()
+        histogram_cards = telemetry_interface.create_histogram_cards()
+        for x, y in zip(histogram_cards[::2], histogram_cards[1::2]):
+            rows.append(
+                dbc.Row(
+                    [
+                        dbc.Col([x], width=6),
+                        dbc.Col([y], width=6),
+                    ]
+                )
             )
+        if len(histogram_cards) % 2 != 0:
+            rows.append(dbc.Row([dbc.Col([histogram_cards[-1]], width=6)]))
 
-            agg_bucket_counts = sum_each_index(bucket_counts)
-            card = dbc.Card(
-                [
-                    dbc.CardHeader(histogram_metric_name),
-                    dbc.CardBody(
-                        [
-                            html.P(metric_description),
-                            dcc.Graph(
-                                id=f"{histogram_metric_name}-graph",
-                                figure=px.bar(
-                                    x=explicit_bounds[0],
-                                    y=agg_bucket_counts[1:],
-                                    labels={"x": "Bucket Bounds", "y": "Count"},
-                                ),
-                            ),
-                        ]
-                    ),
-                ]
-            )
-            data.append(card)
-        return data
+        return dbc.Row(rows)

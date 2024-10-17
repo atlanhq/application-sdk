@@ -125,44 +125,6 @@ class WorkflowInterface(object):
         return df, column_defs
 
     @staticmethod
-    def create_ag_grid(
-        grid_id: str,
-        row_df: pd.DataFrame = None,
-        column_defs=None,
-        default_col_def=None,
-        grid_options=None,
-    ) -> dag.AgGrid:
-        if row_df is None:
-            row_df = pd.DataFrame([])
-        if column_defs is None:
-            column_defs = [{"field": i} for i in row_df.columns]
-
-        if default_col_def is None:
-            default_col_def = {
-                "filter": True,
-                "tooltipComponent": "CustomTooltipSimple",
-            }
-
-        if grid_options is None:
-            grid_options = {
-                "pagination": True,
-                "animateRows": False,
-                "tooltipShowDelay": 0,
-                "tooltipHideDelay": 2000,
-                "rowSelection": "single",
-            }
-
-        return dag.AgGrid(
-            id=grid_id,
-            columnDefs=column_defs,
-            rowData=row_df.to_dict("records"),
-            columnSize="sizeToFit",
-            defaultColDef=default_col_def,
-            dashGridOptions=grid_options,
-            className="ag-theme-balham compact dbc-ag-grid",
-        )
-
-    @staticmethod
     def fetch_workflow_info(selected_rows: dict) -> (str, str):
         workflow_id = selected_rows[0]["id"]
         run_id_markdown = selected_rows[0]["run_id"]
