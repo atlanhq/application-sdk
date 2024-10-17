@@ -1,9 +1,6 @@
-import json
-
 import dash
 import dash_bootstrap_components as dbc
-import plotly.express as px
-from dash import Input, Output, callback, dcc, html
+from dash import Input, Output, callback, html
 
 from ui.pages.interfaces.telemetry import TelemetryInterface
 from ui.pages.interfaces.utils import create_ag_grid
