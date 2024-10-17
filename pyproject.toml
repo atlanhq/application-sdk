@@ -22,6 +22,7 @@ sqlalchemy = "^2.0.35"
 pyatlan = "^2.4.7"
 orjson = "^3.10.7"
 pyarrow = "^17.0.0"
+mock = "^5.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^3.8.0"
