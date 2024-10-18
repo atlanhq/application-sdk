@@ -27,6 +27,7 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 """
 
 import asyncio
+import logging
 import os
 import threading
 import time
@@ -35,7 +36,6 @@ from urllib.parse import quote_plus
 
 from temporalio import workflow
 
-from application_sdk.logging import get_logger
 from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
 from application_sdk.workflows.sql.preflight_check import (
@@ -46,8 +46,7 @@ from application_sdk.workflows.transformers.atlas import AtlasTransformer
 
 APPLICATION_NAME = "postgres"
 
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class SampleSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
