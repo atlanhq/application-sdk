@@ -1,7 +1,7 @@
 # Steps
 
 > [!TIP]
-> Choice of tooling, we use specific tools in this guide to streamline the process, you can use any tooling of your choice. for example: In this guide we use `poetry` to manage your python project.
+> We use specific tools in this guide to streamline the process, you can use any tooling of your choice. for example: In this guide we use `poetry` to manage your python project.
 
 
 # Table of Contents
@@ -24,20 +24,20 @@ We’ll use `poetry` to manage the project, as it simplifies dependency manageme
 ### Step 1: Install `poetry`
 If you don’t already have `poetry` installed, you can install it by running:
 
-```python
+```bash
 curl -sSL https://install.python-poetry.org | python3 -
 ```
 
 Once installed, you can confirm the installation by running:
 
-```python
+```bash
 poetry --version
 ```
 
 ### Step 2: Initialize a new project
 Navigate to the directory where you want to set up your project and run:
 
-```python
+```bash
 poetry new my_workflow_app
 cd my_workflow_app
 ```
@@ -47,13 +47,13 @@ This creates a new Python project with a basic structure, including a `pyproject
 ### Step 3: Add dependencies
 To add dependencies like SQLAlchemy, FastAPI, or others, you can use `poetry add`:
 
-```python
+```bash
 poetry add sqlalchemy fastapi
 ```
 
 If you need to specify a particular version, you can do so:
 
-```python
+```bash
 poetry add sqlalchemy@1.4 fastapi@0.78
 ```
 
