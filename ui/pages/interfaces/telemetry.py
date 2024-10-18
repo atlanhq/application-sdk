@@ -151,8 +151,8 @@ class TelemetryInterface(object):
                                     x=explicit_bounds[0],
                                     y=agg_bucket_counts[1:],
                                     labels={"x": unit, "y": "Count"},
-                                    nbins=len(agg_bucket_counts)-1,
-                                )
+                                    nbins=len(agg_bucket_counts) - 1,
+                                ),
                             ),
                         ]
                     ),
