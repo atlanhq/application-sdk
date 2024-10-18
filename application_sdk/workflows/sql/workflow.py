@@ -118,6 +118,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         if self.use_server_side_cursor:
             connection.execution_options(yield_per=batch_size)
 
+        activity.logger.info(f"Running query: {query}")
+
         with ThreadPoolExecutor() as pool:
             try:
                 cursor = await loop.run_in_executor(
