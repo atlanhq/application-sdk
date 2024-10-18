@@ -122,7 +122,9 @@ class WorkflowWorkerInterface(ABC):
                 id=workflow_id,
                 task_queue=self.TEMPORAL_WORKER_TASK_QUEUE,
             )
-            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
+            workflow.logger.info(
+                f"Workflow started: {handle.id} {handle.result_run_id}"
+            )
             return {
                 "message": "Workflow started",
                 "workflow_id": handle.id,

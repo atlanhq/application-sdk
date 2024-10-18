@@ -10,6 +10,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.types import CallableType
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows import WorkflowWorkerInterface
@@ -18,6 +19,9 @@ from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
+
+workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
@@ -137,7 +141,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 logger.error(f"Error running query in batch: {e}")
                 raise e
 
-        logger.info("Query execution completed")
+        activity.logger.info("Query execution completed")
 
     async def fetch_and_process_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str

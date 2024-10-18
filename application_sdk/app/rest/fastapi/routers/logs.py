@@ -1,6 +1,6 @@
 """Router for handling log-related API endpoints."""
 
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
@@ -19,11 +19,9 @@ router = APIRouter(
 
 @router.get("", response_model=list[Log])
 async def read_logs(
+    req: Request,
     skip: int = 0,
     limit: int = 100,
-    keyword: str = "",
-    from_timestamp: int = 0,
-    to_timestamp: Optional[int] = None,
     session: Session = Depends(get_session),
 ):
     """
@@ -31,16 +29,32 @@ async def read_logs(
 
     :param skip: Number of logs to skip (for pagination).
     :param limit: Maximum number of logs to return.
-    :param keyword: Keyword to filter logs.
-    :param from_timestamp: Start timestamp for log retrieval.
-    :param to_timestamp: End timestamp for log retrieval.
     :param session: Database session.
+    :param [attribute]__[operation]: Dynamically filter logs using query parameters. Filters are specified as
+        `attribute__operation=value` where:
+        - `attribute` is the field you want to filter (e.g., 'timestamp', 'severity', etc.).
+        - `operation` is the filter operation (e.g., `eq`, `lt`, `gt`, `contains`, `ilike`, `like`).
+        Supported operations:
+        - eq: Equal to
+        - ne: Not equal to
+        - lt: Less than
+        - gt: Greater than
+        - contains: Substring containment
+        - ilike: Case-insensitive LIKE
+        - like: SQL LIKE
     :return: A list of Log objects.
     :raises HTTPException: If there's an error with the database operations.
     """
     try:
+        query_filters = dict(req.query_params)
+        del query_filters["skip"]
+        del query_filters["limit"]
+
         return Logs.get_logs(
-            session, skip, limit, keyword, from_timestamp, to_timestamp
+            session,
+            skip,
+            limit,
+            query_filters=query_filters,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

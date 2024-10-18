@@ -1,8 +1,7 @@
 """Interface for handling log-related API endpoints."""
 
-import time
 from datetime import UTC, datetime
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
 from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
@@ -27,9 +26,7 @@ class Logs:
         session: Session,
         skip: int = 0,
         limit: int = 100,
-        keyword: str = "",
-        from_timestamp: int = 0,
-        to_timestamp: Optional[int] = None,
+        query_filters: Dict[str, str] = {},
     ) -> Sequence[Log]:
         """
         Get logs with optional filtering by keyword and timestamp range.
@@ -37,25 +34,47 @@ class Logs:
         :param session: Database session.
         :param skip: Number of logs to skip (for pagination).
         :param limit: Maximum number of logs to return.
-        :param keyword: Keyword to filter logs.
-        :param from_timestamp: Start timestamp for log retrieval.
-        :param to_timestamp: End timestamp for log retrieval.
+        :param query_dict: Dynamically filter logs using query parameters. Filters are specified as
+            `attribute__operation=value` where:
+            - `attribute` is the field you want to filter (e.g., 'timestamp', 'severity', etc.).
+            - `operation` is the filter operation (e.g., `eq`, `lt`, `gt`, `contains`, `ilike`, `like`).
+            Supported operations:
+            - eq: Equal to
+            - ne: Not equal to
+            - lt: Less than
+            - gt: Greater than
+            - contains: Substring containment
+            - ilike: Case-insensitive LIKE
+            - like: SQL LIKE
+        :return: A list of Log objects.
         :return: A list of Log objects.
         """
-        if to_timestamp is None:
-            to_timestamp = int(time.time())
-        return (
-            session.query(Log)
-            .filter(Log.body.contains(keyword))
-            .filter(
-                Log.timestamp >= datetime.fromtimestamp(from_timestamp, tz=UTC),
-                Log.timestamp <= datetime.fromtimestamp(to_timestamp, tz=UTC),
-            )
-            .order_by(Log.timestamp.desc())
-            .offset(skip)
-            .limit(limit)
-            .all()
-        )
+        output = session.query(Log)
+
+        for key in query_filters:
+            path = key.split("__")[0]
+            log_attribute = path.split(".")[0]
+            log_key = ".".join(path.split(".")[1:])
+
+            operation = key.split("__")[1]
+
+            # Conversion to method names in SQLAlchemy
+            # https://docs.sqlalchemy.org/en/20/core/operators.html#comparison-operators
+            if operation in ["eq", "ne", "lt", "gt", "le", "ge"]:
+                operation = "__" + operation + "__"
+
+            value = query_filters[key]
+            column = getattr(Log, log_attribute)
+
+            if str(column.type) == "DATETIME":
+                value = datetime.fromtimestamp(int(value), tz=UTC)
+
+            if log_key:
+                output = output.filter(getattr(column[log_key], operation)(value))
+            else:
+                output = output.filter(getattr(column, operation)(value))
+
+        return output.order_by(Log.timestamp.desc()).offset(skip).limit(limit).all()
 
     @staticmethod
     def create_logs(session: Session, logs_data: LogsData) -> List[Log]:
