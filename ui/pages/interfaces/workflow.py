@@ -2,7 +2,6 @@ import asyncio
 import os
 from dataclasses import asdict
 
-import dash_ag_grid as dag
 import pandas as pd
 from sqlalchemy import create_engine
 from temporalio.client import Client, WorkflowExecutionStatus
