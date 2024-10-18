@@ -12,7 +12,7 @@ layout = html.Div(
     [
         dbc.Container(
             [
-                html.H1("🔍 Source Exploration"),
+                html.H1("🔍 Source Exploration [WIP]"),
                 dbc.Card(
                     [
                         dbc.CardHeader("SQL Source Exploration"),
