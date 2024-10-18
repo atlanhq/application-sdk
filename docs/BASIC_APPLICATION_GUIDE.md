@@ -4,7 +4,7 @@ The SDK currently only supports FastAPI framework but in the future we will be a
 
 ## Table of contents
 - [Simple Integration](#simple-integration)
-= [OTel Integration](#otel-integration)
+- [OTel Integration](#otel-integration)
 
 
 ## Simple Integration
