@@ -81,6 +81,8 @@ def render_content(active_tab):
         # Get all the metric names in the df
         sums_cards = telemetry_interface.create_sum_metrics_cards()
         rows = []
+        if sums_cards:
+            rows.append(html.H4("Sum Metrics"))
         for x, y in zip(sums_cards[::2], sums_cards[1::2]):
             rows.append(
                 dbc.Row(
@@ -94,6 +96,8 @@ def render_content(active_tab):
             rows.append(dbc.Row([dbc.Col([sums_cards[-1]], width=6)]))
 
         histogram_cards = telemetry_interface.create_histogram_cards()
+        if histogram_cards:
+            rows.append(html.H4("Histogram Metrics"))
         for x, y in zip(histogram_cards[::2], histogram_cards[1::2]):
             rows.append(
                 dbc.Row(

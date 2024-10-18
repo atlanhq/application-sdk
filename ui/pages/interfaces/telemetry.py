@@ -57,6 +57,7 @@ class TelemetryInterface(object):
             SELECT
                 name,
                 description,
+                unit,
                 datetime(CAST(json_extract(data_points, '$.sum.startTimeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as start_time,
                 datetime(CAST(json_extract(data_points, '$.sum.timeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as end_time,
                 CAST(json_extract(data_points, '$.sum.asInt') AS INTEGER) as value
@@ -76,6 +77,7 @@ class TelemetryInterface(object):
         for sum_metric_name in metric_names:
             df = sums_metrics_df[sums_metrics_df["name"] == sum_metric_name]
             metric_description = df["description"].iloc[0]
+            unit = df["unit"].iloc[0]
             card = dbc.Card(
                 [
                     dbc.CardHeader(sum_metric_name),
@@ -88,6 +90,7 @@ class TelemetryInterface(object):
                                     df,
                                     x="start_time",
                                     y="value",
+                                    labels={"start_time": "Time", "value": unit},
                                 ),
                             ),
                         ]
@@ -104,6 +107,7 @@ class TelemetryInterface(object):
         SELECT
             name,
             description,
+            unit,
             datetime(CAST(json_extract(data_points, '$.histogram.startTimeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as start_time,
             datetime(CAST(json_extract(data_points, '$.histogram.timeUnixNano') AS float) / 1e9, 'unixepoch', 'localtime') as end_time,
             CAST(json_extract(data_points, '$.histogram.count') AS INTEGER) as count,
@@ -128,6 +132,7 @@ class TelemetryInterface(object):
         for histogram_metric_name in metric_names:
             df = histogram_df[histogram_df["name"] == histogram_metric_name]
             metric_description = df["description"].iloc[0]
+            unit = df["unit"].iloc[0]
             bucket_counts = df["bucketCounts"].apply(lambda x: json.loads(x)).tolist()
             explicit_bounds = (
                 df["explicitBounds"].apply(lambda x: json.loads(x)).tolist()
@@ -142,11 +147,12 @@ class TelemetryInterface(object):
                             html.P(metric_description),
                             dcc.Graph(
                                 id=f"{histogram_metric_name}-graph",
-                                figure=px.bar(
+                                figure=px.histogram(
                                     x=explicit_bounds[0],
                                     y=agg_bucket_counts[1:],
-                                    labels={"x": "Bucket Bounds", "y": "Count"},
-                                ),
+                                    labels={"x": unit, "y": "Count"},
+                                    nbins=len(agg_bucket_counts)-1,
+                                )
                             ),
                         ]
                     ),
