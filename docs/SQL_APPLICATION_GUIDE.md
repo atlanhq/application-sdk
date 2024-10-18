@@ -4,7 +4,7 @@ This guide will walk you through the process of creating an SQL application usin
 
 When we say "SQL application," we mean an application that interacts with an SQL database, extracts metadata from the database, and stores it in the configured object store. The use case can be extended by adding more steps to the workflow, such as data validation, transformation, and more.
 
-> 📘 Info
+> [!TIP]
 >
 > In simple terms, a workflow is a series of steps or tasks that are executed in a specific order to achieve a goal. In the context of an SQL application, these steps could include connecting to the database, extracting metadata, running validation checks, and processing data.
 >
