@@ -25,7 +25,7 @@ Before you begin, make sure you have:
 - Set up your development environment with Python 3.11 or above. You can check your Python version by running the following command in your terminal:
 
    ```python --version```
-   
+
    Ensure that the output shows Python 3.11 or above.
 - Familiarity with the basics of SQL and database concepts
 
@@ -115,7 +115,7 @@ class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 ```
 
-You can also optionally override the default implementation of `fetch_metadata` function, 
+You can also optionally override the default implementation of `fetch_metadata` function,
 ```python
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
 class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
@@ -131,18 +131,17 @@ class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
         return []
 ```
 
-## Defining the `SQLWorkflowPreflightInterface` class
+## Defining the `SQLWorkflowPreflightCheckInterface` class
 
-The `SQLWorkflowPreflightInterface` class is used to perform preflight checks on the data. The `preflight_checks` method is used to perform preflight checks on the data and powers the `GET /v2/preflight` API endpoint.
+The `preflight_checks` method in `SQLWorkflowPreflightCheckInterface` class is used to perform preflight checks on the data.
 
-#TODO
+You can override this class and set the values of `METADATA_SQL`, `TABLES_CHECK_SQL` to define the SQL query to fetch metadata, and the SQL query to fetch the tables.
 
+For example,
 
-
-Create a class that inherits from `SQLWorkflowPreflightInterface` to define the preflight checks:
 ```python
-from application_sdk.workflows.sql.preflight import SQLWorkflowPreflightInterface
-class MySQLWorkflowPreflight(SQLWorkflowPreflightInterface):
+from application_sdk.workflows.sql.preflight import SQLWorkflowPreflightCheckInterface
+class MySQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
     PREFLIGHT_SQL = """
     SELECT COUNT(*)
     FROM your_table;
