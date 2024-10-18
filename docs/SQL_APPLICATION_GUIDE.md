@@ -94,17 +94,19 @@ class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
 
 ## Defining the `SQLWorkflowMetadataInterface` class
 
-The SQLWorkflowMetadataInterface class is responsible for fetching metadata from the database. This includes extracting schema, table, and column information, which can be useful for understanding the structure of the database.
+The `SQLWorkflowMetadataInterface` class is responsible for fetching metadata from the database. This includes extracting schema, table, and column information, which can be useful for understanding the structure of the database.
 
 If you want to customize the metadata extraction logic, you can override the default `METADATA_SQL`, `DATABASE_KEY`, `SCHEMA_KEY`.
 
 `METADATA_SQL` defines the SQL query to fetch the metadata.
+
 `DATABASE_KEY` defines the key to fetch the database name.
+
 `SCHEMA_KEY` defines the key to fetch the schema name.
 
 ```python
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-class YourSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
+class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
     METADATA_SQL = """
     SELECT schema_name, catalog_name
     FROM INFORMATION_SCHEMA.SCHEMATA;
@@ -116,7 +118,7 @@ class YourSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
 You can also optionally override the default implementation of `fetch_metadata` function, 
 ```python
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-class YourSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
+class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
     METADATA_SQL = """
     SELECT schema_name, catalog_name
     FROM INFORMATION_SCHEMA.SCHEMATA;
@@ -140,7 +142,7 @@ The `SQLWorkflowPreflightInterface` class is used to perform preflight checks on
 Create a class that inherits from `SQLWorkflowPreflightInterface` to define the preflight checks:
 ```python
 from application_sdk.workflows.sql.preflight import SQLWorkflowPreflightInterface
-class YourSQLWorkflowPreflight(SQLWorkflowPreflightInterface):
+class MySQLWorkflowPreflight(SQLWorkflowPreflightInterface):
     PREFLIGHT_SQL = """
     SELECT COUNT(*)
     FROM your_table;
@@ -178,7 +180,7 @@ You should override `SQLWorkflowWorkerInterface` if you need to customize how th
 Create a class that inherits from `SQLWorkflowWorkerInterface` to define the workflow worker:
 ```python
 from application_sdk.workflows.sql.worker import SQLWorkflowWorkerInterface
-class YourSQLWorkflowWorker(SQLWorkflowWorkerInterface):
+class MySQLWorkflowWorker(SQLWorkflowWorkerInterface):
     DATABASE_SQL = "Your custom database extraction SQL"
     SCHEMA_SQL = "Your custom schema extraction SQL"
     TABLE_SQL = "Your custom table extraction SQL"
@@ -186,18 +188,42 @@ class YourSQLWorkflowWorker(SQLWorkflowWorkerInterface):
 
     def __init__(self, metadata: SQLWorkflowMetadataInterface, preflight: SQLWorkflowPreflightInterface):
         super().__init__(metadata, preflight)
-
-    def execute_workflow(self, **kwargs) -> Dict[str, Any]:
-        # Your workflow logic here
-        return {"status": "success", "message": "Workflow executed successfully"}
 ```
 
 # Building the Workflow
 
 ## Defining the `SQLWorkflowBuilderInterface` class
 
-The `SQLWorkflowBuilderInterface` class is used to build the workflow. The `build_workflow` method is used to build the workflow.
+The `SQLWorkflowBuilderInterface` class is responsible for constructing the entire workflow by integrating the core components like authentication, metadata extraction, preflight checks, and the worker logic that we've built above.
 
-Create a class that inherits from `SQLWorkflowBuilderInterface` to build the workflow:
+It defines abstract methods to get the SQLAlchemy connection string and connection arguments, which are used to create a database engine for workflow execution. By default, the class provides an engine using SQLAlchemy and allows for the use of pre-built or custom interfaces for authentication, metadata, preflight checks, and worker logic.
+
+Let's create a class that inherits from `SQLWorkflowBuilderInterface` to define our custom builder:
+
 ```python
+class MyWorkflowBuilder(SQLWorkflowBuilderInterface):
+    def get_sqlalchemy_connection_string(self, credentials: Dict[str, Any]) -> str:
+        encoded_password = quote_plus(credentials["password"])
+        user = credentials['user']
+        host = credentials['host']
+        port = credentials['port']
+        database = credentials['database']
+
+        return "My custom credentials string"
+
+    def __init__(self, *args: Any, **kwargs: Any):
+        self.auth_interface = MySQLWorkflowAuthInterface()
+        self.metadata_interface = MySQLWorkflowMetadata(self.get_sql_engine)
+        self.preflight_interface = MySQLWorkflowPreflight(self.get_sql_engine)
+        self.worker_interface = MySQLWorkflowWorker(
+            "My Application Name", get_sql_engine=self.get_sql_engine
+        )
+        super().__init__(
+            auth_interface=self.auth_interface,
+            metadata_interface=self.metadata_interface,
+            preflight_check_interface=self.preflight_interface,
+            worker_interface=self.worker_interface,
+            *args,
+            **kwargs,
+        )
 ```
