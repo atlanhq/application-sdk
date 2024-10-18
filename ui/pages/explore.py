@@ -1,50 +1,52 @@
 import dash
 import dash_bootstrap_components as dbc
 import pandas as pd
-from dash import html, callback, Input, Output
+from dash import Input, Output, callback, html
 from sqlalchemy import create_engine
 
 from ui.pages.interfaces.utils import create_ag_grid
 
 dash.register_page(__name__, name="🔍 Explore")
 
-layout = html.Div([
+layout = html.Div(
+    [
         dbc.Container(
             [
                 html.H1("🔍 Source Exploration"),
-                dbc.Card([
-                    dbc.CardHeader("SQL Source Exploration"),
-                    dbc.CardBody([
-                        dbc.Label("SQLAlchemy Connection String"),
-                        dbc.Input(
-                            id="sqlalchemy_string",
-                            placeholder="postgresql+psycopg2://scott:tiger@localhost:5432/mydatabase",
-                            type="text"
+                dbc.Card(
+                    [
+                        dbc.CardHeader("SQL Source Exploration"),
+                        dbc.CardBody(
+                            [
+                                dbc.Label("SQLAlchemy Connection String"),
+                                dbc.Input(
+                                    id="sqlalchemy_string",
+                                    placeholder="postgresql+psycopg2://scott:tiger@localhost:5432/mydatabase",
+                                    type="text",
+                                ),
+                                html.Br(),
+                                dbc.Label("SQL Query"),
+                                dbc.Input(
+                                    id="sql_query",
+                                    placeholder="SELECT * FROM my_table",
+                                    type="text",
+                                ),
+                                dbc.Button("Run Query", id="run_query"),
+                                html.Br(),
+                                create_ag_grid(grid_id="sql_table", row_df=None),
+                            ]
                         ),
-                        html.Br(),
-                        dbc.Label("SQL Query"),
-                        dbc.Input(
-                            id="sql_query",
-                            placeholder="SELECT * FROM my_table",
-                            type="text"
-                        ),
-                        dbc.Button("Run Query", id="run_query"),
-                        html.Br(),
-                        create_ag_grid(
-                            grid_id="sql_table",
-                            row_df=None
-                        )
-                    ]),
-                ]),
-            ], fluid=True)
-        ]
+                    ]
+                ),
+            ],
+            fluid=True,
+        )
+    ]
 )
 
+
 @callback(
-    [
-        Output("sql_table", "rowData"),
-        Output("sql_table", "columnDefs")
-    ],
+    [Output("sql_table", "rowData"), Output("sql_table", "columnDefs")],
     [
         Input("run_query", "n_clicks"),
         Input("sqlalchemy_string", "value"),
