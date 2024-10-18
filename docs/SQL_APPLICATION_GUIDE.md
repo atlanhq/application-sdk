@@ -30,10 +30,11 @@ Before you begin, make sure you have:
 - Familiarity with the basics of SQL and database concepts
 
 # Table of Contents
-1. [Overview of SQL Workflows](Overview-of-SQL-Workflows)
-2. [Setting up all the configurations required to interact with the database.](#1-setting-up-all-the-configurations-required-to-interact-with-the-database)
-3. [Setting up the Workflow Worker](#2-setting-up-the-workflow-worker)
-4. [Building the Workflow](#3-building-the-workflow)
+1. [Overview of SQL Workflows](#overview-of-sql-workflows)
+2. [Understanding `application-sdk` Structure](#understanding-the-application-sdk-structure)
+2. [Setting up all the configurations required to interact with the database.](#setting-up-all-the-configurations-required-to-interact-with-the-database)
+3. [Setting up the Workflow Worker](#setting-up-the-workflow-worker)
+4. [Building the Workflow](#building-the-workflow)
 
 # Overview of SQL Workflows
 An SQL workflow defines a series of steps that interact with a database. Let's explore the main steps:
