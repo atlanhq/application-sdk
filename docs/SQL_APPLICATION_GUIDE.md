@@ -32,7 +32,7 @@ Before you begin, make sure you have:
 # Table of Contents
 1. [Overview of SQL Workflows](#overview-of-sql-workflows)
 2. [Understanding `application-sdk` Structure](#understanding-the-application-sdk-structure)
-2. [Setting up all the configurations required to interact with the database.](#setting-up-all-the-configurations-required-to-interact-with-the-database)
+2. [Configuration](#configuration)
 3. [Setting up the Workflow Worker](#setting-up-the-workflow-worker)
 4. [Building the Workflow](#building-the-workflow)
 
@@ -51,15 +51,15 @@ Here’s an overview of the core components:
 
 - `SQLWorkflowAuthInterface`: This interface handles authentication for the workflow. The default implementation establishes a connection to the database using the provided credentials and checks their validity.
 
-- `SQLWorkflowMetadataInterface`: This interface manages metadata extraction from the database. The default implementation runs SQL queries to fetch schema, table, and column information, helping the workflow understand the database structure.
+- `SQLWorkflowMetadataInterface`: This interface manages metadata extraction from the database.
 
-- `SQLWorkflowPreflightCheckInterface`: This interface runs preflight checks before the workflow is executed. The default implementation checks whether the necessary tables and columns exist in the database and verifies that the database is accessible.
+- `SQLWorkflowPreflightCheckInterface`: This interface runs preflight checks before the workflow is executed.
 
 - `SQLWorkflowWorkerInterface`: This interface handles the execution logic of the workflow. The default implementation is responsible for running the tasks defined by the workflow, such as extracting data, running preflight checks, and processing results. You can override this interface to implement custom workflow logic, such as data transformations or running multiple queries in sequence.
 
 These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let’s start with setting up the necessary configurations for interacting with the database.
 
-# Setting up all the configurations required to interact with the database.
+# Configuration
 To interact with the database, we need to configure
 - Authentication
 - Metadata extraction
@@ -69,18 +69,20 @@ To interact with the database, we need to configure
 
 The `SQLWorkflowAuthInterface` class is used to authenticate the SQL workflow. The default implementation of `SQLWorkflowAuthInterface` runs a simple SQL query(defined by `TEST_AUTHENTICATION_SQL`) on the source database.
 
-You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
+> [!TIP]
+> You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
+> If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
 
-If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
+When overriding this class, you can either provide your own implementation of `TEST_AUTHENTICATION_SQL` SQL query and use the default implementation of testing authentication, where it creates a connection to the source database, and checks if the query completes successfully.
 
-When overriding this class, you can either provide your own implementation of `TEST_AUTHENTICATION_SQL` SQL query, for example -
+For example -
 
 ```
 class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 ```
 
-Or you can choose to also override the `test_auth` method -
+Or you can also choose to override the `test_auth` method and provide your own implementation -
 
 ```
 class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
@@ -97,13 +99,7 @@ class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
 
 The `SQLWorkflowMetadataInterface` class is responsible for fetching metadata from the database. This includes extracting schema, table, and column information, which can be useful for understanding the structure of the database.
 
-If you want to customize the metadata extraction logic, you can override the default `METADATA_SQL`, `DATABASE_KEY`, `SCHEMA_KEY`.
-
-`METADATA_SQL` defines the SQL query to fetch the metadata.
-
-`DATABASE_KEY` defines the key to fetch the database name.
-
-`SCHEMA_KEY` defines the key to fetch the schema name.
+If you want to customize the metadata extraction SQL, you can override the default `METADATA_SQL`. `METADATA_SQL` defines the SQL query to fetch the metadata.
 
 ```python
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
@@ -112,8 +108,6 @@ class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
     SELECT schema_name, catalog_name
     FROM INFORMATION_SCHEMA.SCHEMATA;
     """
-    DATABASE_KEY: str = "TABLE_CATALOG"
-    SCHEMA_KEY: str = "TABLE_SCHEMA"
 ```
 
 You can also optionally override the default implementation of `fetch_metadata` function,
