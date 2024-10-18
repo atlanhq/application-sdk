@@ -31,7 +31,34 @@ layout = html.Div(
                                     placeholder="SELECT * FROM my_table",
                                     type="text",
                                 ),
-                                dbc.Button("Run Query", id="run_query"),
+                                dbc.ButtonGroup(
+                                    [
+                                        dbc.Button(
+                                            "Run Query",
+                                            outline=True,
+                                            id="run_query",
+                                            color="primary",
+                                        ),
+                                        dbc.Button(
+                                            "AI Improve",
+                                            outline=True,
+                                            id="ai_improve",
+                                            color="primary",
+                                        ),
+                                        dbc.Button(
+                                            "Import Test Data",
+                                            outline=True,
+                                            id="import_test_data",
+                                            color="primary",
+                                        ),
+                                        dbc.Button(
+                                            "Import Scale Data",
+                                            outline=True,
+                                            id="import_scale_data",
+                                            color="primary",
+                                        ),
+                                    ]
+                                ),
                                 html.Br(),
                                 create_ag_grid(grid_id="sql_table", row_df=None),
                             ]
