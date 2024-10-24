@@ -46,6 +46,8 @@ class WorkflowInterface(object):
     def fetch_workflows_df(self) -> (pd.DataFrame, dict):
         workflow_list = asyncio.run(self.fetch_workflows_list())
         df = pd.DataFrame(workflow_list)
+        if df.empty:
+            return pd.DataFrame([]), {}
         del df["data_converter"]
         del df["raw_info"]
         del df["typed_search_attributes"]
