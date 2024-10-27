@@ -56,6 +56,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
         use_server_side_cursor: bool = True,
         temporal_activities: Sequence[CallableType] = None,
+        # New config
+        batch_size: int = 8,
+        max_transform_concurrency_level: int = 5,
     ):
         """
         Initialize the SQL workflow worker.
@@ -70,6 +73,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         self.use_server_side_cursor = use_server_side_cursor
         self.transformer = transformer
 
+        self.batch_size = batch_size
+        self.max_transform_concurrency_level = max_transform_concurrency_level
+
         if not temporal_activities:
             # default activities
             self.TEMPORAL_ACTIVITIES = [
@@ -77,6 +83,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_schemas,
                 self.fetch_tables,
                 self.fetch_columns,
+                self.transform_columns,
             ]
         else:
             self.TEMPORAL_ACTIVITIES = temporal_activities
@@ -98,9 +105,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         workflow_args["credential_guid"] = credential_guid
         return await super().start_workflow(workflow_args)
 
-    async def run_query(
-        self, connection: Connection, query: str, batch_size: int = 100000
-    ):
+    async def run_query(self, connection: Connection, query: str, batch_size: int):
         """
         Run a query in a batch mode with client-side cursor.
 
@@ -143,6 +148,47 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         activity.logger.info("Query execution completed")
 
+    async def fetch_data(
+        self, workflow_args: Dict[str, Any], query: str, typename: str
+    ):
+        """
+        Fetch and process data from the database.
+
+        :param workflow_args: The workflow arguments.
+        :param query: The query to run.
+        :param typename: The type of data to fetch.
+        :return: The fetched data.
+        :raises Exception: If the data cannot be fetched.
+        """
+        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
+        output_path = workflow_args["output_path"]
+
+        raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
+        raw_files_output_prefix = os.path.join(
+            workflow_args["output_prefix"], "raw", f"{typename}"
+        )
+
+        batches = []
+        try:
+            engine = self.get_sql_engine(credentials)
+            with engine.connect() as connection:
+                async with (
+                    JSONChunkedObjectStoreWriter(
+                        raw_files_prefix, raw_files_output_prefix
+                    ) as raw_writer,
+                ):
+                    async for batch in self.run_query(
+                        connection, query, self.batch_size
+                    ):
+                        # Write raw data
+                        await raw_writer.write_list(batch)
+                        batches.append(batch)
+                        # await self._transform_batch(batch, typename, transformed_writer)
+        except Exception as e:
+            logger.error(f"Error fetching databases: {e}")
+            raise e
+        return batches
+
     async def fetch_and_process_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
     ):
@@ -179,7 +225,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                         transform_files_prefix, transform_files_output_prefix
                     ) as transformed_writer,
                 ):
-                    async for batch in self.run_query(connection, query):
+                    async for batch in self.run_query(
+                        connection, query, self.batch_size
+                    ):
                         # Write raw data
                         await raw_writer.write_list(batch)
                         await self._transform_batch(batch, typename, transformed_writer)
@@ -190,7 +238,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     async def _transform_batch(
         self,
         results: List[Dict[str, Any]],
-        typename: str,
+        typename: List[str],
         writer: JSONChunkedObjectStoreWriter,
     ) -> None:
         """
@@ -284,6 +332,25 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
     @activity.defn
     @auto_heartbeater
+    async def transform_columns(self, workflow_args: Dict[str, Any]):
+        batches = workflow_args["batches"]
+        typename = workflow_args["typename"]
+        output_path = workflow_args["output_path"]
+        output_prefix = workflow_args["output_prefix"]
+
+        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
+        transform_files_output_prefix = os.path.join(
+            output_prefix, "transformed", f"{typename}"
+        )
+
+        async with JSONChunkedObjectStoreWriter(
+            transform_files_prefix, transform_files_output_prefix
+        ) as transformed_writer:
+            for batch in batches:
+                await self._transform_batch(batch, typename, transformed_writer)
+
+    @activity.defn
+    @auto_heartbeater
     async def fetch_columns(self, workflow_args: Dict[str, Any]):
         """
         Fetch and process columns from the database.
@@ -306,9 +373,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
         )
-        return await self.fetch_and_process_data(
-            workflow_args, column_sql_query, "column"
-        )
+
+        temp = await self.fetch_data(workflow_args, column_sql_query, "column")
+        return temp
 
     @activity.defn
     @auto_heartbeater
@@ -370,5 +437,40 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         ]
 
         # Wait for all activities to complete
-        await asyncio.gather(*activities)
+        _, _, _, column_batches = await asyncio.gather(*activities)
+
+        column_transform_activities = []
+
+        concurrency_level: int = max(
+            min(self.max_transform_concurrency_level, len(column_batches)), 1
+        )
+
+        transform_batches = [
+            int(len(column_batches) / concurrency_level)
+        ] * concurrency_level
+
+        for i in range(len(column_batches) % concurrency_level):
+            transform_batches[i] += 1
+
+        c = 0
+        for i in transform_batches:
+            transform_args = {
+                **workflow_args,
+                "batches": column_batches[c : c + i],
+                "typename": "column",
+            }
+            c += i
+
+            column_transform_activities.append(
+                workflow.execute_activity(
+                    self.transform_columns,
+                    transform_args,
+                    retry_policy=retry_policy,
+                    heartbeat_timeout=timedelta(seconds=120),
+                    start_to_close_timeout=timedelta(seconds=1000),
+                )
+            )
+
+        await asyncio.gather(*column_transform_activities)
+
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
