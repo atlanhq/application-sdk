@@ -374,8 +374,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             exclude_table=exclude_table,
         )
 
-        temp = await self.fetch_data(workflow_args, column_sql_query, "column")
-        return temp
+        return await self.fetch_data(workflow_args, column_sql_query, "column")
 
     @activity.defn
     @auto_heartbeater
