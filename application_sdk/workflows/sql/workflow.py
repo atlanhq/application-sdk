@@ -57,8 +57,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         # Configuration
         application_name: str = "sql-connector",
         use_server_side_cursor: bool = True,
-        batch_size: int = 8,
-        max_transform_concurrency_level: int = 5,
+        batch_size: int = 10,
+        max_transform_concurrency: int = 5,
     ):
         """
         Initialize the SQL workflow worker.
@@ -68,13 +68,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param use_server_side_cursor: Whether to use server-side cursor (default: True)
         :param temporal_activities: The temporal activities to run (default: [], parent class activities)
         :param transformer: The transformer to use (default: PhoenixTransformer)
+        :param batch_size: The size of batches for running queries and transformation (default: 10)
+        :param max_transform_concurrency: The maximum concurrency for transformation activities (default: 5)
         """
         self.get_sql_engine = get_sql_engine
         self.use_server_side_cursor = use_server_side_cursor
         self.transformer = transformer
 
         self.batch_size = batch_size
-        self.max_transform_concurrency_level = max_transform_concurrency_level
+        self.max_transform_concurrency = max_transform_concurrency
 
         if not temporal_activities:
             # default activities
@@ -183,7 +185,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                         # Write raw data
                         await raw_writer.write_list(batch)
                         batches.append(batch)
-                        # await self._transform_batch(batch, typename, transformed_writer)
         except Exception as e:
             logger.error(f"Error fetching databases: {e}")
             raise e
@@ -238,7 +239,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     async def _transform_batch(
         self,
         results: List[Dict[str, Any]],
-        typename: List[str],
+        typename: str,
         writer: JSONChunkedObjectStoreWriter,
     ) -> None:
         """
@@ -440,26 +441,25 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         column_transform_activities = []
 
-        concurrency_level: int = max(
-            min(self.max_transform_concurrency_level, len(column_batches)), 1
+        # Determine the concurrency level within bounds and at least 1
+        concurrency_level = max(
+            min(self.max_transform_concurrency, len(column_batches)), 1
         )
 
+        # Split column_batches evenly among the concurrency level, handling any remainder
         transform_batches = [
-            int(len(column_batches) / concurrency_level)
-        ] * concurrency_level
+            column_batches[i::concurrency_level] for i in range(concurrency_level)
+        ]
 
-        for i in range(len(column_batches) % concurrency_level):
-            transform_batches[i] += 1
-
-        c = 0
-        for i in transform_batches:
+        # Generate and execute activities for each batch
+        for batch in transform_batches:
             transform_args = {
                 **workflow_args,
-                "batches": column_batches[c : c + i],
+                "batches": batch,
                 "typename": "column",
             }
-            c += i
 
+            # Execute the activity and add it to the list
             column_transform_activities.append(
                 workflow.execute_activity(
                     self.transform_columns,
