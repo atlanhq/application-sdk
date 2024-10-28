@@ -52,11 +52,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     def __init__(
         self,
         transformer: TransformerInterface,
-        application_name: str = "sql-connector",
-        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
-        use_server_side_cursor: bool = True,
         temporal_activities: Sequence[CallableType] = None,
-        # New config
+        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
+        # Configuration
+        application_name: str = "sql-connector",
+        use_server_side_cursor: bool = True,
         batch_size: int = 8,
         max_transform_concurrency_level: int = 5,
     ):
