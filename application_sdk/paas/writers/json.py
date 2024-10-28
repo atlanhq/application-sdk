@@ -39,7 +39,7 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         self.buffer.clear()
         self.current_buffer_size = 0
 
-    async def close(self) -> None:
+    async def close(self) -> int:
         await self._flush_buffer()
         await self.close_current_file()
 
@@ -55,6 +55,8 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                 ).decode("utf-8")
             )
         await self.upload_file(f"{self.local_file_prefix}-metadata.json")
+
+        return self.current_file_number
 
     async def _create_new_file(self):
         await self.close_current_file()

@@ -42,7 +42,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
             await self.write(record)
 
     @abstractmethod
-    async def close(self) -> None:
+    async def close(self) -> int:
         raise NotImplementedError
 
     async def close_current_file(self):
