@@ -422,7 +422,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
             batches: List[List[int]] = []
             start = 1
-            print(concurrency_level, chunk_count)
             for i in range(concurrency_level):
                 current_batch_start = start
                 current_batch_count = int(chunk_count / concurrency_level)

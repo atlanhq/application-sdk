@@ -24,9 +24,3 @@ class JSONChunkedObjectStoreReader(ChunkedObjectStoreReaderInterface):
 
                     data.append(orjson.loads(line))
         return data
-
-    async def get_chunk_count(self) -> int:
-        return self.chunk_count
-
-    async def close(self) -> None:
-        pass

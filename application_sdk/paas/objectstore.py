@@ -57,7 +57,6 @@ class ObjectStore:
 
             relative_path = os.path.relpath(file_path, output_prefix)
             metadata = {"key": relative_path, "fileName": relative_path}
-            print(relative_path, "relative_path a")
 
             try:
                 client.invoke_binding(

@@ -29,6 +29,9 @@ class ChunkedObjectStoreReaderInterface(ABC):
     async def read_chunk(self, chunk: int) -> List[Any]:
         raise NotImplementedError
 
+    async def get_chunk_count(self) -> int:
+        return self.chunk_count
+
     async def download_file(self, file_path: str) -> None:
         await ObjectStore.download_file_from_object_store(
             self.download_file_prefix, os.path.join(self.local_file_path, file_path)
