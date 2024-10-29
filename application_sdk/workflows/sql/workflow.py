@@ -194,43 +194,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             logger.error(f"Error fetching databases: {e}")
             raise e
 
-        return -1
-
-    async def fetch_and_process_data(
-        self, workflow_args: Dict[str, Any], query: str, typename: str
-    ):
-        """
-        Fetch and process data from the database.
-
-        :param workflow_args: The workflow arguments.
-        :param query: The query to run.
-        :param typename: The type of data to fetch.
-        :return: The fetched data.
-        :raises Exception: If the data cannot be fetched.
-        """
-        output_path = workflow_args["output_path"]
-
-        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        # transform_files_output_prefix = os.path.join(
-        #     workflow_args["output_prefix"], "transformed", f"{typename}"
-        # )
-        transform_files_output_prefix = workflow_args["output_prefix"]
-
-        # Fetches data and stores it in raw files
-        await self.fetch_data(workflow_args, query, typename)
-
-        try:
-            async with (
-                JSONChunkedObjectStoreWriter(
-                    transform_files_prefix, transform_files_output_prefix
-                ) as transformed_writer,
-            ):
-                # Transforms data
-                await self._transform_batch(batch, typename, transformed_writer)
-        except Exception as e:
-            logger.error(f"Error fetching databases: {e}")
-            raise e
-
     async def _transform_batch(
         self,
         results: List[Dict[str, Any]],

@@ -50,7 +50,7 @@ class ChunkedObjectStoreReaderInterface(ABC):
         pass
 
     async def __aenter__(self):
-        await self.download_file(f"database-metadata.json")
+        await self.download_file("database-metadata.json")
 
         with open(os.path.join(self.local_file_path, "database-metadata.json")) as f:
             json_data = f.read()
