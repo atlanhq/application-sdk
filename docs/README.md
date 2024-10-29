@@ -18,7 +18,7 @@
 If you would like to use a template to start with and skip steps 1, 2 and 3, use the [phoenix-postgres-app](https://github.com/atlanhq/phoenix-postgres-app) as a template to get started.
 
 
-## Setup the python project
+## 1. Setup the python project
 We’ll use `poetry` to manage the project, as it simplifies dependency management and creates virtual environments automatically. If you prefer to use `pip` and `venv`, you can adapt the steps accordingly.
 
 ### Step 1: Install `poetry`

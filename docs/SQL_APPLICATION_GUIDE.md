@@ -39,10 +39,10 @@ Before you begin, make sure you have:
 # Overview of SQL Workflows
 An SQL workflow defines a series of steps that interact with a database. Let's explore the main steps:
 
-- Authentication: Verifying database credentials to ensure proper access.
-- Metadata extraction: Retrieving schema, table, and column information to understand the database structure.
-- Preflight checks: Verifying database accessibility and structure before running the workflow.
-- Execution logic: Defining the tasks that the workflow will carry out once started, such as processing data or running custom queries.
+- **Authentication**: Verifying database credentials to ensure proper access.
+- **Metadata extraction**: Retrieving schema, table, and column information to understand the database structure.
+- **Preflight checks**: Verifying database accessibility and structure before running the workflow.
+- **Execution logic**: Defining the tasks that the workflow will carry out once started, such as processing data or running custom queries.
 
 # Understanding the Application SDK Structure
 The Atlan Platform SDK offers a set of base interfaces and abstract classes that provide default behavior for common tasks such as authentication, metadata extraction, and preflight checks. You can either use these default implementations or extend them to create custom workflows tailored to your specific use case.
@@ -220,4 +220,10 @@ class MyWorkflowBuilder(SQLWorkflowBuilderInterface):
             *args,
             **kwargs,
         )
+```
+
+Once you've created your WorkflowBuilder class, you can start using it in your project,
+
+```
+my_workflow_builder = MyWorkflowBuilder()
 ```
