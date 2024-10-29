@@ -5,7 +5,6 @@ import pandas as pd
 import pygwalker as pyg
 from dash import callback, html
 from dash.dependencies import Input, Output
-
 from ui.pages.interfaces.utils import create_ag_grid
 from ui.pages.interfaces.workflow import WorkflowInterface
 

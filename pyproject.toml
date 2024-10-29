@@ -9,26 +9,47 @@ readme = "README.md"
 python = "^3.11"
 fastapi-sqlalchemy = "^0.2.1"
 alembic = "^1.13.3"
-dapr = "^1.14.0"
 opentelemetry-distro = "^0.48b0"
 opentelemetry-exporter-otlp = "^1.27.0"
 opentelemetry-instrumentation-fastapi = "^0.48b0"
 opentelemetry-proto = "^1.27.0"
 psutil = "^6.0.0"
 fastapi = {extras = ["standard"], version = "^0.115.0"}
-temporalio = "^1.7.1"
 aiofiles = "^24.1.0"
 sqlalchemy = "^2.0.35"
 pyatlan = "^2.4.7"
 orjson = "^3.10.7"
 pyarrow = "^17.0.0"
-mock = "^5.1.0"
+dapr = {version = "^1.14.0", optional = true}
+temporalio = {version = "^1.7.1", optional = true}
+dash = {version = "^2.18.1", optional = true}
+pandas = {version = "^2.2.3", optional = true}
+dash-ag-grid = {version = "^31.2.0", optional = true}
+dash-bootstrap-components = {version = "^1.6.0", optional = true}
+pygwalker = {version = "^0.4.9.10", optional = true}
+dash-dangerously-set-inner-html = {version = "^0.0.2", optional = true}
+
+[tool.poetry.extras]
+workflows = [
+    "dapr",
+    "temporalio"
+]
+dashboard = [
+    "dash",
+    "pandas",
+    "dash-ag-grid",
+    "dash-bootstrap-components",
+    "pygwalker",
+    "dash-dangerously-set-inner-html"
+]
+
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^3.8.0"
 isort = "^5.13.2"
 
 [tool.poetry.group.test.dependencies]
+mock = "^5.1.0"
 pytest = "^8.3.3"
 coverage = "^7.6.1"
 pytest-asyncio = "^0.24.0"
@@ -36,17 +57,6 @@ hypothesis = "^6.114.0"
 
 [tool.poetry.group.examples.dependencies]
 psycopg2-binary = "^2.9.9"
-
-[tool.poetry.group.ui.dependencies]
-dash = "^2.18.1"
-sqlalchemy = "^2.0.35"
-pandas = "^2.2.3"
-dash-ag-grid = "^31.2.0"
-temporalio = "^1.8.0"
-dash-bootstrap-components = "^1.6.0"
-pygwalker = "^0.4.9.10"
-dash-dangerously-set-inner-html = "^0.0.2"
-
 
 [build-system]
 requires = ["poetry-core"]

@@ -2,6 +2,6 @@
 
 To run the UI, execute the following commands
 - `source .venv/bin/activate`
-- `poetry install`
-- `cd ui`
+- `poetry install --extras "workflows dashboard"`
+- `cd dashboard`
 - `python run app.py`
