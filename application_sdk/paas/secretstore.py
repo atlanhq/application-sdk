@@ -6,8 +6,11 @@ import uuid
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
+from temporalio import activity
 
-logger = logging.getLogger(__name__)
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SecretStore:
@@ -34,10 +37,12 @@ class SecretStore:
                 key=credential_guid,
                 value=json.dumps(config),
             )
-            logger.info(f"Credentials stored successfully with GUID: {credential_guid}")
+            activity.logger.info(
+                f"Credentials stored successfully with GUID: {credential_guid}"
+            )
             return credential_guid
         except Exception as e:
-            logger.error(f"Failed to store credentials: {str(e)}")
+            activity.logger.error(f"Failed to store credentials: {str(e)}")
             raise e
         finally:
             client.close()
@@ -68,10 +73,10 @@ class SecretStore:
                 raise ValueError(f"Credentials not found for GUID: {credential_guid}")
             return json.loads(state.data)
         except ValueError as e:
-            logger.error(str(e))
+            activity.logger.error(str(e))
             raise e
         except Exception as e:
-            logger.error(f"Failed to extract credentials: {str(e)}")
+            activity.logger.error(f"Failed to extract credentials: {str(e)}")
             raise e
         finally:
             client.close()

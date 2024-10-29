@@ -3,7 +3,6 @@ import dash_bootstrap_components as dbc
 import pandas as pd
 from dash import Input, Output, callback, html
 from sqlalchemy import create_engine
-
 from ui.pages.interfaces.utils import create_ag_grid
 
 dash.register_page(__name__, name="🔍 Explore")

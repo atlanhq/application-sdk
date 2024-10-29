@@ -4,9 +4,12 @@ import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
+from temporalio import activity
+
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.objectstore import ObjectStore
 
-logger = logging.getLogger(__name__)
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class ChunkedObjectStoreWriterInterface(ABC):
@@ -52,10 +55,14 @@ class ChunkedObjectStoreWriterInterface(ABC):
         await self.current_file.close()
         await self.upload_file(self.current_file_name)
         # os.unlink(self.current_file_name)
-        logger.info(f"Uploaded file: {self.current_file_name} and removed local copy")
+        activity.logger.info(
+            f"Uploaded file: {self.current_file_name} and removed local copy"
+        )
 
     async def upload_file(self, local_file_path: str):
-        logger.info(f"Uploading file: {local_file_path} to {self.upload_file_prefix}")
+        activity.logger.info(
+            f"Uploading file: {local_file_path} to {self.upload_file_prefix}"
+        )
         await ObjectStore.push_file_to_object_store(
             self.upload_file_prefix, local_file_path
         )

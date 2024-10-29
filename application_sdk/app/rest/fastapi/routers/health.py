@@ -1,5 +1,6 @@
 """Router for handling health-related API endpoints."""
 
+import logging
 import platform
 import re
 import socket
@@ -8,9 +9,7 @@ import uuid
 import psutil
 from fastapi import APIRouter
 
-from application_sdk.logging import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/system",

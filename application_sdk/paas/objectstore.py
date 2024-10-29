@@ -4,8 +4,11 @@ import logging
 import os
 
 from dapr.clients import DaprClient
+from temporalio import activity
 
-logger = logging.getLogger(__name__)
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class ObjectStore:
@@ -33,9 +36,9 @@ class ObjectStore:
                     f.write(response.data.decode("utf-8"))
                     f.close()
 
-                logger.debug(f"Successfully downloaded file: {relative_path}")
+                activity.logger.debug(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
-                logger.error(
+                activity.logger.error(
                     f"Error downloading file {relative_path} to object store: {str(e)}"
                 )
                 raise e
@@ -49,7 +52,7 @@ class ObjectStore:
                 with open(file_path, "rb") as f:
                     file_content = f.read()
             except IOError as e:
-                logger.error(f"Error reading file {file_path}: {str(e)}")
+                activity.logger.error(f"Error reading file {file_path}: {str(e)}")
                 raise e
 
             relative_path = os.path.relpath(file_path, output_prefix)
@@ -63,9 +66,9 @@ class ObjectStore:
                     data=file_content,
                     binding_metadata=metadata,
                 )
-                logger.debug(f"Successfully pushed file: {relative_path}")
+                activity.logger.debug(f"Successfully pushed file: {relative_path}")
             except Exception as e:
-                logger.error(
+                activity.logger.error(
                     f"Error pushing file {relative_path} to object store: {str(e)}"
                 )
                 raise e
@@ -97,11 +100,11 @@ class ObjectStore:
                     file_path = os.path.join(root, file)
                     await cls.push_file_to_object_store(output_prefix, file_path)
 
-            logger.info(
+            activity.logger.info(
                 f"Completed pushing data from {input_files_path} to object store"
             )
         except Exception as e:
-            logger.error(
+            activity.logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e

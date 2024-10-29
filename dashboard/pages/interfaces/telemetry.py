@@ -5,7 +5,6 @@ import pandas as pd
 import plotly.express as px
 from dash import dcc, html
 from sqlalchemy import create_engine
-
 from ui.pages.interfaces.utils import sum_each_index
 
 

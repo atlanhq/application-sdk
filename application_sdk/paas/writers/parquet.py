@@ -4,10 +4,12 @@ from typing import Any, Dict
 import orjson
 import pyarrow as pa
 import pyarrow.parquet as pq
+from temporalio import activity
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.writers import ChunkedObjectStoreWriterInterface
 
-logger = logging.getLogger(__name__)
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
@@ -80,5 +82,5 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
             self.current_file_name, self.schema, **self.parquet_writer_options
         )
 
-        logger.info(f"Created new file: {self.current_file_name}")
+        activity.logger.info(f"Created new file: {self.current_file_name}")
         self.current_record_count = 0
