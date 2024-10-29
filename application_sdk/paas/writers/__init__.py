@@ -17,7 +17,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self,
         local_file_prefix: str,
         upload_file_prefix: str,
-        chunk_size: int = 30000,
+        chunk_size: int = 4,
         buffer_size: int = 1024 * 1024 * 10,
     ):  # 10MB buffer by default
         self.local_file_prefix = local_file_prefix

@@ -341,7 +341,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             ) as transformed_writer,
         ):
             raw_data: List[Any] = []
-            for chunk in range(batch[0], batch[1]):
+            for chunk in batch:
                 raw_data += await raw_reader.read_chunk(chunk)
 
             await self._transform_batch(raw_data, typename, transformed_writer)
@@ -420,7 +420,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 chunk_count,
             )
 
-            batches: List[List[int]] = []
+            batches: List[List[str]] = []
             start = 1
             for i in range(concurrency_level):
                 current_batch_start = start
@@ -430,10 +430,14 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                     and chunk_count > concurrency_level
                 ):
                     current_batch_count += 1
+
                 batches.append(
                     [
-                        current_batch_start,
-                        current_batch_start + current_batch_count,
+                        f"{typename}-{i}.json"
+                        for i in range(
+                            current_batch_start,
+                            current_batch_start + current_batch_count,
+                        )
                     ]
                 )
                 start += current_batch_count

@@ -26,7 +26,7 @@ class ChunkedObjectStoreReaderInterface(ABC):
         self.typename = typename
 
     @abstractmethod
-    async def read_chunk(self, chunk: int) -> List[Any]:
+    async def read_chunk(self, chunk: str) -> List[Any]:
         raise NotImplementedError
 
     async def get_chunk_count(self) -> int:

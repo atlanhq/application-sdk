@@ -10,12 +10,10 @@ logger = logging.getLogger(__name__)
 
 
 class JSONChunkedObjectStoreReader(ChunkedObjectStoreReaderInterface):
-    async def read_chunk(self, chunk: int) -> List[Any]:
+    async def read_chunk(self, chunk: str) -> List[Any]:
         data: List[Any] = []
         async with self.lock:
-            filename = os.path.join(
-                self.local_file_path, f"{self.typename}-{chunk}.json"
-            )
+            filename = os.path.join(self.local_file_path, chunk)
 
             with open(filename, "r") as f:
                 for line in f:
