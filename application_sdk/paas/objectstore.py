@@ -24,11 +24,15 @@ class ObjectStore:
             metadata = {"key": relative_path, "fileName": relative_path}
 
             try:
-                client.invoke_binding(
+                response = client.invoke_binding(
                     binding_name=cls.OBJECT_STORE_NAME,
                     operation=cls.OBJECT_GET_OPERATION,
                     binding_metadata=metadata,
                 )
+                with open(file_path, "w") as f:
+                    f.write(response.data.decode("utf-8"))
+                    f.close()
+
                 logger.debug(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
                 logger.error(

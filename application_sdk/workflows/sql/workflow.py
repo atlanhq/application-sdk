@@ -169,9 +169,10 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
-        raw_files_output_prefix = os.path.join(
-            workflow_args["output_prefix"], "raw", f"{typename}"
-        )
+        # raw_files_output_prefix = os.path.join(
+        #     workflow_args["output_prefix"], "raw", f"{typename}"
+        # )
+        raw_files_output_prefix = workflow_args["output_prefix"]
 
         try:
             engine = self.get_sql_engine(credentials)
@@ -210,9 +211,10 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = workflow_args["output_path"]
 
         transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        transform_files_output_prefix = os.path.join(
-            workflow_args["output_prefix"], "transformed", f"{typename}"
-        )
+        # transform_files_output_prefix = os.path.join(
+        #     workflow_args["output_prefix"], "transformed", f"{typename}"
+        # )
+        transform_files_output_prefix = workflow_args["output_prefix"]
 
         # Fetches data and stores it in raw files
         await self.fetch_data(workflow_args, query, typename)
@@ -293,9 +295,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
         )
-        return await self.fetch_and_process_data(
-            workflow_args, schema_sql_query, "schema"
-        )
+        chunk_count = await self.fetch_data(workflow_args, schema_sql_query, "schema")
+        return {"typename": "schema", "chunk_count": chunk_count}
 
     @activity.defn
     @auto_heartbeater
@@ -321,43 +322,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
         )
-        return await self.fetch_and_process_data(
-            workflow_args, table_sql_query, "table"
-        )
-
-    @activity.defn
-    @auto_heartbeater
-    async def transform_data(self, workflow_args: Dict[str, Any]):
-        batch = workflow_args["batch"]
-        typename = workflow_args["typename"]
-        output_path = workflow_args["output_path"]
-        output_prefix = workflow_args["output_prefix"]
-
-        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        transform_files_output_prefix = os.path.join(
-            output_prefix, "transformed", f"{typename}"
-        )
-
-        raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
-        raw_files_output_prefix = os.path.join(
-            workflow_args["output_prefix"], "raw", f"{typename}"
-        )
-
-        async with (
-            JSONChunkedObjectStoreReader(
-                raw_files_prefix, raw_files_output_prefix
-            ) as raw_reader,
-            JSONChunkedObjectStoreWriter(
-                transform_files_prefix, transform_files_output_prefix
-            ) as transformed_writer,
-        ):
-            data = []
-            for batch in batches:
-                data += await raw_reader.read_chunk(typename, batch[0])
-
-            await self._transform_batch(data, typename, transformed_writer)
-
-            transformed_writer.write_list(data)
+        chunk_count = await self.fetch_data(workflow_args, table_sql_query, "table")
+        return {"typename": "table", "chunk_count": chunk_count}
 
     @activity.defn
     @auto_heartbeater
@@ -384,7 +350,44 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             exclude_table=exclude_table,
         )
 
-        return await self.fetch_data(workflow_args, column_sql_query, "column")
+        chunk_count = await self.fetch_data(workflow_args, column_sql_query, "column")
+        return {"typename": "column", "chunk_count": chunk_count}
+
+    @activity.defn
+    @auto_heartbeater
+    async def transform_data(self, workflow_args: Dict[str, Any]):
+        batch = workflow_args["batch"]
+        typename = workflow_args["typename"]
+        output_path = workflow_args["output_path"]
+        output_prefix = workflow_args["output_prefix"]
+
+        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
+        # transform_files_output_prefix = os.path.join(
+        #     output_prefix, "transformed", f"{typename}"
+        # )
+        transform_files_output_prefix = output_prefix
+
+        raw_files_prefix = os.path.join(output_path, "raw")
+        # raw_files_output_prefix = os.path.join(
+        #     workflow_args["output_prefix"], "raw", f"{typename}"
+        # )
+        raw_files_output_prefix = workflow_args["output_prefix"]
+
+        async with (
+            JSONChunkedObjectStoreReader(
+                raw_files_prefix, raw_files_output_prefix
+            ) as raw_reader,
+            JSONChunkedObjectStoreWriter(
+                transform_files_prefix, transform_files_output_prefix
+            ) as transformed_writer,
+        ):
+            data = []
+            for b in range(batch[0], batch[1]):
+                data += await raw_reader.read_chunk(typename, b)
+
+            await self._transform_batch(data, typename, transformed_writer)
+
+            transformed_writer.write_list(data)
 
     @activity.defn
     @auto_heartbeater
@@ -424,25 +427,25 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
-            # workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            #     self.fetch_schemas,
-            #     workflow_args,
-            #     retry_policy=retry_policy,
-            #     start_to_close_timeout=timedelta(seconds=1000),
-            # ),
-            # workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            #     self.fetch_tables,
-            #     workflow_args,
-            #     retry_policy=retry_policy,
-            #     start_to_close_timeout=timedelta(seconds=1000),
-            # ),
-            # workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            #     self.fetch_columns,
-            #     workflow_args,
-            #     retry_policy=retry_policy,
-            #     heartbeat_timeout=timedelta(seconds=120),
-            #     start_to_close_timeout=timedelta(seconds=1000),
-            # ),
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+                self.fetch_schemas,
+                workflow_args,
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            ),
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+                self.fetch_tables,
+                workflow_args,
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            ),
+            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+                self.fetch_columns,
+                workflow_args,
+                retry_policy=retry_policy,
+                heartbeat_timeout=timedelta(seconds=120),
+                start_to_close_timeout=timedelta(seconds=1000),
+            ),
         ]
 
         raw_stat = await asyncio.gather(*activities)
@@ -459,11 +462,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             )
 
             batches: List[List[int]] = []
-            start = 0
+            start = 1
+            print(concurrency_level, chunk_count)
             for i in range(concurrency_level):
                 current_batch_start = start
                 current_batch_count = int(chunk_count / concurrency_level)
-                if i < chunk_count % concurrency_level:
+                if (
+                    i < chunk_count % concurrency_level
+                    and chunk_count > concurrency_level
+                ):
                     current_batch_count += 1
                 batches.append(
                     [

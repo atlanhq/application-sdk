@@ -1,7 +1,7 @@
 import logging
+import os
 from typing import Any, Dict
 
-import aiofiles
 import orjson
 
 from application_sdk.paas.readers import ChunkedObjectStoreReaderInterface
@@ -15,27 +15,20 @@ class JSONChunkedObjectStoreReader(ChunkedObjectStoreReaderInterface):
             return self.read_chunk(typename, chunk)
 
     async def read_chunk(self, typename, chunk) -> None:
+        data = []
         async with self.lock:
-            async with open(self.local_file_prefix + "-" + str(chunk) + ".json") as f:
-                json_data = f.read()
-                data = orgjson.loads(json_data)
-                print(data)
+            filename = os.path.join(self.local_file_path, f"{typename}-{chunk}.json")
+            with open(filename) as f:
+                while True:
+                    line = f.readline()
+                    if line == "":
+                        break
 
-        #     record = orjson.dumps(data, option=orjson.OPT_APPEND_NEWLINE).decode(
-        #         "utf-8"
-        #     )
-        #     self.buffer.append(record)
-        #     self.current_buffer_size += len(record)
-        #     self.current_record_count += 1
-        #     self.total_record_count += 1
-
-        #     if self.current_buffer_size >= self.buffer_size:
-        #         await self._flush_buffer()
-        print("reading chunk")
-        return {}
+                    data.append(orjson.loads(line))
+        return data
 
     async def get_chunk_count(self) -> int:
-        pass
+        return self.chunk_count
 
     async def close(self) -> None:
         # await self._flush_buffer()
