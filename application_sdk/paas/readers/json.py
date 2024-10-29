@@ -16,11 +16,8 @@ class JSONChunkedObjectStoreReader(ChunkedObjectStoreReaderInterface):
             filename = os.path.join(
                 self.local_file_path, f"{self.typename}-{chunk}.json"
             )
-            with open(filename) as f:
-                while True:
-                    line = f.readline()
-                    if line == "":
-                        break
 
+            with open(filename, "r") as f:
+                for line in f:
                     data.append(orjson.loads(line))
         return data
