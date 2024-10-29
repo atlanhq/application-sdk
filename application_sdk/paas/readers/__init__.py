@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, List
 
 import orjson
 
@@ -16,43 +16,34 @@ class ChunkedObjectStoreReaderInterface(ABC):
         self,
         local_file_path: str,
         download_file_prefix: str,
-    ):  # 10MB buffer by default
+        typename: str,
+    ):
         self.local_file_path = local_file_path
         self.download_file_prefix = download_file_prefix
         self.lock = asyncio.Lock()
         self.total_record_count = 0
         self.chunk_count = 0
+        self.typename = typename
 
     @abstractmethod
-    async def read_chunk(self, typename, chunk) -> None:
+    async def read_chunk(self, chunk: int) -> List[Any]:
         raise NotImplementedError
 
-    async def download_file(self, file_path) -> None:
+    async def download_file(self, file_path: str) -> None:
         await ObjectStore.download_file_from_object_store(
             self.download_file_prefix, os.path.join(self.local_file_path, file_path)
         )
-
-    async def read_list(self, data: List[Dict[str, Any]]) -> None:
-        # for record in data:
-        #     await self.read(record)
-        pass
 
     @abstractmethod
     async def close(self) -> None:
         raise NotImplementedError
 
-    async def close_current_file(self):
-        # if not self.current_file:
-        #     return
-
-        # await self.current_file.close()
-        # # os.unlink(self.current_file_name)
-        pass
-
     async def __aenter__(self):
-        await self.download_file("database-metadata.json")
+        await self.download_file(f"{self.typename}-metadata.json")
 
-        with open(os.path.join(self.local_file_path, "database-metadata.json")) as f:
+        with open(
+            os.path.join(self.local_file_path, f"{self.typename}-metadata.json")
+        ) as f:
             json_data = f.read()
             data = orjson.loads(json_data)
 

@@ -56,8 +56,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         use_server_side_cursor: bool = True,
         batch_size: int = 10,
         max_transform_concurrency: int = 5,
-        # TODO:
-        chunk_size: int = 3000,
     ):
         """
         Initialize the SQL workflow worker.
@@ -336,19 +334,19 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         async with (
             JSONChunkedObjectStoreReader(
-                raw_files_prefix, raw_files_output_prefix
+                raw_files_prefix, raw_files_output_prefix, typename
             ) as raw_reader,
             JSONChunkedObjectStoreWriter(
                 transform_files_prefix, transform_files_output_prefix
             ) as transformed_writer,
         ):
-            data = []
-            for b in range(batch[0], batch[1]):
-                data += await raw_reader.read_chunk(typename, b)
+            raw_data: List[Any] = []
+            for chunk in range(batch[0], batch[1]):
+                raw_data += await raw_reader.read_chunk(chunk)
 
-            await self._transform_batch(data, typename, transformed_writer)
+            await self._transform_batch(raw_data, typename, transformed_writer)
 
-            transformed_writer.write_list(data)
+            await transformed_writer.write_list(raw_data)
 
     @activity.defn
     @auto_heartbeater
