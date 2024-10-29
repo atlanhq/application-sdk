@@ -10,7 +10,6 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.types import CallableType
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows import WorkflowWorkerInterface
@@ -19,9 +18,6 @@ from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
-
-workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
@@ -117,6 +113,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         if self.use_server_side_cursor:
             connection.execution_options(yield_per=batch_size)
+
+        activity.logger.info(f"Running query: {query}")
 
         with ThreadPoolExecutor() as pool:
             try:

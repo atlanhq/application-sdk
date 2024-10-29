@@ -2,8 +2,8 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Input, Output, callback, html
 
-from ui.pages.interfaces.telemetry import TelemetryInterface
-from ui.pages.interfaces.utils import create_ag_grid
+from dashboard.pages.interfaces.telemetry import TelemetryInterface
+from dashboard.pages.interfaces.utils import create_ag_grid
 
 dash.register_page(__name__, name="📡 Telemetry")
 

@@ -14,6 +14,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
 
 logger = get_logger(__name__)
@@ -76,6 +77,9 @@ class WorkflowWorkerInterface(ABC):
         self.temporal_worker = None
         self.application_name = application_name
         self.TEMPORAL_WORKER_TASK_QUEUE = f"{self.application_name}"
+
+        workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+        activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
     @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
