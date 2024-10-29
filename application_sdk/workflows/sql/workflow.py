@@ -3,7 +3,7 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from sqlalchemy import Connection, Engine, text
 from temporalio import activity, workflow
@@ -359,6 +359,60 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         """
         pass
 
+    def get_transform_batches(self, chunk_count: int, typename: str) -> List[List[str]]:
+        # concurrency logic
+        concurrency_level = min(
+            self.max_transform_concurrency,
+            chunk_count,
+        )
+
+        batches: List[List[str]] = []
+        start = 1
+        for i in range(concurrency_level):
+            current_batch_start = start
+            current_batch_count = int(chunk_count / concurrency_level)
+            if i < chunk_count % concurrency_level and chunk_count > concurrency_level:
+                current_batch_count += 1
+
+            batches.append(
+                [
+                    f"{typename}-{i}.json"
+                    for i in range(
+                        current_batch_start,
+                        current_batch_start + current_batch_count,
+                    )
+                ]
+            )
+            start += current_batch_count
+        return batches
+
+    async def fetch_and_transform(self, fetch_fn, workflow_args, retry_policy):
+        raw_stat = await workflow.execute_activity(
+            fetch_fn,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
+
+        transform_activities: List[Any] = []
+
+        typename: str = raw_stat["typename"]
+        chunk_count: int = raw_stat["chunk_count"]
+
+        batches = self.get_transform_batches(chunk_count, typename)
+
+        for batch in batches:
+            transform_activities.append(
+                workflow.execute_activity(
+                    self.transform_data,
+                    {"typename": typename, "batch": batch, **workflow_args},
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=timedelta(seconds=1000),
+                )
+            )
+
+        await asyncio.gather(*transform_activities)
+
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
         """
@@ -378,80 +432,13 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
-        # run activities in parallel
-        activities: List[Coroutine[Any, Any, Any]] = [
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_databases,
-                workflow_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_schemas,
-                workflow_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_tables,
-                workflow_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_columns,
-                workflow_args,
-                retry_policy=retry_policy,
-                heartbeat_timeout=timedelta(seconds=120),
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
+        fetch_and_transforms = [
+            self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
         ]
 
-        raw_stat = await asyncio.gather(*activities)
-        transform_activities: List[Any] = []
-
-        for stat in raw_stat:
-            typename = stat["typename"]
-            chunk_count = stat["chunk_count"]
-
-            # concurrency logic
-            concurrency_level = min(
-                self.max_transform_concurrency,
-                chunk_count,
-            )
-
-            batches: List[List[str]] = []
-            start = 1
-            for i in range(concurrency_level):
-                current_batch_start = start
-                current_batch_count = int(chunk_count / concurrency_level)
-                if (
-                    i < chunk_count % concurrency_level
-                    and chunk_count > concurrency_level
-                ):
-                    current_batch_count += 1
-
-                batches.append(
-                    [
-                        f"{typename}-{i}.json"
-                        for i in range(
-                            current_batch_start,
-                            current_batch_start + current_batch_count,
-                        )
-                    ]
-                )
-                start += current_batch_count
-
-            for batch in batches:
-                transform_activities.append(
-                    workflow.execute_activity(
-                        self.transform_data,
-                        {"typename": typename, "batch": batch, **workflow_args},
-                        retry_policy=retry_policy,
-                        start_to_close_timeout=timedelta(seconds=1000),
-                    )
-                )
-
-        await asyncio.gather(*transform_activities)
+        await asyncio.gather(*fetch_and_transforms)
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
