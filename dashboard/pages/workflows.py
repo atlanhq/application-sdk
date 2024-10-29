@@ -5,8 +5,9 @@ import pandas as pd
 import pygwalker as pyg
 from dash import callback, html
 from dash.dependencies import Input, Output
-from ui.pages.interfaces.utils import create_ag_grid
-from ui.pages.interfaces.workflow import WorkflowInterface
+
+from dashboard.pages.interfaces.utils import create_ag_grid
+from dashboard.pages.interfaces.workflow import WorkflowInterface
 
 dash.register_page(__name__, name="🏗️ Workflows")
 
