@@ -37,9 +37,8 @@ class ChunkedObjectStoreReaderInterface(ABC):
             self.download_file_prefix, os.path.join(self.local_file_path, file_path)
         )
 
-    @abstractmethod
     async def close(self) -> None:
-        raise NotImplementedError
+        pass
 
     async def __aenter__(self):
         await self.download_file(f"{self.typename}-metadata.json")
