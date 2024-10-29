@@ -49,13 +49,13 @@ class TestJSONChunkedObjectStoreReader:
     @staticmethod
     async def test_read_chunk(reader):
         """Test reading the first chunk."""
-        data = await reader.read_chunk(0)
+        data = await reader.read_chunk("test-0.json")
         assert data == [{"key1": "value1"}, {"key2": "value2"}]
 
     @staticmethod
     async def test_read_second_chunk(reader):
         """Test reading the second chunk."""
-        data = await reader.read_chunk(1)
+        data = await reader.read_chunk("test-1.json")
         assert data == [{"key3": "value3"}, {"key4": "value4"}]
 
     @staticmethod
@@ -65,5 +65,5 @@ class TestJSONChunkedObjectStoreReader:
         with open(os.path.join(reader.local_file_path, "test-2.json"), "w") as f:
             f.write("")
 
-        data = await reader.read_chunk(2)
+        data = await reader.read_chunk("test-2.json")
         assert data == []  # Expecting an empty list for an empty chunk file
