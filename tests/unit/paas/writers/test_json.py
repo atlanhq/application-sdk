@@ -24,7 +24,7 @@ class TestJSONChunkedObjectStoreWriter:
             writer = JSONChunkedObjectStoreWriter(
                 local_file_prefix="/tmp/test/test",
                 upload_file_prefix="test",
-                chunk_size=30000,
+                chunk_size=2,
                 buffer_size=1024,
             )
             yield writer
