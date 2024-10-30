@@ -165,9 +165,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
-        # raw_files_output_prefix = os.path.join(
-        #     workflow_args["output_prefix"], "raw", f"{typename}"
-        # )
         raw_files_output_prefix = workflow_args["output_prefix"]
 
         try:
@@ -321,15 +318,9 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_prefix = workflow_args["output_prefix"]
 
         transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        # transform_files_output_prefix = os.path.join(
-        #     output_prefix, "transformed", f"{typename}"
-        # )
         transform_files_output_prefix = output_prefix
 
         raw_files_prefix = os.path.join(output_path, "raw")
-        # raw_files_output_prefix = os.path.join(
-        #     workflow_args["output_prefix"], "raw", f"{typename}"
-        # )
         raw_files_output_prefix = workflow_args["output_prefix"]
 
         async with (
