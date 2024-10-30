@@ -19,6 +19,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         upload_file_prefix: str,
         chunk_size: int = 30000,
         buffer_size: int = 1024 * 1024 * 10,
+        start_file_number: int = 0,
     ):  # 10MB buffer by default
         self.local_file_prefix = local_file_prefix
         self.upload_file_prefix = upload_file_prefix
@@ -26,7 +27,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self.lock = asyncio.Lock()
         self.current_file = None
         self.current_file_name = None
-        self.current_file_number = 0
+        self.current_file_number = start_file_number
         self.current_record_count = 0
         self.total_record_count = 0
 

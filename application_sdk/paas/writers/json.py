@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 import aiofiles
 import orjson
@@ -45,12 +45,14 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         await self._flush_buffer()
         await self.close_current_file()
 
+    async def write_metadata(self, total_record_count: Optional[int] = None):
         # Write number of chunks
         with open(f"{self.local_file_prefix}-metadata.json", mode="w") as f:
             f.write(
                 orjson.dumps(
                     {
-                        "total_record_count": self.total_record_count,
+                        "total_record_count": total_record_count
+                        or self.total_record_count,
                         "chunk_count": self.current_file_number,
                     },
                     option=orjson.OPT_APPEND_NEWLINE,
@@ -58,7 +60,10 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
             )
         await self.upload_file(f"{self.local_file_prefix}-metadata.json")
 
-        return self.current_file_number
+        return {
+            "total_record_count": total_record_count or self.total_record_count,
+            "chunk_count": self.current_file_number,
+        }
 
     async def _create_new_file(self):
         await self.close_current_file()
