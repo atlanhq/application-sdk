@@ -337,8 +337,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
             await self._transform_batch(raw_data, typename, transformed_writer)
 
-            await transformed_writer.write_list(raw_data)
-
     @activity.defn
     @auto_heartbeater
     async def fetch_sql(self, sql: str):
