@@ -54,7 +54,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         # Configuration
         application_name: str = "sql-connector",
         use_server_side_cursor: bool = True,
-        batch_size: int = 10,
+        batch_size: int = 100000,
         max_transform_concurrency: int = 5,
     ):
         """
