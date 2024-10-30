@@ -376,7 +376,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         """
         pass
 
-    def get_transform_batches(self, chunk_count: int, typename: str) -> Any:
+    def get_transform_batches(self, chunk_count: int, typename: str):
         # concurrency logic
         concurrency_level = min(
             self.max_transform_concurrency,
