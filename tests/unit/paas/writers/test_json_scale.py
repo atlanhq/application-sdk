@@ -30,6 +30,7 @@ class TestJSONChunkedObjectStoreWriterScale:
     @classmethod
     async def test_1k(cls, writer):
         await writer.write_list(cls.generate_records(1000))
+        await writer.write_metadata()
         await writer.close()
         # 3 files should be created in /tmp/test
         files = os.listdir("/tmp/test")
@@ -46,6 +47,7 @@ class TestJSONChunkedObjectStoreWriterScale:
         start_time = time.time()
         for i in range(50):
             await writer.write_list(cls.generate_records(2000))
+        await writer.write_metadata()
         await writer.close()
         end_time = time.time()
 
@@ -64,6 +66,7 @@ class TestJSONChunkedObjectStoreWriterScale:
         start_time = time.time()
         for i in range(500):
             await writer.write_list(cls.generate_records(2000))
+        await writer.write_metadata()
         await writer.close()
         end_time = time.time()
 
