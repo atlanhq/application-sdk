@@ -78,6 +78,7 @@ class TestJSONChunkedObjectStoreWriter:
                 {"test": "test"},
             ]
         )
+        await writer.write_metadata()
         await writer.close()
         # 3 files should be created in /tmp/test
         files = os.listdir("/tmp/test")
