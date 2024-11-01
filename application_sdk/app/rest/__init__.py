@@ -124,14 +124,17 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 status_code=500, detail="Worker interface not implemented"
             )
         try:
-            await self.workflow_builder_interface.worker_interface.start_workflow(
-                workflow_args
+            workflow_metadata = (
+                await self.workflow_builder_interface.worker_interface.start_workflow(
+                    workflow_args
+                )
             )
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
                     "success": True,
                     "message": "Workflow started successfully",
+                    "data": workflow_metadata,
                 },
             )
         except Exception as e:
