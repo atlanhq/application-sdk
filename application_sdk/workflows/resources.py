@@ -9,7 +9,10 @@ from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker
-from temporalio.worker.workflow_sandbox import SandboxedWorkflowRunner, SandboxRestrictions
+from temporalio.worker.workflow_sandbox import (
+    SandboxedWorkflowRunner,
+    SandboxRestrictions,
+)
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
@@ -20,7 +23,7 @@ logger = get_logger(__name__)
 class Resource(ABC):
     def __init__(self):
         pass
-    
+
     async def load(self):
         pass
 
@@ -52,7 +55,7 @@ class TemporalResource(Resource):
         )
 
     def set_activities(self, activities: Sequence[CallableType]):
-        self.
+        self.TEMPORAL_ACTIVITIES = activities
 
     async def start_workflow(self, workflow_args, workflow_id: str = None):
         workflow_id = workflow_id or str(uuid.uuid4())

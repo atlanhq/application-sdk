@@ -4,12 +4,12 @@ from typing import Any, Callable, Dict
 from sqlalchemy import Engine
 
 from application_sdk.workflows.controllers import WorkflowAuthController
-from application_sdk.workflows.sql import SQLResource
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowAuthInterface(WorkflowAuthController):
+class SQLWorkflowAuthController(WorkflowAuthController):
     """
     SQL Workflow Auth Interface
 

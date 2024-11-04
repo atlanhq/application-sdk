@@ -36,27 +36,25 @@ from urllib.parse import quote_plus
 
 from temporalio import workflow
 
-from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
-from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-from application_sdk.workflows.sql.preflight_check import (
-    SQLWorkflowPreflightCheckInterface,
-)
-from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
+from application_sdk.workflows.sql.builders.workflow import SQLWorkflowBuilder
+from application_sdk.workflows.sql.controllers.metadata import SQLWorkflowMetadataController
+from application_sdk.workflows.sql.controllers.preflight_check import SQLWorkflowPreflightCheckController
+from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
+from application_sdk.workflows.sql.transformers.atlas import AtlasTransformer
 
 APPLICATION_NAME = "postgres"
 
 logger = logging.getLogger(__name__)
 
 
-class SampleSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
+class SampleSQLWorkflowMetadata(SQLWorkflowMetadataController):
     METADATA_SQL = """
     SELECT schema_name, catalog_name
     FROM INFORMATION_SCHEMA.SCHEMATA;
     """
 
 
-class SampleSQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
+class SampleSQLWorkflowPreflight(SQLWorkflowPreflightCheckController):
     METADATA_SQL = """
     SELECT schema_name, catalog_name
     FROM INFORMATION_SCHEMA.SCHEMATA;
@@ -68,7 +66,7 @@ class SampleSQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
 
 
 @workflow.defn
-class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
+class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
     DATABASE_SQL = """
     SELECT * FROM pg_database WHERE datname = current_database();
     """
@@ -129,7 +127,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         await super().run(workflow_args)
 
 
-class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
+class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     def get_sqlalchemy_connect_args(
         self, credentials: Dict[str, Any]
     ) -> Dict[str, Any]:

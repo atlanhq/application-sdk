@@ -1,8 +1,8 @@
 import asyncio
-import os
 import logging
+import os
 from datetime import timedelta
-from typing import Dict, List, Any, Optional
+from typing import Any, Dict, List, Optional
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -12,12 +12,13 @@ from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.controllers import WorkflowWorkerController
 from application_sdk.workflows.resources import TemporalResource
-from application_sdk.workflows.sql import SQLResource
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
+
 
 class SQLWorkflowWorkerController(WorkflowWorkerController):
     """
@@ -50,7 +51,6 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         temporal_activities: List,
         temporal_resource: TemporalResource,
         sql_resource: SQLResource = None,
-
         # Configuration
         application_name: str = "sql-connector",
         use_server_side_cursor: bool = True,

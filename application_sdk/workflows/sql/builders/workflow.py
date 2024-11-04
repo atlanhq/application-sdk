@@ -1,79 +1,76 @@
-import asyncio
 import logging
-import os
-from concurrent.futures import ThreadPoolExecutor
-from datetime import timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from abc import ABC
 
-from sqlalchemy import Connection, Engine, text
-from temporalio import activity, workflow
-from temporalio.common import RetryPolicy
-from temporalio.types import CallableType
-
-from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
-from application_sdk.paas.secretstore import SecretStore
-from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
-from application_sdk.workflows import WorkflowWorkerInterface
-from application_sdk.workflows.sql.utils import prepare_filters
-from application_sdk.workflows.transformers import TransformerInterface
-from application_sdk.workflows.utils.activity import auto_heartbeater
+from application_sdk.workflows.builders import WorkflowBuilder
+from application_sdk.workflows.controllers import WorkflowAuthController, WorkflowPreflightCheckController, \
+    WorkflowMetadataController, WorkflowWorkerController
+from application_sdk.workflows.resources import TemporalResource
+from application_sdk.workflows.sql.controllers.auth import SQLWorkflowAuthController
+from application_sdk.workflows.sql.controllers.metadata import \
+    SQLWorkflowMetadataController
+from application_sdk.workflows.sql.controllers.preflight_check import \
+    SQLWorkflowPreflightCheckController
+from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
+class SQLWorkflowBuilder(WorkflowBuilder, ABC):
     # Resources
     sql_resource: SQLResource
-    identity_resource: IdentityResource
 
-    # Interfaces
-    auth_interface: AuthInterface
-    preflight_check_interface: PreflightCheckInterface
-    metadata_interface: MetadataInterface
-    worker_interface: WorkerInterface
+    # Controllers
+    auth_controller: WorkflowAuthController
+    preflight_check_controller: WorkflowPreflightCheckController
+    metadata_controller: WorkflowMetadataController
 
     def __init__(
-            self,
+        self,
 
-    ):
-        super().__init__()
-
-    def with_auth(self, auth_interface):
-        self.auth_interface = auth_interface
-        return self
-
-    def with_worker(self, worker_interface):
-        self.worker_interface = worker_interface
-        return self
-
-    def with_preflight(self, preflight_check_interface):
-        self.preflight_check_interface = preflight_check_interface
-        return self
-
-    def with_metadata(self, metadata_interface):
-        self.metadata_interface = metadata_interface
-        return self
-
-    def build(self):
         # Resources
-        if not self.sql_resource:
-            self.sql_resource = SQLResource()
+        sql_resource: SQLResource,
+        temporal_resource: TemporalResource,
 
-        if not self.identity_resource:
-            self.identity_resource = BasicCredentialsIdentityResource()
+        # Controllers
+        auth_controller: WorkflowAuthController,
+        preflight_check_controller: WorkflowPreflightCheckController,
+        metadata_controller: WorkflowMetadataController,
+        worker_controller: WorkflowWorkerController,
+    ):
+        self.temporal_resource = temporal_resource
+        self.sql_resource = sql_resource
 
-        # Interfaces
-        if not self.auth_interface:
-            self.auth_interface = SQLWorkflowAuthInterface()
-        self.auth_interface.with_sql_resource(sql_resource)
+        self.auth_controller = auth_controller or SQLWorkflowAuthController(
+            sql_resource = sql_resource
+        )
+        self.with_metadata_controller(metadata_controller or SQLWorkflowMetadataController(
+            sql_resource=sql_resource,
+        ))
+        self.metadata_controller = metadata_controller or SQLWorkflowMetadataController(
+            sql_resource = sql_resource,
+        )
+        self.with_preflight_check_controller(preflight_check_controller or SQLWorkflowPreflightCheckController(
+            sql_resource = sql_resource,
+        ))
 
-        if not self.metadata_interface:
-            self.metadata_interface = SQLWorkflowMetadataInterface()
+        super().__init__(
+            worker_controller= worker_controller or SQLWorkflowWorkerController(
+                sql_resource=sql_resource,
+                temporal_resource=temporal_resource,
+            ),
+            temporal_resource=temporal_resource
+        )
 
-        if not self.preflight_check_interface:
-            self.preflight_check_interface = SQLWorkflowPreflightCheckInterface()
+    def with_auth_controller(self, auth_controller):
+        self.auth_controller = auth_controller
+        return self
 
-        if not self.worker_interface:
-            self.worker_interface = SQLWorkflowWorkerInterface()
+    def with_preflight_check_controller(self, preflight_check_controller):
+        self.preflight_check_controller = preflight_check_controller
+        return self
 
-        super().build()
+    def with_metadata_controller(self, metadata_controller):
+        self.metadata_controller = metadata_controller
+        return self
+

@@ -1,11 +1,13 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
+
 from temporalio.client import WorkflowFailureError
 
 from application_sdk.logging import get_logger
 from application_sdk.workflows.resources import TemporalResource
 
 logger = get_logger(__name__)
+
 
 # Controller base class
 class Controller(ABC):
@@ -93,11 +95,8 @@ class WorkflowWorkerController(Controller, ABC):
 
         temporal_worker = self.temporal_resource.create_worker()
 
-        logger.info(
-            f"Starting worker with task queue: {temporal_worker.task_queue}"
-        )
+        logger.info(f"Starting worker with task queue: {temporal_worker.task_queue}")
         await temporal_worker.run()
 
     def with_temporal(self, temporal_resource: TemporalResource):
         self.temporal_resource = temporal_resource
-

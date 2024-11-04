@@ -4,8 +4,8 @@ import os
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Sequence
-from dependency_injector import containers
 
+from dependency_injector import containers
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
@@ -17,7 +17,6 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
-
 from application_sdk.workflows.controllers import WorkflowWorkerController
 from application_sdk.workflows.resources import TemporalResource
 
@@ -34,6 +33,7 @@ class WorkflowBuilder(ABC):
     Attributes:
         worker_interface: The worker interface.
     """
+
     worker_controller: WorkflowWorkerController
 
     def __init__(
@@ -45,10 +45,12 @@ class WorkflowBuilder(ABC):
         # Interfaces
         worker_controller: WorkflowWorkerController,
     ):
-        worker_controller = worker_controller or WorkflowWorkerController(temporal_resource)
+        worker_controller = worker_controller or WorkflowWorkerController(
+            temporal_resource
+        )
         self.with_worker(worker_controller)
 
-    def with_worker(self, worker_controller):
+    def with_worker_controller(self, worker_controller):
         self.worker_controller = worker_controller
         return self
 
@@ -56,5 +58,3 @@ class WorkflowBuilder(ABC):
         if not self.worker_controller:
             raise NotImplementedError("Worker controller not implemented")
         asyncio.run(self.worker_controller.start_worker())
-
-

@@ -4,13 +4,14 @@ from typing import Any, Callable, Dict, List, Set, Tuple
 
 from sqlalchemy import Engine, text
 
-from application_sdk.workflows import WorkflowPreflightCheckInterface
+from application_sdk.workflows.controllers import WorkflowPreflightCheckController
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.utils import prepare_filters
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
+class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckController):
     """
     SQL Workflow Preflight Check Interface
 
@@ -40,8 +41,8 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
-        self.create_engine_fn = create_engine_fn
+    def __init__(self, sql_resource: SQLResource):
+        self.sql_resource = sql_resource
 
     def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting preflight check")
@@ -55,24 +56,10 @@ class SQLWorkflowPreflightCheckInterface(WorkflowPreflightCheckInterface):
             results["error"] = f"Preflight check failed: {str(e)}"
         return results
 
-    # FIXME: duplicate with SQLWorkflowMetadataInterface
-    def fetch_metadata(self, credential: Dict) -> List[Dict[str, str]]:
+    def fetch_metadata(self) -> List[Dict[str, str]]:
+        result = None
         try:
-            engine = self.create_engine_fn(credential)
-            with engine.connect() as connection:
-                cursor = connection.execute(text(self.METADATA_SQL))
-                result: List[Dict[str, str]] = []
-                while True:
-                    rows = cursor.fetchmany(1000)  # Fetch 1000 rows at a time
-                    if not rows:
-                        break
-                    for schema_name, catalog_name in rows:
-                        result.append(
-                            {
-                                self.DATABASE_KEY: catalog_name,
-                                self.SCHEMA_KEY: schema_name,
-                            }
-                        )
+            result = self.sql_resource.run_query(text(self.METADATA_SQL))
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e

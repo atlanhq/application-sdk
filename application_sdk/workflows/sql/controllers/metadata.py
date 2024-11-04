@@ -4,12 +4,12 @@ from typing import Any, Callable, Dict, List
 from sqlalchemy import Engine, text
 
 from application_sdk.workflows.controllers import WorkflowMetadataController
-from application_sdk.workflows.sql import SQLResource
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowMetadataInterface(WorkflowMetadataController):
+class SQLWorkflowMetadataController(WorkflowMetadataController):
     """
     SQL Workflow Metadata Interface
 
@@ -50,7 +50,9 @@ class SQLWorkflowMetadataInterface(WorkflowMetadataController):
         :raises Exception: If the metadata cannot be fetched.
         """
         try:
-            result: List[Dict[str, str]] = self.sql_resource.run_query(self.METADATA_SQL)
+            result: List[Dict[str, str]] = self.sql_resource.run_query(
+                self.METADATA_SQL
+            )
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e

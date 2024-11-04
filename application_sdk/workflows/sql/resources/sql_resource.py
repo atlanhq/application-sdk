@@ -1,13 +1,16 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, Any, List
 import logging
-from sqlalchemy import text, create_engine
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List
+from urllib.parse import quote_plus
+
+from sqlalchemy import create_engine, text
 from temporalio import activity
 
 from application_sdk.workflows.resources import Resource
 
 logger = logging.getLogger(__name__)
+
 
 class SQLResource(Resource):
     use_server_side_cursor: bool = True
@@ -17,15 +20,13 @@ class SQLResource(Resource):
         self.engine = create_engine(
             self.get_sqlalchemy_connection_string(),
             connect_args=self.get_sqlalchemy_connect_args(),
-            pool_pre_ping=True
+            pool_pre_ping=True,
         )
         self.connection = None
 
         super().__init__()
 
-    async def run_query(
-        self, query: str, batch_size: int = 100000
-    ):
+    async def run_query(self, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with client-side cursor.
 
@@ -69,10 +70,11 @@ class SQLResource(Resource):
 
         activity.logger.info("Query execution completed")
 
-    def get_sqlalchemy_connection_string(self) -> str:
-        # Logic to generate the connection string
-        pass
+    def get_sqlalchemy_connect_args(
+        self, credentials: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {}
 
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
-        # Logic to generate connection arguments
-        pass
+    def get_sqlalchemy_connection_string(self) -> str:
+        encoded_password = quote_plus(self.credentials["password"])
+        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
