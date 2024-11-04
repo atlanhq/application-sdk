@@ -173,7 +173,7 @@ class WorkflowInterface(object):
         self.duckdb_client.execute(
             """
             CREATE OR REPLACE VIEW app_db.file AS
-            SELECT * FROM read_json(?)
+            SELECT * FROM read_json('?', format = 'array')
         """,
             file_path,
         )
