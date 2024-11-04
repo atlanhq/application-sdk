@@ -1,0 +1,118 @@
+name: E2E Test for Application Examples
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # Install Dapr
+    - name: Install Dapr CLI
+      run: |
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
+        dapr init --slim
+
+    # Install Temporal
+    - name: Install Temporal CLI and Start Server
+      run: |
+        curl -sSf https://temporal.download/cli.sh | sh
+        export PATH="$HOME/.temporalio/bin:$PATH"
+        temporal server start-dev --db-filename /tmp/temporal.db &
+        sleep 10  # Give some time for Temporal to start
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v1
+      with:
+        python-version: "3.11"
+
+    - name: Install poetry
+      run: |
+        pip install poetry==1.8.3
+
+    - name: Install Dependencies
+      run: |
+        git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
+        # Configure poetry to use project-specific virtualenv
+        poetry config virtualenvs.in-project true
+
+        # Install the dependencies with extras
+        poetry install --all-extras
+        poetry update application-sdk --dry-run
+
+    # Start all services
+    - name: Start Platform Services
+      run: |
+        cd examples
+        make start-all
+        sleep 10  # Give services time to start up
+
+    # Make API call and capture workflow/run IDs for each example
+    - name: Start the workflows
+      id: workflow_info
+      env:
+        POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+        POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+      run: |
+        cd examples
+
+        # Initialize workflow_status file
+        echo "## 📦 Example workflows test results" > workflow_status.md
+        echo "- This workflow runs all the examples in the \`examples\` directory." >> workflow_status.md
+        echo "---" >> workflow_status.md
+        echo "| Example File | Status | Duration |" >> workflow_status.md
+        echo "|--------------|--------|-----------|" >> workflow_status.md
+
+        # Process each Python file individually
+        for FILE in *.py; do
+          echo "Testing $FILE..."
+
+          # Capture start time
+          START_TIME=$(date +%s)
+
+          # Run the Python file and capture exit code
+          poetry run python "./$FILE"
+          EXIT_CODE=$?
+
+          # Calculate duration
+          END_TIME=$(date +%s)
+          DURATION=$((END_TIME - START_TIME))
+
+          # Format duration as MM:SS
+          DURATION_FORMAT=$(printf "%02d:%02d" $((DURATION / 60)) $((DURATION % 60)))
+
+          # Check exit code
+          if [ $EXIT_CODE -eq 0 ]; then
+            STATUS="COMPLETED 🟢"
+          else
+            STATUS="FAILED 🔴"
+          fi
+
+          # Add to workflow_status.md with duration
+          echo "| $FILE | $STATUS | $DURATION_FORMAT min |" >> workflow_status.md
+        done
+
+        echo "> This is an automatically generated file. Please do not edit directly." >> workflow_status.md
+        cat workflow_status.md
+
+    - name: Comment test results on Pull Request
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: 'workflow_status'
+        message-path: 'examples/workflow_status.md'
+
+    # Stop all services
+    - name: Stop all services
+      continue-on-error: true
+      run: |
+        make stop-all
+        sleep 10  # Give services time to stop
