@@ -4,7 +4,6 @@ from dataclasses import asdict
 
 import duckdb
 import pandas as pd
-from duckdb.duckdb import connect
 from temporalio.client import Client, WorkflowExecutionStatus
 
 
