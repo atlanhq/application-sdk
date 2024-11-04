@@ -1,27 +1,25 @@
 import asyncio
-import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
+import logging
 from datetime import timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Dict, List, Any, Optional
 
-from sqlalchemy import Connection, Engine, text
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
-from temporalio.types import CallableType
 
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
-from application_sdk.workflows import WorkflowWorkerInterface
+from application_sdk.workflows.controllers import WorkflowWorkerController
+from application_sdk.workflows.resources import TemporalResource
+from application_sdk.workflows.sql import SQLResource
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
 
-
-class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
+class SQLWorkflowWorkerController(WorkflowWorkerController):
     """
     Base class for SQL workflow workers implementing the Template Method pattern.
 
@@ -49,8 +47,10 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     def __init__(
         self,
         transformer: TransformerInterface,
-        temporal_activities: Sequence[CallableType] = None,
-        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
+        temporal_activities: List,
+        temporal_resource: TemporalResource,
+        sql_resource: SQLResource = None,
+
         # Configuration
         application_name: str = "sql-connector",
         use_server_side_cursor: bool = True,
@@ -68,27 +68,25 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param batch_size: The size of batches for running queries and transformation (default: 10)
         :param max_transform_concurrency: The maximum concurrency for transformation activities (default: 5)
         """
-        self.get_sql_engine = get_sql_engine
+        self.sql_resource = sql_resource
         self.use_server_side_cursor = use_server_side_cursor
         self.transformer = transformer
 
         self.batch_size = batch_size
         self.max_transform_concurrency = max_transform_concurrency
 
-        if not temporal_activities:
-            # default activities
-            self.TEMPORAL_ACTIVITIES = [
-                self.fetch_databases,
-                self.fetch_schemas,
-                self.fetch_tables,
-                self.fetch_columns,
-                self.transform_data,
-                self.write_type_metadata,
-            ]
-        else:
-            self.TEMPORAL_ACTIVITIES = temporal_activities
+        temporal_activities = temporal_activities or [
+            self.fetch_databases,
+            self.fetch_schemas,
+            self.fetch_tables,
+            self.fetch_columns,
+            self.transform_data,
+            self.write_type_metadata,
+        ]
 
-        super().__init__(application_name)
+        temporal_resource.set_activities(temporal_activities)
+
+        super().__init__(temporal_resource)
 
     async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
         """
@@ -104,51 +102,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         workflow_args["credential_guid"] = credential_guid
         return await super().start_workflow(workflow_args)
-
-    async def run_query(self, connection: Connection, query: str, batch_size: int):
-        """
-        Run a query in a batch mode with client-side cursor.
-
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
-        If yield_per is not supported by the database, the method will fallback to client-side cursor.
-
-        :param connection: The database connection.
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
-        """
-        loop = asyncio.get_running_loop()
-
-        if self.use_server_side_cursor:
-            connection.execution_options(yield_per=batch_size)
-
-        activity.logger.info(f"Running query: {query}")
-
-        with ThreadPoolExecutor() as pool:
-            try:
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(query)
-                )
-                column_names: List[str] = []
-
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
-
-                    if not column_names:
-                        column_names = rows[0]._fields
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            except Exception as e:
-                logger.error(f"Error running query in batch: {e}")
-                raise e
-
-        activity.logger.info("Query execution completed")
 
     async def fetch_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
@@ -176,7 +129,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                         raw_files_prefix, raw_files_output_prefix
                     ) as raw_writer,
                 ):
-                    async for batch in self.run_query(
+                    async for batch in self.sql_resource.run_query(
                         connection, query, self.batch_size
                     ):
                         # Write raw data

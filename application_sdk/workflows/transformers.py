@@ -19,3 +19,5 @@ class TransformerInterface(ABC):
             Optional[str]: The json string of the transformed metadata.
         """
         raise NotImplementedError
+
+
