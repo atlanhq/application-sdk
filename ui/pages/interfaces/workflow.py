@@ -1,8 +1,8 @@
 import asyncio
 import os
 from dataclasses import asdict
-import duckdb
 
+import duckdb
 import pandas as pd
 from duckdb.duckdb import connect
 from temporalio.client import Client, WorkflowExecutionStatus
@@ -18,7 +18,7 @@ class WorkflowInterface(object):
         self.duckdb_client.execute("ATTACH '/tmp/app.db' AS app_db (READ_ONLY)")
 
     def get_workflow_logs_df(
-            self, workflow_id: str = None, run_id: str = None
+        self, workflow_id: str = None, run_id: str = None
     ) -> pd.DataFrame:
         if not workflow_id or not run_id:
             return pd.DataFrame([])
@@ -57,13 +57,13 @@ class WorkflowInterface(object):
         df["run_time"] = df["close_time"] - df["execution_time"]
         df["run_time"] = df["run_time"].dt.total_seconds()
         df["run_id"] = (
-                "["
-                + df["run_id"]
-                + "](http://localhost:8233/namespaces/default/workflows/"
-                + df["id"]
-                + "/"
-                + df["run_id"]
-                + "/history)"
+            "["
+            + df["run_id"]
+            + "](http://localhost:8233/namespaces/default/workflows/"
+            + df["id"]
+            + "/"
+            + df["run_id"]
+            + "/history)"
         )
         df["status"] = df["status"].apply(lambda x: WorkflowExecutionStatus(x).name)
 
@@ -131,7 +131,7 @@ class WorkflowInterface(object):
     def fetch_workflow_info(selected_rows: dict) -> (str, str):
         workflow_id = selected_rows[0]["id"]
         run_id_markdown = selected_rows[0]["run_id"]
-        run_id = run_id_markdown[1: run_id_markdown.index("]")]
+        run_id = run_id_markdown[1 : run_id_markdown.index("]")]
         return workflow_id, run_id
 
     async def fetch_history(self, workflow_id: str, run_id: str) -> dict:
@@ -171,8 +171,11 @@ class WorkflowInterface(object):
         return pd.DataFrame(files)
 
     def read_json_file(self, file_path: str) -> pd.DataFrame:
-        self.duckdb_client.execute("""
+        self.duckdb_client.execute(
+            """
             CREATE OR REPLACE VIEW app_db.file AS
             SELECT * FROM read_json(?)
-        """, file_path)
+        """,
+            file_path,
+        )
         return self.duckdb_client.execute("SELECT * FROM app_db.file").fetchdf()
