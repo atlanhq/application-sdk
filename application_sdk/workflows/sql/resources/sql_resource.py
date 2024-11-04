@@ -26,6 +26,9 @@ class SQLResource(Resource):
 
         super().__init__()
 
+    async def load(self):
+        self.connection = self.engine.connect()
+
     async def run_query(self, query: str, batch_size: int = 100000):
         """
         Run a query in a batch mode with client-side cursor.
@@ -70,9 +73,7 @@ class SQLResource(Resource):
 
         activity.logger.info("Query execution completed")
 
-    def get_sqlalchemy_connect_args(
-        self, credentials: Dict[str, Any]
-    ) -> Dict[str, Any]:
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return {}
 
     def get_sqlalchemy_connection_string(self) -> str:

@@ -48,10 +48,10 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
     def __init__(
         self,
         transformer: TransformerInterface,
-        temporal_activities: List,
         temporal_resource: TemporalResource,
         sql_resource: SQLResource = None,
         # Configuration
+        temporal_activities: List = None,
         application_name: str = "sql-connector",
         use_server_side_cursor: bool = True,
         batch_size: int = 100000,
@@ -95,12 +95,6 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
-        credentials = workflow_args["credentials"]
-
-        credential_guid = SecretStore.store_credentials(credentials)
-        del workflow_args["credentials"]
-
-        workflow_args["credential_guid"] = credential_guid
         return await super().start_workflow(workflow_args)
 
     async def fetch_data(
@@ -122,21 +116,19 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         raw_files_output_prefix = workflow_args["output_prefix"]
 
         try:
-            engine = self.get_sql_engine(credentials)
-            with engine.connect() as connection:
-                async with (
-                    JSONChunkedObjectStoreWriter(
-                        raw_files_prefix, raw_files_output_prefix
-                    ) as raw_writer,
+            async with (
+                JSONChunkedObjectStoreWriter(
+                    raw_files_prefix, raw_files_output_prefix
+                ) as raw_writer,
+            ):
+                async for batch in self.sql_resource.run_query(
+                    query, self.batch_size
                 ):
-                    async for batch in self.sql_resource.run_query(
-                        connection, query, self.batch_size
-                    ):
-                        # Write raw data
-                        await raw_writer.write_list(batch)
+                    # Write raw data
+                    await raw_writer.write_list(batch)
 
-                    write_data = await raw_writer.write_metadata()
-                    return write_data["chunk_count"]
+                write_data = await raw_writer.write_metadata()
+                return write_data["chunk_count"]
 
         except Exception as e:
             logger.error(f"Error fetching databases: {e}")

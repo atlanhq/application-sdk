@@ -48,7 +48,7 @@ class WorkflowBuilder(ABC):
         worker_controller = worker_controller or WorkflowWorkerController(
             temporal_resource
         )
-        self.with_worker(worker_controller)
+        self.with_worker_controller(worker_controller)
 
     def with_worker_controller(self, worker_controller):
         self.worker_controller = worker_controller

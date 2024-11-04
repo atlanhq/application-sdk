@@ -36,10 +36,12 @@ from urllib.parse import quote_plus
 
 from temporalio import workflow
 
+from application_sdk.workflows.resources import TemporalResource
 from application_sdk.workflows.sql.builders.workflow import SQLWorkflowBuilder
 from application_sdk.workflows.sql.controllers.metadata import SQLWorkflowMetadataController
 from application_sdk.workflows.sql.controllers.preflight_check import SQLWorkflowPreflightCheckController
 from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.transformers.atlas import AtlasTransformer
 
 APPLICATION_NAME = "postgres"
@@ -108,7 +110,13 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
     # PASSTHROUGH_MODULES: Sequence[str] = ["application_sdk", "time"]
 
     def __init__(
-        self, application_name: str = APPLICATION_NAME, *args: Any, **kwargs: Any
+        self,
+
+        # Configuration
+        application_name: str = "sql-connector",
+
+        *args,
+        **kwargs,
     ):
         self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
         # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
@@ -127,33 +135,54 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
         await super().run(workflow_args)
 
 
-class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
-    def get_sqlalchemy_connect_args(
-        self, credentials: Dict[str, Any]
-    ) -> Dict[str, Any]:
+class SampleSQLResource(SQLResource):
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return {}
 
-    def get_sqlalchemy_connection_string(self, credentials: Dict[str, Any]) -> str:
-        encoded_password = quote_plus(credentials["password"])
-        return f"postgresql+psycopg2://{credentials['user']}:{encoded_password}@{credentials['host']}:{credentials['port']}/{credentials['database']}"
+    def get_sqlalchemy_connection_string(self) -> str:
+        encoded_password = quote_plus(self.credentials["password"])
+        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
+
+class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     def __init__(self, *args: Any, **kwargs: Any):
-        self.metadata_interface = SampleSQLWorkflowMetadata(self.get_sql_engine)
-        self.preflight_interface = SampleSQLWorkflowPreflight(self.get_sql_engine)
-        self.worker_interface = SampleSQLWorkflowWorker(
-            APPLICATION_NAME, get_sql_engine=self.get_sql_engine
-        )
-        super().__init__(
-            metadata_interface=self.metadata_interface,
-            preflight_check_interface=self.preflight_interface,
-            worker_interface=self.worker_interface,
+        self.worker_controller = SampleSQLWorkflowWorker(
             *args,
             **kwargs,
         )
 
+        #
+        # self.metadata_interface = SampleSQLWorkflowMetadata(self.get_sql_engine)
+        # self.preflight_interface = SampleSQLWorkflowPreflight(self.get_sql_engine)
+        # self.worker_interface = SampleSQLWorkflowWorker(
+        #     APPLICATION_NAME, get_sql_engine=self.get_sql_engine
+        # )
+        super().__init__(
+            worker_controller=self.worker_controller,
+            *args,
+            **kwargs,
+        )
 
-if __name__ == "__main__":
-    builder = SampleSQLWorkflowBuilder()
+async def main():
+    temporal_resource = TemporalResource(
+        application_name=APPLICATION_NAME
+    )
+    temporal_resource.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
+    await temporal_resource.load()
+
+    sql_resource = SQLResource({
+        "host": os.getenv("POSTGRES_HOST", "localhost"),
+        "port": os.getenv("POSTGRES_PORT", "5432"),
+        "user": os.getenv("POSTGRES_USER", "postgres"),
+        "password": os.getenv("POSTGRES_PASSWORD", "password"),
+        "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
+    })
+    await sql_resource.load()
+
+    builder = SampleSQLWorkflowBuilder(
+        temporal_resource=temporal_resource,
+        sql_resource=sql_resource,
+    )
     # Start the temporal worker in a separate thread
     worker_thread = threading.Thread(target=builder.start_worker, args=(), daemon=True)
     worker_thread.start()
@@ -161,30 +190,25 @@ if __name__ == "__main__":
     # wait for the worker to start
     time.sleep(3)
 
-    asyncio.run(
-        builder.worker_interface.start_workflow(
-            {
-                "credentials": {
-                    "host": os.getenv("POSTGRES_HOST", "localhost"),
-                    "port": os.getenv("POSTGRES_PORT", "5432"),
-                    "user": os.getenv("POSTGRES_USER", "postgres"),
-                    "password": os.getenv("POSTGRES_PASSWORD", "password"),
-                    "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
-                },
-                "connection": {"connection": "dev"},
-                "metadata": {
-                    "exclude-filter": "{}",
-                    "include-filter": "{}",
-                    "temp-table-regex": "",
-                    "advanced-config-strategy": "default",
-                    "use-source-schema-filtering": "false",
-                    "use-jdbc-internal-methods": "true",
-                    "authentication": "BASIC",
-                    "extraction-method": "direct",
-                },
-            }
-        )
+    await builder.worker_controller.start_workflow(
+        {
+            "connection": {"connection": "dev"},
+            "metadata": {
+                "exclude-filter": "{}",
+                "include-filter": "{}",
+                "temp-table-regex": "",
+                "advanced-config-strategy": "default",
+                "use-source-schema-filtering": "false",
+                "use-jdbc-internal-methods": "true",
+                "authentication": "BASIC",
+                "extraction-method": "direct",
+            },
+        }
     )
 
     # wait for the workflow to finish
     time.sleep(300)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
