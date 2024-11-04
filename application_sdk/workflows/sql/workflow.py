@@ -3,13 +3,14 @@ import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from sqlalchemy import Connection, Engine, text
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.types import CallableType
 
+from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows import WorkflowWorkerInterface
@@ -48,10 +49,13 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
     def __init__(
         self,
         transformer: TransformerInterface,
-        application_name: str = "sql-connector",
-        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
-        use_server_side_cursor: bool = True,
         temporal_activities: Sequence[CallableType] = None,
+        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
+        # Configuration
+        application_name: str = "sql-connector",
+        use_server_side_cursor: bool = True,
+        batch_size: int = 100000,
+        max_transform_concurrency: int = 5,
     ):
         """
         Initialize the SQL workflow worker.
@@ -61,10 +65,15 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param use_server_side_cursor: Whether to use server-side cursor (default: True)
         :param temporal_activities: The temporal activities to run (default: [], parent class activities)
         :param transformer: The transformer to use (default: PhoenixTransformer)
+        :param batch_size: The size of batches for running queries and transformation (default: 10)
+        :param max_transform_concurrency: The maximum concurrency for transformation activities (default: 5)
         """
         self.get_sql_engine = get_sql_engine
         self.use_server_side_cursor = use_server_side_cursor
         self.transformer = transformer
+
+        self.batch_size = batch_size
+        self.max_transform_concurrency = max_transform_concurrency
 
         if not temporal_activities:
             # default activities
@@ -73,6 +82,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 self.fetch_schemas,
                 self.fetch_tables,
                 self.fetch_columns,
+                self.transform_data,
+                self.write_type_metadata,
             ]
         else:
             self.TEMPORAL_ACTIVITIES = temporal_activities
@@ -94,9 +105,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         workflow_args["credential_guid"] = credential_guid
         return await super().start_workflow(workflow_args)
 
-    async def run_query(
-        self, connection: Connection, query: str, batch_size: int = 100000
-    ):
+    async def run_query(self, connection: Connection, query: str, batch_size: int):
         """
         Run a query in a batch mode with client-side cursor.
 
@@ -141,11 +150,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         activity.logger.info("Query execution completed")
 
-    async def fetch_and_process_data(
+    async def fetch_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
-    ):
+    ) -> int:
         """
-        Fetch and process data from the database.
+        Fetch data from the database.
 
         :param workflow_args: The workflow arguments.
         :param query: The query to run.
@@ -157,14 +166,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
-        raw_files_output_prefix = os.path.join(
-            workflow_args["output_prefix"], "raw", f"{typename}"
-        )
-
-        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        transform_files_output_prefix = os.path.join(
-            workflow_args["output_prefix"], "transformed", f"{typename}"
-        )
+        raw_files_output_prefix = workflow_args["output_prefix"]
 
         try:
             engine = self.get_sql_engine(credentials)
@@ -173,14 +175,16 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                     JSONChunkedObjectStoreWriter(
                         raw_files_prefix, raw_files_output_prefix
                     ) as raw_writer,
-                    JSONChunkedObjectStoreWriter(
-                        transform_files_prefix, transform_files_output_prefix
-                    ) as transformed_writer,
                 ):
-                    async for batch in self.run_query(connection, query):
+                    async for batch in self.run_query(
+                        connection, query, self.batch_size
+                    ):
                         # Write raw data
                         await raw_writer.write_list(batch)
-                        await self._transform_batch(batch, typename, transformed_writer)
+
+                    write_data = await raw_writer.write_metadata()
+                    return write_data["chunk_count"]
+
         except Exception as e:
             logger.error(f"Error fetching databases: {e}")
             raise e
@@ -223,9 +227,10 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        return await self.fetch_and_process_data(
+        chunk_count = await self.fetch_data(
             workflow_args, self.DATABASE_SQL, "database"
         )
+        return {"typename": "database", "chunk_count": chunk_count}
 
     @activity.defn
     @auto_heartbeater
@@ -248,9 +253,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
         )
-        return await self.fetch_and_process_data(
-            workflow_args, schema_sql_query, "schema"
-        )
+        chunk_count = await self.fetch_data(workflow_args, schema_sql_query, "schema")
+        return {"typename": "schema", "chunk_count": chunk_count}
 
     @activity.defn
     @auto_heartbeater
@@ -276,9 +280,8 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
         )
-        return await self.fetch_and_process_data(
-            workflow_args, table_sql_query, "table"
-        )
+        chunk_count = await self.fetch_data(workflow_args, table_sql_query, "table")
+        return {"typename": "table", "chunk_count": chunk_count}
 
     @activity.defn
     @auto_heartbeater
@@ -304,9 +307,63 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
         )
-        return await self.fetch_and_process_data(
-            workflow_args, column_sql_query, "column"
-        )
+
+        chunk_count = await self.fetch_data(workflow_args, column_sql_query, "column")
+        return {"typename": "column", "chunk_count": chunk_count}
+
+    @activity.defn
+    @auto_heartbeater
+    async def write_type_metadata(self, workflow_args: Dict[str, Any]):
+        chunk_count = workflow_args["chunk_count"]
+        record_count = workflow_args["record_count"]
+        output_path = workflow_args["output_path"]
+        output_prefix = workflow_args["output_prefix"]
+        typename = workflow_args["typename"]
+
+        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
+        transform_files_output_prefix = output_prefix
+
+        async with (
+            JSONChunkedObjectStoreWriter(
+                transform_files_prefix,
+                transform_files_output_prefix,
+                start_file_number=chunk_count,
+            ) as transformed_writer,
+        ):
+            await transformed_writer.write_metadata(total_record_count=record_count)
+
+    @activity.defn
+    @auto_heartbeater
+    async def transform_data(self, workflow_args: Dict[str, Any]) -> int:
+        batch = workflow_args["batch"]
+        chunk_start = workflow_args["chunk_start"]
+        typename = workflow_args["typename"]
+        output_path = workflow_args["output_path"]
+        output_prefix = workflow_args["output_prefix"]
+
+        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
+        transform_files_output_prefix = output_prefix
+
+        raw_files_prefix = os.path.join(output_path, "raw")
+        raw_files_output_prefix = workflow_args["output_prefix"]
+
+        async with (
+            JSONChunkedObjectStoreReader(
+                raw_files_prefix, raw_files_output_prefix, typename
+            ) as raw_reader,
+            JSONChunkedObjectStoreWriter(
+                transform_files_prefix,
+                transform_files_output_prefix,
+                start_file_number=chunk_start,
+            ) as transformed_writer,
+        ):
+            raw_data: List[Any] = []
+            for chunk in batch:
+                raw_data += await raw_reader.read_chunk(chunk)
+                await self._transform_batch(raw_data, typename, transformed_writer)
+
+            write_data = await transformed_writer.write_metadata()
+            return write_data["total_record_count"]
 
     @activity.defn
     @auto_heartbeater
@@ -318,6 +375,81 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :return: The fetched data.
         """
         pass
+
+    def get_transform_batches(self, chunk_count: int, typename: str):
+        # concurrency logic
+        concurrency_level = min(
+            self.max_transform_concurrency,
+            chunk_count,
+        )
+
+        batches: List[List[str]] = []
+        chunk_start_numbers: List[int] = []
+        start = 0
+        for i in range(concurrency_level):
+            current_batch_start = start
+            chunk_start_numbers.append(current_batch_start)
+            current_batch_count = int(chunk_count / concurrency_level)
+            if i < chunk_count % concurrency_level and chunk_count > concurrency_level:
+                current_batch_count += 1
+
+            batches.append(
+                [
+                    f"{typename}-{i}.json"
+                    for i in range(
+                        current_batch_start + 1,
+                        current_batch_start + current_batch_count + 1,
+                    )
+                ]
+            )
+            start += current_batch_count
+
+        return batches, chunk_start_numbers
+
+    async def fetch_and_transform(self, fetch_fn, workflow_args, retry_policy):
+        raw_stat = await workflow.execute_activity(
+            fetch_fn,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
+
+        transform_activities: List[Any] = []
+
+        typename: str = raw_stat["typename"]
+        chunk_count: int = raw_stat["chunk_count"]
+
+        batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
+
+        for i in range(len(batches)):
+            transform_activities.append(
+                workflow.execute_activity(
+                    self.transform_data,
+                    {
+                        "typename": typename,
+                        "batch": batches[i],
+                        "chunk_start": chunk_starts[i],
+                        **workflow_args,
+                    },
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=timedelta(seconds=1000),
+                )
+            )
+
+        record_counts = await asyncio.gather(*transform_activities)
+        total_record_count = sum(record_counts)
+
+        await workflow.execute_activity(
+            self.write_type_metadata,
+            {
+                "record_count": total_record_count,
+                "chunk_count": len(batches),
+                "typename": typename,
+                **workflow_args,
+            },
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
@@ -338,35 +470,13 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
-        # run activities in parallel
-        activities: List[Coroutine[Any, Any, Any]] = [
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_databases,
-                workflow_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_schemas,
-                workflow_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_tables,
-                workflow_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
-            workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                self.fetch_columns,
-                workflow_args,
-                retry_policy=retry_policy,
-                heartbeat_timeout=timedelta(seconds=120),
-                start_to_close_timeout=timedelta(seconds=1000),
-            ),
+        fetch_and_transforms = [
+            self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
         ]
 
-        # Wait for all activities to complete
-        await asyncio.gather(*activities)
+        await asyncio.gather(*fetch_and_transforms)
+
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
