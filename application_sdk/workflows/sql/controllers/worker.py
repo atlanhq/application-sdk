@@ -166,10 +166,10 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        # chunk_count = await self.fetch_data(
-        #     workflow_args, self.DATABASE_SQL, "database"
-        # )
-        return {"typename": "database", "chunk_count": 1}
+        chunk_count = await self.fetch_data(
+            workflow_args, self.DATABASE_SQL, "database"
+        )
+        return {"typename": "database", "chunk_count": chunk_count}
 
     @activity.defn
     @auto_heartbeater
