@@ -48,10 +48,11 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
     def __init__(
         self,
         transformer: TransformerInterface,
+        temporal_activities: List = None,
+        # Resources
         temporal_resource: TemporalResource = None,
         sql_resource: SQLResource = None,
         # Configuration
-        temporal_activities: List = None,
         application_name: str = "sql-connector",
         use_server_side_cursor: bool = True,
         batch_size: int = 100000,

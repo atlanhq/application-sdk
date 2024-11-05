@@ -37,7 +37,7 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     sql_resource: SQLResource
 
     def __init__(self, sql_resource: SQLResource):
-        self.set_sql_resource(sql_resource)
+        self.sql_resource = sql_resource
 
     def fetch_metadata(self) -> List[Dict[str, str]]:
         """
@@ -55,6 +55,3 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e
         return result
-
-    def set_sql_resource(self, sql_resource: SQLResource):
-        self.sql_resource = sql_resource

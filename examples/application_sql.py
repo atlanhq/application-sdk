@@ -115,9 +115,10 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
 
     def __init__(
         self,
-        # Configuration
+        # Resources
         temporal_resource: TemporalResource = None,
         sql_resource: SQLResource = None,
+        # Configuration
         application_name: str = APPLICATION_NAME,
         *args,
         **kwargs,

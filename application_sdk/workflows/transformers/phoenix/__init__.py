@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, Optional
 from pydantic import BaseModel
 
 from application_sdk.workflows.transformers import TransformerInterface
-from application_sdk.workflows.transformers.phoenix.__init__ import (
+from application_sdk.workflows.transformers.phoenix.schema import (
     BaseObjectEntity,
     ColumnConstraint,
     ColumnEntity,
@@ -36,7 +36,7 @@ class PhoenixTransformer(TransformerInterface):
 
     def __init__(self, connector_name: str, **kwargs: Any):
         self.connector_name = connector_name
-        self.connector_type = kwargs.get("connector_type", "")
+        self.connector_type = kwargs.get("connector_type", "phoenix")
         self.connector_temp = f"{self.connector_name}-{self.connector_type}"
         self.namespace = Namespace(id=self.connector_temp, name=self.connector_temp)
         self.package = Package(id=self.connector_temp, name=self.connector_temp)

@@ -51,7 +51,6 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
             temporal_resource=temporal_resource,
         )
 
-        self.temporal_resource = temporal_resource
         self.sql_resource = sql_resource
 
         self.set_auth_controller(

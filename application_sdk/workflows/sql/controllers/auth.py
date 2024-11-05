@@ -33,7 +33,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
     sql_resource: SQLResource
 
     def __init__(self, sql_resource: SQLResource):
-        self.set_sql_resource(sql_resource)
+        self.sql_resource = sql_resource
 
         super().__init__()
 
@@ -51,6 +51,3 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         except Exception as e:
             logger.error(f"Failed to authenticate with the given credentials: {str(e)}")
             raise e
-
-    def set_sql_resource(self, sql_resource):
-        self.sql_resource = sql_resource

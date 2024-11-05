@@ -91,13 +91,6 @@ class TemporalResource(ResourceInterface):
             raise e
 
     def create_worker(self, activities: Sequence[CallableType]) -> Worker:
-        print(
-            "creating worker",
-            len(self.activities),
-            self.worker_task_queue,
-            self.workflow_class,
-        )
-
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,

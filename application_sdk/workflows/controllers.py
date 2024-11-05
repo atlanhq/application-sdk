@@ -10,11 +10,11 @@ logger = get_logger(__name__)
 
 
 # Controller base class
-class ControllerInterface(ABC):
+class WorkflowControllerInterface(ABC):
     pass
 
 
-class WorkflowAuthControllerInterface(ControllerInterface, ABC):
+class WorkflowAuthControllerInterface(WorkflowControllerInterface, ABC):
     """
     Base class for workflow auth Controllers
     """
@@ -24,7 +24,7 @@ class WorkflowAuthControllerInterface(ControllerInterface, ABC):
         raise NotImplementedError
 
 
-class WorkflowMetadataControllerInterface(ControllerInterface, ABC):
+class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     """
     Base class for workflow metadata Controllers
     """
@@ -34,7 +34,7 @@ class WorkflowMetadataControllerInterface(ControllerInterface, ABC):
         raise NotImplementedError
 
 
-class WorkflowPreflightCheckControllerInterface(ControllerInterface, ABC):
+class WorkflowPreflightCheckControllerInterface(WorkflowControllerInterface, ABC):
     """
     Base class for workflow preflight check Controllers
     """
@@ -44,7 +44,7 @@ class WorkflowPreflightCheckControllerInterface(ControllerInterface, ABC):
         raise NotImplementedError
 
 
-class WorkflowWorkerControllerInterface(ControllerInterface, ABC):
+class WorkflowWorkerControllerInterface(WorkflowControllerInterface, ABC):
     """
     Base class for workflow workers
 
@@ -58,10 +58,10 @@ class WorkflowWorkerControllerInterface(ControllerInterface, ABC):
     def __init__(
         self, temporal_resource: TemporalResource, temporal_activities: List[Callable]
     ):
+        self.temporal_resource = temporal_resource
+
         self.temporal_worker = None
         self.temporal_activities = temporal_activities
-
-        self.set_temporal(temporal_resource)
 
     @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
@@ -101,6 +101,3 @@ class WorkflowWorkerControllerInterface(ControllerInterface, ABC):
 
         logger.info(f"Starting worker with task queue: {temporal_worker.task_queue}")
         await temporal_worker.run()
-
-    def set_temporal(self, temporal_resource: TemporalResource):
-        self.temporal_resource = temporal_resource
