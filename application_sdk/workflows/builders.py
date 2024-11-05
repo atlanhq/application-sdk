@@ -8,8 +8,6 @@ from application_sdk.workflows.resources import TemporalResource
 logger = get_logger(__name__)
 
 
-# TODO: Rename it to WorkflowBuilderInterface
-# Same with other files
 class WorkflowBuilderInterface(ABC):
     """
     Base class for workflow builder interfaces
