@@ -31,11 +31,11 @@ class WorkflowBuilderInterface(ABC):
         worker_controller = worker_controller or WorkflowWorkerControllerInterface(
             temporal_resource
         )
-        self.with_worker_controller(worker_controller)
+        self.set_worker_controller(worker_controller)
 
         self.temporal_resource = temporal_resource
 
-    def with_worker_controller(self, worker_controller):
+    def set_worker_controller(self, worker_controller):
         self.worker_controller = worker_controller
         return self
 

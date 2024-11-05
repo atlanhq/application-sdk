@@ -37,7 +37,7 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     sql_resource: SQLResource
 
     def __init__(self, sql_resource: SQLResource):
-        self.with_sql_resource(sql_resource)
+        self.set_sql_resource(sql_resource)
 
     def fetch_metadata(self) -> List[Dict[str, str]]:
         """
@@ -56,5 +56,5 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
             raise e
         return result
 
-    def with_sql_resource(self, sql_resource: SQLResource):
+    def set_sql_resource(self, sql_resource: SQLResource):
         self.sql_resource = sql_resource

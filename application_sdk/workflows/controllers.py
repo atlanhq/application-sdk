@@ -61,7 +61,7 @@ class WorkflowWorkerControllerInterface(ControllerInterface, ABC):
         self.temporal_worker = None
         self.temporal_activities = temporal_activities
 
-        self.with_temporal(temporal_resource)
+        self.set_temporal(temporal_resource)
 
     @abstractmethod
     async def run(self, *args: Any, **kwargs: Any) -> None:
@@ -102,5 +102,5 @@ class WorkflowWorkerControllerInterface(ControllerInterface, ABC):
         logger.info(f"Starting worker with task queue: {temporal_worker.task_queue}")
         await temporal_worker.run()
 
-    def with_temporal(self, temporal_resource: TemporalResource):
+    def set_temporal(self, temporal_resource: TemporalResource):
         self.temporal_resource = temporal_resource

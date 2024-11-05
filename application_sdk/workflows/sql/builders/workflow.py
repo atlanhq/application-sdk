@@ -54,25 +54,25 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
         self.temporal_resource = temporal_resource
         self.sql_resource = sql_resource
 
-        self.with_auth_controller(
+        self.set_auth_controller(
             auth_controller
             or SQLWorkflowAuthController(
                 sql_resource=self.sql_resource,
             )
         )
-        self.with_metadata_controller(
+        self.set_metadata_controller(
             metadata_controller
             or SQLWorkflowMetadataController(
                 sql_resource=sql_resource,
             )
         )
-        self.with_preflight_check_controller(
+        self.set_preflight_check_controller(
             preflight_check_controller
             or SQLWorkflowPreflightCheckController(
                 sql_resource=sql_resource,
             )
         )
-        self.with_worker_controller(worker_controller)
+        self.set_worker_controller(worker_controller)
 
         super().__init__(
             worker_controller=worker_controller, temporal_resource=temporal_resource
@@ -83,17 +83,17 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
 
         await super().load_resources()
 
-    def with_auth_controller(self, auth_controller):
+    def set_auth_controller(self, auth_controller):
         self.auth_controller = auth_controller
         return self
 
-    def with_preflight_check_controller(self, preflight_check_controller):
+    def set_preflight_check_controller(self, preflight_check_controller):
         self.preflight_check_controller = preflight_check_controller
         return self
 
-    def with_metadata_controller(self, metadata_controller):
+    def set_metadata_controller(self, metadata_controller):
         self.metadata_controller = metadata_controller
         return self
 
-    def with_worker_controller(self, worker_controller):
+    def set_worker_controller(self, worker_controller):
         self.worker_controller = worker_controller
