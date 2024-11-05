@@ -44,10 +44,6 @@ class SQLWorkflowBuilder(WorkflowBuilder, ABC):
             sql_resource=sql_resource,
             temporal_resource=temporal_resource,
         )
-        super().__init__(
-            worker_controller=worker_controller,
-            temporal_resource=temporal_resource
-        )
 
         self.temporal_resource = temporal_resource
         self.sql_resource = sql_resource
@@ -63,6 +59,15 @@ class SQLWorkflowBuilder(WorkflowBuilder, ABC):
         ))
         self.with_worker_controller(worker_controller)
 
+        super().__init__(
+            worker_controller=worker_controller,
+            temporal_resource=temporal_resource
+        )
+
+    async def load_resources(self):
+        await self.sql_resource.load()
+
+        await super().load_resources()
 
     def with_auth_controller(self, auth_controller):
         self.auth_controller = auth_controller

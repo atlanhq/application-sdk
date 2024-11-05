@@ -364,35 +364,35 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
-        # for i in range(len(batches)):
-        #     transform_activities.append(
-        #         workflow.execute_activity(
-        #             self.transform_data,
-        #             {
-        #                 "typename": typename,
-        #                 "batch": batches[i],
-        #                 "chunk_start": chunk_starts[i],
-        #                 **workflow_args,
-        #             },
-        #             retry_policy=retry_policy,
-        #             start_to_close_timeout=timedelta(seconds=1000),
-        #         )
-        #     )
-        #
-        # record_counts = await asyncio.gather(*transform_activities)
-        # total_record_count = sum(record_counts)
-        #
-        # await workflow.execute_activity(
-        #     self.write_type_metadata,
-        #     {
-        #         "record_count": total_record_count,
-        #         "chunk_count": len(batches),
-        #         "typename": typename,
-        #         **workflow_args,
-        #     },
-        #     retry_policy=retry_policy,
-        #     start_to_close_timeout=timedelta(seconds=1000),
-        # )
+        for i in range(len(batches)):
+            transform_activities.append(
+                workflow.execute_activity(
+                    self.transform_data,
+                    {
+                        "typename": typename,
+                        "batch": batches[i],
+                        "chunk_start": chunk_starts[i],
+                        **workflow_args,
+                    },
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=timedelta(seconds=1000),
+                )
+            )
+
+        record_counts = await asyncio.gather(*transform_activities)
+        total_record_count = sum(record_counts)
+
+        await workflow.execute_activity(
+            self.write_type_metadata,
+            {
+                "record_count": total_record_count,
+                "chunk_count": len(batches),
+                "typename": typename,
+                **workflow_args,
+            },
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
@@ -431,9 +431,9 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
 
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
-            # self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
-            # self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
-            # self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
         ]
 
         await asyncio.gather(*fetch_and_transforms)

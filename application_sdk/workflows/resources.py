@@ -39,7 +39,7 @@ class TemporalResource(Resource):
     def __init__(
             self,
             application_name: str,
-            activities: Sequence[CallableType],
+            activities: Sequence[CallableType] = [],
     ):
         self.client = None
         self.worker = None

@@ -51,6 +51,8 @@ class WorkflowBuilder(ABC):
         )
         self.with_worker_controller(worker_controller)
 
+        self.temporal_resource = temporal_resource
+
     def with_worker_controller(self, worker_controller):
         self.worker_controller = worker_controller
         return self
@@ -59,3 +61,6 @@ class WorkflowBuilder(ABC):
         if not self.worker_controller:
             raise NotImplementedError("Worker controller not implemented")
         asyncio.run(self.worker_controller.start_worker())
+
+    async def load_resources(self):
+        await self.temporal_resource.load()
