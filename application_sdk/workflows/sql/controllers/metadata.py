@@ -1,15 +1,13 @@
 import logging
-from typing import Any, Callable, Dict, List
+from typing import Dict, List
 
-from sqlalchemy import Engine, text
-
-from application_sdk.workflows.controllers import WorkflowMetadataController
+from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowMetadataController(WorkflowMetadataController):
+class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     """
     SQL Workflow Metadata Interface
 

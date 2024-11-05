@@ -7,12 +7,12 @@ from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
 from temporalio import activity
 
-from application_sdk.workflows.resources import Resource
+from application_sdk.workflows.resources import ResourceInterface
 
 logger = logging.getLogger(__name__)
 
 
-class SQLResource(Resource):
+class SQLResource(ResourceInterface):
     use_server_side_cursor: bool = True
 
     def __init__(self, credentials: Dict[str, Any]):

@@ -1,15 +1,13 @@
 import logging
-from typing import Any, Callable, Dict
+from typing import Any, Dict
 
-from sqlalchemy import Engine
-
-from application_sdk.workflows.controllers import WorkflowAuthController
+from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowAuthController(WorkflowAuthController):
+class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
     """
     SQL Workflow Auth Interface
 

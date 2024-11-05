@@ -1,9 +1,10 @@
 """TODO: Module docstring"""
+
 import logging
 import os
 import uuid
 from abc import ABC
-from typing import Sequence, List
+from typing import Sequence
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
@@ -20,15 +21,15 @@ from application_sdk.logging import get_logger
 logger = get_logger(__name__)
 
 
-class Resource(ABC):
+class ResourceInterface(ABC):
     def __init__(self):
         pass
 
     async def load(self):
         pass
 
-class TemporalResource(Resource):
 
+class TemporalResource(ResourceInterface):
     host = os.getenv("host", "localhost")
     port = os.getenv("port", "7233")
 
@@ -37,9 +38,9 @@ class TemporalResource(Resource):
     passthrough_modules: Sequence[str] = ["application_sdk"]
 
     def __init__(
-            self,
-            application_name: str,
-            activities: Sequence[CallableType] = [],
+        self,
+        application_name: str,
+        activities: Sequence[CallableType] = [],
     ):
         self.client = None
         self.worker = None
@@ -71,7 +72,6 @@ class TemporalResource(Resource):
         workflow.logger.setLevel(logging.DEBUG)
         activity.logger.setLevel(logging.DEBUG)
 
-
         try:
             handle = await self.client.start_workflow(
                 self.workflow_class,
@@ -91,7 +91,12 @@ class TemporalResource(Resource):
             raise e
 
     def create_worker(self, activities: Sequence[CallableType]) -> Worker:
-        print('creating worker', len(self.activities), self.worker_task_queue, self.workflow_class)
+        print(
+            "creating worker",
+            len(self.activities),
+            self.worker_task_queue,
+            self.workflow_class,
+        )
 
         return Worker(
             self.client,

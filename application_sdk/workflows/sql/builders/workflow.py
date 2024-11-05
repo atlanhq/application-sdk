@@ -2,45 +2,51 @@ import logging
 from abc import ABC
 from typing import Optional
 
-from application_sdk.workflows.builders import WorkflowBuilder
-from application_sdk.workflows.controllers import WorkflowAuthController, WorkflowPreflightCheckController, \
-    WorkflowMetadataController, WorkflowWorkerController
+from application_sdk.workflows.builders import WorkflowBuilderInterface
+from application_sdk.workflows.controllers import (
+    WorkflowAuthControllerInterface,
+    WorkflowMetadataControllerInterface,
+    WorkflowPreflightCheckControllerInterface,
+    WorkflowWorkerControllerInterface,
+)
 from application_sdk.workflows.resources import TemporalResource
 from application_sdk.workflows.sql.controllers.auth import SQLWorkflowAuthController
-from application_sdk.workflows.sql.controllers.metadata import \
-    SQLWorkflowMetadataController
-from application_sdk.workflows.sql.controllers.preflight_check import \
-    SQLWorkflowPreflightCheckController
+from application_sdk.workflows.sql.controllers.metadata import (
+    SQLWorkflowMetadataController,
+)
+from application_sdk.workflows.sql.controllers.preflight_check import (
+    SQLWorkflowPreflightCheckController,
+)
 from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowBuilder(WorkflowBuilder, ABC):
+class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     # Resources
     sql_resource: SQLResource
 
     # Controllers
-    auth_controller: WorkflowAuthController
-    preflight_check_controller: WorkflowPreflightCheckController
-    metadata_controller: WorkflowMetadataController
+    auth_controller: WorkflowAuthControllerInterface
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    metadata_controller: WorkflowMetadataControllerInterface
     worker_controller: SQLWorkflowWorkerController
 
     def __init__(
         self,
-
         # Resources
         sql_resource: SQLResource,
         temporal_resource: TemporalResource,
-
         # Controllers
-        auth_controller: Optional[WorkflowAuthController] = None,
-        preflight_check_controller: Optional[WorkflowPreflightCheckController] = None,
-        metadata_controller: Optional[WorkflowMetadataController] = None,
-        worker_controller: Optional[WorkflowWorkerController] = None,
+        auth_controller: Optional[WorkflowAuthControllerInterface] = None,
+        preflight_check_controller: Optional[
+            WorkflowPreflightCheckControllerInterface
+        ] = None,
+        metadata_controller: Optional[WorkflowMetadataControllerInterface] = None,
+        worker_controller: Optional[WorkflowWorkerControllerInterface] = None,
     ):
-        worker_controller=worker_controller or SQLWorkflowWorkerController(
+        worker_controller = worker_controller or SQLWorkflowWorkerController(
             sql_resource=sql_resource,
             temporal_resource=temporal_resource,
         )
@@ -48,20 +54,28 @@ class SQLWorkflowBuilder(WorkflowBuilder, ABC):
         self.temporal_resource = temporal_resource
         self.sql_resource = sql_resource
 
-        self.with_auth_controller(auth_controller or SQLWorkflowAuthController(
-            sql_resource=self.sql_resource,
-        ))
-        self.with_metadata_controller(metadata_controller or SQLWorkflowMetadataController(
-            sql_resource=sql_resource,
-        ))
-        self.with_preflight_check_controller(preflight_check_controller or SQLWorkflowPreflightCheckController(
-            sql_resource = sql_resource,
-        ))
+        self.with_auth_controller(
+            auth_controller
+            or SQLWorkflowAuthController(
+                sql_resource=self.sql_resource,
+            )
+        )
+        self.with_metadata_controller(
+            metadata_controller
+            or SQLWorkflowMetadataController(
+                sql_resource=sql_resource,
+            )
+        )
+        self.with_preflight_check_controller(
+            preflight_check_controller
+            or SQLWorkflowPreflightCheckController(
+                sql_resource=sql_resource,
+            )
+        )
         self.with_worker_controller(worker_controller)
 
         super().__init__(
-            worker_controller=worker_controller,
-            temporal_resource=temporal_resource
+            worker_controller=worker_controller, temporal_resource=temporal_resource
         )
 
     async def load_resources(self):

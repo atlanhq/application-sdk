@@ -8,9 +8,8 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
-from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
-from application_sdk.workflows.controllers import WorkflowWorkerController
+from application_sdk.workflows.controllers import WorkflowWorkerControllerInterface
 from application_sdk.workflows.resources import TemporalResource
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.utils import prepare_filters
@@ -20,7 +19,7 @@ from application_sdk.workflows.utils.activity import auto_heartbeater
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowWorkerController(WorkflowWorkerController):
+class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
     """
     Base class for SQL workflow workers implementing the Template Method pattern.
 
@@ -50,7 +49,6 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         transformer: TransformerInterface,
         temporal_resource: TemporalResource = None,
         sql_resource: SQLResource = None,
-
         # Configuration
         temporal_activities: List = None,
         application_name: str = "sql-connector",
@@ -119,9 +117,7 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
                     raw_files_prefix, raw_files_output_prefix
                 ) as raw_writer,
             ):
-                async for batch in self.sql_resource.run_query(
-                    query, self.batch_size
-                ):
+                async for batch in self.sql_resource.run_query(query, self.batch_size):
                     # Write raw data
                     await raw_writer.write_list(batch)
 
@@ -402,11 +398,11 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         :param workflow_args: The workflow arguments.
         """
         if not self.sql_resource:
-            self.sql_resource = SQLResource(workflow_args['credentials'])
+            self.sql_resource = SQLResource(workflow_args["credentials"])
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
-                workflow_args['application_name'],
+                workflow_args["application_name"],
                 [
                     self.fetch_databases,
                     self.fetch_schemas,
@@ -414,7 +410,7 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
                     self.fetch_columns,
                     self.transform_data,
                     self.write_type_metadata,
-                ]
+                ],
             )
 
         workflow_id = workflow_args["workflow_id"]

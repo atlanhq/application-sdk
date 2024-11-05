@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Callable
+from typing import Any, Callable, Dict, List
 
 from temporalio.client import WorkflowFailureError
 
@@ -10,11 +10,11 @@ logger = get_logger(__name__)
 
 
 # Controller base class
-class Controller(ABC):
+class ControllerInterface(ABC):
     pass
 
 
-class WorkflowAuthController(Controller, ABC):
+class WorkflowAuthControllerInterface(ControllerInterface, ABC):
     """
     Base class for workflow auth Controllers
     """
@@ -24,7 +24,7 @@ class WorkflowAuthController(Controller, ABC):
         raise NotImplementedError
 
 
-class WorkflowMetadataController(Controller, ABC):
+class WorkflowMetadataControllerInterface(ControllerInterface, ABC):
     """
     Base class for workflow metadata Controllers
     """
@@ -34,7 +34,7 @@ class WorkflowMetadataController(Controller, ABC):
         raise NotImplementedError
 
 
-class WorkflowPreflightCheckController(Controller, ABC):
+class WorkflowPreflightCheckControllerInterface(ControllerInterface, ABC):
     """
     Base class for workflow preflight check Controllers
     """
@@ -44,7 +44,7 @@ class WorkflowPreflightCheckController(Controller, ABC):
         raise NotImplementedError
 
 
-class WorkflowWorkerController(Controller, ABC):
+class WorkflowWorkerControllerInterface(ControllerInterface, ABC):
     """
     Base class for workflow workers
 
@@ -55,7 +55,9 @@ class WorkflowWorkerController(Controller, ABC):
     temporal_resource: TemporalResource
     temporal_activities: List[Callable]
 
-    def __init__(self, temporal_resource: TemporalResource, temporal_activities: List[Callable]):
+    def __init__(
+        self, temporal_resource: TemporalResource, temporal_activities: List[Callable]
+    ):
         self.temporal_worker = None
         self.temporal_activities = temporal_activities
 

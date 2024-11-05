@@ -38,8 +38,12 @@ from temporalio import workflow
 
 from application_sdk.workflows.resources import TemporalResource
 from application_sdk.workflows.sql.builders.workflow import SQLWorkflowBuilder
-from application_sdk.workflows.sql.controllers.metadata import SQLWorkflowMetadataController
-from application_sdk.workflows.sql.controllers.preflight_check import SQLWorkflowPreflightCheckController
+from application_sdk.workflows.sql.controllers.metadata import (
+    SQLWorkflowMetadataController,
+)
+from application_sdk.workflows.sql.controllers.preflight_check import (
+    SQLWorkflowPreflightCheckController,
+)
 from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
@@ -111,12 +115,10 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
 
     def __init__(
         self,
-
         # Configuration
         temporal_resource: TemporalResource = None,
         sql_resource: SQLResource = None,
         application_name: str = "sql-connector",
-
         *args,
         **kwargs,
     ):
@@ -151,9 +153,7 @@ class SampleSQLResource(SQLResource):
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     def __init__(self, sql_resource: SQLResource, *args: Any, **kwargs: Any):
-        temporal_resource = TemporalResource(
-            application_name=APPLICATION_NAME
-        )
+        temporal_resource = TemporalResource(application_name=APPLICATION_NAME)
         temporal_resource.workflow_class = SampleSQLWorkflowWorker
 
         self.worker_controller = SampleSQLWorkflowWorker(
@@ -163,7 +163,9 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
             **kwargs,
         )
         self.metadata_controller = SampleSQLWorkflowMetadata(sql_resource=sql_resource)
-        self.preflight_controller = SampleSQLWorkflowPreflight(sql_resource=sql_resource)
+        self.preflight_controller = SampleSQLWorkflowPreflight(
+            sql_resource=sql_resource
+        )
 
         super().__init__(
             worker_controller=self.worker_controller,
@@ -175,15 +177,18 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
             **kwargs,
         )
 
+
 async def main():
     # Setup resources
-    sql_resource = SampleSQLResource({
-        "host": os.getenv("POSTGRES_HOST", "localhost"),
-        "port": os.getenv("POSTGRES_PORT", "5432"),
-        "user": os.getenv("POSTGRES_USER", "postgres"),
-        "password": os.getenv("POSTGRES_PASSWORD", "password"),
-        "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
-    })
+    sql_resource = SampleSQLResource(
+        {
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": os.getenv("POSTGRES_PORT", "5432"),
+            "user": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", "password"),
+            "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
+        }
+    )
 
     builder = SampleSQLWorkflowBuilder(
         sql_resource=sql_resource,

@@ -1,17 +1,19 @@
 import json
 import logging
-from typing import Any, Callable, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Set, Tuple
 
-from sqlalchemy import Engine, text
+from sqlalchemy import text
 
-from application_sdk.workflows.controllers import WorkflowPreflightCheckController
+from application_sdk.workflows.controllers import (
+    WorkflowPreflightCheckControllerInterface,
+)
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.utils import prepare_filters
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckController):
+class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
     """
     SQL Workflow Preflight Check Interface
 
