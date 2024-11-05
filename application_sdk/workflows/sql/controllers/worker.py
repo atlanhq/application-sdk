@@ -8,6 +8,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
+from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.controllers import WorkflowWorkerControllerInterface
 from application_sdk.workflows.resources import TemporalResource
@@ -92,6 +93,13 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
+        credentials = workflow_args["credentials"]
+
+        credential_guid = SecretStore.store_credentials(credentials)
+        del workflow_args["credentials"]
+
+        workflow_args["credential_guid"] = credential_guid
+
         return await super().start_workflow(workflow_args)
 
     async def fetch_data(
@@ -398,7 +406,10 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
         :param workflow_args: The workflow arguments.
         """
         if not self.sql_resource:
-            self.sql_resource = SQLResource(workflow_args["credentials"])
+            credentials = SecretStore.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+            self.sql_resource = SQLResource(credentials)
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
