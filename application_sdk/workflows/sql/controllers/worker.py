@@ -48,8 +48,9 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
     def __init__(
         self,
         transformer: TransformerInterface,
-        temporal_resource: TemporalResource,
+        temporal_resource: TemporalResource = None,
         sql_resource: SQLResource = None,
+
         # Configuration
         temporal_activities: List = None,
         application_name: str = "sql-connector",
@@ -84,9 +85,7 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
             self.write_type_metadata,
         ]
 
-        temporal_resource.set_activities(temporal_activities)
-
-        super().__init__(temporal_resource)
+        super().__init__(temporal_resource, temporal_activities)
 
     async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
         """
@@ -109,7 +108,6 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         :return: The fetched data.
         :raises Exception: If the data cannot be fetched.
         """
-        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
@@ -172,10 +170,10 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        chunk_count = await self.fetch_data(
-            workflow_args, self.DATABASE_SQL, "database"
-        )
-        return {"typename": "database", "chunk_count": chunk_count}
+        # chunk_count = await self.fetch_data(
+        #     workflow_args, self.DATABASE_SQL, "database"
+        # )
+        return {"typename": "database", "chunk_count": 1}
 
     @activity.defn
     @auto_heartbeater
@@ -366,35 +364,35 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
-        for i in range(len(batches)):
-            transform_activities.append(
-                workflow.execute_activity(
-                    self.transform_data,
-                    {
-                        "typename": typename,
-                        "batch": batches[i],
-                        "chunk_start": chunk_starts[i],
-                        **workflow_args,
-                    },
-                    retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(seconds=1000),
-                )
-            )
-
-        record_counts = await asyncio.gather(*transform_activities)
-        total_record_count = sum(record_counts)
-
-        await workflow.execute_activity(
-            self.write_type_metadata,
-            {
-                "record_count": total_record_count,
-                "chunk_count": len(batches),
-                "typename": typename,
-                **workflow_args,
-            },
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
+        # for i in range(len(batches)):
+        #     transform_activities.append(
+        #         workflow.execute_activity(
+        #             self.transform_data,
+        #             {
+        #                 "typename": typename,
+        #                 "batch": batches[i],
+        #                 "chunk_start": chunk_starts[i],
+        #                 **workflow_args,
+        #             },
+        #             retry_policy=retry_policy,
+        #             start_to_close_timeout=timedelta(seconds=1000),
+        #         )
+        #     )
+        #
+        # record_counts = await asyncio.gather(*transform_activities)
+        # total_record_count = sum(record_counts)
+        #
+        # await workflow.execute_activity(
+        #     self.write_type_metadata,
+        #     {
+        #         "record_count": total_record_count,
+        #         "chunk_count": len(batches),
+        #         "typename": typename,
+        #         **workflow_args,
+        #     },
+        #     retry_policy=retry_policy,
+        #     start_to_close_timeout=timedelta(seconds=1000),
+        # )
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
@@ -403,6 +401,22 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
 
         :param workflow_args: The workflow arguments.
         """
+        if not self.sql_resource:
+            self.sql_resource = SQLResource(workflow_args['credentials'])
+
+        if not self.temporal_resource:
+            self.temporal_resource = TemporalResource(
+                workflow_args['application_name'],
+                [
+                    self.fetch_databases,
+                    self.fetch_schemas,
+                    self.fetch_tables,
+                    self.fetch_columns,
+                    self.transform_data,
+                    self.write_type_metadata,
+                ]
+            )
+
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
@@ -417,9 +431,9 @@ class SQLWorkflowWorkerController(WorkflowWorkerController):
 
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
+            # self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            # self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            # self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
         ]
 
         await asyncio.gather(*fetch_and_transforms)

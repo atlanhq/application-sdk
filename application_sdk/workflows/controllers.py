@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Callable
 
 from temporalio.client import WorkflowFailureError
 
@@ -53,9 +53,11 @@ class WorkflowWorkerController(Controller, ABC):
     """
 
     temporal_resource: TemporalResource
+    temporal_activities: List[Callable]
 
-    def __init__(self, temporal_resource: TemporalResource):
+    def __init__(self, temporal_resource: TemporalResource, temporal_activities: List[Callable]):
         self.temporal_worker = None
+        self.temporal_activities = temporal_activities
 
         self.with_temporal(temporal_resource)
 
@@ -93,7 +95,7 @@ class WorkflowWorkerController(Controller, ABC):
         Start the worker
         """
 
-        temporal_worker = self.temporal_resource.create_worker()
+        temporal_worker = self.temporal_resource.create_worker(self.temporal_activities)
 
         logger.info(f"Starting worker with task queue: {temporal_worker.task_queue}")
         await temporal_worker.run()

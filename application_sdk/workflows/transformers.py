@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 
+# TODO: Reset transformers before
 class TransformerInterface(ABC):
     @abstractmethod
     def transform_metadata(

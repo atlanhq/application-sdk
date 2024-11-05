@@ -113,6 +113,8 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
         self,
 
         # Configuration
+        temporal_resource: TemporalResource = None,
+        sql_resource: SQLResource = None,
         application_name: str = "sql-connector",
 
         *args,
@@ -123,9 +125,12 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
         transformer = AtlasTransformer(
             connector_name=application_name, connector_type="sql"
         )
+
         super().__init__(
             transformer=transformer,
             application_name=application_name,
+            temporal_resource=temporal_resource,
+            sql_resource=sql_resource,
             *args,
             **kwargs,
         )
@@ -145,29 +150,32 @@ class SampleSQLResource(SQLResource):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(self, temporal_resource: TemporalResource, sql_resource: SQLResource, *args: Any, **kwargs: Any):
         self.worker_controller = SampleSQLWorkflowWorker(
+            temporal_resource=temporal_resource,
             *args,
             **kwargs,
         )
 
-        #
-        # self.metadata_interface = SampleSQLWorkflowMetadata(self.get_sql_engine)
-        # self.preflight_interface = SampleSQLWorkflowPreflight(self.get_sql_engine)
-        # self.worker_interface = SampleSQLWorkflowWorker(
-        #     APPLICATION_NAME, get_sql_engine=self.get_sql_engine
-        # )
+        self.metadata_interface = SampleSQLWorkflowMetadata(sql_resource=sql_resource)
+        self.preflight_interface = SampleSQLWorkflowPreflight(sql_resource=sql_resource)
+
         super().__init__(
             worker_controller=self.worker_controller,
+            temporal_resource=temporal_resource,
+            sql_resource=sql_resource,
             *args,
             **kwargs,
         )
 
 async def main():
+    # Setup resources
+    # Temporal
     temporal_resource = TemporalResource(
-        application_name=APPLICATION_NAME
+        application_name=APPLICATION_NAME,
+        activities=[],
     )
-    temporal_resource.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
+    temporal_resource.workflow_class = SampleSQLWorkflowWorker
     await temporal_resource.load()
 
     sql_resource = SQLResource({
@@ -192,6 +200,14 @@ async def main():
 
     await builder.worker_controller.start_workflow(
         {
+            "application_name": APPLICATION_NAME,
+            "credentials": {
+                "host": os.getenv("POSTGRES_HOST", "localhost"),
+                "port": os.getenv("POSTGRES_PORT", "5432"),
+                "user": os.getenv("POSTGRES_USER", "postgres"),
+                "password": os.getenv("POSTGRES_PASSWORD", "password"),
+                "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
+            },
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude-filter": "{}",
