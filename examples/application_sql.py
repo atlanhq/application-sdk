@@ -118,7 +118,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
         # Configuration
         temporal_resource: TemporalResource = None,
         sql_resource: SQLResource = None,
-        application_name: str = "sql-connector",
+        application_name: str = APPLICATION_NAME,
         *args,
         **kwargs,
     ):
