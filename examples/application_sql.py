@@ -37,7 +37,7 @@ from urllib.parse import quote_plus
 from temporalio import workflow
 
 from application_sdk.workflows.resources import TemporalResource
-from application_sdk.workflows.sql.builders.workflow import SQLWorkflowBuilder
+from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
 from application_sdk.workflows.sql.controllers.metadata import (
     SQLWorkflowMetadataController,
 )
@@ -152,7 +152,7 @@ class SampleSQLResource(SQLResource):
         return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
-class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
+class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
     def __init__(self, sql_resource: SQLResource, *args: Any, **kwargs: Any):
         temporal_resource = TemporalResource(application_name=APPLICATION_NAME)
         temporal_resource.workflow_class = SampleSQLWorkflowWorker
