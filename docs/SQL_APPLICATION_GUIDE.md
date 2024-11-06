@@ -2,7 +2,7 @@
 
 This guide will walk you through the process of creating an SQL application using the Atlan Platform SDK. We will cover each component and explain how you can extend them for your specific needs.
 
-When we say "SQL application," we mean an application that interacts with an SQL database, extracts metadata from the database, and stores it in the configured object store. The use case can be extended by adding more steps to the workflow, such as data validation, transformation, and more.
+When we say "SQL application," we mean an application that interacts with an SQL database, extracts metadata from the database, (optionally) processes the metadata to provide capabilities (like lineage, popularity metrics, etc.) and stores the metadata in a specified format in the configured object store. The use case can be extended by adding more steps to the workflow, such as data validation, transformation, and more.
 
 > [!TIP]
 >
@@ -36,7 +36,7 @@ Before you begin, make sure you have:
 3. [Setting up the Workflow Worker](#setting-up-the-workflow-worker)
 4. [Building the Workflow](#building-the-workflow)
 
-# Overview of SQL Workflows
+## Overview of SQL Workflows
 An SQL workflow defines a series of steps that interact with a database. Let's explore the main steps:
 
 - **Authentication**: Verifying database credentials to ensure proper access.
@@ -44,7 +44,7 @@ An SQL workflow defines a series of steps that interact with a database. Let's e
 - **Preflight checks**: Verifying database accessibility and structure before running the workflow.
 - **Execution logic**: Defining the tasks that the workflow will carry out once started, such as processing data or running custom queries.
 
-# Understanding the Application SDK Structure
+## Understanding the Application SDK Structure
 The Atlan Platform SDK offers a set of base interfaces and abstract classes that provide default behavior for common tasks such as authentication, metadata extraction, and preflight checks. You can either use these default implementations or extend them to create custom workflows tailored to your specific use case.
 
 Here’s an overview of the core components:
@@ -59,13 +59,13 @@ Here’s an overview of the core components:
 
 These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let’s start with setting up the necessary configurations for interacting with the database.
 
-# Configuration
+## Configuration
 To interact with the database, we need to configure
 - Authentication
 - Metadata extraction
 - Preflight checks
 
-## Defining the `SQLWorkflowAuthInterface` class
+### Defining the `SQLWorkflowAuthInterface` class
 
 The `SQLWorkflowAuthInterface` class is used to authenticate the SQL workflow. The default implementation of `SQLWorkflowAuthInterface` runs a simple SQL query(defined by `TEST_AUTHENTICATION_SQL`) on the source database.
 
@@ -95,7 +95,7 @@ class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
 
 ```
 
-## Defining the `SQLWorkflowMetadataInterface` class
+### Defining the `SQLWorkflowMetadataInterface` class
 
 The `SQLWorkflowMetadataInterface` class is responsible for fetching metadata from the database. This includes extracting schema, table, and column information, which can be useful for understanding the structure of the database.
 
@@ -126,7 +126,7 @@ class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
         return []
 ```
 
-## Defining the `SQLWorkflowPreflightCheckInterface` class
+### Defining the `SQLWorkflowPreflightCheckInterface` class
 
 The `preflight_checks` method in `SQLWorkflowPreflightCheckInterface` class is used to perform preflight checks on the data.
 
@@ -151,9 +151,9 @@ class MySQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
         return {"status": "success", "message": "Preflight check completed successfully"}
 ```
 
-# Setting up the Workflow Worker
+## Setting up the Workflow Worker
 
-## Defining the `SQLWorkflowWorkerInterface` class
+### Defining the `SQLWorkflowWorkerInterface` class
 
 The `SQLWorkflowWorkerInterface` class handles the execution of the workflow. It provides the core logic to interact with the database, fetch data (such as schemas, tables, columns), and process that data according to the workflow’s configuration. The `execute_workflow` method is used to execute the workflow.
 
@@ -184,9 +184,9 @@ class MySQLWorkflowWorker(SQLWorkflowWorkerInterface):
         super().__init__(metadata, preflight)
 ```
 
-# Building the Workflow
+## Building the Workflow
 
-## Defining the `SQLWorkflowBuilderInterface` class
+### Defining the `SQLWorkflowBuilderInterface` class
 
 The `SQLWorkflowBuilderInterface` class is responsible for constructing the entire workflow by integrating the core components like authentication, metadata extraction, preflight checks, and the worker logic that we've built above.
 
