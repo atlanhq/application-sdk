@@ -15,19 +15,22 @@ logger = logging.getLogger(__name__)
 class SQLResource(ResourceInterface):
     use_server_side_cursor: bool = True
 
-    def __init__(self, credentials: Dict[str, Any]):
+    def __init__(self, credentials: Dict[str, Any] = None):
         self.credentials = credentials
+        self.connection = None
+
+        super().__init__()
+
+    async def connect(self):
         self.engine = create_engine(
             self.get_sqlalchemy_connection_string(),
             connect_args=self.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
-        self.connection = None
-
-        super().__init__()
-
-    async def load(self):
         self.connection = self.engine.connect()
+
+    def set_credentials(self, credentials):
+        self.credentials = credentials
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """

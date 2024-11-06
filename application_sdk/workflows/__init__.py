@@ -51,6 +51,3 @@ class WorkflowBuilderInterface(ABC):
         if not self.worker_controller:
             raise NotImplementedError("Worker interface not implemented")
         asyncio.run(self.worker_controller.start_worker())
-
-    async def load_resources(self):
-        await self.temporal_resource.load()

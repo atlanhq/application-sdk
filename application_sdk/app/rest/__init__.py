@@ -35,13 +35,13 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def test_auth(self, credential: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
-            or not self.workflow_builder_interface.auth_interface
+            or not self.workflow_builder_interface.auth_controller
         ):
             raise HTTPException(
                 status_code=500, detail="Auth interface not implemented"
             )
         try:
-            self.workflow_builder_interface.auth_interface.test_auth(credential)
+            self.workflow_builder_interface.auth_controller.test_auth(credential)
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
@@ -62,19 +62,22 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def fetch_metadata(self, credential: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
-            or not self.workflow_builder_interface.metadata_interface
+            or not self.workflow_builder_interface.metadata_controller
         ):
             raise HTTPException(
                 status_code=500, detail="Metadata interface not implemented"
             )
         try:
+            self.workflow_builder_interface.get_sql_resource().set_credentials(
+                credential
+            )
+            await self.workflow_builder_interface.get_sql_resource().connect()
+
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
                     "success": True,
-                    "data": self.workflow_builder_interface.metadata_interface.fetch_metadata(
-                        credential
-                    ),
+                    "data": await self.workflow_builder_interface.metadata_controller.fetch_metadata(),
                 },
             )
         except Exception as e:
@@ -90,17 +93,17 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def preflight_check(self, form_data: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
-            or not self.workflow_builder_interface.preflight_check_interface
+            or not self.workflow_builder_interface.preflight_check_controller
         ):
             raise HTTPException(
-                status_code=500, detail="Preflight check interface not implemented"
+                status_code=500, detail="Preflight check controller not implemented"
             )
         try:
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
                     "success": True,
-                    "data": self.workflow_builder_interface.preflight_check_interface.preflight_check(
+                    "data": self.workflow_builder_interface.preflight_check_controller.preflight_check(
                         form_data
                     ),
                 },
@@ -118,14 +121,14 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def start_workflow(self, workflow_args: Dict[str, Any]):
         if (
             not self.workflow_builder_interface
-            or not self.workflow_builder_interface.worker_interface
+            or not self.workflow_builder_interface.worker_controller
         ):
             raise HTTPException(
                 status_code=500, detail="Worker interface not implemented"
             )
         try:
             workflow_metadata = (
-                await self.workflow_builder_interface.worker_interface.start_workflow(
+                await self.workflow_builder_interface.worker_controller.start_workflow(
                     workflow_args
                 )
             )

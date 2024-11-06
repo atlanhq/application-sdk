@@ -123,7 +123,9 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerController):
         *args,
         **kwargs,
     ):
-        self.temporal_workflow_class = SampleSQLWorkflowWorker
+        if temporal_resource:
+            temporal_resource.workflow_class = SampleSQLWorkflowWorker
+
         # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
         transformer = AtlasTransformer(
             connector_name=application_name, connector_type="sql"
@@ -190,11 +192,11 @@ async def main():
             "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
         }
     )
+    await sql_resource.connect()
 
     builder = SampleSQLWorkflowBuilder(
         sql_resource=sql_resource,
     )
-    await builder.load_resources()
 
     # Start the worker in a separate thread
     worker_thread = threading.Thread(target=builder.start_worker, args=(), daemon=True)

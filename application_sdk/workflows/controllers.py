@@ -30,7 +30,7 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     """
 
     @abstractmethod
-    def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self) -> List[Dict[str, str]]:
         raise NotImplementedError
 
 
@@ -97,7 +97,9 @@ class WorkflowWorkerControllerInterface(WorkflowControllerInterface, ABC):
         Start the worker
         """
 
-        temporal_worker = self.temporal_resource.create_worker(self.temporal_activities)
+        temporal_worker = await self.temporal_resource.create_worker(
+            self.temporal_activities
+        )
 
         logger.info(f"Starting worker with task queue: {temporal_worker.task_queue}")
         await temporal_worker.run()

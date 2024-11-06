@@ -25,9 +25,6 @@ class ResourceInterface(ABC):
     def __init__(self):
         pass
 
-    async def load(self):
-        pass
-
 
 class TemporalResource(ResourceInterface):
     host = os.getenv("host", "localhost")
@@ -40,13 +37,11 @@ class TemporalResource(ResourceInterface):
     def __init__(
         self,
         application_name: str,
-        activities: Sequence[CallableType] = [],
     ):
         self.client = None
         self.worker = None
         self.application_name = application_name
         self.worker_task_queue = f"{self.application_name}"
-        self.activities = activities
 
         workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
         activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -90,7 +85,10 @@ class TemporalResource(ResourceInterface):
             logger.error(f"Workflow failure: {e}")
             raise e
 
-    def create_worker(self, activities: Sequence[CallableType]) -> Worker:
+    async def create_worker(self, activities: Sequence[CallableType]) -> Worker:
+        if not self.client:
+            await self.load()
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,

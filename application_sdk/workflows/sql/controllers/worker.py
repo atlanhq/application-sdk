@@ -76,6 +76,8 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
         self.batch_size = batch_size
         self.max_transform_concurrency = max_transform_concurrency
 
+        self.application_name = application_name
+
         temporal_activities = temporal_activities or [
             self.fetch_databases,
             self.fetch_schemas,
@@ -414,15 +416,7 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
-                workflow_args["application_name"],
-                [
-                    self.fetch_databases,
-                    self.fetch_schemas,
-                    self.fetch_tables,
-                    self.fetch_columns,
-                    self.transform_data,
-                    self.write_type_metadata,
-                ],
+                application_name=self.application_name,
             )
 
         workflow_id = workflow_args["workflow_id"]

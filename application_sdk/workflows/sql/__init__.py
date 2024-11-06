@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 
 class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
+    sql_resource: SQLResource
+
     def __init__(
         self,
         # Resources
@@ -57,6 +59,7 @@ class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
         if not worker_controller:
             worker_controller = SQLWorkflowWorkerController(
                 sql_resource=sql_resource,
+                temporal_resource=temporal_resource,
             )
 
         super().__init__(
@@ -67,7 +70,5 @@ class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
             worker_controller=worker_controller,
         )
 
-    async def load_resources(self):
-        await self.sql_resource.load()
-
-        await super().load_resources()
+    def get_sql_resource(self) -> SQLResource:
+        return self.sql_resource

@@ -39,7 +39,7 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     def __init__(self, sql_resource: SQLResource):
         self.sql_resource = sql_resource
 
-    def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self) -> List[Dict[str, str]]:
         """
         Fetch metadata from the database.
 
@@ -48,9 +48,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
         :raises Exception: If the metadata cannot be fetched.
         """
         try:
-            result: List[Dict[str, str]] = self.sql_resource.run_query(
-                self.METADATA_SQL
-            )
+            result = []
+            async for batch in self.sql_resource.run_query(self.METADATA_SQL):
+                result += batch
+
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e
