@@ -6,10 +6,13 @@ APP_NAME := application-sdk
 
 # Run Temporal locally
 start-temporal-dev:
-	temporal server start-dev
+	temporal server start-dev --db-filename /tmp/temporal.db
 
 start-dapr:
 	dapr run --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path ../components
 
 start-all:
-	make start-dapr & make start-temporal-dev
+	@echo "Starting all services in detached mode..."
+	make start-dapr &
+	make start-temporal-dev &
+	@echo "Services started. Proceeding..."

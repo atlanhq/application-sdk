@@ -211,7 +211,7 @@ async def main():
                 "port": os.getenv("POSTGRES_PORT", "5432"),
                 "user": os.getenv("POSTGRES_USER", "postgres"),
                 "password": os.getenv("POSTGRES_PASSWORD", "password"),
-                "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
+                "database": os.getenv("POSTGRES_DATABASE", "postgres"),
             },
             "connection": {"connection": "dev"},
             "metadata": {
@@ -228,7 +228,7 @@ async def main():
     )
 
     # wait for the workflow to finish
-    time.sleep(300)
+    time.sleep(120)
 
 
 if __name__ == "__main__":

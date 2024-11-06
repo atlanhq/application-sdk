@@ -2,38 +2,39 @@ import asyncio
 import os
 from dataclasses import asdict
 
+import duckdb
 import pandas as pd
-from sqlalchemy import create_engine
 from temporalio.client import Client, WorkflowExecutionStatus
 
 
 class WorkflowInterface(object):
-    ENGINE = create_engine("sqlite:////tmp/app.db?mode=ro")
+    duckdb_client = duckdb.connect("/tmp/app.duckdb")
 
     def __init__(self, temporal_uri: str = "0.0.0.0:7233"):
         self.temporal_uri = temporal_uri
+        self.duckdb_client.execute("INSTALL sqlite")
+        self.duckdb_client.execute("LOAD sqlite")
+        self.duckdb_client.execute("ATTACH '/tmp/app.db' AS app_db (READ_ONLY)")
 
-    @staticmethod
     def get_workflow_logs_df(
-        workflow_id: str = None, run_id: str = None
+        self, workflow_id: str = None, run_id: str = None
     ) -> pd.DataFrame:
         if not workflow_id or not run_id:
             return pd.DataFrame([])
 
-        return pd.read_sql(
+        return self.duckdb_client.execute(
             f"""
             SELECT
                 severity,
                 observed_timestamp,
                 body,
-                JSON_EXTRACT(attributes, '$.activity_type') as activity_type
-            FROM logs
-            WHERE JSON_EXTRACT(attributes, '$.workflow_id') = '{workflow_id}'
-            AND JSON_EXTRACT(attributes, '$.run_id') = '{run_id}'
+                JSON_EXTRACT_STRING(attributes, '$.activity_type') as activity_type
+            FROM app_db.logs
+            WHERE JSON_EXTRACT_STRING(attributes, '$.workflow_id') = '{workflow_id}'
+            AND JSON_EXTRACT_STRING(attributes, '$.run_id') = '{run_id}'
             ORDER BY observed_timestamp DESC
-        """,
-            con=WorkflowInterface.ENGINE,
-        )
+        """
+        ).fetchdf()
 
     async def fetch_workflows_list(self) -> list[dict]:
         client = await Client.connect(self.temporal_uri)
@@ -167,3 +168,13 @@ class WorkflowInterface(object):
     def fetch_files_df(self, workflow_id: str, run_id: str) -> pd.DataFrame:
         files = self.list_files(workflow_id, run_id)
         return pd.DataFrame(files)
+
+    def read_json_file(self, file_path: str) -> pd.DataFrame:
+        self.duckdb_client.execute(
+            """
+            CREATE OR REPLACE VIEW app_db.file AS
+            SELECT * FROM read_json('?', format = 'array')
+        """,
+            file_path,
+        )
+        return self.duckdb_client.execute("SELECT * FROM app_db.file").fetchdf()

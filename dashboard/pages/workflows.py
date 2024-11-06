@@ -205,7 +205,7 @@ def debug_file(selected_rows):
         pass
 
     if df is None:
-        df = pd.read_json(selected_rows[0]["full_path"])
+        df = workflow_interface.read_json_file(selected_file["full_path"])
 
     walker = pyg.walk(df, debug=False)
     html_code = walker.to_html()
