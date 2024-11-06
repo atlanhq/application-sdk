@@ -3,7 +3,7 @@ from typing import Optional
 
 from application_sdk.app import models
 from application_sdk.app.database import get_engine
-from application_sdk.workflows.builders import WorkflowBuilderInterface
+from application_sdk.workflows import WorkflowBuilderInterface
 
 
 class AtlanApplicationBuilder(ABC):
