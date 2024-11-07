@@ -201,8 +201,12 @@ async def main():
     )
     await sql_resource.connect()
 
-    builder = SampleSQLWorkflowBuilder(
-        sql_resource=sql_resource,
+    builder = (
+        SampleSQLWorkflowBuilder()
+        .set_sql_resource(sql_resource)
+        .set_metadata_controller(SampleSQLWorkflowMetadata())
+        .set_preflight_controller(SampleSQLWorkflowPreflight())
+        .build()
     )
 
     # Start the worker in a separate thread
