@@ -40,7 +40,7 @@ class WorkflowPreflightCheckControllerInterface(WorkflowControllerInterface, ABC
     """
 
     @abstractmethod
-    def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
 
 

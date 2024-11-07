@@ -2,8 +2,6 @@ import json
 import logging
 from typing import Any, Dict, List, Set, Tuple
 
-from sqlalchemy import text
-
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
@@ -46,34 +44,47 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
     def __init__(self, sql_resource: SQLResource):
         self.sql_resource = sql_resource
 
-    def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
-            results["databaseSchemaCheck"] = self.check_schemas_and_databases(payload)
-            results["tablesCheck"] = self.tables_check(payload)
+            results["databaseSchemaCheck"] = await self.check_schemas_and_databases(
+                payload
+            )
+            results["tablesCheck"] = await self.tables_check(payload)
             logger.info("Preflight check completed successfully")
         except Exception as e:
             logger.error("Error during preflight check", exc_info=True)
             results["error"] = f"Preflight check failed: {str(e)}"
         return results
 
-    def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self) -> List[Dict[str, str]]:
         result = None
         try:
-            result = self.sql_resource.run_query(text(self.METADATA_SQL))
+            result = []
+            async for batch in self.sql_resource.run_query(self.METADATA_SQL):
+                for row in batch:
+                    schema_name = row["schema_name"]
+                    catalog_name = row["catalog_name"]
+                    result.append(
+                        {
+                            self.DATABASE_KEY: catalog_name,
+                            self.SCHEMA_KEY: schema_name,
+                        }
+                    )
+
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise e
 
         return result
 
-    def check_schemas_and_databases(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def check_schemas_and_databases(
+        self, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
         logger.info("Starting schema and database check")
         try:
-            schemas_results: List[Dict[str, str]] = self.fetch_metadata(
-                payload.get("credentials", {})
-            )
+            schemas_results: List[Dict[str, str]] = await self.fetch_metadata()
 
             include_filter = json.loads(
                 payload.get("form_data", {}).get("include_filter", "{}")
@@ -132,7 +143,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
                     return False, f"{db}.{sch} schema"
         return True, ""
 
-    def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting tables check")
         try:
             normalized_include_regex, normalized_exclude_regex, exclude_table = (
@@ -148,11 +159,10 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
                 normalized_include_regex=normalized_include_regex,
             )
 
-            credentials = payload.get("credentials", {})
-            engine = self.create_engine_fn(credentials)
-            with engine.connect() as connection:
-                cursor = connection.execute(text(query))
-                result = cursor.fetchone()[0]
+            result = 0
+            async for batch in self.sql_resource.run_query(query):
+                for row in batch:
+                    result += row["count"]
 
             return {
                 "success": True,

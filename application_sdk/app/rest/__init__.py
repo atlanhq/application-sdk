@@ -99,11 +99,15 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 status_code=500, detail="Preflight check controller not implemented"
             )
         try:
+            self.workflow_builder_interface.get_sql_resource().set_credentials(
+                form_data["credentials"]
+            )
+            await self.workflow_builder_interface.get_sql_resource().connect()
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
                     "success": True,
-                    "data": self.workflow_builder_interface.preflight_check_controller.preflight_check(
+                    "data": await self.workflow_builder_interface.preflight_check_controller.preflight_check(
                         form_data
                     ),
                 },
