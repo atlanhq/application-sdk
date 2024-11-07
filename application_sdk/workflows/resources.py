@@ -26,22 +26,43 @@ class ResourceInterface(ABC):
         pass
 
 
-class TemporalResource(ResourceInterface):
+class TemporalConfig:
     host = os.getenv("host", "localhost")
     port = os.getenv("port", "7233")
+    application_name = os.getenv("application_name", "default")
 
+    def __init__(
+        self, host: str = None, port: str = None, application_name: str = None
+    ):
+        if host:
+            self.host = host
+
+        if port:
+            self.port = port
+
+        if application_name:
+            self.application_name = application_name
+
+    def get_worker_task_queue(self) -> str:
+        return f"{self.application_name}"
+
+    def get_connection_string(self) -> str:
+        return f"{self.host}:{self.port}"
+
+
+class TemporalResource(ResourceInterface):
     workflow_class = ClassType
     activities: Sequence[CallableType] = []
     passthrough_modules: Sequence[str] = ["application_sdk"]
 
     def __init__(
         self,
-        application_name: str,
+        temporal_config: TemporalConfig,
     ):
+        self.config = temporal_config
         self.client = None
         self.worker = None
-        self.application_name = application_name
-        self.worker_task_queue = f"{self.application_name}"
+        self.worker_task_queue = self.config.get_worker_task_queue()
 
         workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
         activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -50,7 +71,7 @@ class TemporalResource(ResourceInterface):
 
     async def load(self):
         self.client = await Client.connect(
-            f"{self.host}:{self.port}",
+            self.config.get_connection_string(),
             namespace="default",
             # FIXME: causes issue with different namespace, TBR.
         )

@@ -50,7 +50,15 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
         try:
             result = []
             async for batch in self.sql_resource.run_query(self.METADATA_SQL):
-                result += batch
+                for row in batch:
+                    schema_name = row["schema_name"]
+                    catalog_name = row["catalog_name"]
+                    result.append(
+                        {
+                            self.DATABASE_KEY: catalog_name,
+                            self.SCHEMA_KEY: schema_name,
+                        }
+                    )
 
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")

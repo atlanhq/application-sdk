@@ -11,8 +11,11 @@ from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.controllers import WorkflowWorkerControllerInterface
-from application_sdk.workflows.resources import TemporalResource
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.resources import TemporalConfig, TemporalResource
+from application_sdk.workflows.sql.resources.sql_resource import (
+    SQLResource,
+    SQLResourceConfig,
+)
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
@@ -412,11 +415,15 @@ class SQLWorkflowWorkerController(WorkflowWorkerControllerInterface):
             credentials = SecretStore.extract_credentials(
                 workflow_args["credential_guid"]
             )
-            self.sql_resource = SQLResource(credentials)
+            self.sql_resource = SQLResource(
+                SQLResourceConfig(
+                    credentials=credentials,
+                )
+            )
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
-                application_name=self.application_name,
+                TemporalConfig(application_name=self.application_name)
             )
 
         workflow_id = workflow_args["workflow_id"]

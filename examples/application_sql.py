@@ -36,7 +36,7 @@ from urllib.parse import quote_plus
 
 from temporalio import workflow
 
-from application_sdk.workflows.resources import TemporalResource
+from application_sdk.workflows.resources import TemporalConfig, TemporalResource
 from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
 from application_sdk.workflows.sql.controllers.metadata import (
     SQLWorkflowMetadataController,
@@ -45,7 +45,10 @@ from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
 from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.sql.resources.sql_resource import (
+    SQLResource,
+    SQLResourceConfig,
+)
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 
 APPLICATION_NAME = "postgres"
@@ -156,7 +159,9 @@ class SampleSQLResource(SQLResource):
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
     def __init__(self, sql_resource: SQLResource, *args: Any, **kwargs: Any):
-        temporal_resource = TemporalResource(application_name=APPLICATION_NAME)
+        temporal_resource = TemporalResource(
+            TemporalConfig(application_name=APPLICATION_NAME)
+        )
         temporal_resource.workflow_class = SampleSQLWorkflowWorker
 
         self.worker_controller = SampleSQLWorkflowWorker(
@@ -184,13 +189,15 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
 async def main():
     # Setup resources
     sql_resource = SampleSQLResource(
-        {
-            "host": os.getenv("POSTGRES_HOST", "localhost"),
-            "port": os.getenv("POSTGRES_PORT", "5432"),
-            "user": os.getenv("POSTGRES_USER", "postgres"),
-            "password": os.getenv("POSTGRES_PASSWORD", "password"),
-            "database": os.getenv("POSTGRES_DATABASE", "assets_100k"),
-        }
+        SQLResourceConfig(
+            credentials={
+                "host": os.getenv("POSTGRES_HOST", "localhost"),
+                "port": os.getenv("POSTGRES_PORT", "5432"),
+                "user": os.getenv("POSTGRES_USER", "postgres"),
+                "password": os.getenv("POSTGRES_PASSWORD", "password"),
+                "database": os.getenv("POSTGRES_DATABASE", "postgres"),
+            }
+        )
     )
     await sql_resource.connect()
 

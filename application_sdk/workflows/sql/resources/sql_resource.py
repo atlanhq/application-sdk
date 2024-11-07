@@ -12,25 +12,52 @@ from application_sdk.workflows.resources import ResourceInterface
 logger = logging.getLogger(__name__)
 
 
-class SQLResource(ResourceInterface):
+class SQLResourceConfig:
     use_server_side_cursor: bool = True
+    credentials: Dict[str, Any] = None
+    sql_alchemy_connect_args: Dict[str, Any] = None
 
-    def __init__(self, credentials: Dict[str, Any] = None):
+    def __init__(
+        self,
+        use_server_side_cursor: bool = True,
+        credentials: Dict[str, Any] = None,
+        sql_alchemy_connect_args: Dict[str, Any] = {},
+    ):
+        self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
-        self.connection = None
+        self.sql_alchemy_connect_args = sql_alchemy_connect_args
+
+    def set_credentials(self, credentials: Dict[str, Any]):
+        self.credentials = credentials
+
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
+        return self.sql_alchemy_connect_args
+
+    def get_sqlalchemy_connection_string(self) -> str:
+        encoded_password = quote_plus(self.credentials["password"])
+        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+
+
+class SQLResource(ResourceInterface):
+    config: SQLResourceConfig = None
+    connection = None
+    engine = None
+
+    def __init__(self, config: SQLResourceConfig = None):
+        self.config = config
 
         super().__init__()
 
     async def connect(self):
         self.engine = create_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.get_sqlalchemy_connect_args(),
+            self.config.get_sqlalchemy_connection_string(),
+            connect_args=self.config.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
         self.connection = self.engine.connect()
 
     def set_credentials(self, credentials):
-        self.credentials = credentials
+        self.config.set_credentials(credentials)
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """
@@ -46,7 +73,7 @@ class SQLResource(ResourceInterface):
         """
         loop = asyncio.get_running_loop()
 
-        if self.use_server_side_cursor:
+        if self.config.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
         activity.logger.info(f"Running query: {query}")
@@ -75,10 +102,3 @@ class SQLResource(ResourceInterface):
                 raise e
 
         activity.logger.info("Query execution completed")
-
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
-        return {}
-
-    def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
