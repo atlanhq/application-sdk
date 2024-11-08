@@ -10,7 +10,10 @@ from temporalio.common import RetryPolicy
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
-from application_sdk.workflows.resources import TemporalConfig, TemporalResource
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
+)
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,

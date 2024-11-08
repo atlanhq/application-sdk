@@ -34,7 +34,10 @@ import time
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
-from application_sdk.workflows.resources import TemporalConfig, TemporalResource
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
+)
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,

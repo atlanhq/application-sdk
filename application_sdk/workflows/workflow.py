@@ -4,7 +4,7 @@ from typing import Any, Callable, List
 
 from temporalio.client import WorkflowFailureError
 
-from application_sdk.workflows.resources import TemporalResource
+from application_sdk.workflows.resources.temporal_resource import TemporalResource
 
 logger = logging.getLogger(__name__)
 

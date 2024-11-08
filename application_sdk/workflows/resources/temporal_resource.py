@@ -36,6 +36,7 @@ class TemporalConfig:
     host = os.getenv("host", "localhost")
     port = os.getenv("port", "7233")
     application_name = os.getenv("application_name", "default")
+    # FIXME: causes issue with different namespace, TBR.
     namespace: str = "default"
 
     def __init__(
@@ -90,7 +91,6 @@ class TemporalResource(ResourceInterface):
         self.client = await Client.connect(
             self.config.get_connection_string(),
             namespace=self.config.get_namespace(),
-            # FIXME: causes issue with different namespace, TBR.
         )
 
     async def start_workflow(
