@@ -42,7 +42,7 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
-from application_sdk.workflows.worker import WorkflowWorker
+from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
 

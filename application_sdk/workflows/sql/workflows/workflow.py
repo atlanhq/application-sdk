@@ -359,8 +359,11 @@ class SQLWorkflow(WorkflowInterface):
 
         transform_activities: List[Any] = []
 
-        typename: str = raw_stat["typename"]
-        chunk_count: int = raw_stat["chunk_count"]
+        typename: str | None = raw_stat["typename"] or None
+        chunk_count: int | None = raw_stat["chunk_count"] or None
+
+        if typename is None or chunk_count is None:
+            raise ValueError("Invalid typename or chunk_count")
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
@@ -395,7 +398,7 @@ class SQLWorkflow(WorkflowInterface):
         )
 
     @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]):
+    async def __run(self, workflow_args: Dict[str, Any]):
         """
         Run the workflow.
 
