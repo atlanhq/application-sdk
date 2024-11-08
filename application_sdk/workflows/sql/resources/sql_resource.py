@@ -7,7 +7,7 @@ from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
 from temporalio import activity
 
-from application_sdk.workflows.resources import ResourceInterface
+from application_sdk.workflows.resources.temporal_resource import ResourceInterface
 
 logger = logging.getLogger(__name__)
 

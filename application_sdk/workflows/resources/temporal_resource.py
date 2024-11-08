@@ -36,12 +36,14 @@ class TemporalConfig:
     host = os.getenv("host", "localhost")
     port = os.getenv("port", "7233")
     application_name = os.getenv("application_name", "default")
+    namespace: str = "default"
 
     def __init__(
         self,
         host: str | None = None,
         port: str | None = None,
         application_name: str | None = None,
+        namespace: str | None = "default",
     ):
         if host:
             self.host = host
@@ -52,11 +54,17 @@ class TemporalConfig:
         if application_name:
             self.application_name = application_name
 
+        if namespace:
+            self.namespace = namespace
+
     def get_worker_task_queue(self) -> str:
         return f"{self.application_name}"
 
     def get_connection_string(self) -> str:
         return f"{self.host}:{self.port}"
+
+    def get_namespace(self) -> str:
+        return self.namespace
 
 
 class TemporalResource(ResourceInterface):
@@ -81,7 +89,7 @@ class TemporalResource(ResourceInterface):
     async def load(self):
         self.client = await Client.connect(
             self.config.get_connection_string(),
-            namespace="default",
+            namespace=self.config.get_namespace(),
             # FIXME: causes issue with different namespace, TBR.
         )
 

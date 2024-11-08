@@ -10,7 +10,7 @@ from application_sdk.workflows.controllers import (
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.resources import ResourceInterface
+from application_sdk.workflows.resources.temporal_resource import ResourceInterface
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
