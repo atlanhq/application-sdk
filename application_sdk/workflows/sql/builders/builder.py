@@ -1,45 +1,43 @@
 import logging
 from abc import ABC
-from typing import Optional
 
 from application_sdk.workflows.builder import (
-    WorkflowAuthControllerInterface,
     WorkflowBuilderInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-    WorkflowWorkerControllerInterface,
 )
-from application_sdk.workflows.resources import TemporalResource
-from application_sdk.workflows.sql.controllers.auth import SQLWorkflowAuthController
-from application_sdk.workflows.sql.controllers.metadata import (
-    SQLWorkflowMetadataController,
-)
-from application_sdk.workflows.sql.controllers.preflight_check import (
-    SQLWorkflowPreflightCheckController,
-)
-from application_sdk.workflows.sql.controllers.worker import SQLWorkflowWorkerController
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.resources import TemporalResource
+from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.workflows.controllers import WorkflowAuthControllerInterface, WorkflowMetadataControllerInterface, WorkflowPreflightCheckControllerInterface
+from application_sdk.workflows.transformers import TransformerInterface
+
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowBuilderInterface(WorkflowBuilderInterface, ABC):
+class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     sql_resource: SQLResource
+    temporal_resource: TemporalResource
+    transformer: TransformerInterface
 
-    auth_controller: SQLWorkflowAuthController
-    preflight_check_controller: SQLWorkflowPreflightCheckController
-    metadata_controller: SQLWorkflowMetadataController
-
-    def set_auth_controller(self, auth_controller: SQLWorkflowAuthController):
-        self.auth_controller = auth_controller
-
-    def set_preflight_check_controller(
-        self, preflight_check_controller: SQLWorkflowPreflightCheckController
-    ):
-        self.preflight_check_controller = preflight_check_controller
-
-    def set_sql_resource(self, sql_resource: SQLResource):
+    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflowBuilder":
         self.sql_resource = sql_resource
+        return self
 
     def get_sql_resource(self) -> SQLResource:
         return self.sql_resource
+    
+    def set_transformer(self, transformer: TransformerInterface) -> "SQLWorkflowBuilder":
+        self.transformer = transformer
+        return self
+    
+    def set_temporal_resource(self, temporal_resource: TemporalResource) -> "SQLWorkflowBuilder":
+        self.temporal_resource = temporal_resource
+        return self
+    
+    def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
+        workflow = workflow or SQLWorkflow()
+
+        return workflow \
+            .set_sql_resource(self.sql_resource) \
+            .set_transformer(self.transformer) \
+            .set_temporal_resource(self.temporal_resource)

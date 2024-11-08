@@ -17,6 +17,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
+from typing import Any
 
 logger = get_logger(__name__)
 
@@ -25,6 +26,8 @@ class ResourceInterface(ABC):
     def __init__(self):
         pass
 
+    async def load(self):
+        pass
 
 class TemporalConfig:
     host = os.getenv("host", "localhost")
@@ -32,7 +35,7 @@ class TemporalConfig:
     application_name = os.getenv("application_name", "default")
 
     def __init__(
-        self, host: str = None, port: str = None, application_name: str = None
+        self, host: str | None = None, port: str | None = None, application_name: str | None = None
     ):
         if host:
             self.host = host
@@ -76,7 +79,7 @@ class TemporalResource(ResourceInterface):
             # FIXME: causes issue with different namespace, TBR.
         )
 
-    async def start_workflow(self, workflow_args, workflow_id: str = None):
+    async def start_workflow(self, workflow_args: Any, workflow_class: Any, workflow_id: str | None = None):
         workflow_id = workflow_id or str(uuid.uuid4())
         workflow_args.update(
             {
@@ -90,7 +93,7 @@ class TemporalResource(ResourceInterface):
 
         try:
             handle = await self.client.start_workflow(
-                self.workflow_class,
+                workflow_class,
                 workflow_args,
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
@@ -98,6 +101,7 @@ class TemporalResource(ResourceInterface):
             workflow.logger.info(
                 f"Workflow started: {handle.id} {handle.result_run_id}"
             )
+            
             return {
                 "workflow_id": handle.id,
                 "run_id": handle.result_run_id,
@@ -106,14 +110,14 @@ class TemporalResource(ResourceInterface):
             logger.error(f"Workflow failure: {e}")
             raise e
 
-    async def create_worker(self, activities: Sequence[CallableType]) -> Worker:
+    def create_worker(self, activities: Sequence[CallableType], workflow_class: Any) -> Worker:
         if not self.client:
-            await self.load()
+            raise ValueError("Client is not loaded")
 
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
-            workflows=[self.workflow_class],
+            workflows=[workflow_class],
             activities=activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(

@@ -34,9 +34,9 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    sql_resource: SQLResource
+    sql_resource: SQLResource | None = None
 
-    def __init__(self, sql_resource: SQLResource):
+    def __init__(self, sql_resource: SQLResource | None = None):
         self.sql_resource = sql_resource
 
     async def fetch_metadata(self) -> List[Dict[str, str]]:

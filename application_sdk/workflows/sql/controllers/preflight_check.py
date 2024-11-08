@@ -41,7 +41,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    def __init__(self, sql_resource: SQLResource):
+    def __init__(self, sql_resource: SQLResource | None = None):
         self.sql_resource = sql_resource
 
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:

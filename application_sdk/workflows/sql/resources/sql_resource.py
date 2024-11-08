@@ -48,7 +48,7 @@ class SQLResource(ResourceInterface):
 
         super().__init__()
 
-    async def connect(self):
+    async def load(self):
         self.engine = create_engine(
             self.config.get_sqlalchemy_connection_string(),
             connect_args=self.config.get_sqlalchemy_connect_args(),
