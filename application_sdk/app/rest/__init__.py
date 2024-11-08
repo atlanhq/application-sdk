@@ -44,6 +44,12 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         self.resource = resource
         self.workflow = workflow
 
+        super().__init__(
+            auth_controller=auth_controller,
+            metadata_controller=metadata_controller,
+            preflight_check_controller=preflight_check_controller,
+        )
+
     def add_telemetry_routes(self) -> None:
         self.app.include_router(logs.router)
         self.app.include_router(metrics.router)
