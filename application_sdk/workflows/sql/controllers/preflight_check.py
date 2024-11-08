@@ -59,9 +59,8 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
         return results
 
     async def fetch_metadata(self) -> List[Dict[str, str]]:
-        result = None
+        result = []
         try:
-            result = []
             async for batch in self.sql_resource.run_query(self.METADATA_SQL):
                 for row in batch:
                     schema_name = row["schema_name"]
