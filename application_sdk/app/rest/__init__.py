@@ -10,14 +10,14 @@ from application_sdk.workflows.controllers import (
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.resources import ResourceInterface
 
 
 class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     auth_controller: WorkflowAuthControllerInterface
     metadata_controller: WorkflowMetadataControllerInterface
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
-    sql_resource: SQLResource
+    resource: ResourceInterface
 
     workflows_router: APIRouter = APIRouter(
         prefix="/workflows/v1",
@@ -31,14 +31,14 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         auth_controller: WorkflowAuthControllerInterface,
         metadata_controller: WorkflowMetadataControllerInterface,
         preflight_check_controller: WorkflowPreflightCheckControllerInterface,
-        sql_resource: SQLResource,
+        resource: ResourceInterface,
     ):
         self.app = app
         self.app.include_router(health.router)
         self.auth_controller = auth_controller
         self.metadata_controller = metadata_controller
         self.preflight_check_controller = preflight_check_controller
-        self.sql_resource = sql_resource
+        self.resource = resource
 
     def add_telemetry_routes(self) -> None:
         self.app.include_router(logs.router)
@@ -79,8 +79,8 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 status_code=500, detail="Metadata interface not implemented"
             )
         try:
-            self.sql_resource.set_credentials(credential)
-            await self.sql_resource.connect()
+            self.resource.set_credentials(credential)
+            await self.resource.connect()
 
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
@@ -105,8 +105,8 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 status_code=500, detail="Preflight check controller not implemented"
             )
         try:
-            self.sql_resource.set_credentials(form_data["credentials"])
-            await self.sql_resource.connect()
+            self.resource.set_credentials(form_data["credentials"])
+            await self.resource.connect()
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={

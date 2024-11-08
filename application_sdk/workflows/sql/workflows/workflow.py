@@ -91,6 +91,12 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
+
+        self.sql_resource.set_credentials(workflow_args["credentials"])
+        await self.sql_resource.load()
+
         workflow_args["credential_guid"] = self.store_credentials(
             workflow_args["credentials"]
         )

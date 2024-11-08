@@ -4,7 +4,7 @@ import logging
 import os
 import uuid
 from abc import ABC
-from typing import Any, Sequence
+from typing import Any, Dict, Sequence
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
@@ -26,6 +26,9 @@ class ResourceInterface(ABC):
         pass
 
     async def load(self):
+        pass
+
+    def set_credentials(self, _: Dict[str, Any]):
         pass
 
 
@@ -59,7 +62,7 @@ class TemporalConfig:
 class TemporalResource(ResourceInterface):
     workflow_class = ClassType
     activities: Sequence[CallableType] = []
-    passthrough_modules: Sequence[str] = ["application_sdk"]
+    passthrough_modules: Sequence[str] = ["application_sdk", "os"]
 
     def __init__(
         self,

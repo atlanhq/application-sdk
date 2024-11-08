@@ -104,20 +104,6 @@ class SampleSQLResource(SQLResource):
 
 
 async def main():
-    # Setup resources
-    sql_resource = SampleSQLResource(
-        SQLResourceConfig(
-            credentials={
-                "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": os.getenv("POSTGRES_PORT", "5432"),
-                "user": os.getenv("POSTGRES_USER", "postgres"),
-                "password": os.getenv("POSTGRES_PASSWORD", "password"),
-                "database": os.getenv("POSTGRES_DATABASE", "postgres"),
-            }
-        )
-    )
-    await sql_resource.load()
-
     temporal_resource = TemporalResource(
         TemporalConfig(
             application_name=APPLICATION_NAME,
@@ -131,9 +117,9 @@ async def main():
 
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
-        .set_sql_resource(sql_resource)
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
+        .set_sql_resource(SampleSQLResource(SQLResourceConfig()))
         .build()
     )
 
@@ -154,7 +140,6 @@ async def main():
 
     await workflow.start(
         {
-            "application_name": APPLICATION_NAME,
             "credentials": {
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
                 "port": os.getenv("POSTGRES_PORT", "5432"),
