@@ -1,16 +1,8 @@
-from application_sdk.workflows.workflow import WorkflowInterface
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
-from application_sdk.workflows.transformers import TransformerInterface
-from application_sdk.paas.secretstore import SecretStore
-
-
 import asyncio
-import os
-from typing import Any, Dict, List, Optional, Callable
-from datetime import timedelta
-
-
 import logging
+import os
+from datetime import timedelta
+from typing import Any, Callable, Dict, List, Optional
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -26,12 +18,13 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
+from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = logging.getLogger(__name__)
 
+
 @workflow.defn
 class SQLWorkflow(WorkflowInterface):
-    
     fetch_database_sql = ""
     fetch_schema_sql = ""
     fetch_table_sql = ""
@@ -55,23 +48,27 @@ class SQLWorkflow(WorkflowInterface):
     def set_transformer(self, transformer: TransformerInterface) -> "SQLWorkflow":
         self.transformer = transformer
         return self
-    
+
     def set_application_name(self, application_name: str) -> "SQLWorkflow":
         self.application_name = application_name
         return self
-    
+
     def set_batch_size(self, batch_size: int) -> "SQLWorkflow":
         self.batch_size = batch_size
         return self
-    
-    def set_max_transform_concurrency(self, max_transform_concurrency: int) -> "SQLWorkflow":
+
+    def set_max_transform_concurrency(
+        self, max_transform_concurrency: int
+    ) -> "SQLWorkflow":
         self.max_transform_concurrency = max_transform_concurrency
         return self
-    
-    def set_temporal_resource(self, temporal_resource: TemporalResource) -> "SQLWorkflow":
+
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "SQLWorkflow":
         super().set_temporal_resource(temporal_resource)
         return self
-    
+
     def get_activities(self) -> List[Callable[..., Any]]:
         return [
             self.fetch_databases,
@@ -85,14 +82,18 @@ class SQLWorkflow(WorkflowInterface):
     def store_credentials(self, credentials: Dict[str, Any]) -> str:
         return SecretStore.store_credentials(credentials)
 
-    async def start(self, workflow_args: Dict[str, Any], workflow_class: Any | None = None) -> Dict[str, Any]:
+    async def start(
+        self, workflow_args: Dict[str, Any], workflow_class: Any | None = None
+    ) -> Dict[str, Any]:
         """
         Run the workflow.
 
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
-        workflow_args["credential_guid"] = self.store_credentials(workflow_args["credentials"])
+        workflow_args["credential_guid"] = self.store_credentials(
+            workflow_args["credentials"]
+        )
         del workflow_args["credentials"]
 
         workflow_class = workflow_class or self.__class__
@@ -431,4 +432,3 @@ class SQLWorkflow(WorkflowInterface):
         await asyncio.gather(*fetch_and_transforms)
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
-

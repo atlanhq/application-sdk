@@ -1,10 +1,7 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, List
-
-
+from typing import Any, Dict, List
 
 from application_sdk.logging import get_logger
-from application_sdk.workflows.resources import TemporalResource
 
 logger = get_logger(__name__)
 
@@ -42,4 +39,3 @@ class WorkflowPreflightCheckControllerInterface(WorkflowControllerInterface, ABC
     @abstractmethod
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError
-

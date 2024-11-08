@@ -1,12 +1,12 @@
-from typing import Any, Callable, List
 import logging
+from typing import Any, Callable, List
 
-from application_sdk.workflows.controllers import WorkflowControllerInterface
 from application_sdk.workflows.resources import TemporalResource
 
 logger = logging.getLogger(__name__)
 
-class WorkflowWorker():
+
+class WorkflowWorker:
     """
     Base class for workflow workers
 

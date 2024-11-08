@@ -36,13 +36,12 @@ from urllib.parse import quote_plus
 
 from application_sdk.workflows.resources import TemporalConfig, TemporalResource
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
-
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
-from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
@@ -89,9 +88,11 @@ class SampleSQLWorkflow(SQLWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
+
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
         return super().build(workflow=workflow or SampleSQLWorkflow())
+
 
 class SampleSQLResource(SQLResource):
     def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
@@ -130,10 +131,10 @@ async def main():
 
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
-            .set_sql_resource(sql_resource)
-            .set_transformer(transformer)
-            .set_temporal_resource(temporal_resource)
-            .build()
+        .set_sql_resource(sql_resource)
+        .set_transformer(transformer)
+        .set_temporal_resource(temporal_resource)
+        .build()
     )
 
     worker: WorkflowWorker = WorkflowWorker(
@@ -143,7 +144,9 @@ async def main():
     )
 
     # Start the worker in a separate thread
-    worker_thread = threading.Thread(target=lambda: asyncio.run(worker.start()), daemon=True)
+    worker_thread = threading.Thread(
+        target=lambda: asyncio.run(worker.start()), daemon=True
+    )
     worker_thread.start()
 
     # wait for the worker to start

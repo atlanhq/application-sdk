@@ -1,11 +1,6 @@
 from abc import ABC, abstractmethod
 
 from application_sdk.logging import get_logger
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -24,6 +19,7 @@ class WorkflowBuilderInterface(ABC):
         preflight_check_controller: The preflight check interface.
         worker_controller: The worker interface.
     """
+
     async def load_resources(self):
         pass
 
