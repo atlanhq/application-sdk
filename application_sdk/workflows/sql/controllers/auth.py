@@ -37,7 +37,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
         super().__init__()
 
-    def test_auth(self, credential: Dict[str, Any]) -> bool:
+    def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
