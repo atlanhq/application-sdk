@@ -43,6 +43,9 @@ class SQLResource(ResourceInterface):
     connection = None
     engine = None
 
+    default_database_alias_key = "catalog_name"
+    default_schema_alias_key = "schema_name"
+
     def __init__(self, config: SQLResourceConfig = None):
         self.config = config
 
@@ -58,6 +61,31 @@ class SQLResource(ResourceInterface):
 
     def set_credentials(self, credentials):
         self.config.set_credentials(credentials)
+
+    async def fetch_metadata(
+        self,
+        metadata_sql: str,
+        database_alias_key: str = default_database_alias_key,
+        schema_alias_key: str = default_schema_alias_key,
+        database_result_key: str = "TABLE_CATALOG",
+        schema_result_key: str = "TABLE_SCHEMA",
+    ):
+        result: List[Dict[Any, Any]] = []
+        try:
+            async for batch in self.run_query(metadata_sql):
+                for row in batch:
+                    result.append(
+                        {
+                            database_result_key: row[database_alias_key],
+                            schema_result_key: row[schema_alias_key],
+                        }
+                    )
+
+        except Exception as e:
+            logger.error(f"Failed to fetch metadata: {str(e)}")
+            raise e
+
+        return result
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """

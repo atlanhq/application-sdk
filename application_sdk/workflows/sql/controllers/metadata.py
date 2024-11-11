@@ -40,27 +40,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
         self.sql_resource = sql_resource
 
     async def fetch_metadata(self) -> List[Dict[str, str]]:
-        """
-        Fetch metadata from the database.
-
-        :param credential: Credentials to use.
-        :return: List of metadata.
-        :raises Exception: If the metadata cannot be fetched.
-        """
-        try:
-            result = []
-            async for batch in self.sql_resource.run_query(self.METADATA_SQL):
-                for row in batch:
-                    schema_name = row["schema_name"]
-                    catalog_name = row["catalog_name"]
-                    result.append(
-                        {
-                            self.DATABASE_KEY: catalog_name,
-                            self.SCHEMA_KEY: schema_name,
-                        }
-                    )
-
-        except Exception as e:
-            logger.error(f"Failed to fetch metadata: {str(e)}")
-            raise e
-        return result
+        if not self.sql_resource:
+            raise ValueError("SQL Resource not defined")
+        return await self.sql_resource.fetch_metadata(
+            metadata_sql=self.METADATA_SQL,
+            database_result_key=self.DATABASE_KEY,
+            schema_result_key=self.SCHEMA_KEY,
+        )
