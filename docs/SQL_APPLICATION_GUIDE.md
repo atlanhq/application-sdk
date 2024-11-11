@@ -186,16 +186,16 @@ class MySQLWorkflowWorker(SQLWorkflowWorkerInterface):
 
 ## Building the Workflow
 
-### Defining the `SQLWorkflowBuilderInterface` class
+### Defining the `SQLWorkflowBuilder` class
 
-The `SQLWorkflowBuilderInterface` class is responsible for constructing the entire workflow by integrating the core components like authentication, metadata extraction, preflight checks, and the worker logic that we've built above.
+The `SQLWorkflowBuilder` class is responsible for constructing the entire workflow by integrating the core components like authentication, metadata extraction, preflight checks, and the worker logic that we've built above.
 
 It defines abstract methods to get the SQLAlchemy connection string and connection arguments, which are used to create a database engine for workflow execution. By default, the class provides an engine using SQLAlchemy and allows for the use of pre-built or custom interfaces for authentication, metadata, preflight checks, and worker logic.
 
-Let's create a class that inherits from `SQLWorkflowBuilderInterface` to define our custom builder:
+Let's create a class that inherits from `SQLWorkflowBuilder` to define our custom builder:
 
 ```python
-class MyWorkflowBuilder(SQLWorkflowBuilderInterface):
+class MyWorkflowBuilder(SQLWorkflowBuilder):
     def get_sqlalchemy_connection_string(self, credentials: Dict[str, Any]) -> str:
         encoded_password = quote_plus(credentials["password"])
         user = credentials['user']

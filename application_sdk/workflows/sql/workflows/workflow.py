@@ -1,154 +1,113 @@
 import asyncio
 import logging
 import os
-from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional
 
-from sqlalchemy import Connection, Engine, text
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
-from temporalio.types import CallableType
 
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
-from application_sdk.workflows import WorkflowWorkerInterface
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
+)
+from application_sdk.workflows.sql.resources.sql_resource import (
+    SQLResource,
+    SQLResourceConfig,
+)
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
+from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
-    """
-    Base class for SQL workflow workers implementing the Template Method pattern.
+@workflow.defn
+class SQLWorkflow(WorkflowInterface):
+    fetch_database_sql = ""
+    fetch_schema_sql = ""
+    fetch_table_sql = ""
+    fetch_column_sql = ""
 
-    This class provides a default implementation for the workflow, with hooks
-    for subclasses to customize specific behaviors.
+    sql_resource: SQLResource | None = None
+    transformer: TransformerInterface | None = None
 
-    Attributes:
-        DATABASE_SQL (str): SQL query to fetch database information.
-        SCHEMA_SQL (str): SQL query to fetch schema information.
-        TABLE_SQL (str): SQL query to fetch table information.
-        COLUMN_SQL (str): SQL query to fetch column information.
-
-    Usage:
-        Subclass this class and override the SQL query attributes and any methods
-        that need custom behavior. Then use the subclass to create a workflow builder
-        and run the workflow.
-    """
-
-    DATABASE_SQL = ""
-    SCHEMA_SQL = ""
-    TABLE_SQL = ""
-    COLUMN_SQL = ""
+    application_name: str = "sql-connector"
+    batch_size: int = 100000
+    max_transform_concurrency: int = 5
 
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
-    def __init__(
-        self,
-        transformer: TransformerInterface,
-        temporal_activities: Sequence[CallableType] = None,
-        get_sql_engine: Callable[[Dict[str, Any]], Engine] = None,
-        # Configuration
-        application_name: str = "sql-connector",
-        use_server_side_cursor: bool = True,
-        batch_size: int = 100000,
-        max_transform_concurrency: int = 5,
-    ):
-        """
-        Initialize the SQL workflow worker.
+    def __init__(self):
+        super().__init__()
 
-        :param application_name: The name of the application (default: "sql-connector")
-        :param get_sql_engine: A callable that returns an SQLAlchemy engine (default: None)
-        :param use_server_side_cursor: Whether to use server-side cursor (default: True)
-        :param temporal_activities: The temporal activities to run (default: [], parent class activities)
-        :param transformer: The transformer to use (default: PhoenixTransformer)
-        :param batch_size: The size of batches for running queries and transformation (default: 10)
-        :param max_transform_concurrency: The maximum concurrency for transformation activities (default: 5)
-        """
-        self.get_sql_engine = get_sql_engine
-        self.use_server_side_cursor = use_server_side_cursor
+    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflow":
+        self.sql_resource = sql_resource
+        return self
+
+    def set_transformer(self, transformer: TransformerInterface) -> "SQLWorkflow":
         self.transformer = transformer
+        return self
 
+    def set_application_name(self, application_name: str) -> "SQLWorkflow":
+        self.application_name = application_name
+        return self
+
+    def set_batch_size(self, batch_size: int) -> "SQLWorkflow":
         self.batch_size = batch_size
+        return self
+
+    def set_max_transform_concurrency(
+        self, max_transform_concurrency: int
+    ) -> "SQLWorkflow":
         self.max_transform_concurrency = max_transform_concurrency
+        return self
 
-        if not temporal_activities:
-            # default activities
-            self.TEMPORAL_ACTIVITIES = [
-                self.fetch_databases,
-                self.fetch_schemas,
-                self.fetch_tables,
-                self.fetch_columns,
-                self.transform_data,
-                self.write_type_metadata,
-            ]
-        else:
-            self.TEMPORAL_ACTIVITIES = temporal_activities
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "SQLWorkflow":
+        super().set_temporal_resource(temporal_resource)
+        return self
 
-        super().__init__(application_name)
+    def get_activities(self) -> List[Callable[..., Any]]:
+        return [
+            self.fetch_databases,
+            self.fetch_schemas,
+            self.fetch_tables,
+            self.fetch_columns,
+            self.transform_data,
+            self.write_type_metadata,
+        ] + super().get_activities()
 
-    async def start_workflow(self, workflow_args: Any) -> Dict[str, Any]:
+    def store_credentials(self, credentials: Dict[str, Any]) -> str:
+        return SecretStore.store_credentials(credentials)
+
+    async def start(
+        self, workflow_args: Dict[str, Any], workflow_class: Any | None = None
+    ) -> Dict[str, Any]:
         """
         Run the workflow.
 
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
-        credentials = workflow_args["credentials"]
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
 
-        credential_guid = SecretStore.store_credentials(credentials)
+        self.sql_resource.set_credentials(workflow_args["credentials"])
+        await self.sql_resource.load()
+
+        workflow_args["credential_guid"] = self.store_credentials(
+            workflow_args["credentials"]
+        )
         del workflow_args["credentials"]
 
-        workflow_args["credential_guid"] = credential_guid
-        return await super().start_workflow(workflow_args)
+        workflow_class = workflow_class or self.__class__
 
-    async def run_query(self, connection: Connection, query: str, batch_size: int):
-        """
-        Run a query in a batch mode with client-side cursor.
-
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
-        If yield_per is not supported by the database, the method will fallback to client-side cursor.
-
-        :param connection: The database connection.
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
-        """
-        loop = asyncio.get_running_loop()
-
-        if self.use_server_side_cursor:
-            connection.execution_options(yield_per=batch_size)
-
-        activity.logger.info(f"Running query: {query}")
-
-        with ThreadPoolExecutor() as pool:
-            try:
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(query)
-                )
-                column_names: List[str] = []
-
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
-
-                    if not column_names:
-                        column_names = rows[0]._fields
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            except Exception as e:
-                logger.error(f"Error running query in batch: {e}")
-                raise e
-
-        activity.logger.info("Query execution completed")
+        return await super().start(workflow_args, workflow_class)
 
     async def fetch_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
@@ -162,28 +121,26 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :return: The fetched data.
         :raises Exception: If the data cannot be fetched.
         """
-        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
         raw_files_output_prefix = workflow_args["output_prefix"]
 
         try:
-            engine = self.get_sql_engine(credentials)
-            with engine.connect() as connection:
-                async with (
-                    JSONChunkedObjectStoreWriter(
-                        raw_files_prefix, raw_files_output_prefix
-                    ) as raw_writer,
-                ):
-                    async for batch in self.run_query(
-                        connection, query, self.batch_size
-                    ):
-                        # Write raw data
-                        await raw_writer.write_list(batch)
+            async with (
+                JSONChunkedObjectStoreWriter(
+                    raw_files_prefix, raw_files_output_prefix
+                ) as raw_writer,
+            ):
+                if self.sql_resource is None:
+                    raise ValueError("SQL resource is not set")
 
-                    write_data = await raw_writer.write_metadata()
-                    return write_data["chunk_count"]
+                async for batch in self.sql_resource.run_query(query, self.batch_size):
+                    # Write raw data
+                    await raw_writer.write_list(batch)
+
+                write_data = await raw_writer.write_metadata()
+                return write_data["chunk_count"]
 
         except Exception as e:
             logger.error(f"Error fetching databases: {e}")
@@ -228,7 +185,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         :return: The fetched databases.
         """
         chunk_count = await self.fetch_data(
-            workflow_args, self.DATABASE_SQL, "database"
+            workflow_args, self.fetch_database_sql, "database"
         )
         return {"typename": "database", "chunk_count": chunk_count}
 
@@ -249,7 +206,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             exclude_filter,
             temp_table_regex,
         )
-        schema_sql_query = self.SCHEMA_SQL.format(
+        schema_sql_query = self.fetch_schema_sql.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
         )
@@ -275,7 +232,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 temp_table_regex,
             )
         )
-        table_sql_query = self.TABLE_SQL.format(
+        table_sql_query = self.fetch_table_sql.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
@@ -302,7 +259,7 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
                 temp_table_regex,
             )
         )
-        column_sql_query = self.COLUMN_SQL.format(
+        column_sql_query = self.fetch_column_sql.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
@@ -365,17 +322,6 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
             write_data = await transformed_writer.write_metadata()
             return write_data["total_record_count"]
 
-    @activity.defn
-    @auto_heartbeater
-    async def fetch_sql(self, sql: str):
-        """
-        Fetch data from the database using a custom SQL query.
-
-        :param sql: The SQL query to run.
-        :return: The fetched data.
-        """
-        pass
-
     def get_transform_batches(self, chunk_count: int, typename: str):
         # concurrency logic
         concurrency_level = min(
@@ -416,8 +362,11 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
 
         transform_activities: List[Any] = []
 
-        typename: str = raw_stat["typename"]
-        chunk_count: int = raw_stat["chunk_count"]
+        typename: str | None = raw_stat["typename"] or None
+        chunk_count: int | None = raw_stat["chunk_count"] or None
+
+        if typename is None or chunk_count is None:
+            raise ValueError("Invalid typename or chunk_count")
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
@@ -452,12 +401,27 @@ class SQLWorkflowWorkerInterface(WorkflowWorkerInterface):
         )
 
     @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]):
+    async def __run(self, workflow_args: Dict[str, Any]):
         """
         Run the workflow.
 
         :param workflow_args: The workflow arguments.
         """
+        if not self.sql_resource:
+            credentials = SecretStore.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+            self.sql_resource = SQLResource(
+                SQLResourceConfig(
+                    credentials=credentials,
+                )
+            )
+
+        if not self.temporal_resource:
+            self.temporal_resource = TemporalResource(
+                TemporalConfig(application_name=self.application_name)
+            )
+
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(

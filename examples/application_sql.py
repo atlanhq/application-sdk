@@ -34,46 +34,30 @@ import time
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
-from temporalio import workflow
-
-from application_sdk.workflows.sql import SQLWorkflowBuilderInterface
-from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-from application_sdk.workflows.sql.preflight_check import (
-    SQLWorkflowPreflightCheckInterface,
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
 )
-from application_sdk.workflows.sql.workflow import SQLWorkflowWorkerInterface
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
+from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
+from application_sdk.workflows.sql.resources.sql_resource import (
+    SQLResource,
+    SQLResourceConfig,
+)
+from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
+from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
 
 logger = logging.getLogger(__name__)
 
 
-class SampleSQLWorkflowMetadata(SQLWorkflowMetadataInterface):
-    METADATA_SQL = """
-    SELECT schema_name, catalog_name
-    FROM INFORMATION_SCHEMA.SCHEMATA;
-    """
-
-
-class SampleSQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
-    METADATA_SQL = """
-    SELECT schema_name, catalog_name
-    FROM INFORMATION_SCHEMA.SCHEMATA;
-    """
-    TABLES_CHECK_SQL = """
-    SELECT count(*)
-    FROM INFORMATION_SCHEMA.TABLES;
-    """
-
-
-@workflow.defn
-class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
-    DATABASE_SQL = """
+class SampleSQLWorkflow(SQLWorkflow):
+    fetch_database_sql = """
     SELECT * FROM pg_database WHERE datname = current_database();
     """
 
-    SCHEMA_SQL = """
+    fetch_schema_sql = """
     SELECT
         s.*
     FROM
@@ -85,7 +69,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
     """
 
-    TABLE_SQL = """
+    fetch_table_sql = """
     SELECT
         t.*
     FROM
@@ -96,7 +80,7 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         AND t.table_name !~ '{exclude_table}';
     """
 
-    COLUMN_SQL = """
+    fetch_column_sql = """
     SELECT
         c.*
     FROM
@@ -107,86 +91,82 @@ class SampleSQLWorkflowWorker(SQLWorkflowWorkerInterface):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    # PASSTHROUGH_MODULES: Sequence[str] = ["application_sdk", "time"]
 
-    def __init__(
-        self, application_name: str = APPLICATION_NAME, *args: Any, **kwargs: Any
-    ):
-        self.TEMPORAL_WORKFLOW_CLASS = SampleSQLWorkflowWorker
-        # we use the default TEMPORAL_ACTIVITIES from the parent class (SQLWorkflowWorkerInterface)
-        transformer = AtlasTransformer(
-            connector_name=application_name, connector_type="sql"
-        )
-        super().__init__(
-            transformer=transformer,
-            application_name=application_name,
-            *args,
-            **kwargs,
-        )
-
-    @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]):
-        await super().run(workflow_args)
+class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
+    def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
+        return super().build(workflow=workflow or SampleSQLWorkflow())
 
 
-class SampleSQLWorkflowBuilder(SQLWorkflowBuilderInterface):
-    def get_sqlalchemy_connect_args(
-        self, credentials: Dict[str, Any]
-    ) -> Dict[str, Any]:
+class SampleSQLResource(SQLResource):
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return {}
 
-    def get_sqlalchemy_connection_string(self, credentials: Dict[str, Any]) -> str:
-        encoded_password = quote_plus(credentials["password"])
-        return f"postgresql+psycopg2://{credentials['user']}:{encoded_password}@{credentials['host']}:{credentials['port']}/{credentials['database']}"
+    def get_sqlalchemy_connection_string(self) -> str:
+        encoded_password = quote_plus(self.credentials["password"])
+        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
-    def __init__(self, *args: Any, **kwargs: Any):
-        self.metadata_interface = SampleSQLWorkflowMetadata(self.get_sql_engine)
-        self.preflight_interface = SampleSQLWorkflowPreflight(self.get_sql_engine)
-        self.worker_interface = SampleSQLWorkflowWorker(
-            APPLICATION_NAME, get_sql_engine=self.get_sql_engine
+
+async def main():
+    temporal_resource = TemporalResource(
+        TemporalConfig(
+            application_name=APPLICATION_NAME,
         )
-        super().__init__(
-            metadata_interface=self.metadata_interface,
-            preflight_check_interface=self.preflight_interface,
-            worker_interface=self.worker_interface,
-            *args,
-            **kwargs,
-        )
+    )
+    await temporal_resource.load()
 
+    transformer = AtlasTransformer(
+        connector_name=APPLICATION_NAME, connector_type="sql"
+    )
 
-if __name__ == "__main__":
-    builder = SampleSQLWorkflowBuilder()
-    # Start the temporal worker in a separate thread
-    worker_thread = threading.Thread(target=builder.start_worker, args=(), daemon=True)
+    workflow: SQLWorkflow = (
+        SampleSQLWorkflowBuilder()
+        .set_transformer(transformer)
+        .set_temporal_resource(temporal_resource)
+        .set_sql_resource(SampleSQLResource(SQLResourceConfig()))
+        .build()
+    )
+
+    worker: WorkflowWorker = WorkflowWorker(
+        temporal_resource=temporal_resource,
+        temporal_activities=workflow.get_activities(),
+        workflow_class=SQLWorkflow,
+    )
+
+    # Start the worker in a separate thread
+    worker_thread = threading.Thread(
+        target=lambda: asyncio.run(worker.start()), daemon=True
+    )
     worker_thread.start()
 
     # wait for the worker to start
     time.sleep(3)
 
-    asyncio.run(
-        builder.worker_interface.start_workflow(
-            {
-                "credentials": {
-                    "host": os.getenv("POSTGRES_HOST", "localhost"),
-                    "port": os.getenv("POSTGRES_PORT", "5432"),
-                    "user": os.getenv("POSTGRES_USER", "postgres"),
-                    "password": os.getenv("POSTGRES_PASSWORD", "password"),
-                    "database": os.getenv("POSTGRES_DATABASE", "postgres"),
-                },
-                "connection": {"connection": "dev"},
-                "metadata": {
-                    "exclude-filter": "{}",
-                    "include-filter": "{}",
-                    "temp-table-regex": "",
-                    "advanced-config-strategy": "default",
-                    "use-source-schema-filtering": "false",
-                    "use-jdbc-internal-methods": "true",
-                    "authentication": "BASIC",
-                    "extraction-method": "direct",
-                },
-            }
-        )
+    await workflow.start(
+        {
+            "credentials": {
+                "host": os.getenv("POSTGRES_HOST", "localhost"),
+                "port": os.getenv("POSTGRES_PORT", "5432"),
+                "user": os.getenv("POSTGRES_USER", "postgres"),
+                "password": os.getenv("POSTGRES_PASSWORD", "password"),
+                "database": os.getenv("POSTGRES_DATABASE", "postgres"),
+            },
+            "connection": {"connection": "dev"},
+            "metadata": {
+                "exclude-filter": "{}",
+                "include-filter": "{}",
+                "temp-table-regex": "",
+                "advanced-config-strategy": "default",
+                "use-source-schema-filtering": "false",
+                "use-jdbc-internal-methods": "true",
+                "authentication": "BASIC",
+                "extraction-method": "direct",
+            },
+        }
     )
 
     # wait for the workflow to finish
     time.sleep(120)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

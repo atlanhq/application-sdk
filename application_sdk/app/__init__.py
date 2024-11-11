@@ -1,16 +1,28 @@
 from abc import ABC, abstractmethod
-from typing import Optional
 
 from application_sdk.app import models
 from application_sdk.app.database import get_engine
-from application_sdk.workflows import WorkflowBuilderInterface
+from application_sdk.workflows.controllers import (
+    WorkflowAuthControllerInterface,
+    WorkflowMetadataControllerInterface,
+    WorkflowPreflightCheckControllerInterface,
+)
 
 
 class AtlanApplicationBuilder(ABC):
+    auth_controller: WorkflowAuthControllerInterface
+    metadata_controller: WorkflowMetadataControllerInterface
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+
     def __init__(
-        self, workflow_builder_interface: Optional[WorkflowBuilderInterface] = None
+        self,
+        auth_controller: WorkflowAuthControllerInterface,
+        metadata_controller: WorkflowMetadataControllerInterface,
+        preflight_check_controller: WorkflowPreflightCheckControllerInterface,
     ):
-        self.workflow_builder_interface = workflow_builder_interface
+        self.auth_controller = auth_controller
+        self.metadata_controller = metadata_controller
+        self.preflight_check_controller = preflight_check_controller
 
     @abstractmethod
     def add_telemetry_routes(self) -> None:

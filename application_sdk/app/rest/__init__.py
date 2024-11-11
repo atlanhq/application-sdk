@@ -1,13 +1,26 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from fastapi import APIRouter, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
 
-from application_sdk.app import AtlanApplicationBuilder, WorkflowBuilderInterface
+from application_sdk.app import AtlanApplicationBuilder
 from application_sdk.app.rest.fastapi.routers import health, logs, metrics, traces
+from application_sdk.workflows.controllers import (
+    WorkflowAuthControllerInterface,
+    WorkflowMetadataControllerInterface,
+    WorkflowPreflightCheckControllerInterface,
+)
+from application_sdk.workflows.resources.temporal_resource import ResourceInterface
+from application_sdk.workflows.workflow import WorkflowInterface
 
 
 class FastAPIApplicationBuilder(AtlanApplicationBuilder):
+    auth_controller: WorkflowAuthControllerInterface
+    metadata_controller: WorkflowMetadataControllerInterface
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    resource: ResourceInterface
+    workflow: WorkflowInterface
+
     workflows_router: APIRouter = APIRouter(
         prefix="/workflows/v1",
         tags=["workflows"],
@@ -17,11 +30,25 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     def __init__(
         self,
         app: FastAPI,
-        workflow_builder_interface: Optional[WorkflowBuilderInterface] = None,
+        resource: ResourceInterface,
+        workflow: WorkflowInterface,
+        auth_controller: WorkflowAuthControllerInterface,
+        metadata_controller: WorkflowMetadataControllerInterface,
+        preflight_check_controller: WorkflowPreflightCheckControllerInterface,
     ):
         self.app = app
         self.app.include_router(health.router)
-        super().__init__(workflow_builder_interface)
+        self.auth_controller = auth_controller
+        self.metadata_controller = metadata_controller
+        self.preflight_check_controller = preflight_check_controller
+        self.resource = resource
+        self.workflow = workflow
+
+        super().__init__(
+            auth_controller=auth_controller,
+            metadata_controller=metadata_controller,
+            preflight_check_controller=preflight_check_controller,
+        )
 
     def add_telemetry_routes(self) -> None:
         self.app.include_router(logs.router)
@@ -33,15 +60,12 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
         # FastAPIInstrumentor.instrument_app(self.app)  # pyright: ignore[reportUnknownMemberType]
 
     async def test_auth(self, credential: Dict[str, Any]):
-        if (
-            not self.workflow_builder_interface
-            or not self.workflow_builder_interface.auth_interface
-        ):
+        if not self.auth_controller:
             raise HTTPException(
                 status_code=500, detail="Auth interface not implemented"
             )
         try:
-            self.workflow_builder_interface.auth_interface.test_auth(credential)
+            self.auth_controller.test_auth(credential)
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
@@ -60,21 +84,19 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             )
 
     async def fetch_metadata(self, credential: Dict[str, Any]):
-        if (
-            not self.workflow_builder_interface
-            or not self.workflow_builder_interface.metadata_interface
-        ):
+        if not self.metadata_controller:
             raise HTTPException(
                 status_code=500, detail="Metadata interface not implemented"
             )
         try:
+            self.resource.set_credentials(credential)
+            await self.resource.load()
+
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
                     "success": True,
-                    "data": self.workflow_builder_interface.metadata_interface.fetch_metadata(
-                        credential
-                    ),
+                    "data": await self.metadata_controller.fetch_metadata(),
                 },
             )
         except Exception as e:
@@ -88,19 +110,18 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             )
 
     async def preflight_check(self, form_data: Dict[str, Any]):
-        if (
-            not self.workflow_builder_interface
-            or not self.workflow_builder_interface.preflight_check_interface
-        ):
+        if not self.preflight_check_controller:
             raise HTTPException(
-                status_code=500, detail="Preflight check interface not implemented"
+                status_code=500, detail="Preflight check controller not implemented"
             )
         try:
+            self.resource.set_credentials(form_data["credentials"])
+            await self.resource.load()
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={
                     "success": True,
-                    "data": self.workflow_builder_interface.preflight_check_interface.preflight_check(
+                    "data": await self.preflight_check_controller.preflight_check(
                         form_data
                     ),
                 },
@@ -116,19 +137,12 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             )
 
     async def start_workflow(self, workflow_args: Dict[str, Any]):
-        if (
-            not self.workflow_builder_interface
-            or not self.workflow_builder_interface.worker_interface
-        ):
+        if not self.workflow:
             raise HTTPException(
-                status_code=500, detail="Worker interface not implemented"
+                status_code=500, detail="Workflow interface not implemented"
             )
         try:
-            workflow_metadata = (
-                await self.workflow_builder_interface.worker_interface.start_workflow(
-                    workflow_args
-                )
-            )
+            workflow_metadata = await self.workflow.start(workflow_args)
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={

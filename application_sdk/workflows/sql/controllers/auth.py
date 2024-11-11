@@ -1,14 +1,12 @@
 import logging
-from typing import Any, Callable, Dict
 
-from sqlalchemy import Engine, text
-
-from application_sdk.workflows import WorkflowAuthInterface
+from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
+from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = logging.getLogger(__name__)
 
 
-class SQLWorkflowAuthInterface(WorkflowAuthInterface):
+class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
     """
     SQL Workflow Auth Interface
 
@@ -31,10 +29,14 @@ class SQLWorkflowAuthInterface(WorkflowAuthInterface):
 
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 
-    def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
-        self.create_engine_fn = create_engine_fn
+    sql_resource: SQLResource
 
-    def test_auth(self, credential: Dict[str, Any]) -> bool:
+    def __init__(self, sql_resource: SQLResource):
+        self.sql_resource = sql_resource
+
+        super().__init__()
+
+    def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
@@ -43,9 +45,7 @@ class SQLWorkflowAuthInterface(WorkflowAuthInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            engine = self.create_engine_fn(credential)
-            with engine.connect() as connection:
-                connection.execute(text(self.TEST_AUTHENTICATION_SQL))
+            self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL)
             return True
         except Exception as e:
             logger.error(f"Failed to authenticate with the given credentials: {str(e)}")
