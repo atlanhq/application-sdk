@@ -1,3 +1,4 @@
+import duckdb
 import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
@@ -9,10 +10,10 @@ class TestDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @transform(
-            QueryInput(engine, "SELECT 1 as value")
+            batch_input=QueryInput(engine, "SELECT 1 as value")
         )
-        async def func(chunk_df: pd.DataFrame):
-            assert len(chunk_df) == 1
+        async def func(batch_input: pd.DataFrame):
+            assert len(batch_input) == 1
 
         await func()
 
@@ -25,10 +26,10 @@ class TestDecorators:
             conn.commit()
 
         @transform(
-            QueryInput(engine, "SELECT * FROM numbers")
+            batch_input=QueryInput(engine, "SELECT * FROM numbers")
         )
-        async def func(chunk_df: pd.DataFrame):
-            assert len(chunk_df) == 3
+        async def func(batch_input: pd.DataFrame):
+            assert len(batch_input) == 3
 
         await func()
 
@@ -36,14 +37,13 @@ class TestDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @transform(
-            QueryInput(engine, "SELECT 1 as value"),
-            [
-                JsonOutput("/tmp/raw"),
-                JsonOutput("/tmp/transformed"),
-            ]
+            batch_input=QueryInput(engine, "SELECT 1 as value"),
+            out1=JsonOutput("/tmp/raw"),
+            out2=JsonOutput("/tmp/transformed")
         )
-        async def func(chunk_df: pd.DataFrame):
-            return [chunk_df, chunk_df.map(lambda x: x + 1)]
+        async def func(batch_input, out1, out2):
+            return [batch_input, batch_input.map(lambda x: x + 1)]
+
 
         await func()
         # Check files generated
@@ -51,5 +51,4 @@ class TestDecorators:
             assert f.read().strip() == '{"value":1}'
         with open("/tmp/transformed/0.json") as f:
             assert f.read().strip() == '{"value":2}'
-
 
