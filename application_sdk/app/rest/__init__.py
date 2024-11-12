@@ -65,7 +65,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 status_code=500, detail="Auth interface not implemented"
             )
         try:
-            self.auth_controller.test_auth(credential)
+            self.auth_controller.test_auth()
             return JSONResponse(
                 status_code=status.HTTP_200_OK,
                 content={

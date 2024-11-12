@@ -401,7 +401,7 @@ class SQLWorkflow(WorkflowInterface):
         )
 
     @workflow.run
-    async def __run(self, workflow_args: Dict[str, Any]):
+    async def run(self, workflow_args: Dict[str, Any]):
         """
         Run the workflow.
 
