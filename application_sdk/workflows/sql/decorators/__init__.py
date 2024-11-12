@@ -46,6 +46,9 @@ class ObjectStoreInput(Input):
             if file.endswith(".json"):
                 yield pd.read_json(f"{self.object_store_path}/{file}", lines=True)
 
+    def get_df(self) -> pd.DataFrame:
+        return pd.concat([df for df in self.get_batched_df()])
+
 
 class Output(abc.ABC):
     @abstractmethod
