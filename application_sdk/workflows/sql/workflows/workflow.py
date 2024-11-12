@@ -198,9 +198,9 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
         normalized_include_regex, normalized_exclude_regex, _ = prepare_filters(
             include_filter,
             exclude_filter,
@@ -222,9 +222,9 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
         normalized_include_regex, normalized_exclude_regex, exclude_table = (
             prepare_filters(
                 include_filter,
@@ -249,9 +249,9 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
         normalized_include_regex, normalized_exclude_regex, exclude_table = (
             prepare_filters(
                 include_filter,
