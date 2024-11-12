@@ -65,11 +65,17 @@ class SQLResource(ResourceInterface):
     async def fetch_metadata(
         self,
         metadata_sql: str,
-        database_alias_key: str = default_database_alias_key,
-        schema_alias_key: str = default_schema_alias_key,
+        database_alias_key: str | None = None,
+        schema_alias_key: str | None = None,
         database_result_key: str = "TABLE_CATALOG",
         schema_result_key: str = "TABLE_SCHEMA",
     ):
+        if database_alias_key is None:
+            database_alias_key = self.default_database_alias_key
+
+        if schema_alias_key is None:
+            schema_alias_key = self.default_schema_alias_key
+
         result: List[Dict[Any, Any]] = []
         try:
             async for batch in self.run_query(metadata_sql):
