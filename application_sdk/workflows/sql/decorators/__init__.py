@@ -52,7 +52,7 @@ class ObjectStoreInput(Input):
 
 class Output(abc.ABC):
     @abstractmethod
-    def write_df(self, df: pd.DataFrame):
+    def write_df(self, df: pd.DataFrame, chunk_num: int=0):
         pass
 
 class JsonOutput(Output):
@@ -60,7 +60,7 @@ class JsonOutput(Output):
         self.output_path = output_path
         os.makedirs(f"{output_path}", exist_ok=True)
 
-    def write_df(self, df: pd.DataFrame, chunk_num=0):
+    def write_df(self, df: pd.DataFrame, chunk_num: int=0):
         df.to_json(f"{self.output_path}/{chunk_num}.json", orient="records", lines=True)
 
 def transform(batch_input: Optional[Input]=None, **kwargs):
@@ -86,7 +86,7 @@ def transform(batch_input: Optional[Input]=None, **kwargs):
                     if ret_name not in outputs:
                         logger.warning(f"Output {ret_name} not found but function returned data")
                         continue
-                    outputs[name].write_df(ret_df)
+                    outputs[ret_name].write_df(ret_df)
 
             if not batch_input:
                 process_ret(await f(**fn_kwargs))

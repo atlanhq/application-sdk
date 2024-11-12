@@ -42,7 +42,10 @@ class TestDecorators:
             out2=JsonOutput("/tmp/transformed")
         )
         async def func(batch_input, out1, out2):
-            return [batch_input, batch_input.map(lambda x: x + 1)]
+            return {
+                'out1': batch_input,
+                'out2': batch_input.map(lambda x: x + 1)
+            }
 
 
         await func()
