@@ -1,17 +1,17 @@
 import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
-from application_sdk.workflows.sql.decorators import query_batch, transform_query_results
-import pytest
+from application_sdk.workflows.sql.decorators import transform, QueryInput, JsonOutput
 
 
 class TestDecorators:
     async def test_query_batch_basic(self):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @query_batch(engine, "SELECT 1")
-        async def func(chunk_number, chunk_df):
-            assert chunk_number == 0
+        @transform(
+            QueryInput(engine, "SELECT 1 as value")
+        )
+        async def func(chunk_df: pd.DataFrame):
             assert len(chunk_df) == 1
 
         await func()
@@ -24,23 +24,26 @@ class TestDecorators:
             conn.execute(text("INSERT INTO numbers (value) VALUES (0), (1), (2)"))
             conn.commit()
 
-        @query_batch(engine, "SELECT * FROM numbers", chunk_size=2)
-        async def func(chunk_number, chunk_df):
-            if chunk_number == 0:
-                assert len(chunk_df) == 2
-            elif chunk_number == 1:
-                assert len(chunk_df) == 1
+        @transform(
+            QueryInput(engine, "SELECT * FROM numbers")
+        )
+        async def func(chunk_df: pd.DataFrame):
+            assert len(chunk_df) == 3
 
         await func()
 
     async def test_query_write_basic(self):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @transform_query_results(engine, "SELECT 1 as value", "/tmp")
-        async def func(chunk_number, chunk_df: pd.DataFrame):
-            assert chunk_number == 0
-            assert len(chunk_df) == 1
-            return chunk_df.applymap(lambda x: x + 1)
+        @transform(
+            QueryInput(engine, "SELECT 1 as value"),
+            [
+                JsonOutput("/tmp/raw"),
+                JsonOutput("/tmp/transformed"),
+            ]
+        )
+        async def func(chunk_df: pd.DataFrame):
+            return [chunk_df, chunk_df.map(lambda x: x + 1)]
 
         await func()
         # Check files generated
@@ -49,12 +52,4 @@ class TestDecorators:
         with open("/tmp/transformed/0.json") as f:
             assert f.read().strip() == '{"value":2}'
 
-    async def test_query_write_no_return_func(self):
-        engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @transform_query_results(engine, "SELECT 1", "/tmp")
-        async def func(chunk_number, chunk_df):
-            pass
-
-        with pytest.raises(ValueError):
-            await func()

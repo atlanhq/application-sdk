@@ -1,59 +1,58 @@
+import abc
 import os
+from abc import abstractmethod
+from typing import Optional, List
 
 from sqlalchemy.engine import Engine
 import pandas as pd
 
 
+class Input(abc.ABC):
+    @abstractmethod
+    def get_batched_df(self):
+        pass
 
-def query_batch(engine: Engine, query: str, chunk_size: int = 10000):
-    def decorator(f):
-        with engine.connect() as conn:
+class QueryInput(Input):
+    def __init__(self, engine: Engine, query: str):
+        self.query = query
+        self.engine = engine
+
+    def get_batched_df(self):
+        with self.engine.connect() as conn:
             data_iter = pd.read_sql_query(
-                query, conn, chunksize=chunk_size
+                self.query, conn, chunksize=10000
             )
-
-            async def new_f(*args, **kwargs):
-                chunk_number = 0
-                for chunk_df in data_iter:
-                    await f(chunk_number, chunk_df, *args, **kwargs)
-                    chunk_number += 1
-                    del chunk_df
-            return new_f
-    return decorator
+            for chunk_df in data_iter:
+                yield chunk_df
 
 
-def transform_query_results(engine: Engine, query: str, output_path: str, chunk_size: int = 10000):
-    def decorator(f):
-        os.makedirs(f"{output_path}/raw", exist_ok=True)
-        os.makedirs(f"{output_path}/transformed", exist_ok=True)
+class Output(abc.ABC):
+    @abstractmethod
+    def write_df(self, df: pd.DataFrame):
+        pass
 
-        @query_batch(engine, query, chunk_size)
-        async def new_fn(chunk_number, chunk_df, *args, **kwargs):
-            df: pd.DataFrame = await f(chunk_number, chunk_df, *args, **kwargs)
-            if df is None:
-                raise ValueError("Function must return a DataFrame")
+class JsonOutput(Output):
+    def __init__(self, output_path: str):
+        self.output_path = output_path
+        os.makedirs(f"{output_path}", exist_ok=True)
 
-            chunk_df.to_json(f"{output_path}/raw/{chunk_number}.json", orient="records", lines=True)
-            df.to_json(f"{output_path}/transformed/{chunk_number}.json", orient="records", lines=True)
-        return new_fn
-    return decorator
+    def write_df(self, df: pd.DataFrame, chunk_num=0):
+        df.to_json(f"{self.output_path}/{chunk_num}.json", orient="records", lines=True)
 
-
-def incremental_query_batch(
-        engine: Engine,
-        query: str,
-        marker_hash: str,
-        chunk_size: int = 10000
+def transform(
+        source_df: Input,
+        outputs: Optional[List[Output]] = None
 ):
     def decorator(f):
-        # TODO: Fetch last saved marker using {marker_hash} from PaaS storage
-        hashes = {}
-        last_marker = hashes.get(marker_hash, 0)
-        new_query = query.replace("{MARKER_VALUE}", str(last_marker))
+        async def new_fn(*args, **kwargs):
+            for chunk_df in source_df.get_batched_df():
+                dfs: Optional[List[pd.DataFrame]] = await f(chunk_df, *args, **kwargs)
+                if not dfs or not outputs:
+                    continue
 
-        @query_batch(engine, new_query, chunk_size)
-        async def new_fn(chunk_number, chunk_df, *args, **kwargs):
-            await f(chunk_number, chunk_df, *args, **kwargs)
-
+                for i, df in enumerate(dfs):
+                    outputs[i].write_df(df)
         return new_fn
     return decorator
+
+
