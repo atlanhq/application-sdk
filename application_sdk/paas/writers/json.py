@@ -21,9 +21,9 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                 await self._flush_buffer()
                 await self._create_new_file()
 
-            record = orjson.dumps(data, option=orjson.OPT_APPEND_NEWLINE | orjson.OPT_NON_STR_KEYS).decode(
-                "utf-8"
-            )
+            record = orjson.dumps(
+                data, option=orjson.OPT_APPEND_NEWLINE | orjson.OPT_NON_STR_KEYS
+            ).decode("utf-8")
             self.buffer.append(record)
             self.current_buffer_size += len(record)
             self.current_record_count += 1
