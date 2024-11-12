@@ -1,6 +1,7 @@
+import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
-from application_sdk.workflows.sql.decorators import query_batch, query_write
+from application_sdk.workflows.sql.decorators import query_batch, transform_query_results
 import pytest
 
 
@@ -35,18 +36,23 @@ class TestDecorators:
     async def test_query_write_basic(self):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @query_write(engine, "SELECT 1", "/tmp")
-        async def func(chunk_number, chunk_df):
+        @transform_query_results(engine, "SELECT 1 as value", "/tmp")
+        async def func(chunk_number, chunk_df: pd.DataFrame):
             assert chunk_number == 0
             assert len(chunk_df) == 1
-            return chunk_df
+            return chunk_df.applymap(lambda x: x + 1)
 
         await func()
+        # Check files generated
+        with open("/tmp/raw/0.json") as f:
+            assert f.read().strip() == '{"value":1}'
+        with open("/tmp/transformed/0.json") as f:
+            assert f.read().strip() == '{"value":2}'
 
     async def test_query_write_no_return_func(self):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @query_write(engine, "SELECT 1", "/tmp")
+        @transform_query_results(engine, "SELECT 1", "/tmp")
         async def func(chunk_number, chunk_df):
             pass
 
