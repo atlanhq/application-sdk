@@ -9,9 +9,12 @@ from application_sdk.workflows.transformers.phoenix.schema import (
     ColumnConstraint,
     ColumnEntity,
     DatabaseEntity,
+    FunctionEntity,
     Namespace,
     Package,
     SchemaEntity,
+    SnowflakePipeEntity,
+    StageEntity,
     TableEntity,
     ViewEntity,
 )
@@ -61,6 +64,9 @@ class PhoenixTransformer(TransformerInterface):
             "SCHEMA": self._transform_schema,
             "TABLE": self._transform_table,
             "COLUMN": self._transform_column,
+            "STAGE": self._transform_stage,
+            "PIPE": self._transform_pipe,
+            "FUNCTION": self._transform_function,
         }
 
         if transform_method:
@@ -162,6 +168,85 @@ class PhoenixTransformer(TransformerInterface):
             )
         except AssertionError as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
+            return None
+
+    def _transform_stage(self, data: Dict[str, Any]) -> Optional[StageEntity]:
+        try:
+            self._assert_not_none(data, "stage_id", "Stage ID")
+            self._assert_not_none(data, "stage_name", "Stage Name")
+            self._assert_not_none(data, "stage_schema", "Stage Schema")
+
+            return StageEntity(
+                namespace=self.namespace,
+                package=self.package,
+                typeName="STAGE",
+                id=data["stage_id"],
+                name=data["stage_name"],
+                schema=data["stage_schema"],
+                URI=self._build_uri(
+                    data["stage_catalog"],
+                    data["stage_schema"],
+                    data["stage_name"],
+                ),
+            )
+        except AssertionError as e:
+            logger.error(f"Error creating StageEntity: {str(e)}")
+            return None
+
+    def _transform_pipe(self, data: Dict[str, Any]) -> Optional[SnowflakePipeEntity]:
+        try:
+            self._assert_not_none(data, "pipe_id", "Pipe ID")
+            self._assert_not_none(data, "pipe_name", "Pipe Name")
+            self._assert_not_none(data, "pipe_schema", "Pipe Schema")
+
+            return SnowflakePipeEntity(
+                namespace=self.namespace,
+                package=self.package,
+                typeName="PIPE",
+                id=data["pipe_id"],
+                name=data["pipe_name"],
+                schema=data["pipe_schema"],
+                URI=self._build_uri(
+                    data["pipe_catalog"],
+                    data["pipe_schema"],
+                    data["pipe_name"],
+                ),
+                snowflakePipeIsAutoIngestEnabled=data["is_autoingest_enabled"],
+                snowflakePipeNotificationChannelName=data["notification_channel_name"],
+            )
+        except AssertionError as e:
+            logger.error(f"Error creating SnowflakePipeEntity: {str(e)}")
+            return None
+
+    def _transform_function(self, data: Dict[str, Any]) -> Optional[FunctionEntity]:
+        try:
+            self._assert_not_none(data, "function_id", "Function ID")
+            self._assert_not_none(data, "function_name", "Function name")
+            self._assert_not_none(data, "function_schema", "Function schema")
+
+            return FunctionEntity(
+                namespace=self.namespace,
+                package=self.package,
+                typeName="FUNCTION",
+                id=data["function_id"],
+                name=data["function_name"],
+                schema=data["function_schema"],
+                URI=self._build_uri(
+                    data["function_catalog"],
+                    data["function_schema"],
+                    data["function_name"],
+                ),
+                functionArguments=data["argument_signature"],
+                functionDefinition=data["function_definition"],
+                functionIsExternal=data["is_external"] == "YES",
+                functionIsMemoizable=data["is_memoizable"] == "YES",
+                functionLanguage=data["function_language"],
+                functionReturnType=data["data_type"],
+                functionIsSecure=True,
+                functionType="",
+            )
+        except AssertionError as e:
+            logger.error(f"Error creating FunctionEntity: {str(e)}")
             return None
 
     def _transform_default(

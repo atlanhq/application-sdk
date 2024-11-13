@@ -73,3 +73,37 @@ class ColumnEntity(BaseObjectEntity):
     isSearchable: bool = True
     namespace: Namespace
     package: Package
+
+
+class StageEntity(BaseObjectEntity):
+    namespace: Namespace
+    package: Package
+    id: int
+    name: str
+    schema: str
+
+
+class FunctionEntity(BaseObjectEntity):
+    namespace: Namespace
+    package: Package
+    id: int
+    name: str
+    schema: str
+    functionArguments: str
+    functionDefinition: str
+    functionIsExternal: bool
+    functionIsMemoizable: bool
+    functionIsSecure: bool
+    functionLanguage: str
+    functionReturnType: str
+    functionType: str
+
+
+class SnowflakePipeEntity(BaseObjectEntity):
+    namespace: Namespace
+    package: Package
+    id: int
+    name: str
+    schema: str
+    snowflakePipeIsAutoIngestEnabled: bool
+    snowflakePipeNotificationChannelName: str
