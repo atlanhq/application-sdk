@@ -22,10 +22,14 @@ class SQLResourceConfig:
         use_server_side_cursor: bool = True,
         credentials: Dict[str, Any] = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
+        sql_engine_adapter: str = "psycopg2",
+        sql_alchemy_driver: str = "postgresql",
     ):
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
+        self.sql_engine_adapter = sql_engine_adapter
+        self.sql_alchemy_driver = sql_alchemy_driver
 
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
@@ -35,7 +39,7 @@ class SQLResourceConfig:
 
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+        return f"{self.sql_alchemy_driver}+{self.sql_engine_adapter}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
 class SQLResource(ResourceInterface):
