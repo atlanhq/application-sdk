@@ -59,7 +59,7 @@ class SQLResource(ResourceInterface):
         )
         self.connection = self.engine.connect()
 
-    def set_credentials(self, credentials):
+    def set_credentials(self, credentials: Dict[str, Any]) -> None:
         self.config.set_credentials(credentials)
 
     async def fetch_metadata(
