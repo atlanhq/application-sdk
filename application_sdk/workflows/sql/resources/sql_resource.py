@@ -137,7 +137,7 @@ class SQLResource(ResourceInterface):
                         break
 
                     if not column_names:
-                        column_names = [str(field) for field in rows[0]._fields]
+                        column_names = [field for field in rows[0]._fields]
 
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
