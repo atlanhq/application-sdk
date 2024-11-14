@@ -21,6 +21,8 @@ def config():
             "port": 5432,
             "database": "test_db",
         },
+        database_driver="psycopg2",
+        database_dialect="postgresql",
         sql_alchemy_connect_args={},
     )
 
