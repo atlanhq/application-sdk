@@ -1,7 +1,16 @@
 import logging
 from typing import Any, Callable, Dict, Optional, Union
 
-from pyatlan.model.assets import SQL, Column, Database, Schema, Table, View
+from pyatlan.model.assets import (
+    SQL,
+    Column,
+    Database,
+    Function,
+    Schema,
+    SnowflakePipe,
+    Table,
+    View,
+)
 
 from application_sdk.workflows.transformers import TransformerInterface
 
@@ -42,6 +51,9 @@ class AtlasTransformer(TransformerInterface):
             "SCHEMA": self._create_schema_entity,
             "TABLE": self._create_table_entity,
             "COLUMN": self._create_column_entity,
+            # TODO: No type for Snowflake stage
+            "PIPE": self._create_pipe_entity,
+            "FUNCTION": self._create_function_entity,
         }
 
         creator = entity_creators.get(typename.upper())
@@ -158,6 +170,74 @@ class AtlasTransformer(TransformerInterface):
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
             return sql_column
+        except AssertionError as e:
+            logger.error(f"Error creating ColumnEntity: {str(e)}")
+            return None
+
+    def _create_pipe_entity(
+        self, data: Dict[str, Any], base_qualified_name: str
+    ) -> Optional[SnowflakePipe]:
+        try:
+            assert data["pipe_name"] is not None, "Pipe name cannot be None"
+            assert data["definition"] is not None, "Pipe definition cannot be None"
+            assert (
+                data["is_autoingest_enabled"] is not None
+            ), "Is auto ingest enabled cannot be None"
+            assert (
+                data["notification_channel_name"] is not None
+            ), "Notification channel name cannot be None"
+
+            snowflake_pipe = SnowflakePipe.create(
+                name=data["pipe_name"],
+                definition=data["definition"],
+                snowflake_pipe_is_auto_ingest_enabled=data["is_autoingest_enabled"],
+                snowflake_pipe_notification_channel_name=data[
+                    "notification_channel_name"
+                ],
+            )
+
+            snowflake_pipe.attributes.atlan_schema = Schema.creator(
+                name=data["pipe_schema"],
+                database_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}",
+            )
+
+            return snowflake_pipe
+        except AssertionError as e:
+            logger.error(f"Error creating ColumnEntity: {str(e)}")
+            return None
+
+    def _create_function_entity(
+        self, data: Dict[str, Any], base_qualified_name: str
+    ) -> Optional[Function]:
+        try:
+            assert data["pipe_name"] is not None, "Pipe name cannot be None"
+            assert data["definition"] is not None, "Pipe definition cannot be None"
+            assert (
+                data["is_autoingest_enabled"] is not None
+            ), "Is auto ingest enabled cannot be None"
+            assert (
+                data["notification_channel_name"] is not None
+            ), "Notification channel name cannot be None"
+            assert (
+                data["ordinal_position"] is not None
+            ), "Ordinal position cannot be None"
+            assert data["data_type"] is not None, "Data type cannot be None"
+
+            function = Function.create(
+                name=data["function_name"],
+                function_arguments=data["argument_signature"],
+                function_definition=data["function_definition"],
+                function_is_external=data["is_external"] == "YES",
+                function_is_memoizable=data["is_memoizable"] == "YES",
+                # TODO: Can't find secure in snowflake functions
+                # function_is_secure=,
+                function_language=data["function_language"],
+                # TODO: Can't find return type and function_type in snowflake functions
+                # function_return_type=data[],
+                # function_type=,
+            )
+
+            return function
         except AssertionError as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
