@@ -210,18 +210,22 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Function]:
         try:
-            assert data["pipe_name"] is not None, "Pipe name cannot be None"
-            assert data["definition"] is not None, "Pipe definition cannot be None"
+            assert data["function_name"] is not None, "Function name cannot be None"
             assert (
-                data["is_autoingest_enabled"] is not None
-            ), "Is auto ingest enabled cannot be None"
+                data["argument_signature"] is not None
+            ), "Function argument signature cannot be None"
             assert (
-                data["notification_channel_name"] is not None
-            ), "Notification channel name cannot be None"
+                data["function_definition"] is not None
+            ), "Function definition cannot be None"
             assert (
-                data["ordinal_position"] is not None
-            ), "Ordinal position cannot be None"
-            assert data["data_type"] is not None, "Data type cannot be None"
+                data["is_external"] is not None
+            ), "Function is_external name cannot be None"
+            assert (
+                data["is_memoizable"] is not None
+            ), "Function is_memoizable cannot be None"
+            assert (
+                data["function_language"] is not None
+            ), "Function language cannot be None"
 
             function = Function.create(
                 name=data["function_name"],
