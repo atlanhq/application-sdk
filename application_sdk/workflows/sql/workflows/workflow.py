@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from datetime import timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -352,7 +352,12 @@ class SQLWorkflow(WorkflowInterface):
 
         return batches, chunk_start_numbers
 
-    async def fetch_and_transform(self, fetch_fn, workflow_args, retry_policy):
+    async def fetch_and_transform(
+        self,
+        fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
+        workflow_args: Dict[str, Any],
+        retry_policy: RetryPolicy,
+    ) -> None:
         raw_stat = await workflow.execute_activity(
             fetch_fn,
             workflow_args,
