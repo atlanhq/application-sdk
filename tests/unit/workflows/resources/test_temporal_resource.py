@@ -79,6 +79,43 @@ async def test_start_workflow(
     "application_sdk.workflows.resources.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
+async def test_start_workflow_with_workflow_id(
+    mock_connect: AsyncMock, temporal_resource: TemporalResource
+):
+    # Mock the client connection
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    def start_workflow_side_effect(_, __, id, *args, **kwargs):
+        mock_handle = MagicMock()
+        mock_handle.id = id
+        mock_handle.result_run_id = "test_run_id"
+        return mock_handle
+
+    # Run load to connect the client
+    await temporal_resource.load()
+    mock_client.start_workflow.side_effect = start_workflow_side_effect
+
+    # Sample workflow arguments
+    workflow_args = {"param1": "value1"}
+    workflow_class = MagicMock()  # Mocking the workflow class
+
+    # Run start_workflow and capture the result
+    result = await temporal_resource.start_workflow(
+        workflow_args, workflow_class, workflow_id="test_workflow_id"
+    )
+
+    # Assertions
+    mock_client.start_workflow.assert_called_once()
+    assert "workflow_id" in result
+    assert result["workflow_id"] == "test_workflow_id"
+    assert result["run_id"] == "test_run_id"
+
+
+@patch(
+    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    new_callable=AsyncMock,
+)
 async def test_start_workflow_failure(
     mock_connect: AsyncMock, temporal_resource: TemporalResource
 ):
