@@ -22,14 +22,17 @@ class SQLResourceConfig:
         use_server_side_cursor: bool = True,
         credentials: Dict[str, Any] = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
-        sql_engine_adapter: str = "psycopg2",
-        sql_alchemy_driver: str = "postgresql",
+        database_driver: str | None = None,
+        database_dialect: str | None = None,
     ):
+        if database_driver is None or database_dialect is None:
+            raise ValueError("database_driver and database_dialect are required")
+
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
-        self.sql_engine_adapter = sql_engine_adapter
-        self.sql_alchemy_driver = sql_alchemy_driver
+        self.database_driver = database_driver
+        self.database_dialect = database_dialect
 
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
@@ -39,18 +42,21 @@ class SQLResourceConfig:
 
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.credentials["password"])
-        return f"{self.sql_alchemy_driver}+{self.sql_engine_adapter}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+        return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
 class SQLResource(ResourceInterface):
-    config: SQLResourceConfig = None
+    config: SQLResourceConfig
     connection = None
     engine = None
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
 
-    def __init__(self, config: SQLResourceConfig = None):
+    def __init__(self, config: SQLResourceConfig | None = None):
+        if config is None:
+            raise ValueError("config is required")
+
         self.config = config
 
         super().__init__()

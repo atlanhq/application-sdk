@@ -31,8 +31,6 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict
-from urllib.parse import quote_plus
 
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -48,6 +46,8 @@ from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransform
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
+DATABASE_DRIVER = "psycopg2"
+DATABASE_DIALECT = "postgresql"
 
 logger = logging.getLogger(__name__)
 
@@ -97,15 +97,6 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
         return super().build(workflow=workflow or SampleSQLWorkflow())
 
 
-class SampleSQLResource(SQLResource):
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
-        return {}
-
-    def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
-
-
 async def main():
     temporal_resource = TemporalResource(
         TemporalConfig(
@@ -122,7 +113,14 @@ async def main():
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
-        .set_sql_resource(SampleSQLResource(SQLResourceConfig()))
+        .set_sql_resource(
+            SQLResource(
+                SQLResourceConfig(
+                    database_driver=DATABASE_DRIVER,
+                    database_dialect=DATABASE_DIALECT,
+                )
+            )
+        )
         .build()
     )
 
@@ -150,6 +148,8 @@ async def main():
                 "password": os.getenv("POSTGRES_PASSWORD", "password"),
                 "database": os.getenv("POSTGRES_DATABASE", "postgres"),
             },
+            "database_driver": DATABASE_DRIVER,
+            "database_dialect": DATABASE_DIALECT,
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",

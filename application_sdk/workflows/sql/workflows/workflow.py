@@ -425,6 +425,8 @@ class SQLWorkflow(WorkflowInterface):
             self.sql_resource = SQLResource(
                 SQLResourceConfig(
                     credentials=credentials,
+                    database_driver=workflow_args["database_driver"],
+                    database_dialect=workflow_args["database_dialect"],
                 )
             )
 
