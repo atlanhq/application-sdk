@@ -62,7 +62,8 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def test_auth(self, credential: Dict[str, Any]):
         if not self.auth_controller:
             raise HTTPException(
-                status_code=500, detail="Auth interface not implemented"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Auth interface not implemented",
             )
         try:
             self.auth_controller.test_auth()
@@ -75,7 +76,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             )
         except Exception as e:
             return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
                     "success": False,
                     "message": "Failed to test authentication",
@@ -86,7 +87,8 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def fetch_metadata(self, credential: Dict[str, Any]):
         if not self.metadata_controller:
             raise HTTPException(
-                status_code=500, detail="Metadata interface not implemented"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Metadata interface not implemented",
             )
         try:
             self.resource.set_credentials(credential)
@@ -101,7 +103,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             )
         except Exception as e:
             return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
                     "success": False,
                     "message": "Failed to fetch metadata",
@@ -112,9 +114,16 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def preflight_check(self, form_data: Dict[str, Any]):
         if not self.preflight_check_controller:
             raise HTTPException(
-                status_code=500, detail="Preflight check controller not implemented"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Preflight check controller not implemented",
             )
         try:
+            if not form_data["credentials"]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Credentials not passed",
+                )
+
             self.resource.set_credentials(form_data["credentials"])
             await self.resource.load()
             return JSONResponse(
@@ -128,7 +137,7 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             )
         except Exception as e:
             return JSONResponse(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 content={
                     "success": False,
                     "message": "Preflight check failed",
@@ -139,7 +148,8 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     async def start_workflow(self, workflow_args: Dict[str, Any]):
         if not self.workflow:
             raise HTTPException(
-                status_code=500, detail="Workflow interface not implemented"
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Workflow interface not implemented",
             )
         try:
             workflow_metadata = await self.workflow.start(workflow_args)
@@ -152,7 +162,9 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
                 },
             )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=str(e))
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(e)
+            )
 
     def add_workflows_router(self):
         self.workflows_router.add_api_route(
