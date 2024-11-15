@@ -144,14 +144,12 @@ async def test_run_query(
 
     # Create MagicMock rows with `_fields` and specific attribute values
     row1 = MagicMock()
-    row1._fields = ["col1", "col2"]
     row1.col1 = "row1_col1"
     row1.col2 = "row1_col2"
     row1.__iter__.return_value = iter(["row1_col1", "row1_col2"])
     row1.__getitem__.side_effect = get_item_gen(["row1_col1", "row1_col2"])
 
     row2 = MagicMock()
-    row2._fields = ["col1", "col2"]
     row2.col1 = "row2_col1"
     row2.col2 = "row2_col2"
     row2.__iter__.return_value = iter(["row2_col1", "row2_col2"])
@@ -159,6 +157,14 @@ async def test_run_query(
 
     # Mock the connection execute and cursor
     mock_cursor = MagicMock()
+
+    col1 = MagicMock()
+    col1.name = "COL1"
+
+    col2 = MagicMock()
+    col2.name = "COL2"
+
+    mock_cursor.cursor.description = [col1, col2]
     mock_cursor.fetchmany = MagicMock(
         side_effect=[
             [row1, row2],  # First batch
