@@ -25,9 +25,6 @@ class SQLResourceConfig:
         database_driver: str | None = None,
         database_dialect: str | None = None,
     ):
-        if database_driver is None or database_dialect is None:
-            raise ValueError("database_driver and database_dialect are required")
-
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
