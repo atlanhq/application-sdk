@@ -127,7 +127,10 @@ class SQLResource(ResourceInterface):
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
-                column_names: List[str] = []
+                column_names: List[str] = [
+                    description.name.lower()
+                    for description in cursor.cursor.description
+                ]
 
                 while True:
                     rows = await loop.run_in_executor(
@@ -135,9 +138,6 @@ class SQLResource(ResourceInterface):
                     )
                     if not rows:
                         break
-
-                    if not column_names:
-                        column_names = [str(field) for field in rows[0]._fields]
 
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
