@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
@@ -15,10 +15,10 @@ from application_sdk.workflows.workflow import WorkflowInterface
 
 
 class FastAPIApplicationBuilder(AtlanApplicationBuilder):
-    auth_controller: WorkflowAuthControllerInterface
-    metadata_controller: WorkflowMetadataControllerInterface
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface
-    resource: ResourceInterface
+    auth_controller: WorkflowAuthControllerInterface | None
+    metadata_controller: WorkflowMetadataControllerInterface | None
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface | None
+    resource: ResourceInterface | None
     workflow: WorkflowInterface
 
     workflows_router: APIRouter = APIRouter(
@@ -30,11 +30,13 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
     def __init__(
         self,
         app: FastAPI,
-        resource: ResourceInterface,
         workflow: WorkflowInterface,
-        auth_controller: WorkflowAuthControllerInterface,
-        metadata_controller: WorkflowMetadataControllerInterface,
-        preflight_check_controller: WorkflowPreflightCheckControllerInterface,
+        resource: Optional[ResourceInterface] | None = None,
+        auth_controller: Optional[WorkflowAuthControllerInterface] | None = None,
+        metadata_controller: Optional[WorkflowMetadataControllerInterface]
+        | None = None,
+        preflight_check_controller: Optional[WorkflowPreflightCheckControllerInterface]
+        | None = None,
     ):
         self.app = app
         self.app.include_router(health.router)
@@ -88,6 +90,9 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             raise HTTPException(
                 status_code=500, detail="Metadata interface not implemented"
             )
+
+        if not self.resource:
+            raise HTTPException(status_code=500, detail="Resource not implemented")
         try:
             self.resource.set_credentials(credential)
             await self.resource.load()
@@ -114,6 +119,9 @@ class FastAPIApplicationBuilder(AtlanApplicationBuilder):
             raise HTTPException(
                 status_code=500, detail="Preflight check controller not implemented"
             )
+
+        if not self.resource:
+            raise HTTPException(status_code=500, detail="Resource not implemented")
         try:
             self.resource.set_credentials(form_data["credentials"])
             await self.resource.load()
