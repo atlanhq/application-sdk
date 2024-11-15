@@ -38,6 +38,9 @@ class SQLResourceConfig:
         return self.sql_alchemy_connect_args
 
     def get_sqlalchemy_connection_string(self) -> str:
+        if not self.database_dialect or not self.database_driver:
+            raise ValueError("database_driver and database_dialect are required")
+
         encoded_password = quote_plus(self.credentials["password"])
         return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
