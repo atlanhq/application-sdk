@@ -142,6 +142,29 @@ async def test_start_workflow_failure(
     "application_sdk.workflows.resources.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
+async def test_create_worker_without_client(
+    mock_connect: AsyncMock,
+    mock_worker_class: MagicMock,
+    temporal_resource: TemporalResource,
+):
+    # Mock the client connection
+    mock_client = AsyncMock()
+    mock_connect.return_value = mock_client
+
+    # Mock workflow class and activities
+    workflow_class = MagicMock()
+    activities = [MagicMock(), MagicMock()]
+
+    # Run create_worker
+    with pytest.raises(ValueError, match="Client is not loaded"):
+        temporal_resource.create_worker(activities, workflow_class)
+
+
+@patch("application_sdk.workflows.resources.temporal_resource.Worker")
+@patch(
+    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    new_callable=AsyncMock,
+)
 async def test_create_worker(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,

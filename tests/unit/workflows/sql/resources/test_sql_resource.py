@@ -33,6 +33,11 @@ def resource(config: SQLResourceConfig):
     return SQLResource(config=config)
 
 
+def test_init_without_config():
+    with pytest.raises(ValueError, match="config is required"):
+        SQLResource()
+
+
 @patch("application_sdk.workflows.sql.resources.sql_resource.create_engine")
 def test_load(mock_create_engine: Any, resource: SQLResource):
     # Mock the engine and connection
@@ -69,6 +74,30 @@ async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
         metadata_sql,
         database_alias_key="TABLE_CATALOG",
         schema_alias_key="TABLE_SCHEMA",
+    )
+
+    # Assertions
+    assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    mock_run_query.assert_called_once_with(metadata_sql)
+
+
+@patch("application_sdk.workflows.sql.resources.sql_resource.SQLResource.run_query")
+async def test_fetch_metadata_without_database_alias_key(
+    mock_run_query: Any, resource: SQLResource
+):
+    async def async_gen(_):
+        yield [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+
+    mock_run_query.side_effect = async_gen
+
+    # Sample SQL query
+    metadata_sql = "SELECT * FROM information_schema.tables"
+
+    # Run fetch_metadata
+    resource.default_database_alias_key = "TABLE_CATALOG"
+    resource.default_schema_alias_key = "TABLE_SCHEMA"
+    result = await resource.fetch_metadata(
+        metadata_sql,
     )
 
     # Assertions
@@ -197,3 +226,45 @@ async def test_run_query(
 
     # Assertions
     assert results == expected_results
+
+
+@pytest.mark.asyncio
+@patch("application_sdk.workflows.sql.resources.sql_resource.text")
+@patch(
+    "application_sdk.workflows.sql.resources.sql_resource.asyncio.get_running_loop",
+    new_callable=MagicMock,
+)
+async def test_run_query_with_error(
+    mock_get_running_loop: MagicMock, mock_text: Any, resource: SQLResource
+):
+    # Mock the query text
+    query = "SELECT * FROM test_table"
+    mock_text.return_value = query
+
+    # Mock the connection execute and cursor
+    mock_cursor = MagicMock()
+
+    col1 = MagicMock()
+    col1.name = "COL1"
+
+    col2 = MagicMock()
+    col2.name = "COL2"
+
+    mock_cursor.cursor.description = [col1, col2]
+
+    resource.connection = MagicMock()
+    resource.connection.execute.return_value = mock_cursor
+
+    # Mock run_in_executor to return cursor and then batches
+    mock_get_running_loop.return_value.run_in_executor = AsyncMock(
+        side_effect=[
+            mock_cursor,  # Simulate connection.execute
+            Exception("Simulated query failure"),  # Simulate error from `fetchmany`
+        ]
+    )
+
+    # Run run_query and collect all results
+    results: list[dict[str, str]] = []
+    with pytest.raises(Exception, match="Simulated query failure"):
+        async for batch in resource.run_query(query):
+            results.extend(batch)
