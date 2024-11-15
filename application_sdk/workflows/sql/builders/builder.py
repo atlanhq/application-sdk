@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     sql_resource: SQLResource
-    temporal_resource: TemporalResource
     transformer: TransformerInterface
 
     def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflowBuilder":
@@ -31,7 +30,7 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     def set_temporal_resource(
         self, temporal_resource: TemporalResource
     ) -> "SQLWorkflowBuilder":
-        self.temporal_resource = temporal_resource
+        super().set_temporal_resource(temporal_resource)
         return self
 
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
