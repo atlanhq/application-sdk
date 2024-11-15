@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Set, Tuple
@@ -48,10 +49,13 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
-            results["databaseSchemaCheck"] = await self.check_schemas_and_databases(
-                payload
+            (
+                results["databaseSchemaCheck"],
+                results["tablesCheck"],
+            ) = await asyncio.gather(
+                self.check_schemas_and_databases(payload),
+                self.tables_check(payload),
             )
-            results["tablesCheck"] = await self.tables_check(payload)
             logger.info("Preflight check completed successfully")
         except Exception as e:
             logger.error("Error during preflight check", exc_info=True)

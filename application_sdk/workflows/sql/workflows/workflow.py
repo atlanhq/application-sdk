@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from datetime import timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
@@ -198,9 +198,9 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
         normalized_include_regex, normalized_exclude_regex, _ = prepare_filters(
             include_filter,
             exclude_filter,
@@ -222,9 +222,9 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
         normalized_include_regex, normalized_exclude_regex, exclude_table = (
             prepare_filters(
                 include_filter,
@@ -249,9 +249,9 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include-filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude-filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp-table-regex", "")
+        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
+        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
+        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
         normalized_include_regex, normalized_exclude_regex, exclude_table = (
             prepare_filters(
                 include_filter,
@@ -352,7 +352,12 @@ class SQLWorkflow(WorkflowInterface):
 
         return batches, chunk_start_numbers
 
-    async def fetch_and_transform(self, fetch_fn, workflow_args, retry_policy):
+    async def fetch_and_transform(
+        self,
+        fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
+        workflow_args: Dict[str, Any],
+        retry_policy: RetryPolicy,
+    ) -> None:
         raw_stat = await workflow.execute_activity(
             fetch_fn,
             workflow_args,
@@ -363,10 +368,14 @@ class SQLWorkflow(WorkflowInterface):
         transform_activities: List[Any] = []
 
         typename: str | None = raw_stat["typename"] or None
-        chunk_count: int | None = raw_stat["chunk_count"] or None
 
-        if typename is None or chunk_count is None:
-            raise ValueError("Invalid typename or chunk_count")
+        chunk_count = raw_stat.get("chunk_count", None)
+
+        if typename is None:
+            raise ValueError("Invalid typename")
+
+        if chunk_count is None:
+            raise ValueError("Invalid chunk_count")
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
@@ -414,6 +423,8 @@ class SQLWorkflow(WorkflowInterface):
             self.sql_resource = SQLResource(
                 SQLResourceConfig(
                     credentials=credentials,
+                    database_driver=workflow_args["database_driver"],
+                    database_dialect=workflow_args["database_dialect"],
                 )
             )
 

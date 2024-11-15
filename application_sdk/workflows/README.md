@@ -23,7 +23,7 @@ You can create a custom auth interface by extending this class and overriding th
 
 ### `WorkflowMetadataInterface`
 This class is used to handle the `Include/Exclude` feature.
-- This is automatically linked to the default UI interface and the `include-filter` and `exclude-filter` widget.
+- This is automatically linked to the default UI interface and the `include_filter` and `exclude_filter` widget.
 
 You can create a custom metadata interface by extending this class and overriding the `fetch_metadata` method.
 
