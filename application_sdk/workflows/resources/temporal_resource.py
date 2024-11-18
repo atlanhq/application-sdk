@@ -15,6 +15,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk import const
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
 
@@ -33,11 +34,11 @@ class ResourceInterface(ABC):
 
 
 class TemporalConfig:
-    host = os.getenv("host", "localhost")
-    port = os.getenv("port", "7233")
-    application_name = os.getenv("application_name", "default")
+    host = os.getenv(const.TEMPORAL_HOST, "localhost")
+    port = os.getenv(const.TEMPORAL_PORT, "7233")
+    application_name = os.getenv(const.TEMPORAL_APPLICATION_NAME, "default")
     # FIXME: causes issue with different namespace, TBR.
-    namespace: str = "default"
+    namespace: str = os.getenv(const.TEMPORAL_NAMESPACE, "default")
 
     def __init__(
         self,
