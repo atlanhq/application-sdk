@@ -51,7 +51,7 @@ class AtlasTransformer(TransformerInterface):
             "SCHEMA": self._create_schema_entity,
             "TABLE": self._create_table_entity,
             "COLUMN": self._create_column_entity,
-            # TODO: No type for Snowflake stage
+            "STAGE": self._create_stage_entity,
             "PIPE": self._create_pipe_entity,
             "FUNCTION": self._create_function_entity,
         }
@@ -130,6 +130,27 @@ class AtlasTransformer(TransformerInterface):
             return sql_table
         except AssertionError as e:
             logger.error(f"Error creating TableEntity: {str(e)}")
+            return None
+
+    def _create_stage_entity(
+        self, data: Dict[str, Any], base_qualified_name: str
+    ) -> Optional[Union[Table, View]]:
+        try:
+            assert data["stage_name"] is not None, "Stage name cannot be None"
+            assert data["stage_catalog"] is not None, "Stage catalog cannot be None"
+            assert data["stage_schema"] is not None, "Stage schema cannot be None"
+
+            sql_table: Table = Table.creator(
+                name=data["stage_name"],
+                schema_qualified_name=f"{base_qualified_name}/{data['stage_catalog']}/{data['stage_schema']}",
+            )
+            sql_table.attributes.atlan_schema = Schema.creator(
+                name=data["stage_schema"],
+                database_qualified_name=f"{base_qualified_name}/{data['stage_catalog']}",
+            )
+            return sql_table
+        except AssertionError as e:
+            logger.error(f"Error creating StageEntity: {str(e)}")
             return None
 
     def _create_column_entity(
