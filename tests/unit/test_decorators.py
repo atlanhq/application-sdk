@@ -1,16 +1,17 @@
-import duckdb
 import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
-from application_sdk.workflows.sql.decorators import transform, QueryInput, JsonOutput
+from application_sdk import activity
+from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.outputs import JsonOutput
 
 
 class TestDecorators:
     async def test_query_batch_basic(self):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @transform(
-            batch_input=QueryInput(engine, "SELECT 1 as value")
+        @activity(
+            batch_input=SQLQueryInput(engine, "SELECT 1 as value")
         )
         async def func(batch_input: pd.DataFrame):
             assert len(batch_input) == 1
@@ -25,8 +26,8 @@ class TestDecorators:
             conn.execute(text("INSERT INTO numbers (value) VALUES (0), (1), (2)"))
             conn.commit()
 
-        @transform(
-            batch_input=QueryInput(engine, "SELECT * FROM numbers")
+        @activity(
+            batch_input=SQLQueryInput(engine, "SELECT * FROM numbers")
         )
         async def func(batch_input: pd.DataFrame):
             assert len(batch_input) == 3
@@ -36,8 +37,8 @@ class TestDecorators:
     async def test_query_write_basic(self):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @transform(
-            batch_input=QueryInput(engine, "SELECT 1 as value"),
+        @activity(
+            batch_input=SQLQueryInput(engine, "SELECT 1 as value"),
             out1=JsonOutput("/tmp/raw"),
             out2=JsonOutput("/tmp/transformed")
         )
