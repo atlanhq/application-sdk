@@ -1,0 +1,6 @@
+# Supported entity types
+DATABASE = "DATABASE"
+SCHEMA = "SCHEMA"
+TABLE = "TABLE"
+COLUMN = "COLUMN"
+VIEW = "VIEW"

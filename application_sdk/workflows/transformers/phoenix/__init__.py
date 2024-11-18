@@ -1,9 +1,14 @@
 import logging
 from typing import Any, Callable, Dict, Optional
 
-from pydantic import BaseModel
-
 from application_sdk.workflows.transformers import TransformerInterface
+from application_sdk.workflows.transformers.const import (
+    COLUMN,
+    DATABASE,
+    SCHEMA,
+    TABLE,
+    VIEW,
+)
 from application_sdk.workflows.transformers.phoenix.schema import (
     BaseObjectEntity,
     ColumnConstraint,
@@ -41,8 +46,22 @@ class PhoenixTransformer(TransformerInterface):
         self.namespace = Namespace(id=self.connector_temp, name=self.connector_temp)
         self.package = Package(id=self.connector_temp, name=self.connector_temp)
 
+        self.entity_creator_map: Dict[
+            str, Callable[[Dict[str, Any]], Optional[Any]]
+        ] = {
+            DATABASE: self._create_database_entity,
+            SCHEMA: self._create_schema_entity,
+            TABLE: self._create_table_entity,
+            COLUMN: self._create_column_entity,
+        }
+
     def transform_metadata(
-        self, typename: str, data: Dict[str, Any], **kwargs: Any
+        self,
+        typename: str,
+        data: Dict[str, Any],
+        entity_creator_map: Dict[str, Callable[[Dict[str, Any]], Optional[Any]]]
+        | None = None,
+        **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         """
         Transform metadata to Atlan Open Spec.
@@ -56,30 +75,27 @@ class PhoenixTransformer(TransformerInterface):
             Optional[str]: The json string of the transformed metadata.
         """
         type_name = typename.upper()
-        transform_method: Dict[str, Callable[[Dict[str, Any]], Optional[BaseModel]]] = {
-            "DATABASE": self._transform_database,
-            "SCHEMA": self._transform_schema,
-            "TABLE": self._transform_table,
-            "COLUMN": self._transform_column,
-        }
+        self.entity_creator_map = entity_creator_map or self.entity_creator_map
 
-        if transform_method:
-            entity = transform_method[type_name](data)
+        creator = self.entity_creator_map.get(type_name)
+        if creator:
+            entity = creator(data)
             if entity:
                 return entity.model_dump()
             else:
+                logger.error(f"Error deserializing {type_name} entity: {data}")
                 return None
         else:
-            logger.error(f"Unknown typename: {typename}")
-            return self._transform_default(type_name, data).model_dump()
+            logger.error(f"Unknown typename: {typename}, creating default entity")
+            return self._create_default_entity(type_name, data).model_dump()
 
-    def _transform_database(self, data: Dict[str, Any]) -> Optional[DatabaseEntity]:
+    def _create_database_entity(self, data: Dict[str, Any]) -> Optional[DatabaseEntity]:
         try:
             self._assert_not_none(data, "datname", "Database name")
             return DatabaseEntity(
                 namespace=self.namespace,
                 package=self.package,
-                typeName="DATABASE",
+                typeName=DATABASE,
                 name=data["datname"],
                 URI=self._build_uri(data["datname"]),
             )
@@ -87,14 +103,14 @@ class PhoenixTransformer(TransformerInterface):
             logger.error(f"Error creating DatabaseEntity: {str(e)}")
             return None
 
-    def _transform_schema(self, data: Dict[str, Any]) -> Optional[SchemaEntity]:
+    def _create_schema_entity(self, data: Dict[str, Any]) -> Optional[SchemaEntity]:
         try:
             self._assert_not_none(data, "schema_name", "Schema name")
             self._assert_not_none(data, "catalog_name", "Catalog name")
             return SchemaEntity(
                 namespace=self.namespace,
                 package=self.package,
-                typeName="SCHEMA",
+                typeName=SCHEMA,
                 name=data["schema_name"],
                 URI=self._build_uri(data["catalog_name"], data["schema_name"]),
             )
@@ -102,17 +118,17 @@ class PhoenixTransformer(TransformerInterface):
             logger.error(f"Error creating SchemaEntity: {str(e)}")
             return None
 
-    def _transform_table(self, data: Dict[str, Any]) -> Optional[BaseObjectEntity]:
+    def _create_table_entity(self, data: Dict[str, Any]) -> Optional[TableEntity]:
         try:
             self._assert_not_none(data, "table_name", "Table name")
             self._assert_not_none(data, "table_catalog", "Table catalog")
             self._assert_not_none(data, "table_schema", "Table schema")
 
-            if data.get("table_type") == "TABLE":
+            if data.get("table_type") == TABLE:
                 return TableEntity(
                     namespace=self.namespace,
                     package=self.package,
-                    typeName="TABLE",
+                    typeName=TABLE,
                     name=data["table_name"],
                     URI=self._build_uri(
                         data["table_catalog"], data["table_schema"], data["table_name"]
@@ -123,7 +139,7 @@ class PhoenixTransformer(TransformerInterface):
                 return ViewEntity(
                     namespace=self.namespace,
                     package=self.package,
-                    typeName="VIEW",
+                    typeName=VIEW,
                     name=data["table_name"],
                     URI=self._build_uri(
                         data["table_catalog"], data["table_schema"], data["table_name"]
@@ -133,7 +149,7 @@ class PhoenixTransformer(TransformerInterface):
             logger.error(f"Error creating TableEntity: {str(e)}")
             return None
 
-    def _transform_column(self, data: Dict[str, Any]) -> Optional[ColumnEntity]:
+    def _create_column_entity(self, data: Dict[str, Any]) -> Optional[ColumnEntity]:
         try:
             self._assert_not_none(data, "column_name", "Column name")
             self._assert_not_none(data, "table_catalog", "Table catalog")
@@ -145,7 +161,7 @@ class PhoenixTransformer(TransformerInterface):
             return ColumnEntity(
                 namespace=self.namespace,
                 package=self.package,
-                typeName="COLUMN",
+                typeName=COLUMN,
                 name=data["column_name"],
                 URI=self._build_uri(
                     data["table_catalog"],
@@ -164,7 +180,7 @@ class PhoenixTransformer(TransformerInterface):
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
-    def _transform_default(
+    def _create_default_entity(
         self, type_name: str, data: Dict[str, Any]
     ) -> BaseObjectEntity:
         name = data[f"{type_name.lower()}_name"]
