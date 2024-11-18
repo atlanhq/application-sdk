@@ -369,9 +369,7 @@ class SQLWorkflow(WorkflowInterface):
 
         typename: str | None = raw_stat["typename"] or None
 
-        chunk_count = raw_stat["chunk_count"]
-        if raw_stat["chunk_count"] is None:
-            chunk_count = None
+        chunk_count = raw_stat.get("chunk_count", None)
 
         if typename is None:
             raise ValueError("Invalid typename")
@@ -425,6 +423,8 @@ class SQLWorkflow(WorkflowInterface):
             self.sql_resource = SQLResource(
                 SQLResourceConfig(
                     credentials=credentials,
+                    database_driver=workflow_args["database_driver"],
+                    database_dialect=workflow_args["database_dialect"],
                 )
             )
 

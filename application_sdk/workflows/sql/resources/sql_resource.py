@@ -22,10 +22,14 @@ class SQLResourceConfig:
         use_server_side_cursor: bool = True,
         credentials: Dict[str, Any] = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
+        database_driver: str | None = None,
+        database_dialect: str | None = None,
     ):
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
+        self.database_driver = database_driver
+        self.database_dialect = database_dialect
 
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
@@ -34,19 +38,25 @@ class SQLResourceConfig:
         return self.sql_alchemy_connect_args
 
     def get_sqlalchemy_connection_string(self) -> str:
+        if not self.database_dialect or not self.database_driver:
+            raise ValueError("database_driver and database_dialect are required")
+
         encoded_password = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg2://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+        return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
 class SQLResource(ResourceInterface):
-    config: SQLResourceConfig = None
+    config: SQLResourceConfig
     connection = None
     engine = None
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
 
-    def __init__(self, config: SQLResourceConfig = None):
+    def __init__(self, config: SQLResourceConfig | None = None):
+        if config is None:
+            raise ValueError("config is required")
+
         self.config = config
 
         super().__init__()
@@ -65,11 +75,17 @@ class SQLResource(ResourceInterface):
     async def fetch_metadata(
         self,
         metadata_sql: str,
-        database_alias_key: str = default_database_alias_key,
-        schema_alias_key: str = default_schema_alias_key,
+        database_alias_key: str | None = None,
+        schema_alias_key: str | None = None,
         database_result_key: str = "TABLE_CATALOG",
         schema_result_key: str = "TABLE_SCHEMA",
     ):
+        if database_alias_key is None:
+            database_alias_key = self.default_database_alias_key
+
+        if schema_alias_key is None:
+            schema_alias_key = self.default_schema_alias_key
+
         result: List[Dict[Any, Any]] = []
         try:
             async for batch in self.run_query(metadata_sql):
@@ -111,7 +127,10 @@ class SQLResource(ResourceInterface):
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
-                column_names: List[str] = []
+                column_names: List[str] = [
+                    description.name.lower()
+                    for description in cursor.cursor.description
+                ]
 
                 while True:
                     rows = await loop.run_in_executor(
@@ -119,9 +138,6 @@ class SQLResource(ResourceInterface):
                     )
                     if not rows:
                         break
-
-                    if not column_names:
-                        column_names = [str(field) for field in rows[0]._fields]
 
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results

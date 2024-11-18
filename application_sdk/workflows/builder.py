@@ -6,6 +6,7 @@ from application_sdk.workflows.controllers import (
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
 )
+from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -29,8 +30,10 @@ class WorkflowBuilderInterface(ABC):
     metadata_controller: WorkflowMetadataControllerInterface
     auth_controller: WorkflowAuthControllerInterface
 
+    temporal_resource: TemporalResource
+
     async def load_resources(self):
-        pass
+        await self.temporal_resource.load()
 
     @abstractmethod
     def build(self) -> WorkflowInterface:
@@ -52,4 +55,10 @@ class WorkflowBuilderInterface(ABC):
         self, auth_controller: WorkflowAuthControllerInterface
     ) -> "WorkflowBuilderInterface":
         self.auth_controller = auth_controller
+        return self
+
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "WorkflowBuilderInterface":
+        self.temporal_resource = temporal_resource
         return self
