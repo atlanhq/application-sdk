@@ -56,9 +56,6 @@ coverage = "^7.6.1"
 pytest-asyncio = "^0.24.0"
 hypothesis = "^6.114.0"
 
-[tool.poetry.group.examples.dependencies]
-psycopg2-binary = "^2.9.9"
-
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
