@@ -1,11 +1,9 @@
-import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
@@ -15,13 +13,13 @@ logger = logging.getLogger(__name__)
 
 class SQLResourceConfig:
     use_server_side_cursor: bool = True
-    credentials: Dict[str, Any] = None
-    sql_alchemy_connect_args: Dict[str, Any] = None
+    credentials: Dict[str, Any] | None = None
+    sql_alchemy_connect_args: Dict[str, Any] | None = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = True,
-        credentials: Dict[str, Any] = None,
+        credentials: Dict[str, Any] | None = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
         database_driver: str | None = None,
         database_dialect: str | None = None,
@@ -35,12 +33,15 @@ class SQLResourceConfig:
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
 
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any] | None:
         return self.sql_alchemy_connect_args
 
     def get_sqlalchemy_connection_string(self) -> str:
         if not self.database_dialect or not self.database_driver:
             raise ValueError("database_driver and database_dialect are required")
+
+        if not self.credentials:
+            raise ValueError("credentials are required")
 
         encoded_password = quote_plus(self.credentials["password"])
         return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
@@ -48,8 +49,8 @@ class SQLResourceConfig:
 
 class SQLResource(ResourceInterface):
     config: SQLResourceConfig
-    connection = None
-    engine = None
+    connection: AsyncConnection | None = None
+    engine: AsyncEngine | None = None
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
@@ -116,18 +117,38 @@ class SQLResource(ResourceInterface):
         :return: The query results.
         :raises Exception: If the query fails.
         """
-        if self.config.use_server_side_cursor:
-            await self.connection.execution_options(yield_per=batch_size)
+        if not self.connection:
+            raise ValueError("Connection is not established")
 
         activity.logger.info(f"Running query: {query}")
+        use_server_side_cursor = self.config.use_server_side_cursor
 
-        async_result = await self.connection.stream(text(query))
-        column_names: List[str] = list(async_result.keys())
-        while True:
-            rows = await async_result.fetchmany(batch_size)
-            if not rows:
-                break
+        try:
+            if use_server_side_cursor:
+                await self.connection.execution_options(yield_per=batch_size)
 
-            yield [dict(zip(column_names, row)) for row in rows]
+            result = (
+                await self.connection.stream(text(query))
+                if use_server_side_cursor
+                else await self.connection.execute(text(query))
+            )
+
+            column_names = list(result.keys())
+
+            while True:
+                rows = (
+                    await result.fetchmany(batch_size)
+                    if use_server_side_cursor
+                    else result.cursor.fetchmany(batch_size)
+                )
+                if not rows:
+                    break
+                yield [dict(zip(column_names, row)) for row in rows]
+
+        except Exception as e:
+            logger.error(f"Error executing query: {e}", exc_info=True)
+            raise
+
+        logger.info("Query execution completed.")
 
         activity.logger.info("Query execution completed")
