@@ -5,6 +5,7 @@ from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.ext.asyncio import create_async_engine
 from temporalio import activity
 
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
@@ -62,12 +63,12 @@ class SQLResource(ResourceInterface):
         super().__init__()
 
     async def load(self):
-        self.engine = create_engine(
+        self.engine = create_async_engine(
             self.config.get_sqlalchemy_connection_string(),
             connect_args=self.config.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
-        self.connection = self.engine.connect()
+        self.connection = await self.engine.connect()
 
     def set_credentials(self, credentials: Dict[str, Any]) -> None:
         self.config.set_credentials(credentials)
@@ -115,34 +116,18 @@ class SQLResource(ResourceInterface):
         :return: The query results.
         :raises Exception: If the query fails.
         """
-        loop = asyncio.get_running_loop()
-
         if self.config.use_server_side_cursor:
-            self.connection.execution_options(yield_per=batch_size)
+            await self.connection.execution_options(yield_per=batch_size)
 
         activity.logger.info(f"Running query: {query}")
 
-        with ThreadPoolExecutor() as pool:
-            try:
-                cursor = await loop.run_in_executor(
-                    pool, self.connection.execute, text(query)
-                )
-                column_names: List[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+        async_result = await self.connection.stream(text(query))
+        column_names: List[str] = list(async_result.keys())
+        while True:
+            rows = await async_result.fetchmany(batch_size)
+            if not rows:
+                break
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            except Exception as e:
-                logger.error(f"Error running query in batch: {e}")
-                raise e
+            yield [dict(zip(column_names, row)) for row in rows]
 
         activity.logger.info("Query execution completed")
