@@ -1,5 +1,6 @@
 import logging
-from typing import Any, Callable, Dict, Optional, Union
+from datetime import datetime
+from typing import Any, Dict, Optional, Type, Union
 
 from pyatlan.model.assets import Column, Database, Schema, Table, View
 
@@ -36,14 +37,13 @@ class AtlasTransformer(TransformerInterface):
     def __init__(self, connector_name: str, **kwargs: Any):
         self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
-        self.entity_creator_map: Dict[
-            str, Callable[[Dict[str, Any]], Optional[Any]]
-        ] = {
-            DATABASE: self._create_database_entity,
-            SCHEMA: self._create_schema_entity,
-            TABLE: self._create_table_entity,
-            VIEW: self._create_table_entity,
-            COLUMN: self._create_column_entity,
+
+        self.entity_class_definitions: Dict[str, Type[Any]] = {
+            DATABASE: Database,
+            SCHEMA: Schema,
+            TABLE: Table,
+            VIEW: View,
+            COLUMN: Column,
         }
 
         self.base_qualified_name = kwargs.get(
@@ -54,16 +54,28 @@ class AtlasTransformer(TransformerInterface):
         self,
         typename: str,
         data: Dict[str, Any],
-        entity_creator_map: Dict[str, Callable[[Dict[str, Any]], Optional[Any]]]
-        | None = None,
+        entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         typename = typename.upper()
-        self.entity_creator_map = entity_creator_map or self.entity_creator_map
+        self.entity_class_definitions = (
+            entity_class_definitions or self.entity_class_definitions
+        )
 
-        creator = self.entity_creator_map.get(typename)
-        if creator:
-            entity = creator(data)
+        entity_object = {
+            "typeName": typename.capitalize(),
+            "attributes": data,
+            "status": "ACTIVE",
+            "createdBy": "atlan",
+            "updatedBy": "atlan",
+            "createdAt": datetime.now().isoformat(),
+            "updatedAt": datetime.now().isoformat(),
+            "version": 0,
+        }
+
+        entity_class = self.entity_class_definitions.get(typename)
+        if entity_class:
+            entity = entity_class(**entity_object)
             if entity:
                 return entity.dict()
             else:

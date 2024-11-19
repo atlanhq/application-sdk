@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional, Type
 
 
 class TransformerInterface(ABC):
@@ -8,8 +8,7 @@ class TransformerInterface(ABC):
         self,
         typename: str,
         data: Dict[str, Any],
-        entity_creator_map: Dict[str, Callable[[Dict[str, Any]], Optional[Any]]]
-        | None = None,
+        entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         """
