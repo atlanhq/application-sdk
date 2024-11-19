@@ -54,7 +54,7 @@ logger = logging.getLogger(__name__)
 
 class SampleSQLWorkflow(SQLWorkflow):
     fetch_database_sql = """
-    SELECT * FROM pg_database WHERE datname = current_database();
+    SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
 
     fetch_schema_sql = """

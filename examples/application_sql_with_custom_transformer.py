@@ -110,7 +110,7 @@ class CustomTransformer(AtlasTransformer):
 
     def _create_database_entity(self, data: Dict[str, Any]) -> Optional[Database]:
         try:
-            assert data["datname"] is not None, "Database name cannot be None"
+            assert data["database"] is not None, "Database name cannot be None"
             sql_database: Database = Database.creator(
                 name=data["datname"],
                 connection_qualified_name=self.base_qualified_name,

@@ -91,13 +91,13 @@ class PhoenixTransformer(TransformerInterface):
 
     def _create_database_entity(self, data: Dict[str, Any]) -> Optional[DatabaseEntity]:
         try:
-            self._assert_not_none(data, "datname", "Database name")
+            self._assert_not_none(data, "database_name", "Database name")
             return DatabaseEntity(
                 namespace=self.namespace,
                 package=self.package,
                 typeName=DATABASE,
-                name=data["datname"],
-                URI=self._build_uri(data["datname"]),
+                name=data["database_name"],
+                URI=self._build_uri(data["database_name"]),
             )
         except AssertionError as e:
             logger.error(f"Error creating DatabaseEntity: {str(e)}")

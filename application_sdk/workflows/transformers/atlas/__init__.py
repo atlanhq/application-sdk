@@ -75,9 +75,9 @@ class AtlasTransformer(TransformerInterface):
 
     def _create_database_entity(self, data: Dict[str, Any]) -> Optional[Database]:
         try:
-            assert data["datname"] is not None, "Database name cannot be None"
+            assert data["database_name"] is not None, "Database name cannot be None"
             sql_database = Database.creator(
-                name=data["datname"],
+                name=data["database_name"],
                 connection_qualified_name=self.base_qualified_name,
             )
             sql_database.attributes.schema_count = data.get("schema_count", 0)
