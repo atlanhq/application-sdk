@@ -37,10 +37,8 @@ from application_sdk.workflows.resources.temporal_resource import (
     TemporalResource,
 )
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
-from application_sdk.workflows.sql.resources.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
+from application_sdk.workflows.sql.resources.sql_resource import SQLResourceConfig
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
@@ -114,7 +112,7 @@ async def main():
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
         .set_sql_resource(
-            SQLResource(
+            AsyncSQLResource(
                 SQLResourceConfig(
                     database_driver=DATABASE_DRIVER,
                     database_dialect=DATABASE_DIALECT,

@@ -1,9 +1,10 @@
+import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy import create_engine, text
 from temporalio import activity
 
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
@@ -13,13 +14,13 @@ logger = logging.getLogger(__name__)
 
 class SQLResourceConfig:
     use_server_side_cursor: bool = True
-    credentials: Dict[str, Any] | None = None
-    sql_alchemy_connect_args: Dict[str, Any] | None = None
+    credentials: Dict[str, Any] = None
+    sql_alchemy_connect_args: Dict[str, Any] = None
 
     def __init__(
         self,
         use_server_side_cursor: bool = True,
-        credentials: Dict[str, Any] | None = None,
+        credentials: Dict[str, Any] = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
         database_driver: str | None = None,
         database_dialect: str | None = None,
@@ -33,15 +34,12 @@ class SQLResourceConfig:
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
 
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any] | None:
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return self.sql_alchemy_connect_args
 
     def get_sqlalchemy_connection_string(self) -> str:
         if not self.database_dialect or not self.database_driver:
             raise ValueError("database_driver and database_dialect are required")
-
-        if not self.credentials:
-            raise ValueError("credentials are required")
 
         encoded_password = quote_plus(self.credentials["password"])
         return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
@@ -49,8 +47,8 @@ class SQLResourceConfig:
 
 class SQLResource(ResourceInterface):
     config: SQLResourceConfig
-    connection: AsyncConnection | None = None
-    engine: AsyncEngine | None = None
+    connection = None
+    engine = None
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
@@ -64,12 +62,12 @@ class SQLResource(ResourceInterface):
         super().__init__()
 
     async def load(self):
-        self.engine = create_async_engine(
+        self.engine = create_engine(
             self.config.get_sqlalchemy_connection_string(),
             connect_args=self.config.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
-        self.connection = await self.engine.connect()
+        self.connection = self.engine.connect()
 
     def set_credentials(self, credentials: Dict[str, Any]) -> None:
         self.config.set_credentials(credentials)
@@ -117,38 +115,34 @@ class SQLResource(ResourceInterface):
         :return: The query results.
         :raises Exception: If the query fails.
         """
-        if not self.connection:
-            raise ValueError("Connection is not established")
+        loop = asyncio.get_running_loop()
+
+        if self.config.use_server_side_cursor:
+            self.connection.execution_options(yield_per=batch_size)
 
         activity.logger.info(f"Running query: {query}")
-        use_server_side_cursor = self.config.use_server_side_cursor
 
-        try:
-            if use_server_side_cursor:
-                await self.connection.execution_options(yield_per=batch_size)
-
-            result = (
-                await self.connection.stream(text(query))
-                if use_server_side_cursor
-                else await self.connection.execute(text(query))
-            )
-
-            column_names = list(result.keys())
-
-            while True:
-                rows = (
-                    await result.fetchmany(batch_size)
-                    if use_server_side_cursor
-                    else result.cursor.fetchmany(batch_size)
+        with ThreadPoolExecutor() as pool:
+            try:
+                cursor = await loop.run_in_executor(
+                    pool, self.connection.execute, text(query)
                 )
-                if not rows:
-                    break
-                yield [dict(zip(column_names, row)) for row in rows]
+                column_names: List[str] = [
+                    description.name.lower()
+                    for description in cursor.cursor.description
+                ]
 
-        except Exception as e:
-            logger.error(f"Error executing query: {e}", exc_info=True)
-            raise
+                while True:
+                    rows = await loop.run_in_executor(
+                        pool, cursor.fetchmany, batch_size
+                    )
+                    if not rows:
+                        break
 
-        logger.info("Query execution completed.")
+                    results = [dict(zip(column_names, row)) for row in rows]
+                    yield results
+            except Exception as e:
+                logger.error(f"Error running query in batch: {e}")
+                raise e
 
         activity.logger.info("Query execution completed")

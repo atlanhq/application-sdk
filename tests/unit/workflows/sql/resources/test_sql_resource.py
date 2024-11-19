@@ -38,19 +38,19 @@ def test_init_without_config():
         SQLResource()
 
 
-@patch("application_sdk.workflows.sql.resources.sql_resource.create_async_engine")
-def test_load(create_async_engine: Any, resource: SQLResource):
+@patch("application_sdk.workflows.sql.resources.sql_resource.create_engine")
+def test_load(mock_create_engine: Any, resource: SQLResource):
     # Mock the engine and connection
-    mock_engine = AsyncMock()
+    mock_engine = MagicMock()
     mock_connection = MagicMock()
-    create_async_engine.return_value = mock_engine
+    mock_create_engine.return_value = mock_engine
     mock_engine.connect.return_value = mock_connection
 
     # Run the load function
     asyncio.run(resource.load())
 
     # Assertions to verify behavior
-    create_async_engine.assert_called_once_with(
+    mock_create_engine.assert_called_once_with(
         resource.config.get_sqlalchemy_connection_string(),
         connect_args=resource.config.get_sqlalchemy_connect_args(),
         pool_pre_ping=True,
@@ -153,38 +153,69 @@ async def test_fetch_metadata_with_error(
 
 
 @pytest.mark.asyncio
+@patch("application_sdk.workflows.sql.resources.sql_resource.text")
 @patch(
-    "application_sdk.workflows.sql.resources.sql_resource.text",
-    side_effect=lambda q: q,  # type: ignore
+    "application_sdk.workflows.sql.resources.sql_resource.asyncio.get_running_loop",
+    new_callable=MagicMock,
 )
-async def test_run_query_client_side_cursor(mock_text: MagicMock, resource: MagicMock):
-    # Mock the query
+async def test_run_query(
+    mock_get_running_loop: MagicMock, mock_text: Any, resource: SQLResource
+):
+    # Mock the query text
     query = "SELECT * FROM test_table"
+    mock_text.return_value = query
 
-    # Mock the result set returned by the query
-    row1 = ("row1_col1", "row1_col2")
-    row2 = ("row2_col1", "row2_col2")
-    mock_result = MagicMock()
-    mock_result.keys.side_effect = lambda: ["col1", "col2"]
-    mock_result.cursor = MagicMock()
-    mock_result.cursor.fetchmany = MagicMock(
+    def get_item_gen(arr: list[str]):
+        def get_item(idx: int):
+            return arr[idx]
+
+        return get_item
+
+    # Create MagicMock rows with `_fields` and specific attribute values
+    row1 = MagicMock()
+    row1.col1 = "row1_col1"
+    row1.col2 = "row1_col2"
+    row1.__iter__.return_value = iter(["row1_col1", "row1_col2"])
+    row1.__getitem__.side_effect = get_item_gen(["row1_col1", "row1_col2"])
+
+    row2 = MagicMock()
+    row2.col1 = "row2_col1"
+    row2.col2 = "row2_col2"
+    row2.__iter__.return_value = iter(["row2_col1", "row2_col2"])
+    row2.__getitem__.side_effect = get_item_gen(["row2_col1", "row2_col2"])
+
+    # Mock the connection execute and cursor
+    mock_cursor = MagicMock()
+
+    col1 = MagicMock()
+    col1.name = "COL1"
+
+    col2 = MagicMock()
+    col2.name = "COL2"
+
+    mock_cursor.cursor.description = [col1, col2]
+    mock_cursor.fetchmany = MagicMock(
         side_effect=[
             [row1, row2],  # First batch
-            [],  # No more data
+            [],  # End of data
         ]
     )
 
-    # Mock the connection and method execution
     resource.connection = MagicMock()
-    resource.connection.execute = AsyncMock(return_value=mock_result)
+    resource.connection.execute.return_value = mock_cursor
 
-    # Set the configuration to NOT use server-side cursor
-    resource.config = MagicMock()
-    resource.config.use_server_side_cursor = False
+    # Mock run_in_executor to return cursor and then batches
+    mock_get_running_loop.return_value.run_in_executor = AsyncMock(
+        side_effect=[
+            mock_cursor,  # Simulate connection.execute
+            [row1, row2],  # First batch from `fetchmany`
+            [],  # End of data from `fetchmany`
+        ]
+    )
 
-    # Call the run_query method
+    # Run run_query and collect all results
     results: list[dict[str, str]] = []
-    async for batch in resource.run_query(query, batch_size=2):
+    async for batch in resource.run_query(query):
         results.extend(batch)
 
     # Expected results formatted as dictionaries
@@ -195,90 +226,44 @@ async def test_run_query_client_side_cursor(mock_text: MagicMock, resource: Magi
 
     # Assertions
     assert results == expected_results
-    resource.connection.execute.assert_called_once_with(query)
-    mock_result.cursor.fetchmany.assert_called()
-    mock_result.keys.assert_called_once()
 
 
 @pytest.mark.asyncio
+@patch("application_sdk.workflows.sql.resources.sql_resource.text")
 @patch(
-    "application_sdk.workflows.sql.resources.sql_resource.text",
-    side_effect=lambda q: q,  # type: ignore
+    "application_sdk.workflows.sql.resources.sql_resource.asyncio.get_running_loop",
+    new_callable=MagicMock,
 )
-async def test_run_query_server_side_cursor(mock_text: MagicMock, resource: MagicMock):
-    # Mock the query
+async def test_run_query_with_error(
+    mock_get_running_loop: MagicMock, mock_text: Any, resource: SQLResource
+):
+    # Mock the query text
     query = "SELECT * FROM test_table"
+    mock_text.return_value = query
 
-    # Mock the result set returned by the query
-    row1 = ("row1_col1", "row1_col2")
-    row2 = ("row2_col1", "row2_col2")
-    mock_result = MagicMock()
-    mock_result.keys.side_effect = lambda: ["col1", "col2"]
-    mock_result.fetchmany = AsyncMock(
+    # Mock the connection execute and cursor
+    mock_cursor = MagicMock()
+
+    col1 = MagicMock()
+    col1.name = "COL1"
+
+    col2 = MagicMock()
+    col2.name = "COL2"
+
+    mock_cursor.cursor.description = [col1, col2]
+
+    resource.connection = MagicMock()
+    resource.connection.execute.return_value = mock_cursor
+
+    # Mock run_in_executor to return cursor and then batches
+    mock_get_running_loop.return_value.run_in_executor = AsyncMock(
         side_effect=[
-            [row1, row2],  # First batch
-            [],  # No more data
+            mock_cursor,  # Simulate connection.execute
+            Exception("Simulated query failure"),  # Simulate error from `fetchmany`
         ]
     )
 
-    async def empty_fn(*args, **kwargs):  # type: ignore # Mock execution options
-        pass
-
-    # Mock the connection and method execution
-    resource.connection = MagicMock()
-    resource.connection.stream = AsyncMock(return_value=mock_result)
-    resource.connection.execution_options.side_effect = empty_fn
-
-    # Set the configuration to use server-side cursor
-    resource.config = MagicMock()
-    resource.config.use_server_side_cursor = True
-
-    # Call the run_query method
-    results: list[dict[str, str]] = []
-    async for batch in resource.run_query(query, batch_size=2):
-        results.extend(batch)
-
-    # Expected results formatted as dictionaries
-    expected_results = [
-        {"col1": "row1_col1", "col2": "row1_col2"},
-        {"col1": "row2_col1", "col2": "row2_col2"},
-    ]
-
-    # Assertions
-    assert results == expected_results
-    resource.connection.stream.assert_called_once_with(query)
-    mock_result.fetchmany.assert_awaited()
-    mock_result.keys.assert_called_once()
-
-
-@pytest.mark.asyncio
-@patch(
-    "application_sdk.workflows.sql.resources.sql_resource.text",
-    side_effect=lambda q: q,  # type: ignore
-)
-async def test_run_query_with_error(mock_text: MagicMock, resource: MagicMock):
-    # Mock the query
-    query = "SELECT * FROM test_table"
-
-    # Mock the result set returned by the query
-    mock_result = MagicMock()
-    mock_result.keys.side_effect = lambda: ["col1", "col2"]
-    mock_result.fetchmany = AsyncMock(
-        side_effect=[Exception("Simulated query failure")]
-    )
-
-    async def empty_fn(*args, **kwargs):  # type: ignore # Mock execution options
-        pass
-
-    # Mock the connection and method execution
-    resource.connection = MagicMock()
-    resource.connection.stream = AsyncMock(return_value=mock_result)
-    resource.connection.execution_options.side_effect = empty_fn
-
-    # Set the configuration to use server-side cursor
-    resource.config = MagicMock()
-    resource.config.use_server_side_cursor = True
-
+    # Run run_query and collect all results
     results: list[dict[str, str]] = []
     with pytest.raises(Exception, match="Simulated query failure"):
         async for batch in resource.run_query(query):
