@@ -4,7 +4,13 @@ from typing import Any, Callable, Dict, Optional, Union
 from pyatlan.model.assets import Column, Database, Schema, Table, View
 
 from application_sdk.workflows.transformers import TransformerInterface
-from application_sdk.workflows.transformers.const import COLUMN, DATABASE, SCHEMA, TABLE
+from application_sdk.workflows.transformers.const import (
+    COLUMN,
+    DATABASE,
+    SCHEMA,
+    TABLE,
+    VIEW,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -36,6 +42,7 @@ class AtlasTransformer(TransformerInterface):
             DATABASE: self._create_database_entity,
             SCHEMA: self._create_schema_entity,
             TABLE: self._create_table_entity,
+            VIEW: self._create_table_entity,
             COLUMN: self._create_column_entity,
         }
 
