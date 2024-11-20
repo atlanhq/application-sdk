@@ -48,7 +48,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
             rows = []
             async for row in self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL):
                 rows.append(row)
-            return rows
+            return True
         except Exception as e:
             logger.error(f"Failed to authenticate with the given credentials: {str(e)}")
             raise e
