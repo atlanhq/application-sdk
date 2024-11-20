@@ -28,7 +28,7 @@ class ResourceInterface(ABC):
     async def load(self):
         pass
 
-    def set_credentials(self, _: Dict[str, Any]):
+    def set_credentials(self, credentials: Dict[str, Any]):
         pass
 
 
