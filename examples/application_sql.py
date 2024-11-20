@@ -127,7 +127,7 @@ async def main():
     worker: WorkflowWorker = WorkflowWorker(
         temporal_resource=temporal_resource,
         temporal_activities=workflow.get_activities(),
-        workflow_class=SQLWorkflow,
+        workflow_classes=[SQLWorkflow],
     )
 
     # Start the worker in a separate thread
