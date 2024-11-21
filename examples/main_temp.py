@@ -7,17 +7,31 @@ from pydantic import BaseModel, Field
 
 
 class TestAuthRequest(BaseModel):
-    name: str
+    name: str = Field(description="The name of the item")
     description: str | None = Field(
         default=None, title="The description of the item", max_length=300
     )
+
+
+class TestAuthResponse(BaseModel):
+    success: bool
+    abcd: str
 
 
 def validation_middleware(request_body_dto):
     def validation(fn):
         async def decorator(self, request: Request):
             try:
-                request_body_dto.model_validate(await request.json())
+                print(self.abcd)
+                json_data = await request.json()
+                request_body_dto.model_validate(json_data)
+                return await fn(
+                    self,
+                    body=request_body_dto.parse_obj(json_data),
+                    query_params=request.query_params,
+                    headers=request.headers,
+                    request=request,
+                )
             except Exception as e:
                 raise HTTPException(status_code=400, detail=str(e))
 
@@ -71,10 +85,7 @@ class FastAPIApplication(AtlanAPIApplication):
         self.auth_router = APIRouter()
 
         self.register_routes()
-
-        self.app.include_router(self.workflow_router, prefix="/workflows/v1")
-        self.app.include_router(self.preflight_router, prefix="/preflight/v1")
-        self.app.include_router(self.auth_router, prefix="/auth/v1")
+        self.register_routers()
 
     def register_routes(self):
         self.workflow_router.add_api_route(
@@ -90,16 +101,48 @@ class FastAPIApplication(AtlanAPIApplication):
         self.auth_router.add_api_route("/test_auth", self.test_auth, methods=["GET"])
         # ...
 
+    def register_routers(self):
+        self.app.include_router(self.workflow_router, prefix="/workflows/v1")
+        self.app.include_router(self.preflight_router, prefix="/preflight/v1")
+        self.app.include_router(self.auth_router, prefix="/auth/v1")
+
     @http_controller
     @validation_middleware(TestAuthRequest)
-    def test_auth(self, testAuthRequest: TestAuthRequest):
-        return {"success": True, "abcd": self.abcd}
+    def test_auth(
+        self,
+        body: TestAuthRequest,
+        query_params: Dict[str, Any],
+        headers: Dict[str, Any],
+        request: Request,
+    ) -> TestAuthResponse:
+        return TestAuthResponse(success=True, abcd=self.abcd)
 
     def preflight_test(self):
         return {"success": True, "abcd": self.abcd}
 
     def start(self):
         uvicorn.run(self.app, host="0.0.0.0", port=8000)
+
+
+class MyFastAPIApplication(FastAPIApplication):
+    my_custom_router = APIRouter()
+
+    def register_routes(self):
+        self.my_custom_router.add_api_route(
+            "/my_custom_route", self.my_custom_route, methods=["GET"]
+        )
+
+        super().register_routes()
+
+    def register_routers(self):
+        self.app.include_router(self.my_custom_router, prefix="/my_custom_router")
+
+        super().register_routers()
+
+    @http_controller
+    @validation_middleware(TestAuthRequest)
+    def my_custom_route(self, testAuthRequest: TestAuthRequest):
+        return {"success": True, "abcd": self.abcd}
 
 
 if __name__ == "__main__":

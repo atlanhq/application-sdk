@@ -148,8 +148,8 @@ async def main():
                 "password": os.getenv("POSTGRES_PASSWORD", "password"),
                 "database": os.getenv("POSTGRES_DATABASE", "postgres"),
             },
-            "database_driver": DATABASE_DRIVER,
-            "database_dialect": DATABASE_DIALECT,
+            # "database_driver": DATABASE_DRIVER,
+            # "database_dialect": DATABASE_DIALECT,
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",
