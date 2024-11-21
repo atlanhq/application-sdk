@@ -80,3 +80,116 @@ temporal:
             - host
   metrics:
     enabled: true
+
+app:
+  # General settings
+  enabled: false
+  name: "hello-world-app"
+  fullnameOverride: "hello-world-app"
+  namespace: hello-world-app
+
+  # Deployment settings
+  replicaCount: 1
+  image:
+    repository: harbor-phoenix.atlan.dev/applications/phoenix-hello-world-app
+    tag: main-latest
+  containerPort: 8000
+  imagePullSecrets:
+    - name: harbor-image-registry
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  priorityClassName: ""
+
+  # Annotations for pod
+  podAnnotations: {}
+
+  # Security context for the pod
+  securityContext: {}
+    # capabilities:
+    #   drop:
+    #   - ALL
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    # runAsUser: 1000
+
+  # Init containers
+  initContainers: []
+  #Environment variables
+  env:
+    - name: ATLAN_TEMPORAL_HOST
+      value: temporal-cluster-frontend.temporal.svc.cluster.local
+    - name: ATLAN_TEMPORAL_PORT
+      value: "7233"
+    - name: APP_NAME
+      value: "hello-world-app"
+
+  # Resources
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+
+  # Service Account settings
+  serviceAccount:
+    create: true
+    annotations: {}
+
+  # Liveness and Readiness Probes
+  readinessProbe:
+    enabled: true
+    path: "/health/readiness"
+    port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+  livenessProbe:
+    enabled: true
+    path: "/health/livenesss"
+    port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+  # Service settings
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+
+  # Service Account Name
+  serviceAccountName: ""
+
+  # Ingress settings
+  ingress:
+    #would you like to enable ingress for this service
+    enabled: false
+    className: ""
+    #Annotations
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+    annotations: {}
+    ## Hostnames.
+    ## Must be provided if Ingress is enable.
+    hosts:
+    ## Path for grafana ingress
+      - host: 'repl{{ ConfigOption `DOMAIN_NAME` }}'
+        paths: [
+          /postgres-app
+        ]
+    ## TLS configuration for grafana Ingress
+    ## Secret must be manually created in the namespace
+    ##
+    tls:
+      host: 'repl{{ ConfigOption `DOMAIN_NAME` }}'
+      secretName: 'repl{{ ConfigOption `TLS_SECRET_NAME` }}'
+    # Secrets for SSl
+    tlsSecrets:
+      tls.key: '{{repl ConfigOptionData "tls-private-key-file" | Base64Encode}}'
+      tls.crt: '{{repl ConfigOptionData "tls-certificate-file" | Base64Encode}}'

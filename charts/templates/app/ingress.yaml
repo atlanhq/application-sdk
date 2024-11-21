@@ -1,0 +1,58 @@
+---
+{{- if and .Values.app.enabled }}
+{{- if .Values.app.ingress.enabled }}
+{{- $svcPort := .Values.app.service.port -}}
+{{- $svcName := include "app.fullname" . -}}
+{{- if semverCompare "<1.14-0" .Capabilities.KubeVersion.Version }}
+apiVersion: extensions/v1beta1
+{{- else if semverCompare "<1.19-0" .Capabilities.KubeVersion.Version }}
+apiVersion: networking.k8s.io/v1beta1
+{{- else }}
+apiVersion: networking.k8s.io/v1
+{{- end }}
+kind: Ingress
+metadata:
+  name: {{ include "app.fullname" . }}
+  namespace: {{ .Values.app.namespace | default "default" }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.app.ingress.annotations }}
+    {{ toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- if .Values.app.ingress.className }}
+  ingressClassName: {{ .Values.app.ingress.className }}
+  {{- end }}
+  {{- if .Values.app.ingress.tls }}
+  tls:
+  - secretName: {{ .Values.app.ingress.tls.secretName }}
+    hosts:
+    {{- range .Values.app.ingress.hosts }}
+    - {{ . }}
+    {{- end }}
+  {{- end }}
+  rules:
+  {{- range .Values.app.ingress.hosts }}
+  - host: {{ . }}
+    http:
+      paths:
+      {{- range .paths }}
+      {{- if semverCompare "<1.19-0" $.Capabilities.KubeVersion.Version }}
+      - path: {{ . }}
+        backend:
+          serviceName: {{ $svcName }}
+          servicePort: {{ $svcPort }}
+      {{- else }}
+      - path: {{ . }}
+        pathType: Prefix
+        backend:
+          service:
+            name: {{ $svcName }}
+            port:
+              number: {{ $svcPort }}
+      {{- end }}
+      {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

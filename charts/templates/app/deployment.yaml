@@ -1,0 +1,121 @@
+---
+{{- if and .Values.app.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "app.fullname" . }}
+  namespace: {{ .Values.app.namespace | default "default" }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  strategy:
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+    type: RollingUpdate
+  replicas: {{ .Values.app.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "app.selectorLabels" . | nindent 8 }}
+  template:
+    metadata:
+      labels:
+        {{- include "app.selectorLabels" . | nindent 8 }}
+      annotations:
+        {{- toYaml .Values.app.podAnnotations | nindent 8 }}
+    spec:
+{{- if .Values.app.priorityClassName }}
+      priorityClassName: {{ .Values.app.priorityClassName }}
+{{- end }}
+{{- if .Values.app.serviceAccount.create }}
+      serviceAccountName: {{ .Values.app.name }}-serviceaccount
+{{- end }}
+{{- if .Values.app.securityContext }}
+      securityContext:
+{{- toYaml .Values.app.podSecurityContext | nindent 8 }}
+{{- end }}
+{{- if .Values.app.nodeSelector }}
+      nodeSelector:
+{{ toYaml .Values.app.nodeSelector | indent 8 }}
+{{- end }}
+{{- if .Values.app.affinity }}
+      affinity:
+{{- toYaml .Values.app.affinity | nindent 8 }}
+{{- end }}
+{{- if .Values.app.imagePullSecrets }}
+      imagePullSecrets:
+{{ toYaml .Values.app.imagePullSecrets | indent 8 }}
+{{- end }}
+{{- if .Values.app.tolerations }}
+      tolerations:
+{{ toYaml .Values.app.tolerations | indent 8 }}
+{{- end }}
+      initContainers:
+{{- if .Values.app.initContainers }}
+{{- toYaml .Values.app.initContainers | nindent 8 }}
+{{- end }}
+{{- if .Values.app.configMaps }}
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ .Values.app.name }}-configmap
+{{- end }}
+      containers:
+        - name: {{ .Values.app.name }}
+          image: "{{ .Values.app.image.repository }}:{{ .Values.app.image.tag }}"
+          imagePullPolicy: Always
+          ports:
+            - containerPort: {{ .Values.app.containerPort }}
+          {{- if .Values.app.command }}
+          command: {{ toYaml .Values.app.command | nindent 12 }}
+          {{- end }}
+          env:
+            - name: K8S_POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: K8S_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            - name: Namespace
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: K8S_POD_SERVICE_ACCOUNT
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.serviceAccountName
+            {{- range .Values.app.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+{{- if .Values.app.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.app.readinessProbe.path }}
+              port: {{ .Values.app.readinessProbe.port }}
+            initialDelaySeconds: {{ .Values.app.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.app.readinessProbe.periodSeconds }}
+            failureThreshold: {{.Values.app.readinessProbe.failureThreshold}}
+{{- end }}
+{{- if .Values.app.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.app.livenessProbe.path }}
+              port: {{ .Values.app.livenessProbe.port }}
+            initialDelaySeconds: {{ .Values.app.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.app.livenessProbe.periodSeconds }}
+            failureThreshold: {{.Values.app.livenessProbe.failureThreshold}}
+{{- end }}
+          resources:
+            {{- toYaml .Values.app.resources | nindent 12 }}
+{{- end }}

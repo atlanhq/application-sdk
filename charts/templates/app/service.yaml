@@ -1,0 +1,17 @@
+---
+{{- if and .Values.app.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "app.fullname" . }}
+  namespace: {{ .Values.app.namespace | default "default" }}
+  labels:
+    {{- include "app.labels" . | nindent 4 }}
+spec:
+  ports:
+    - name: http
+      port: 80
+      targetPort: {{ .Values.app.containerPort }}
+  selector:
+    {{- include "app.selectorLabels" . | nindent 4 }}
+{{- end }}
