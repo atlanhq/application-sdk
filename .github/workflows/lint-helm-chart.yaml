@@ -1,0 +1,41 @@
+# Name of the Workflow
+
+name: Lint Helm Charts
+
+# Controls when the action will run. Triggers the workflow on pull requests on the branchs listed.
+# Also, triggers the workflow when matched the expression/pattern defined under tags: field.
+
+on:
+  pull_request:
+    types:
+    - opened
+    - edited
+    - synchronize
+  push:
+    branches:
+    - main
+    - develop
+
+permissions:
+  pull-requests: read
+
+# Under jobs: field, we have a job named "lint-helm-charts" which do the following:
+# 1. Lint all the dynamically created helm charts.
+jobs:       
+  lint-helm-charts:
+    # The type of runner that the job will run on
+    runs-on: ubuntu-latest
+
+    # Steps represent a sequence of tasks that will be executed as part of the job
+    steps:
+
+    # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+    - uses: actions/checkout@v3
+      with:
+        token: ${{ secrets.ORG_PAT_GITHUB }}
+        fetch-depth: 0
+
+    - name: Lint helm charts
+      run: |
+        chmod +x ./scripts/lint_helm_charts.sh
+        ./.github/scripts/lint_helm_charts.sh
