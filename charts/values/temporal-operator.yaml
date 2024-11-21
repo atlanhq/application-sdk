@@ -36,7 +36,7 @@ webhook:
   type: ClusterIP
   # -- Certificate manager settings for the webhook server.
   certManager:
-    # -- Webhook certificate configuration using cert-manager. 
+    # -- Webhook certificate configuration using cert-manager.
     certificate:
       # -- Enabled defines if cert-manager should be used to manage the webhook certificate.
       enabled: true

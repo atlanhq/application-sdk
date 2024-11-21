@@ -48,23 +48,23 @@ spec:
   services:
     frontend:
       replicas: {{ .Values.temporal.frontend.replicas }}
-      resources: 
+      resources:
         {{- toYaml .Values.temporal.frontend.resources | nindent 8 }}
     history:
       replicas: {{ .Values.temporal.history.replicas }}
-      resources: 
+      resources:
         {{- toYaml .Values.temporal.history.resources | nindent 8 }}
     matching:
       replicas: {{ .Values.temporal.matching.replicas }}
-      resources: 
+      resources:
         {{- toYaml .Values.temporal.matching.resources | nindent 8 }}
     worker:
       replicas: {{ .Values.temporal.worker.replicas }}
-      resources: 
+      resources:
         {{- toYaml .Values.temporal.worker.resources | nindent 8 }}
   ui:
     replicas: {{ .Values.temporal.ui.replicas }}
-    resources: 
+    resources:
       {{- toYaml .Values.temporal.ui.resources | nindent 6 }}
     enabled: {{ .Values.temporal.ui.enabled }}
     {{- if .Values.temporal.ui.ingress.enabled }}
