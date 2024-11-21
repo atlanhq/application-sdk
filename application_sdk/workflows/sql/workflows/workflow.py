@@ -105,6 +105,9 @@ class SQLWorkflow(WorkflowInterface):
         )
         del workflow_args["credentials"]
 
+        workflow_args["database_driver"] = self.sql_resource.config.database_driver
+        workflow_args["database_dialect"] = self.sql_resource.config.database_dialect
+
         workflow_class = workflow_class or self.__class__
 
         return await super().start(workflow_args, workflow_class)
