@@ -1,36 +1,39 @@
-# apiVersion: dapr.io/v1alpha1
-# kind: Component
-# metadata:
-#   name: statestore
-# spec:
-#   type: state.postgresql
-#   # Note: setting "version" to "v2" is required to use the v2 of the component
-#   version: v2
-#   metadata:
-#     # Connection string
-#     - name: connectionString
-#       value: "<CONNECTION STRING>"
-#     # Timeout for database operations, as a Go duration or number of seconds (optional)
-#     #- name: timeout
-#     #  value: 20
-#     # Prefix for the table where the data is stored (optional)
-#     #- name: tablePrefix
-#     #  value: ""
-#     # Name of the table where to store metadata used by Dapr (optional)
-#     #- name: metadataTableName
-#     #  value: "dapr_metadata"
-#     # Cleanup interval in seconds, to remove expired rows (optional)
-#     #- name: cleanupInterval
-#     #  value: "1h"
-#     # Maximum number of connections pooled by this component (optional)
-#     #- name: maxConns
-#     #  value: 0
-#     # Max idle time for connections before they're closed (optional)
-#     #- name: connectionMaxIdleTime
-#     #  value: 0
-#     # Controls the default mode for executing queries. (optional)
-#     #- name: queryExecMode
-#     #  value: ""
-#     # Uncomment this if you wish to use PostgreSQL as a state store for actors (optional)
-#     #- name: actorStateStore
-#     #  value: "true"
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+    name: statestore
+    namespace: dapr
+spec:
+    type: state.postgresql
+    # Note: setting "version" to "v2" is required to use the v2 of the component
+    version: v2
+    metadata:
+    # Connection string
+    - name: connectionString
+      secretKeyRef:
+        name: dapr-pg-connection-string
+        key:  connection-string
+    # Timeout for database operations, as a Go duration or number of seconds (optional)
+    - name: timeout
+      value: 20
+    # Prefix for the table where the data is stored (optional)
+    - name: tablePrefix
+      value: ""
+    # Name of the table where to store metadata used by Dapr (optional)
+    - name: metadataTableName
+      value: "dapr_metadata"
+    # Cleanup interval in seconds, to remove expired rows (optional)
+    - name: cleanupInterval
+      value: "1h"
+    # Maximum number of connections pooled by this component (optional)
+    - name: maxConns
+      value: 0
+    # Max idle time for connections before they're closed (optional)
+    - name: connectionMaxIdleTime
+      value: 0
+    # Controls the default mode for executing queries. (optional)
+    - name: queryExecMode
+      value: ""
+    # Uncomment this if you wish to use PostgreSQL as a state store for actors (optional)
+    - name: actorStateStore
+      value: "true"

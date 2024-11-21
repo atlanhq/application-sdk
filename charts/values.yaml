@@ -9,18 +9,18 @@ temporal:
   persistence:
     defaultStore:
       sql:
-        user: temporal_admin
+        user: app_admin
         databaseName: temporal
         connectAddr: postgres-cluster-rw.postgres.svc.cluster.local:5432
       passwordSecretRef:
-        name: postgres-cluster-app
+        name: postgres-creds
     visibilityStore:
       sql:
-        user: temporal_admin
+        user: app_admin
         databaseName: temporal_visibility
         connectAddr: postgres-cluster-rw.postgres.svc.cluster.local:5432
       passwordSecretRef:
-        name: postgres-cluster-app
+        name: postgres-creds
   frontend:
     replicas: 2
     resources:

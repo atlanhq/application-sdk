@@ -80,8 +80,8 @@ releases:
   values:
     - values/minio-operator.yaml
 
-- name: tenant
-  namespace: tenant
+- name: minio-tenant
+  namespace: minio-tenant
   createNamespace: true
   chart: minio/tenant
   version: 6.0.4

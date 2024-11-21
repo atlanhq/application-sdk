@@ -1,106 +1,100 @@
-# apiVersion: dapr.io/v1alpha1
-# kind: Component
-# metadata:
-#   name: objectstore
-# spec:
-# {{ if eq .Values.deployment.provider "edge" }}
-# type: bindings.aws.s3
-#   version: v1
-#   metadata:
-#   - name: bucket
-#     value: "mybucket"
-#   - name: region
-#     value: "us-east-1"
-#   - name: endpoint
-#     value: "https://myminio-hl.tenant.svc.cluster.local:9000"
-#   - name: accessKey
-#     value: "*****************"
-#   - name: secretKey
-#     value: "*****************"
-#   - name: sessionToken
-#     value: "mysession"
-#   - name: decodeBase64
-#     value: "<bool>"
-#   - name: encodeBase64
-#     value: "<bool>"
-#   - name: forcePathStyle
-#     value: "<bool>"
-#   - name: disableSSL
-#     value: "<bool>"
-#   - name: insecureSSL
-#     value: "true"
-# {{ else if eq .Values.deployment.provider "aws" }}
-#   type: bindings.aws.s3
-#   version: v1
-#   metadata:
-#   - name: bucket
-#     value: "mybucket"
-#   - name: region
-#     value: "us-west-2"
-#   - name: endpoint
-#     value: "s3.us-west-2.amazonaws.com"
-#   - name: accessKey
-#     value: "*****************"
-#   - name: secretKey
-#     value: "*****************"
-#   - name: sessionToken
-#     value: "mysession"
-#   - name: decodeBase64
-#     value: "<bool>"
-#   - name: encodeBase64
-#     value: "<bool>"
-#   - name: forcePathStyle
-#     value: "<bool>"
-#   - name: disableSSL
-#     value: "<bool>"
-#   - name: insecureSSL
-#     value: "<bool>"
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: objectstore
+  namespace: dapr
+spec:
+{{ if eq .Values.deployment.provider "edge" }}
+  type: bindings.aws.s3
+  version: v1
+  metadata:
+  - name: bucket
+    value: "dapr-objects"
+  - name: region
+    value: "us-east-1"
+  - name: endpoint
+    value: "https://myminio-hl.minio-tenant.svc.cluster.local:9000"
+  - name: accessKey
+    value: "minio"
+  - name: secretKey
+    value: "minio123"
+  - name: forcePathStyle
+    value: true
+  - name: disableSSL
+    value: false
+  - name: insecureSSL
+    value: true
+{{ else if eq .Values.deployment.provider "aws" }}
+  type: bindings.aws.s3
+  version: v1
+  metadata:
+  - name: bucket
+    value: "mybucket"
+  - name: region
+    value: "us-west-2"
+  - name: endpoint
+    value: "s3.us-west-2.amazonaws.com"
+  - name: accessKey
+    value: "*****************"
+  - name: secretKey
+    value: "*****************"
+  - name: sessionToken
+    value: "mysession"
+  - name: decodeBase64
+    value: "<bool>"
+  - name: encodeBase64
+    value: "<bool>"
+  - name: forcePathStyle
+    value: "<bool>"
+  - name: disableSSL
+    value: "<bool>"
+  - name: insecureSSL
+    value: "<bool>"
 
-# {{ else if eq .Values.deployment.provider "gcp" }}
-#   type: bindings.gcp.bucket
-#   version: v1
-#   metadata:
-#   - name: bucket
-#     value: "mybucket"
-#   - name: type
-#     value: "service_account"
-#   - name: project_id
-#     value: "project_111"
-#   - name: private_key_id
-#     value: "*************"
-#   - name: client_email
-#     value: "name@domain.com"
-#   - name: client_id
-#     value: "1111111111111111"
-#   - name: auth_uri
-#     value: "https://accounts.google.com/o/oauth2/auth"
-#   - name: token_uri
-#     value: "https://oauth2.googleapis.com/token"
-#   - name: auth_provider_x509_cert_url
-#     value: "https://www.googleapis.com/oauth2/v1/certs"
-#   - name: client_x509_cert_url
-#     value: "https://www.googleapis.com/robot/v1/metadata/x509/<project-name>.iam.gserviceaccount.com"
-#   - name: private_key
-#     value: "PRIVATE KEY"
-#   - name: decodeBase64
-#     value: "<bool>"
-#   - name: encodeBase64
-#     value: "<bool>"
-
-# {{ else if eq .Values.deployment.provider "azure" }}
-#   type: bindings.azure.blobstorage
-#   version: v1
-#   metadata:
-#   - name: accountName
-#     value: myStorageAccountName
-#   - name: accountKey
-#     value: ***********
-#   - name: containerName
-#     value: container1
-#   - name: decodeBase64
-#     value: <bool>
-#   - name: getBlobRetryCount
-#     value: <integer>
-#   - name: publicAccessLevel
-#    value: <publicAccessLevel>
-# {{ end }}
+{{ else if eq .Values.deployment.provider "gcp" }}
+  type: bindings.gcp.bucket
+  version: v1
+  metadata:
+  - name: bucket
+    value: "mybucket"
+  - name: type
+    value: "service_account"
+  - name: project_id
+    value: "project_111"
+  - name: private_key_id
+    value: "*************"
+  - name: client_email
+    value: "name@domain.com"
+  - name: client_id
+    value: "1111111111111111"
+  - name: auth_uri
+    value: "https://accounts.google.com/o/oauth2/auth"
+  - name: token_uri
+    value: "https://oauth2.googleapis.com/token"
+  - name: auth_provider_x509_cert_url
+    value: "https://www.googleapis.com/oauth2/v1/certs"
+  - name: client_x509_cert_url
+    value: "https://www.googleapis.com/robot/v1/metadata/x509/<project-name>.iam.gserviceaccount.com"
+  - name: private_key
+    value: "PRIVATE KEY"
+  - name: decodeBase64
+    value: "<bool>"
+  - name: encodeBase64
+    value: "<bool>"
+{{ else if eq .Values.deployment.provider "azure" }}
+  type: bindings.azure.blobstorage
+  version: v1
+  metadata:
+  - name: accountName
+    value: myStorageAccountName
+  - name: accountKey
+    value: ***********
+  - name: containerName
+    value: container1
+  - name: decodeBase64
+    value: <bool>
+  - name: getBlobRetryCount
+    value: <integer>
+  - name: publicAccessLevel
+   value: <publicAccessLevel>
+{{ end }}

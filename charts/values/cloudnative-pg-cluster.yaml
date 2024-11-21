@@ -199,7 +199,7 @@ cluster:
   # When this option is disabled, the operator will ignore the SuperuserSecret content, delete it when automatically created,
   # and then blank the password of the postgres user by setting it to NULL.
   enableSuperuserAccess: true
-  superuserSecret: "postgres-superuser"
+  superuserSecret: ""
 
   # -- This feature enables declarative management of existing roles, as well as the creation of new roles if they are not
   # already present in the database.
@@ -271,10 +271,17 @@ cluster:
   # See: https://cloudnative-pg.io/documentation/current/cloudnative-pg.v1/#postgresql-cnpg-io-v1-bootstrapinitdb
   initdb:
       database: temporal
-      owner: temporal_admin
+      owner: app_admin
       postInitSQL:
-        - ALTER USER temporal_admin WITH SUPERUSER;
-      postInitApplicationSQL: []
+        - CREATE SCHEMA IF NOT EXISTS public;
+        - GRANT ALL PRIVILEGES ON SCHEMA public TO app_admin;
+        - GRANT USAGE ON SCHEMA public TO app_admin;
+        - CREATE DATABASE dapr;
+        - GRANT ALL PRIVILEGES ON DATABASE dapr TO app_admin;
+        - ALTER DATABASE dapr OWNER TO app_admin;
+        - ALTER USER app_admin CREATEDB;
+      postInitApplicationSQL:
+        - GRANT ALL PRIVILEGES ON DATABASE temporal TO app_admin;
       postInitTemplateSQL: []
 
   additionalLabels: {}
