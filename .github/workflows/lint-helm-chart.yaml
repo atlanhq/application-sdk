@@ -37,5 +37,5 @@ jobs:
 
     - name: Lint helm charts
       run: |
-        chmod +x ./scripts/lint_helm_charts.sh
-        ./.github/scripts/lint_helm_charts.sh
+        chmod +x ./scripts/lint_helm_chart.sh
+        ./.github/scripts/lint_helm_chart.sh
