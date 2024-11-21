@@ -1,0 +1,107 @@
+apiVersion: temporal.io/v1beta1
+kind: TemporalCluster
+metadata:
+  name: {{ .Values.temporal.name }}
+  namespace: {{ .Values.temporal.namespace }}
+spec:
+  version: {{ .Values.temporal.version }}
+  numHistoryShards: {{ .Values.temporal.numHistoryShards }}
+  persistence:
+    defaultStore:
+      sql:
+        user: {{ .Values.temporal.persistence.defaultStore.sql.user }}
+        pluginName: postgres12
+        databaseName: {{ .Values.temporal.persistence.defaultStore.sql.databaseName }}
+        connectAddr: {{ .Values.temporal.persistence.defaultStore.sql.connectAddr }}
+        connectProtocol: tcp
+        maxConnLifetime: 1h0m0s
+        maxConns: 20
+        maxIdleConns: 10
+      passwordSecretRef:
+        name: {{ .Values.temporal.persistence.defaultStore.passwordSecretRef.name }}
+        key: password
+      skipCreate: true
+      tls:
+        enabled: false
+    visibilityStore:
+      sql:
+        user: {{ .Values.temporal.persistence.visibilityStore.sql.user }}
+        pluginName: postgres12
+        databaseName: {{ .Values.temporal.persistence.visibilityStore.sql.databaseName }}
+        connectAddr: {{ .Values.temporal.persistence.visibilityStore.sql.connectAddr }}
+        connectProtocol: tcp
+        maxConnLifetime: 1h0m0s
+        maxConns: 20
+        maxIdleConns: 10
+      passwordSecretRef:
+        name: {{ .Values.temporal.persistence.visibilityStore.passwordSecretRef.name }}
+        key: password
+      tls:
+        enabled: false
+      # skipCreate: true
+  log:
+    development: false
+    format: json
+    level: debug
+    outputFile: ""
+    stdout: true
+  services:
+    frontend:
+      replicas: {{ .Values.temporal.frontend.replicas }}
+      resources: 
+        {{- toYaml .Values.temporal.frontend.resources | nindent 8 }}
+    history:
+      replicas: {{ .Values.temporal.history.replicas }}
+      resources: 
+        {{- toYaml .Values.temporal.history.resources | nindent 8 }}
+    matching:
+      replicas: {{ .Values.temporal.matching.replicas }}
+      resources: 
+        {{- toYaml .Values.temporal.matching.resources | nindent 8 }}
+    worker:
+      replicas: {{ .Values.temporal.worker.replicas }}
+      resources: 
+        {{- toYaml .Values.temporal.worker.resources | nindent 8 }}
+  ui:
+    replicas: {{ .Values.temporal.ui.replicas }}
+    resources: 
+      {{- toYaml .Values.temporal.ui.resources | nindent 6 }}
+    enabled: {{ .Values.temporal.ui.enabled }}
+    {{- if .Values.temporal.ui.ingress.enabled }}
+    ingress:
+      ingressClassName: {{ .Values.temporal.ui.ingress.className }}
+      {{- with .Values.temporal.ui.ingress.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      hosts:
+        {{- range .Values.temporal.ui.ingress.hosts }}
+        - {{ . }}
+        {{- end }}
+      tls:
+        {{- range .Values.temporal.ui.ingress.tls }}
+        - secretName: {{ .secretName }}
+          hosts:
+            {{- range .hosts }}
+            - {{ . }}
+            {{- end }}
+        {{- end }}
+    {{- end }}
+  admintools:
+    enabled: true
+  metrics:
+    enabled: {{ .Values.temporal.metrics.enabled }}
+    prometheus:
+      listenPort: 9090
+      scrapeConfig:
+        serviceMonitor:
+          enabled: true
+  dynamicConfig:
+    pollInterval: 10s
+    values:
+      matching.numTaskqueueReadPartitions:
+      - value: 5
+        constraints: {}
+      matching.numTaskqueueWritePartitions:
+      - value: 5
+        constraints: {}

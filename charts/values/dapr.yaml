@@ -1,0 +1,107 @@
+global:
+  registry: ghcr.io/dapr
+  tag: 'edge'
+  dnsSuffix: ".cluster.local"
+  logAsJson: false
+  imagePullPolicy: IfNotPresent
+
+  # To help compatibility with other charts which use global.imagePullSecrets.
+  # Allow either a string with single imagepullsecret or an array of {name: pullSecret} maps (k8s-style) or an array of strings (more common helm-style).
+  # global:
+  #   imagePullSecrets: "pullSecret"
+  # or
+  # global:
+  #   imagePullSecrets:
+  #   - name: pullSecret1
+  #   - name: pullSecret2
+  # or
+  # global:
+  #   imagePullSecrets:
+  #   - pullSecret1
+  #   - pullSecret2
+  imagePullSecrets: ""
+
+  priorityClassName: ""
+  nodeSelector: {}
+  tolerations: []
+  rbac:
+    namespaced: false
+  ha:
+    enabled: false
+    replicaCount: 3
+    disruption:
+      minimumAvailable: ""
+      maximumUnavailable: "25%"
+  prometheus:
+    enabled: true
+    port: 9090
+  mtls:
+    enabled: true
+    workloadCertTTL: 24h
+    allowedClockSkew: 15m
+    controlPlaneTrustDomain: "cluster.local"
+    # If set to true, a bound service account token will be mounted and used to
+    # authenticate to Sentry.
+    mountSentryVolume: true
+    # Used to override `dapr-sentry.{{ .Release.Namespace }}.svc.cluster.local:443`
+    #sentryAddress:
+  # extraVolumes and extraVolumeMounts are used to mount additional volumes to
+  # the Dapr control plane pods. Useful for using alternative authentication
+  # credentials to sentry.
+  extraVolumes: {}
+  #  sentry:
+  #  placement:
+  #  operator:
+  #  injector:
+  #  scheduler:
+  extraVolumeMounts: {}
+  #  sentry:
+  #  placement:
+  #  operator:
+  #  injector:
+  #  scheduler:
+
+  actors:
+    # Enables actor functionality in the cluster
+    enabled: true
+    # Name of the service that provides actor placement services
+    serviceName: "placement"
+
+  reminders:
+    # Name of the service that provides reminders
+    # If empty, uses the built-in reminders capabilities in Dapr sidecars
+    serviceName: ""
+
+  scheduler:
+    # Enables scheduler functionality in the cluster
+    enabled: true
+
+  daprControlPlaneOs: linux
+  labels: {}
+  seccompProfile: ""
+  k8sLabels:
+    app.kubernetes.io/name: "{{ .Release.Name }}"
+    app.kubernetes.io/version: "{{ .Values.global.tag }}"
+    app.kubernetes.io/part-of: "dapr"
+    app.kubernetes.io/managed-by: "helm"
+    app.kubernetes.io/component: "{{ .Values.component }}" # Should be set in each subchart
+
+  issuerFilenames: {}
+  ## the issuerFilenames dictionary, if setup, have to contain 3 keys: ca,cert,key
+  # issuerFilenames:
+  #   ca: "ca.crt"
+  #   cert: "tls.crt"
+  #   key: "tls.key"
+  argoRolloutServiceReconciler:
+    enabled: false
+
+  operator:
+    watchdogCanPatchPodLabels: false
+
+dapr_scheduler:
+  ha: false
+  etcdSpaceQuota: 2Gi
+  cluster:
+    storageClassName: ""
+    storageSize: 2Gi
+    inMemoryStorage: false

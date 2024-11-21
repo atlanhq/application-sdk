@@ -1,0 +1,82 @@
+deployment:
+  provider: "edge"  # "aws" or "gcp" or "azure" or "edge"
+
+temporal:
+  name: temporal-cluster
+  namespace: temporal
+  version: "1.23.0"
+  numHistoryShards: 512
+  persistence:
+    defaultStore:
+      sql:
+        user: temporal_admin
+        databaseName: temporal
+        connectAddr: postgres-cluster-rw.postgres.svc.cluster.local:5432
+      passwordSecretRef:
+        name: postgres-cluster-app
+    visibilityStore:
+      sql:
+        user: temporal_admin
+        databaseName: temporal_visibility
+        connectAddr: postgres-cluster-rw.postgres.svc.cluster.local:5432
+      passwordSecretRef:
+        name: postgres-cluster-app
+  frontend:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  history:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  matching:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  worker:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  ui:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+    enabled: true
+    ingress:
+      enabled: false
+      className: "nginx" # or "traefik" or "alb" or "kong" or "custom"
+      annotations:
+        {}
+      hosts:
+        - host
+      tls:
+        - secretName: <secret-name>
+          hosts:
+            - host
+  metrics:
+    enabled: true

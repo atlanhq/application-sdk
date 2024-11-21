@@ -1,0 +1,12 @@
+apiVersion: temporal.io/v1beta1
+kind: TemporalNamespace
+metadata:
+  name: default
+  namespace: temporal
+spec:
+  description: "Default namespace"
+  retentionPeriod: 168h
+  isGlobalNamespace: false
+  allowDeletion: true
+  clusterRef:
+    name: temporal-cluster
