@@ -15,8 +15,8 @@ class AtlanApplicationConfig:
     port: int = 8000
 
 
-# TODO: The name of this class is not great, it is specific to HTTP.
-class AtlanApplication(ABC):
+# TODO: The name of this class is not great, it is specific to REST.
+class AtlanAPIApplication(ABC):
     auth_controller: WorkflowAuthControllerInterface | None
     metadata_controller: WorkflowMetadataControllerInterface | None
     preflight_check_controller: WorkflowPreflightCheckControllerInterface | None

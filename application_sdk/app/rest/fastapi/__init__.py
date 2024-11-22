@@ -1,6 +1,6 @@
 from fastapi import APIRouter, FastAPI
 
-from application_sdk.app.rest import AtlanApplication
+from application_sdk.app.rest import AtlanAPIApplication
 from application_sdk.app.rest.fastapi.dto.workflow import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -26,7 +26,7 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
-class FastAPIApplication(AtlanApplication):
+class FastAPIApplication(AtlanAPIApplication):
     app: FastAPI
 
     workflow_router: APIRouter = APIRouter()
