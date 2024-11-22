@@ -101,10 +101,6 @@ class SampleSQLWorkflow(SQLWorkflow):
 
     sql_resource: SQLResource | None = PostgreSQLResource(SQLResourceConfig())
 
-    def __init__(self):
-        super().__init__()
-        self.sql_resource = PostgreSQLResource(SQLResourceConfig())
-
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
