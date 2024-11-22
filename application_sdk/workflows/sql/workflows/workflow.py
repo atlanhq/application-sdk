@@ -8,8 +8,8 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
-from application_sdk.paas.secretstore import SecretStore
-from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
+from application_sdk.inputs.secretstore import SecretStore
+from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -22,6 +22,8 @@ from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk import activity_pd
+from application_sdk.outputs import JsonOutput
 
 logger = logging.getLogger(__name__)
 
@@ -180,96 +182,91 @@ class SQLWorkflow(WorkflowInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_databases(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=self.fetch_database_sql
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw",
+            upload_file_prefix=workflow_args["output_prefix"],
+            typename="database"
+        ),
+    )
+    async def fetch_databases(self, batch_input, raw_output):
         """
         Fetch and process databases from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        chunk_count = await self.fetch_data(
-            workflow_args, self.fetch_database_sql, "database"
-        )
-        return {"typename": "database", "chunk_count": chunk_count}
+        return {'raw_output': batch_input}
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_schemas(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=self.fetch_schema_sql
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw",
+            upload_file_prefix=workflow_args["output_prefix"],
+            typename="schema"
+        ),
+    )
+    async def fetch_schemas(self, batch_input, raw_output):
         """
         Fetch and process schemas from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, _ = prepare_filters(
-            include_filter,
-            exclude_filter,
-            temp_table_regex,
-        )
-        schema_sql_query = self.fetch_schema_sql.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-        )
-        chunk_count = await self.fetch_data(workflow_args, schema_sql_query, "schema")
-        return {"typename": "schema", "chunk_count": chunk_count}
+        return {'raw_output': batch_input}
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_tables(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self:self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            self.fetch_table_sql
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw",
+            upload_file_prefix=workflow_args["output_prefix"],
+            typename="table"
+        ),
+    )
+    async def fetch_tables(self, batch_input, raw_output):
         """
         Fetch and process tables from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, exclude_table = (
-            prepare_filters(
-                include_filter,
-                exclude_filter,
-                temp_table_regex,
-            )
-        )
-        table_sql_query = self.fetch_table_sql.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-            exclude_table=exclude_table,
-        )
-        chunk_count = await self.fetch_data(workflow_args, table_sql_query, "table")
-        return {"typename": "table", "chunk_count": chunk_count}
+        return {'raw_output': batch_input}
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_columns(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            self.fetch_column_sql
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw",
+            upload_file_prefix=workflow_args["output_prefix"],
+            typename="column"
+        ),
+    )
+    async def fetch_columns(self, batch_input, raw_output):
         """
         Fetch and process columns from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, exclude_table = (
-            prepare_filters(
-                include_filter,
-                exclude_filter,
-                temp_table_regex,
-            )
-        )
-        column_sql_query = self.fetch_column_sql.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-            exclude_table=exclude_table,
-        )
-
-        chunk_count = await self.fetch_data(workflow_args, column_sql_query, "column")
-        return {"typename": "column", "chunk_count": chunk_count}
+        return {'raw_output': batch_input}
 
     @activity.defn
     @auto_heartbeater

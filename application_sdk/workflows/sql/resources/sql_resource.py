@@ -8,6 +8,8 @@ from sqlalchemy import create_engine, text
 from temporalio import activity
 
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
+from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk import activity_pd
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,7 @@ class SQLResource(ResourceInterface):
     config: SQLResourceConfig
     connection = None
     engine = None
+    sql_input = SQLQueryInput
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
@@ -72,8 +75,15 @@ class SQLResource(ResourceInterface):
     def set_credentials(self, credentials: Dict[str, Any]) -> None:
         self.config.set_credentials(credentials)
 
+    @activity_pd(
+        batch_input=lambda self, args: self.sql_input(
+            self.engine,
+            args["metadata_sql"],
+        )
+    )
     async def fetch_metadata(
         self,
+        batch_input: str,
         metadata_sql: str,
         database_alias_key: str | None = None,
         schema_alias_key: str | None = None,
@@ -88,14 +98,13 @@ class SQLResource(ResourceInterface):
 
         result: List[Dict[Any, Any]] = []
         try:
-            async for batch in self.run_query(metadata_sql):
-                for row in batch:
-                    result.append(
-                        {
-                            database_result_key: row[database_alias_key],
-                            schema_result_key: row[schema_alias_key],
-                        }
-                    )
+            for row in batch_input.to_dict(orient="records"):
+                result.append(
+                    {
+                        database_result_key: row[database_alias_key],
+                        schema_result_key: row[schema_alias_key],
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")

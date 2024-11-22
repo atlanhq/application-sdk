@@ -8,6 +8,7 @@ from application_sdk.workflows.controllers import (
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.utils import prepare_filters
+from application_sdk import activity_pd
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +70,14 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
     async def fetch_metadata(self) -> List[Dict[str, str]]:
         if not self.sql_resource:
             raise ValueError("SQL Resource not defined")
-        return await self.sql_resource.fetch_metadata(
-            metadata_sql=self.METADATA_SQL,
-            database_result_key=self.DATABASE_KEY,
-            schema_result_key=self.SCHEMA_KEY,
-            database_alias_key=self.DATABASE_ALIAS_KEY,
-            schema_alias_key=self.SCHEMA_ALIAS_KEY,
-        )
+        args = {
+            "metadata_sql": self.METADATA_SQL,
+            "database_alias_key": self.DATABASE_ALIAS_KEY,
+            "schema_alias_key": self.SCHEMA_ALIAS_KEY,
+            "database_result_key": self.DATABASE_KEY,
+            "schema_result_key": self.SCHEMA_KEY,
+        }
+        return await self.sql_resource.fetch_metadata(args)
 
     async def check_schemas_and_databases(
         self, payload: Dict[str, Any]
@@ -141,26 +143,17 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
                     return False, f"{db}.{sch} schema"
         return True, ""
 
-    async def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    @activity_pd(
+        batch_input=lambda self, args: self.sql_resource.sql_input(
+            self.sql_resource.engine, self.TABLES_CHECK_SQL
+        )
+    )
+    async def tables_check(self, batch_input, **kwargs) -> Dict[str, Any]:
         logger.info("Starting tables check")
         try:
-            normalized_include_regex, normalized_exclude_regex, exclude_table = (
-                prepare_filters(
-                    payload.get("form_data", {}).get("include_filter", ""),
-                    payload.get("form_data", {}).get("exclude_filter", ""),
-                    payload.get("form_data", {}).get("temp_table_regex", ""),
-                )
-            )
-            query = self.TABLES_CHECK_SQL.format(
-                exclude_table=exclude_table,
-                normalized_exclude_regex=normalized_exclude_regex,
-                normalized_include_regex=normalized_include_regex,
-            )
-
             result = 0
-            async for batch in self.sql_resource.run_query(query):
-                for row in batch:
-                    result += row["count"]
+            for row in batch_input.to_dict(orient="records"):
+                result += row["count"]
 
             return {
                 "success": True,

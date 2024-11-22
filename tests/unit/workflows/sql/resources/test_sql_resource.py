@@ -8,6 +8,7 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
+import pandas as pd
 
 
 @pytest.fixture
@@ -59,36 +60,35 @@ def test_load(mock_create_engine: Any, resource: SQLResource):
     assert resource.connection == mock_connection
 
 
-@patch("application_sdk.workflows.sql.resources.sql_resource.SQLResource.run_query")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
 async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
-    async def async_gen(_):
-        yield [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
-    mock_run_query.side_effect = async_gen
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    result = await resource.fetch_metadata(
-        metadata_sql,
-        database_alias_key="TABLE_CATALOG",
-        schema_alias_key="TABLE_SCHEMA",
-    )
+    args = {
+        "metadata_sql": metadata_sql,
+        "database_alias_key": "TABLE_CATALOG",
+        "schema_alias_key": "TABLE_SCHEMA",
+    }
+    result = await resource.fetch_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with(metadata_sql)
+    mock_run_query.assert_called_once_with(args)
 
 
-@patch("application_sdk.workflows.sql.resources.sql_resource.SQLResource.run_query")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, resource: SQLResource
 ):
-    async def async_gen(_):
-        yield [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
-    mock_run_query.side_effect = async_gen
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -96,42 +96,42 @@ async def test_fetch_metadata_without_database_alias_key(
     # Run fetch_metadata
     resource.default_database_alias_key = "TABLE_CATALOG"
     resource.default_schema_alias_key = "TABLE_SCHEMA"
-    result = await resource.fetch_metadata(
-        metadata_sql,
-    )
+    args = {
+        "metadata_sql": metadata_sql,
+    }
+    result = await resource.fetch_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with(metadata_sql)
+    mock_run_query.assert_called_once_with(args)
 
 
-@patch("application_sdk.workflows.sql.resources.sql_resource.SQLResource.run_query")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, resource: SQLResource
 ):
-    async def async_gen(_):
-        yield [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-
-    mock_run_query.side_effect = async_gen
+    data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    result = await resource.fetch_metadata(
-        metadata_sql,
-        database_alias_key="TABLE_CATALOG",
-        schema_alias_key="TABLE_SCHEMA",
-        database_result_key="DATABASE",
-        schema_result_key="SCHEMA",
-    )
+    args = {
+        "metadata_sql": metadata_sql,
+        "database_alias_key": "TABLE_CATALOG",
+        "schema_alias_key": "TABLE_SCHEMA",
+        "database_result_key": "DATABASE",
+        "schema_result_key": "SCHEMA",
+    }
+    result = await resource.fetch_metadata(args)
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with(metadata_sql)
+    mock_run_query.assert_called_once_with(args)
 
 
-@patch("application_sdk.workflows.sql.resources.sql_resource.SQLResource.run_query")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, resource: SQLResource
 ):
@@ -142,14 +142,15 @@ async def test_fetch_metadata_with_error(
 
     # Run fetch_metadata and expect it to raise an exception
     with pytest.raises(Exception, match="Simulated query failure"):
-        await resource.fetch_metadata(
-            metadata_sql,
-            database_alias_key="TABLE_CATALOG",
-            schema_alias_key="TABLE_SCHEMA",
-        )
+        args = {
+            "metadata_sql": metadata_sql,
+            "database_alias_key": "TABLE_CATALOG",
+            "schema_alias_key": "TABLE_SCHEMA"
+        }
+        await resource.fetch_metadata(args)
 
     # Assertions
-    mock_run_query.assert_called_once_with(metadata_sql)
+    mock_run_query.assert_called_once_with(args)
 
 
 @pytest.mark.asyncio
