@@ -31,6 +31,7 @@ import logging
 import os
 import threading
 import time
+from urllib.parse import quote_plus
 
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -38,7 +39,10 @@ from application_sdk.workflows.resources.temporal_resource import (
 )
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
 from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
-from application_sdk.workflows.sql.resources.sql_resource import SQLResourceConfig
+from application_sdk.workflows.sql.resources.sql_resource import (
+    SQLResource,
+    SQLResourceConfig,
+)
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
@@ -48,6 +52,12 @@ DATABASE_DRIVER = "psycopg"
 DATABASE_DIALECT = "postgresql"
 
 logger = logging.getLogger(__name__)
+
+
+class PostgreSQLResource(AsyncSQLResource):
+    def get_sqlalchemy_connection_string(self) -> str:
+        encoded_password: str = quote_plus(self.config.credentials["password"])
+        return f"postgresql+psycopg://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['host']}:{self.config.credentials['port']}/{self.config.credentials['database']}"
 
 
 class SampleSQLWorkflow(SQLWorkflow):
@@ -89,6 +99,12 @@ class SampleSQLWorkflow(SQLWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
+    sql_resource: SQLResource | None = PostgreSQLResource(SQLResourceConfig())
+
+    def __init__(self):
+        super().__init__()
+        self.sql_resource = PostgreSQLResource(SQLResourceConfig())
+
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
@@ -111,14 +127,7 @@ async def main():
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
-        .set_sql_resource(
-            AsyncSQLResource(
-                SQLResourceConfig(
-                    database_driver=DATABASE_DRIVER,
-                    database_dialect=DATABASE_DIALECT,
-                )
-            )
-        )
+        .set_sql_resource(PostgreSQLResource(SQLResourceConfig()))
         .build()
     )
 
@@ -146,8 +155,6 @@ async def main():
                 "password": os.getenv("POSTGRES_PASSWORD", "password"),
                 "database": os.getenv("POSTGRES_DATABASE", "postgres"),
             },
-            "database_driver": DATABASE_DRIVER,
-            "database_dialect": DATABASE_DIALECT,
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",

@@ -10,6 +10,11 @@ from application_sdk.workflows.sql.resources.async_sql_resource import (
 )
 
 
+class TestAsyncSQLResource(AsyncSQLResource):
+    def get_sqlalchemy_connection_string(self) -> str:
+        return "test_connection_string"
+
+
 @pytest.fixture
 def config():
     # Create a sample SQLResourceConfig object with mock credentials
@@ -21,8 +26,6 @@ def config():
             "port": 5432,
             "database": "test_db",
         },
-        database_driver="psycopg2",
-        database_dialect="postgresql",
         sql_alchemy_connect_args={},
     )
 
@@ -30,12 +33,12 @@ def config():
 @pytest.fixture
 def resource(config: SQLResourceConfig):
     # Create a AsyncSQLResource object with the above config
-    return AsyncSQLResource(config=config)
+    return TestAsyncSQLResource(config=config)
 
 
 def test_init_without_config():
     with pytest.raises(ValueError, match="config is required"):
-        AsyncSQLResource()
+        TestAsyncSQLResource()
 
 
 @patch("application_sdk.workflows.sql.resources.async_sql_resource.create_async_engine")
@@ -51,7 +54,7 @@ def test_load(create_async_engine: Any, resource: AsyncSQLResource):
 
     # Assertions to verify behavior
     create_async_engine.assert_called_once_with(
-        resource.config.get_sqlalchemy_connection_string(),
+        resource.get_sqlalchemy_connection_string(),
         connect_args=resource.config.get_sqlalchemy_connect_args(),
         pool_pre_ping=True,
     )

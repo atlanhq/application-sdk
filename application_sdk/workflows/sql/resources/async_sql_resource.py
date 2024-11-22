@@ -22,7 +22,7 @@ class AsyncSQLResource(SQLResource):
 
     async def load(self):
         self.engine = create_async_engine(
-            self.config.get_sqlalchemy_connection_string(),
+            self.get_sqlalchemy_connection_string(),
             connect_args=self.config.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
