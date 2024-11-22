@@ -2,13 +2,13 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
 
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
-import pandas as pd
 
 
 @pytest.fixture
@@ -145,7 +145,7 @@ async def test_fetch_metadata_with_error(
         args = {
             "metadata_sql": metadata_sql,
             "database_alias_key": "TABLE_CATALOG",
-            "schema_alias_key": "TABLE_SCHEMA"
+            "schema_alias_key": "TABLE_SCHEMA",
         }
         await resource.fetch_metadata(args)
 

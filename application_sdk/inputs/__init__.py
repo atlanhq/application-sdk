@@ -1,7 +1,8 @@
 import abc
 from abc import abstractmethod
-import pandas as pd
 from typing import Any, Iterator
+
+import pandas as pd
 
 from application_sdk import logging
 

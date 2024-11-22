@@ -1,9 +1,10 @@
 import logging
 
+import pandas as pd
+
+from application_sdk import activity_pd
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
-from application_sdk import activity_pd
-import pandas as pd
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +41,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
     @activity_pd(
         batch_input=lambda self: self.sql_resource.sql_input(
-            self.sql_resource.engine,
-            self.TEST_AUTHENTICATION_SQL
+            self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL
         )
     )
     async def test_auth(self, batch_input: pd.DataFrame) -> bool:

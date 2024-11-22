@@ -7,9 +7,11 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
+from application_sdk import activity_pd
 from application_sdk.inputs.secretstore import SecretStore
+from application_sdk.outputs import JsonOutput
 from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
+from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -18,12 +20,9 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
-from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
-from application_sdk import activity_pd
-from application_sdk.outputs import JsonOutput
 
 logger = logging.getLogger(__name__)
 
@@ -184,13 +183,12 @@ class SQLWorkflow(WorkflowInterface):
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
-            query=self.fetch_database_sql
+            engine=self.sql_resource.engine, query=self.fetch_database_sql
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="database"
+            typename="database",
         ),
     )
     async def fetch_databases(self, batch_input, raw_output):
@@ -200,19 +198,18 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        return {'raw_output': batch_input}
+        return {"raw_output": batch_input}
 
     @activity.defn
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
-            query=self.fetch_schema_sql
+            engine=self.sql_resource.engine, query=self.fetch_schema_sql
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="schema"
+            typename="schema",
         ),
     )
     async def fetch_schemas(self, batch_input, raw_output):
@@ -222,19 +219,18 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        return {'raw_output': batch_input}
+        return {"raw_output": batch_input}
 
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self:self.sql_resource.sql_input(
-            self.sql_resource.engine,
-            self.fetch_table_sql
+        batch_input=lambda self: self.sql_resource.sql_input(
+            self.sql_resource.engine, self.fetch_table_sql
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="table"
+            typename="table",
         ),
     )
     async def fetch_tables(self, batch_input, raw_output):
@@ -244,19 +240,18 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        return {'raw_output': batch_input}
+        return {"raw_output": batch_input}
 
     @activity.defn
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self: self.sql_resource.sql_input(
-            self.sql_resource.engine,
-            self.fetch_column_sql
+            self.sql_resource.engine, self.fetch_column_sql
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="column"
+            typename="column",
         ),
     )
     async def fetch_columns(self, batch_input, raw_output):
@@ -266,7 +261,7 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        return {'raw_output': batch_input}
+        return {"raw_output": batch_input}
 
     @activity.defn
     @auto_heartbeater

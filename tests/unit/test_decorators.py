@@ -1,6 +1,7 @@
 import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
+
 from application_sdk import activity_pd
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs import JsonOutput
@@ -40,20 +41,17 @@ class TestDecorators:
         @activity_pd(
             batch_input=lambda self: SQLQueryInput(engine, "SELECT 1 as value"),
             out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/raw",
-                upload_file_prefix="raw",
-                typename="table"
+                output_path="/tmp/raw", upload_file_prefix="raw", typename="table"
             ),
             out2=lambda self, arg: JsonOutput(
                 output_path="/tmp/transformed",
                 upload_file_prefix="transformed",
-                typename="table")
+                typename="table",
+            ),
         )
         async def func(self, batch_input, out1, out2):
-            return {
-                'out1': batch_input,
-                'out2': batch_input.map(lambda x: x + 1)
-            }
+            return {"out1": batch_input, "out2": batch_input.map(lambda x: x + 1)}
+
         arg = {}
         await func(self, arg)
         # Check files generated

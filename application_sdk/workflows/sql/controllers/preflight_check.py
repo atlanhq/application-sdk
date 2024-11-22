@@ -3,12 +3,11 @@ import json
 import logging
 from typing import Any, Dict, List, Set, Tuple
 
+from application_sdk import activity_pd
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
-from application_sdk.workflows.sql.utils import prepare_filters
-from application_sdk import activity_pd
 
 logger = logging.getLogger(__name__)
 
