@@ -20,7 +20,7 @@ jobs:
     - name: Install Dapr CLI
       run: |
         wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
-        dapr init --slim
+        dapr init --runtime-version 1.13.6 --slim
 
     # Install Temporal
     - name: Install Temporal CLI and Start Server
