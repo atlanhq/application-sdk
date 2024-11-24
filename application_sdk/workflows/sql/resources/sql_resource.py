@@ -2,7 +2,6 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
-from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text
 from temporalio import activity
@@ -22,27 +21,16 @@ class SQLResourceConfig:
         use_server_side_cursor: bool = True,
         credentials: Dict[str, Any] = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
-        database_driver: str | None = None,
-        database_dialect: str | None = None,
     ):
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
-        self.database_driver = database_driver
-        self.database_dialect = database_dialect
 
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
 
     def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return self.sql_alchemy_connect_args
-
-    def get_sqlalchemy_connection_string(self) -> str:
-        if not self.database_dialect or not self.database_driver:
-            raise ValueError("database_driver and database_dialect are required")
-
-        encoded_password = quote_plus(self.credentials["password"])
-        return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
 class SQLResource(ResourceInterface):
@@ -63,7 +51,7 @@ class SQLResource(ResourceInterface):
 
     async def load(self):
         self.engine = create_engine(
-            self.config.get_sqlalchemy_connection_string(),
+            self.get_sqlalchemy_connection_string(),
             connect_args=self.config.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
@@ -71,6 +59,9 @@ class SQLResource(ResourceInterface):
 
     def set_credentials(self, credentials: Dict[str, Any]) -> None:
         self.config.set_credentials(credentials)
+
+    def get_sqlalchemy_connection_string(self) -> str:
+        raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
 
     async def fetch_metadata(
         self,

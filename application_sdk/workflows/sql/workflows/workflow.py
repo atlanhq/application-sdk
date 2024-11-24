@@ -105,9 +105,6 @@ class SQLWorkflow(WorkflowInterface):
         )
         del workflow_args["credentials"]
 
-        workflow_args["database_driver"] = self.sql_resource.config.database_driver
-        workflow_args["database_dialect"] = self.sql_resource.config.database_dialect
-
         workflow_class = workflow_class or self.__class__
 
         return await super().start(workflow_args, workflow_class)
@@ -420,16 +417,10 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         """
         if not self.sql_resource:
-            credentials = SecretStore.extract_credentials(
-                workflow_args["credential_guid"]
-            )
-            self.sql_resource = SQLResource(
-                SQLResourceConfig(
-                    credentials=credentials,
-                    database_driver=workflow_args["database_driver"],
-                    database_dialect=workflow_args["database_dialect"],
-                )
-            )
+            self.sql_resource = SQLResource(SQLResourceConfig())
+
+        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
+        self.sql_resource.set_credentials(credentials)
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
