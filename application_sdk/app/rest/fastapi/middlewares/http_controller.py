@@ -22,9 +22,11 @@ def http_controller(T):
                 )
             except Exception as e:
                 # Log
+                # Log the exception details (this is a placeholder, replace with actual logging)
+                print(f"Exception occurred: {e}")
                 return JSONResponse(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    content={"error": str(e)},
+                    content={"error": "An internal error has occurred."},
                 )
 
         return wrapped_controller
