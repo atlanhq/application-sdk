@@ -31,6 +31,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     """
 
     METADATA_SQL: str = ""
+
+    DATABASE_ALIAS_KEY: str | None = None
+    SCHEMA_ALIAS_KEY: str | None = None
+
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
@@ -48,6 +52,8 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
 
         return await self.sql_resource.fetch_metadata(
             metadata_sql=self.METADATA_SQL,
+            database_alias_key=self.DATABASE_ALIAS_KEY,
+            schema_alias_key=self.SCHEMA_ALIAS_KEY,
             database_result_key=self.DATABASE_KEY,
             schema_result_key=self.SCHEMA_KEY,
         )

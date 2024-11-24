@@ -36,7 +36,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
         super().__init__()
 
-    def test_auth(self, credential: Dict[str, Any]) -> bool:
+    async def test_auth(self, credential: Dict[str, Any]) -> bool:
         """
         Test the authentication credentials.
 
@@ -47,7 +47,9 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         try:
             self.sql_resource.set_credential(credential)
             await self.sql_resource.load()
-            self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL)
+            rows = []
+            async for row in self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL):
+                rows.append(row)
             return True
         except Exception as e:
             logger.error(f"Failed to authenticate with the given credentials: {str(e)}")

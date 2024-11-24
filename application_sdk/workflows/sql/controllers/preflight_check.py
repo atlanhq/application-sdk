@@ -39,6 +39,10 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
 
     METADATA_SQL: str = ""
     TABLES_CHECK_SQL: str = ""
+
+    DATABASE_ALIAS_KEY: str | None = None
+    SCHEMA_ALIAS_KEY: str | None = None
+
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
@@ -69,6 +73,8 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
             metadata_sql=self.METADATA_SQL,
             database_result_key=self.DATABASE_KEY,
             schema_result_key=self.SCHEMA_KEY,
+            database_alias_key=self.DATABASE_ALIAS_KEY,
+            schema_alias_key=self.SCHEMA_ALIAS_KEY,
         )
 
     async def check_schemas_and_databases(
