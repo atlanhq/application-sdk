@@ -21,8 +21,6 @@ def http_controller(T):
                     status_code=e.status_code, content={"error": e.detail}
                 )
             except Exception as e:
-                # Log
-                # Log the exception details (this is a placeholder, replace with actual logging)
                 print(f"Exception occurred: {e}")
                 return JSONResponse(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
