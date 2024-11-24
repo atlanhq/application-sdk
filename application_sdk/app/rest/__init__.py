@@ -3,6 +3,7 @@ from abc import ABC, abstractmethod
 from uvicorn import Config, Server
 from uvicorn._types import ASGIApplication
 
+from application_sdk.app import AtlanApplication, AtlanApplicationConfig
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
@@ -10,18 +11,14 @@ from application_sdk.workflows.controllers import (
 )
 
 
-class AtlanApplicationConfig:
+class AtlanAPIApplicationConfig(AtlanApplicationConfig):
     host: str = "0.0.0.0"
     port: int = 8000
 
 
-# TODO: The name of this class is not great, it is specific to REST.
-class AtlanAPIApplication(ABC):
-    auth_controller: WorkflowAuthControllerInterface | None
-    metadata_controller: WorkflowMetadataControllerInterface | None
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface | None
-
+class AtlanAPIApplication(AtlanApplication, ABC):
     app: ASGIApplication
+    config: AtlanAPIApplicationConfig
 
     def __init__(
         self,
@@ -29,11 +26,14 @@ class AtlanAPIApplication(ABC):
         metadata_controller: WorkflowMetadataControllerInterface | None = None,
         preflight_check_controller: WorkflowPreflightCheckControllerInterface
         | None = None,
-        config: AtlanApplicationConfig = AtlanApplicationConfig(),
+        config: AtlanAPIApplicationConfig = AtlanAPIApplicationConfig(),
     ):
-        self.auth_controller = auth_controller
-        self.metadata_controller = metadata_controller
-        self.preflight_check_controller = preflight_check_controller
+        super().__init__(
+            auth_controller=auth_controller,
+            metadata_controller=metadata_controller,
+            preflight_check_controller=preflight_check_controller,
+            config=config,
+        )
 
         self.config = config
 
