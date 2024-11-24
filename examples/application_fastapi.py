@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 from typing import Any, Dict, List
 
 from application_sdk.app.rest.fastapi import FastAPIApplication
@@ -27,7 +28,10 @@ class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface
 
 class SampleWorkflow(WorkflowInterface):
     async def start(self, workflow_args: Dict[str, Any], workflow_class: Any) -> None:
-        pass
+        return {
+            "workflow_id": str(uuid.uuid4()),
+            "run_id": str(uuid.uuid4()),
+        }
 
     async def run(self, workflow_args: Dict[str, Any]) -> None:
         pass

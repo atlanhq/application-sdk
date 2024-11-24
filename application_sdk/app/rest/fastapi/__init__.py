@@ -10,6 +10,7 @@ from application_sdk.app.rest.fastapi.dto.workflow import (
     StartWorkflowResponse,
     TestAuthRequest,
     TestAuthResponse,
+    WorkflowData,
 )
 from application_sdk.app.rest.fastapi.middlewares.http_controller import http_controller
 from application_sdk.app.rest.fastapi.middlewares.requires import requires
@@ -70,25 +71,25 @@ class FastAPIApplication(AtlanAPIApplication):
 
     def register_routes(self):
         self.workflow_router.add_api_route(
-            "/test_auth",
+            "/auth",
             self.test_auth,
             methods=["POST"],
             response_model=TestAuthResponse,
         )
         self.workflow_router.add_api_route(
-            "/fetch_metadata",
+            "/metadata",
             self.fetch_metadata,
             methods=["POST"],
             response_model=FetchMetadataResponse,
         )
         self.workflow_router.add_api_route(
-            "/preflight_check",
+            "/check",
             self.preflight_check,
             methods=["POST"],
             response_model=PreflightCheckResponse,
         )
         self.workflow_router.add_api_route(
-            "/start_workflow",
+            "/start",
             self.start_workflow,
             methods=["POST"],
             response_model=StartWorkflowResponse,
@@ -125,5 +126,14 @@ class FastAPIApplication(AtlanAPIApplication):
     async def start_workflow(
         self, body: StartWorkflowRequest, **_
     ) -> StartWorkflowResponse:
-        await self.workflow.start(body.input, workflow_class=self.workflow.__class__)
-        return StartWorkflowResponse(success=True)
+        workflow_data = await self.workflow.start(
+            body.metadata, workflow_class=self.workflow.__class__
+        )
+        return StartWorkflowResponse(
+            success=True,
+            message="Workflow started successfully",
+            data=WorkflowData(
+                workflow_id=workflow_data["workflow_id"],
+                run_id=workflow_data["run_id"],
+            ),
+        )
