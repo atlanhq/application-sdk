@@ -13,7 +13,6 @@ from application_sdk.app.rest.fastapi.dto.workflow import (
 )
 from application_sdk.app.rest.fastapi.middlewares.http_controller import http_controller
 from application_sdk.app.rest.fastapi.middlewares.requires import requires
-from application_sdk.app.rest.fastapi.middlewares.validation import validation
 from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
@@ -97,15 +96,13 @@ class FastAPIApplication(AtlanAPIApplication):
 
         super().register_routes()
 
-    @http_controller
-    @validation(TestAuthRequest)
+    @http_controller(TestAuthRequest)
     @requires("auth_controller")
     async def test_auth(self, body: TestAuthRequest, **_) -> TestAuthResponse:
         await self.auth_controller.test_auth(body.credential)
         return TestAuthResponse(success=True, message="Authentication successful")
 
-    @http_controller
-    @validation(FetchMetadataRequest)
+    @http_controller(FetchMetadataRequest)
     @requires("metadata_controller")
     async def fetch_metadata(
         self, body: FetchMetadataRequest, **_
@@ -113,8 +110,7 @@ class FastAPIApplication(AtlanAPIApplication):
         metadata = await self.metadata_controller.fetch_metadata(body.credential)
         return FetchMetadataResponse(success=True, metadata=metadata)
 
-    @http_controller
-    @validation(PreflightCheckRequest)
+    @http_controller(PreflightCheckRequest)
     @requires("preflight_check_controller")
     async def preflight_check(
         self, body: PreflightCheckRequest, **_
@@ -124,8 +120,7 @@ class FastAPIApplication(AtlanAPIApplication):
         )
         return PreflightCheckResponse(success=True, preflight_check=preflight_check)
 
-    @http_controller
-    @validation(StartWorkflowRequest)
+    @http_controller(StartWorkflowRequest)
     @requires("workflow")
     async def start_workflow(
         self, body: StartWorkflowRequest, **_

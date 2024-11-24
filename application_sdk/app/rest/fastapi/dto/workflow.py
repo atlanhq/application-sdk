@@ -2,11 +2,15 @@
 
 from typing import Any, Dict, List
 
+from pydantic import BaseModel, Field
 from pydantic import BaseModel
 
 
 class TestAuthRequest(BaseModel):
-    credential: Dict[str, Any]
+    credential: Dict[str, Any] = Field(
+        description="A dictionary containing authentication credentials",
+        min_items=1  # Ensures the dictionary is not empty
+    )
 
 
 class TestAuthResponse(BaseModel):
