@@ -1,4 +1,4 @@
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, FastAPI, status
 
 from application_sdk.app.rest import AtlanAPIApplication
 from application_sdk.app.rest.fastapi.dto.workflow import (
@@ -12,8 +12,9 @@ from application_sdk.app.rest.fastapi.dto.workflow import (
     TestAuthResponse,
     WorkflowData,
 )
-from application_sdk.app.rest.fastapi.middlewares.http_controller import http_controller
-from application_sdk.app.rest.fastapi.middlewares.requires import requires
+from application_sdk.app.rest.fastapi.middlewares.error_handler import (
+    internal_server_error_handler,
+)
 from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
@@ -44,6 +45,9 @@ class FastAPIApplication(AtlanAPIApplication):
         **kwargs,
     ):
         self.app = FastAPI()
+        self.app.add_exception_handler(
+            status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
+        )
 
         self.auth_controller = auth_controller
         self.metadata_controller = metadata_controller
@@ -97,35 +101,23 @@ class FastAPIApplication(AtlanAPIApplication):
 
         super().register_routes()
 
-    @http_controller(TestAuthRequest)
-    @requires("auth_controller")
-    async def test_auth(self, body: TestAuthRequest, **_) -> TestAuthResponse:
+    async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         await self.auth_controller.test_auth(body.credential)
         return TestAuthResponse(success=True, message="Authentication successful")
 
-    @http_controller(FetchMetadataRequest)
-    @requires("metadata_controller")
-    async def fetch_metadata(
-        self, body: FetchMetadataRequest, **_
-    ) -> FetchMetadataResponse:
+    async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
         metadata = await self.metadata_controller.fetch_metadata(body.credential)
         return FetchMetadataResponse(success=True, metadata=metadata)
 
-    @http_controller(PreflightCheckRequest)
-    @requires("preflight_check_controller")
     async def preflight_check(
-        self, body: PreflightCheckRequest, **_
+        self, body: PreflightCheckRequest
     ) -> PreflightCheckResponse:
         preflight_check = await self.preflight_check_controller.preflight_check(
             body.form_data
         )
         return PreflightCheckResponse(success=True, preflight_check=preflight_check)
 
-    @http_controller(StartWorkflowRequest)
-    @requires("workflow")
-    async def start_workflow(
-        self, body: StartWorkflowRequest, **_
-    ) -> StartWorkflowResponse:
+    async def start_workflow(self, body: StartWorkflowRequest) -> StartWorkflowResponse:
         workflow_data = await self.workflow.start(
             body.metadata, workflow_class=self.workflow.__class__
         )
