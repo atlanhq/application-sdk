@@ -421,7 +421,6 @@ class SQLWorkflow(WorkflowInterface):
 
         credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         self.sql_resource.set_credentials(credentials)
-        print(self.sql_resource)
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
