@@ -1,7 +1,5 @@
-from fastapi import HTTPException, Request
+from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
-from functools import wraps
-from fastapi import status
 
 
 def http_controller(T):
@@ -15,12 +13,20 @@ def http_controller(T):
                     headers=request_obj.headers,
                     request=request_obj,
                 )
-                return JSONResponse(status_code=status.HTTP_200_OK, content=result.dict())
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK, content=result.dict()
+                )
             except HTTPException as e:
-                return JSONResponse(status_code=e.status_code, content={"error": e.detail})
+                return JSONResponse(
+                    status_code=e.status_code, content={"error": e.detail}
+                )
             except Exception as e:
                 # Log
-                return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"error": str(e)})
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"error": str(e)},
+                )
 
         return wrapped_controller
+
     return request_handler

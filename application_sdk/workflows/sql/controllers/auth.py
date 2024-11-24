@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Dict
 
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
