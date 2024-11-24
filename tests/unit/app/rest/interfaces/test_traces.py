@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from application_sdk.app.models import Base, Trace
-from application_sdk.app.rest.interfaces.traces import Traces
+from application_sdk.app.rest.common.interfaces.traces import Traces
 
 
 @pytest.fixture(scope="function")

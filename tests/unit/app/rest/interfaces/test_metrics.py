@@ -9,7 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from application_sdk.app.models import Base, Metric
-from application_sdk.app.rest.interfaces.metrics import Metrics
+from application_sdk.app.rest.common.interfaces.metrics import Metrics
 
 
 @pytest.fixture(scope="function")
