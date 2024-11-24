@@ -16,7 +16,7 @@ class WorkflowAuthController(WorkflowAuthControllerInterface):
 
 
 class WorkflowMetadataController(WorkflowMetadataControllerInterface):
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self, credential: Dict[str, str]) -> List[Dict[str, str]]:
         return [{"database": "test", "schema": "test"}]
 
 
@@ -26,6 +26,9 @@ class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface
 
 
 class SampleWorkflow(WorkflowInterface):
+    async def start(self, workflow_args: Dict[str, Any], workflow_class: Any) -> None:
+        pass
+
     async def run(self, workflow_args: Dict[str, Any]) -> None:
         pass
 

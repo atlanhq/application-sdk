@@ -27,7 +27,7 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     """
 
     @abstractmethod
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
         raise NotImplementedError
 
 

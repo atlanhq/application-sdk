@@ -1,6 +1,6 @@
 # Request/Response DTOs for workflows
 
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from pydantic import BaseModel
 
@@ -20,7 +20,7 @@ class FetchMetadataRequest(BaseModel):
 
 class FetchMetadataResponse(BaseModel):
     success: bool
-    metadata: str
+    metadata: List[Dict[str, str]]
 
 
 class PreflightCheckRequest(BaseModel):
@@ -33,10 +33,8 @@ class PreflightCheckResponse(BaseModel):
 
 
 class StartWorkflowRequest(BaseModel):
-    workflow_id: str
     input: Dict[str, Any]
 
 
 class StartWorkflowResponse(BaseModel):
-    workflow_id: str
-    status: str
+    success: bool

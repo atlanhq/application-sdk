@@ -108,19 +108,19 @@ class FastAPIApplication(AtlanAPIApplication):
     @validation(FetchMetadataRequest)
     @requires("metadata_controller")
     async def fetch_metadata(
-        self, request: FetchMetadataRequest
+        self, body: FetchMetadataRequest, **_
     ) -> FetchMetadataResponse:
-        metadata = await self.metadata_controller.fetch_metadata(request.credential)
+        metadata = await self.metadata_controller.fetch_metadata(body.credential)
         return FetchMetadataResponse(success=True, metadata=metadata)
 
     @http_controller
     @validation(PreflightCheckRequest)
     @requires("preflight_check_controller")
     async def preflight_check(
-        self, request: PreflightCheckRequest
+        self, body: PreflightCheckRequest, **_
     ) -> PreflightCheckResponse:
         preflight_check = await self.preflight_check_controller.preflight_check(
-            request.form_data
+            body.form_data
         )
         return PreflightCheckResponse(success=True, preflight_check=preflight_check)
 
@@ -128,9 +128,7 @@ class FastAPIApplication(AtlanAPIApplication):
     @validation(StartWorkflowRequest)
     @requires("workflow")
     async def start_workflow(
-        self, request: StartWorkflowRequest
+        self, body: StartWorkflowRequest, **_
     ) -> StartWorkflowResponse:
-        workflow_metadata = await self.workflow.start(
-            request.input, workflow_class=self.workflow.__class__
-        )
-        return StartWorkflowResponse(success=True, workflow_metadata=workflow_metadata)
+        await self.workflow.start(body.input, workflow_class=self.workflow.__class__)
+        return StartWorkflowResponse(success=True)
