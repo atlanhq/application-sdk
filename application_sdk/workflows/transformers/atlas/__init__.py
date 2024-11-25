@@ -77,8 +77,16 @@ class AtlasTransformer(TransformerInterface):
             sql_database = Database.creator(
                 name=data["datname"],
                 connection_qualified_name=f"{base_qualified_name}",
+                schema_count=data.get("schema_count", 0),
+                source_created_by=data.get("source_created_by", ""),
             )
-            sql_database.attributes.schema_count = data.get("schema_count", 0)
+
+            if data.get("created", None):
+                sql_database.attributes.source_created_at = data.get("created")
+
+            if data.get("last_altered", None):
+                sql_database.attributes.source_updated_at = data.get("last_altered")
+
             return sql_database
         except AssertionError as e:
             logger.error(f"Error creating DatabaseEntity: {str(e)}")
@@ -330,7 +338,7 @@ class AtlasTransformer(TransformerInterface):
             # TODO: Is this required?
             tag.attributes.atlan_schema = Schema.creator(
                 name=data["tag_schema"],
-                database_qualified_name=f"{base_qualified_name}/{data['tag_catalog']}",
+                database_qualified_name=f"{base_qualified_name}/{data['tag_database']}",
             )
 
             return tag
