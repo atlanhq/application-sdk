@@ -62,6 +62,9 @@ jobs:
       env:
         POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
         POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        SNOWFLAKE_ACCOUNT_ID: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+        SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+        SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
       run: |
         cd examples
 
