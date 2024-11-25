@@ -56,7 +56,7 @@ releases:
   disableValidation: true
   missingFileHandler: Error
   values:
-    - values/dapr-dashboard.yaml
+    - values/dapr_dashboard.yaml
 
 - name: cloudnative-pg
   namespace: '{{ .Environment.Values.namespaces.cloudnativePg }}'
@@ -66,7 +66,7 @@ releases:
   disableValidation: true
   wait: true  # Wait for cloudnative-pg to be ready
   values:
-    - values/cloudnative-pg.yaml
+    - values/cloudnative_pg.yaml
 
 - name: postgres-cluster
   namespace: '{{ .Environment.Values.namespaces.postgresCluster }}'
@@ -76,7 +76,7 @@ releases:
   disableValidation: true
   wait: true  # Wait for postgres-cluster to be ready
   values:
-    - values/cloudnative-pg-cluster.yaml
+    - values/cloudnative_pg_cluster.yaml
   needs:
     - '{{ .Environment.Values.namespaces.cloudnativePg }}/cloudnative-pg' # Ensure cloudnative-pg is deployed before postgres-cluster
 
@@ -88,7 +88,7 @@ releases:
   disableValidation: true
   wait: true  # Wait for cert-manager to be ready
   values:
-    - values/cert-manager.yaml
+    - values/cert_manager.yaml
 
 - name: temporal
   namespace: '{{ .Environment.Values.namespaces.temporalOperator }}'
@@ -97,7 +97,7 @@ releases:
   version: 0.5.0
   disableValidation: true
   values:
-    - values/temporal-operator.yaml
+    - values/temporal_operator.yaml
   needs:
     - '{{ .Environment.Values.namespaces.certManager }}/cert-manager' # Ensure cert-manager is deployed before temporal
 
@@ -109,7 +109,7 @@ releases:
   disableValidation: true
   wait: true  # Wait for minio-operator to be ready
   values:
-    - values/minio-operator.yaml
+    - values/minio_operator.yaml
 
 - name: minio-tenant
   namespace: '{{ .Environment.Values.namespaces.minioTenant }}'
@@ -118,6 +118,6 @@ releases:
   version: 6.0.4
   disableValidation: true
   values:
-    - values/minio-tenant.yaml
+    - values/minio_tenant.yaml
   needs:
     - '{{ .Environment.Values.namespaces.minioOperator }}/minio-operator' # Ensure minio-operator is deployed before tenant
