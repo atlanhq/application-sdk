@@ -44,12 +44,10 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResourceConfig,
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
+from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
-DATABASE_DRIVER = "psycopg"
-DATABASE_DIALECT = "postgresql"
 
 logger = logging.getLogger(__name__)
 

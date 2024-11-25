@@ -34,7 +34,7 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
+from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "snowflake"
@@ -196,8 +196,6 @@ async def main():
                 "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "compute_wh"),
                 "role": os.getenv("SNOWFLAKE_ROLE", "accountadmin"),
             },
-            "database_driver": "snowflake",
-            "database_dialect": "snowflake",
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",
