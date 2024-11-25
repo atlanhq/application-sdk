@@ -144,7 +144,7 @@ async def test_start_workflow_failure(
 )
 async def test_create_worker_without_client(
     mock_connect: AsyncMock,
-    mock_worker_classes: MagicMock,
+    mock_worker_class: MagicMock,
     temporal_resource: TemporalResource,
 ):
     # Mock the client connection
