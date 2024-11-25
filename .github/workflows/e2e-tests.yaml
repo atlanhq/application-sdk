@@ -11,6 +11,9 @@ on:
 
 jobs:
   test:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
