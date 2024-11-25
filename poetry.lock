@@ -1560,13 +1560,13 @@ zoneinfo = ["tzdata (>=2024.2)"]
 
 [[package]]
 name = "identify"
-version = "2.6.2"
+version = "2.6.3"
 description = "File identification library for Python"
 optional = false
 python-versions = ">=3.9"
 files = [
-    {file = "identify-2.6.2-py2.py3-none-any.whl", hash = "sha256:c097384259f49e372f4ea00a19719d95ae27dd5ff0fd77ad630aa891306b82f3"},
-    {file = "identify-2.6.2.tar.gz", hash = "sha256:fab5c716c24d7a789775228823797296a2994b075fb6080ac83a102772a98cbd"},
+    {file = "identify-2.6.3-py2.py3-none-any.whl", hash = "sha256:9edba65473324c2ea9684b1f944fe3191db3345e50b6d04571d10ed164f8d7bd"},
+    {file = "identify-2.6.3.tar.gz", hash = "sha256:62f5dae9b5fef52c84cc188514e9ea4f3f636b1d8799ab5ebc475471f9e47a02"},
 ]
 
 [package.extras]
@@ -3112,13 +3112,13 @@ test = ["cffi", "hypothesis", "pandas", "pytest", "pytz"]
 
 [[package]]
 name = "pyatlan"
-version = "2.6.0"
+version = "2.6.1"
 description = "Atlan Python Client"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pyatlan-2.6.0-py3-none-any.whl", hash = "sha256:cd75836a0b04760f571db1916d3622200695c46bd0752065a014c5d240281123"},
-    {file = "pyatlan-2.6.0.tar.gz", hash = "sha256:6de3e55e5c550dad6cc6b1d3ac915bd32b83d5527a2a87eac02e0751e3918ac2"},
+    {file = "pyatlan-2.6.1-py3-none-any.whl", hash = "sha256:4be0f0419753d15c507f045df636a0e169d684bf3825bcd6d58b9a73555b8313"},
+    {file = "pyatlan-2.6.1.tar.gz", hash = "sha256:20b555a7e16702978234af4bcd1b7d081bb283c8b22fe41790f4f9e97181efa7"},
 ]
 
 [package.dependencies]
@@ -4154,18 +4154,18 @@ test = ["covdefaults (>=2.3)", "coverage (>=7.2.7)", "coverage-enable-subprocess
 
 [[package]]
 name = "wasmtime"
-version = "27.0.1"
+version = "27.0.2"
 description = "A WebAssembly runtime powered by Wasmtime"
 optional = true
 python-versions = ">=3.9"
 files = [
-    {file = "wasmtime-27.0.1-py3-none-any.whl", hash = "sha256:96c06c62c66581eb3fd0dc81e4d9e625a8203c08e3b57972cf9967cf395d2e47"},
-    {file = "wasmtime-27.0.1-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:31c882bb246ccc059afe8ef3fdde242b7e63dd1f13693b952bf2de92831848a9"},
-    {file = "wasmtime-27.0.1-py3-none-macosx_11_0_arm64.whl", hash = "sha256:1082442529d06c5c50fb9377dbb599460c175f98ca0d332625bf76661c7309b4"},
-    {file = "wasmtime-27.0.1-py3-none-manylinux1_x86_64.whl", hash = "sha256:99339ed56b7bc4d280bcb0d5527725a7cfe51c269941cf888f57b46f05c249a6"},
-    {file = "wasmtime-27.0.1-py3-none-manylinux2014_aarch64.whl", hash = "sha256:dac4e2232cc44b6bfc290f84ff9244621b7e99ee1da4036afb83113dd93b13bf"},
-    {file = "wasmtime-27.0.1-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:83a85f9038edb39293854bf063d364e4a6bcaec460a890763bf33120787dbb20"},
-    {file = "wasmtime-27.0.1-py3-none-win_amd64.whl", hash = "sha256:e691aafe8881a872a69a52822f24c209f54fe6f06154d1dfadd977ee86374169"},
+    {file = "wasmtime-27.0.2-py3-none-any.whl", hash = "sha256:a1248d0e024651284a6b81bfde34ca6a8efc1a0ec09675fd3148845febdc71c8"},
+    {file = "wasmtime-27.0.2-py3-none-macosx_10_13_x86_64.whl", hash = "sha256:67bd2ecf05a535e0e186116dd50d301fbf8920cb4a5685d7b48d88d7ea753431"},
+    {file = "wasmtime-27.0.2-py3-none-macosx_11_0_arm64.whl", hash = "sha256:e2db3c5f32c5f9f743a6468d55a9750aaf9b9ae83f5e68ee83921bd79180f643"},
+    {file = "wasmtime-27.0.2-py3-none-manylinux1_x86_64.whl", hash = "sha256:c41fc2b18fbc77a02fa944e1fdc041dc1627d0fe8a401d02b3214f5e9db7c535"},
+    {file = "wasmtime-27.0.2-py3-none-manylinux2014_aarch64.whl", hash = "sha256:1d610eef52d44bbde7edbad6eae41d3eb82462a3219fe466cb42c52a6f863276"},
+    {file = "wasmtime-27.0.2-py3-none-musllinux_1_2_x86_64.whl", hash = "sha256:65ca44ea3aec734a2451ff9484bb9acf2e401a4a761c55ae5e2976d449cec8f4"},
+    {file = "wasmtime-27.0.2-py3-none-win_amd64.whl", hash = "sha256:c5853ab9f8d8a958136bd1c374db5cde9e3695e0f04aa308672177a1a49b0522"},
 ]
 
 [package.dependencies]
