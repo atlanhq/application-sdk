@@ -2,13 +2,12 @@ import asyncio
 import json
 import logging
 import os
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any, Callable, Coroutine, Dict, List
 
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.common.query_parallelizer import ParallelizeQueryExecutor
 from application_sdk.paas.objectstore import ObjectStore
 from application_sdk.paas.secretstore import SecretStore
 from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
@@ -21,8 +20,6 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResourceConfig,
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-
-# from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
@@ -40,8 +37,6 @@ class SQLMinerWorkflow(SQLWorkflow):
 
     def store_credentials(self, credentials: Dict[str, Any]) -> str:
         return SecretStore.store_credentials(credentials)
-
-    # def get_parallelized_chunks()
 
     async def fetch_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
@@ -87,18 +82,206 @@ class SQLMinerWorkflow(SQLWorkflow):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_queries(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+    async def fetch_queries(self, workflow_args: Dict[str, Any]):
         """
         Fetch and process queries from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched queries.
         """
-        sql_query = workflow_args.get("sql_query", "")
-        # logger.info(f"Fetching queries: {workflow_args.get('chunk_index', 0)}")
+        assert "sql_query" in workflow_args, "sql_query is required"
 
-        chunk_count = await self.fetch_data(workflow_args, sql_query, "queries")
-        return {"typename": "queries", "chunk_count": chunk_count}
+        await self.fetch_data(workflow_args, workflow_args["sql_query"], "queries")
+
+    async def _process_query_chunk(
+        self,
+        query: str,
+        timestamp_column: str,
+        chunk_size: int,
+        current_marker: str,
+        sql_ranged_replace_from: str,
+        sql_ranged_replace_to: str,
+        ranged_sql_start_key: str,
+        ranged_sql_end_key: str,
+        parallel_markers: List[Dict[str, Any]],
+    ):
+        """
+        Processes a single chunk of the query, collecting timestamp ranges.
+
+        Args:
+            query: The SQL query to process
+            timestamp_column: Column name containing the timestamp
+            chunk_size: Number of records per chunk
+            current_marker: Starting timestamp marker
+            sql_ranged_replace_from: Original SQL fragment to replace
+            sql_ranged_replace_to: SQL fragment with range placeholders
+            ranged_sql_start_key: Placeholder for range start timestamp
+            ranged_sql_end_key: Placeholder for range end timestamp
+            parallel_markers: List to store the chunked queries
+
+        Returns:
+            Tuple of (final chunk count, records in last chunk)
+        """
+        marked_sql = query.replace(ranged_sql_start_key, current_marker)
+        rewritten_query = f"WITH T AS ({marked_sql}) SELECT {timestamp_column} FROM T ORDER BY {timestamp_column} ASC"
+        logger.info(f"Executing query: {rewritten_query}")
+
+        chunk_start_marker = None
+        chunk_end_marker = None
+        record_count = 0
+        last_marker = None
+
+        if not self.sql_resource:
+            raise ValueError("SQL resource is not initialized")
+
+        async for result_batch in self.sql_resource.run_query(rewritten_query):
+            for row in result_batch:
+                timestamp = row[timestamp_column.lower()]
+                new_marker = str(int(timestamp.timestamp() * 1000))
+
+                if last_marker == new_marker:
+                    logger.info("Skipping duplicate start time")
+                    record_count += 1
+                    continue
+
+                if not chunk_start_marker:
+                    chunk_start_marker = new_marker
+                chunk_end_marker = new_marker
+                record_count += 1
+                last_marker = new_marker
+
+                if record_count >= chunk_size:
+                    self._create_chunked_query(
+                        query=query,
+                        start_marker=chunk_start_marker,
+                        end_marker=chunk_end_marker,
+                        parallel_markers=parallel_markers,
+                        record_count=record_count,
+                        sql_ranged_replace_from=sql_ranged_replace_from,
+                        sql_ranged_replace_to=sql_ranged_replace_to,
+                        ranged_sql_start_key=ranged_sql_start_key,
+                        ranged_sql_end_key=ranged_sql_end_key,
+                    )
+                    record_count = 0
+                    chunk_start_marker = None
+                    chunk_end_marker = None
+
+        if record_count > 0:
+            self._create_chunked_query(
+                query=query,
+                start_marker=chunk_start_marker,
+                end_marker=chunk_end_marker,
+                parallel_markers=parallel_markers,
+                record_count=record_count,
+                sql_ranged_replace_from=sql_ranged_replace_from,
+                sql_ranged_replace_to=sql_ranged_replace_to,
+                ranged_sql_start_key=ranged_sql_start_key,
+                ranged_sql_end_key=ranged_sql_end_key,
+            )
+
+        return len(parallel_markers), record_count
+
+    def _create_chunked_query(
+        self,
+        query: str,
+        start_marker: str | None,
+        end_marker: str | None,
+        parallel_markers: List[Dict[str, Any]],
+        record_count: int,
+        sql_ranged_replace_from: str,
+        sql_ranged_replace_to: str,
+        ranged_sql_start_key: str,
+        ranged_sql_end_key: str,
+    ) -> None:
+        """
+        Creates a chunked query with the specified time range and adds it to parallel_markers.
+
+        Args:
+            query: The base SQL query
+            chunk_count: Current chunk number
+            start_marker: Start timestamp for the chunk
+            end_marker: End timestamp for the chunk
+            parallel_markers: List to store the chunked queries
+            record_count: Number of records in this chunk
+            sql_ranged_replace_from: Original SQL fragment to replace
+            sql_ranged_replace_to: SQL fragment with range placeholders
+            ranged_sql_start_key: Placeholder for range start timestamp
+            ranged_sql_end_key: Placeholder for range end timestamp
+        """
+        if not start_marker or not end_marker:
+            return
+
+        chunked_sql = query.replace(
+            sql_ranged_replace_from,
+            sql_ranged_replace_to.replace(ranged_sql_start_key, start_marker).replace(
+                ranged_sql_end_key, end_marker
+            ),
+        )
+
+        logger.info(
+            f"Processed {record_count} records in chunk {len(parallel_markers)}, "
+            f"with start marker {start_marker} and end marker {end_marker}"
+        )
+        logger.info(f"Chunked SQL: {chunked_sql}")
+
+        parallel_markers.append(
+            {
+                "sql": chunked_sql,
+                "start": start_marker,
+                "end": end_marker,
+                "count": record_count,
+            }
+        )
+
+    async def parallelize_query(
+        self,
+        query: str,
+        timestamp_column: str,
+        chunk_size: int,
+        current_marker: str,
+        sql_ranged_replace_from: str,
+        sql_ranged_replace_to: str,
+        ranged_sql_start_key: str,
+        ranged_sql_end_key: str,
+    ) -> List[Dict[str, Any]]:
+        """
+        Parallelizes a SQL query by breaking it into chunks based on timestamp ranges.
+
+        Args:
+            query: The SQL query to parallelize
+            timestamp_column: Column name containing the timestamp to chunk by, e.g. START_TIME
+            chunk_size: Number of records per chunk
+            current_marker: Starting timestamp marker
+            sql_ranged_replace_from: Original SQL fragment to replace
+            sql_ranged_replace_to: SQL fragment with range placeholders
+            ranged_sql_start_key: Placeholder for range start timestamp eg: [START_MARKER]
+            ranged_sql_end_key: Placeholder for range end timestamp eg: [END_MARKER]
+
+        Returns:
+            List of dictionaries containing chunked queries and their metadata
+        """
+        if chunk_size <= 0:
+            raise ValueError("chunk_size must be greater than 0")
+
+        parallel_markers: List[Dict[str, Any]] = []
+
+        try:
+            await self._process_query_chunk(
+                query=query,
+                timestamp_column=timestamp_column,
+                chunk_size=chunk_size,
+                current_marker=current_marker,
+                sql_ranged_replace_from=sql_ranged_replace_from,
+                sql_ranged_replace_to=sql_ranged_replace_to,
+                ranged_sql_start_key=ranged_sql_start_key,
+                ranged_sql_end_key=ranged_sql_end_key,
+                parallel_markers=parallel_markers,
+            )
+        except Exception as e:
+            logger.error(f"Failed to process SQL: {e}")
+            raise e
+
+        return parallel_markers
 
     @activity.defn
     @auto_heartbeater
@@ -107,41 +290,52 @@ class SQLMinerWorkflow(SQLWorkflow):
     ) -> List[Dict[str, Any]]:
         miner_args = workflow_args.get("miner_args", {})
 
+        assert (
+            "database_name_cleaned" in miner_args
+        ), "database_name_cleaned is required"
+        assert "schema_name_cleaned" in miner_args, "schema_name_cleaned is required"
+        assert "timestamp_column" in miner_args, "timestamp_column is required"
+        assert "chunk_size" in miner_args, "chunk_size is required"
+        assert "current_marker" in miner_args, "current_marker is required"
+        assert "sql_replace_from" in miner_args, "sql_replace_from is required"
+        assert "sql_replace_to" in miner_args, "sql_replace_to is required"
+        assert "ranged_sql_start_key" in miner_args, "ranged_sql_start_key is required"
+        assert "ranged_sql_end_key" in miner_args, "ranged_sql_end_key is required"
+
         queries_sql_query = self.fetch_queries_sql.format(
-            database_name_cleaned=miner_args.get("database_name_cleaned", "SNOWFLAKE"),
-            schema_name_cleaned=miner_args.get("schema_name_cleaned", "ACCOUNT_USAGE"),
-            mining_start_date=miner_args.get("mining_start_date", "1731723638"),
-            crawler_last_run=miner_args.get("crawler_last_run", "1731723638"),
-        )
-
-        executor = ParallelizeQueryExecutor(
-            query=queries_sql_query,
-            timestamp_column=miner_args.get("timestamp_column", "START_TIME"),
-            chunk_size=miner_args.get("chunk_size", 200),
-            current_marker=miner_args.get("current_marker", "1731723638"),
-            sql_ranged_replace_from=miner_args.get("sql_replace_from", ""),
-            sql_ranged_replace_to=miner_args.get("sql_replace_to", ""),
-            ranged_sql_start_key=miner_args.get(
-                "ranged_sql_start_key", "[START_MARKER]"
+            database_name_cleaned=miner_args["database_name_cleaned"],
+            schema_name_cleaned=miner_args["schema_name_cleaned"],
+            miner_start_time_epoch=miner_args.get(
+                "miner_start_time_epoch",
+                int((datetime.now() - timedelta(days=14)).timestamp()),
             ),
-            ranged_sql_end_key=miner_args.get("ranged_sql_end_key", "[END_MARKER]"),
-            sql_resource=self.sql_resource,
         )
 
-        results = await executor.execute()
+        parallel_markers = await self.parallelize_query(
+            query=queries_sql_query,
+            timestamp_column=miner_args["timestamp_column"],
+            chunk_size=miner_args.get("chunk_size", 500),
+            current_marker=str(miner_args["current_marker"]),
+            sql_ranged_replace_from=miner_args["sql_replace_from"],
+            sql_ranged_replace_to=miner_args["sql_replace_to"],
+            ranged_sql_start_key=miner_args["ranged_sql_start_key"],
+            ranged_sql_end_key=miner_args["ranged_sql_end_key"],
+        )
+
+        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
 
         # Write the results to a metadata file
         output_path = os.path.join(workflow_args["output_path"], "raw")
         metadata_file_path = os.path.join(output_path, "queries_metadata.json")
         os.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
         with open(metadata_file_path, "w") as f:
-            f.write(json.dumps(results))
+            f.write(json.dumps(parallel_markers))
 
         await ObjectStore.push_file_to_object_store(
             workflow_args["output_prefix"], metadata_file_path
         )
 
-        return results
+        return parallel_markers
 
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
@@ -172,7 +366,6 @@ class SQLMinerWorkflow(SQLWorkflow):
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
-        workflow_args["chunk_size"] = 200
 
         results: List[Dict[str, Any]] = await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
             self.get_query_batches,
@@ -181,11 +374,10 @@ class SQLMinerWorkflow(SQLWorkflow):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        miner_activities: List[Coroutine[Any, Any, Dict[str, Any]]] = []
+        miner_activities: List[Coroutine[Any, Any, None]] = []
 
         # Extract Queries
         for result in results:
-            # Create a new copy of workflow_args for each activity
             activity_args = workflow_args.copy()
             activity_args["sql_query"] = result["sql"]
             activity_args["start_marker"] = result["start"]
@@ -194,7 +386,7 @@ class SQLMinerWorkflow(SQLWorkflow):
             miner_activities.append(
                 workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
                     self.fetch_queries,
-                    activity_args,  # Pass the copied args
+                    activity_args,
                     retry_policy=retry_policy,
                     start_to_close_timeout=timedelta(seconds=1000),
                 )

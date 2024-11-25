@@ -20,6 +20,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 from application_sdk.workflows.resources.temporal_resource import (
@@ -51,26 +52,26 @@ WITH qs AS (
             {database_name_cleaned}.{schema_name_cleaned}.QUERY_HISTORY
         WHERE
             START_TIME >= CURRENT_DATE - INTERVAL '3 WEEK'
-            AND START_TIME <= TO_TIMESTAMP_TZ({crawler_last_run})
+            AND START_TIME <= CURRENT_DATE - INTERVAL '1 DAY'
         GROUP BY
             SESSION_ID
         ) ss
         WHERE
             ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)
-            AND ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ({mining_start_date})
+            AND ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ({miner_start_time_epoch})
             AND ss.SESSION_CREATED_ON >= CURRENT_DATE - INTERVAL '30 DAYS'
     ),
     q AS (
         SELECT
             *,
-            CASE WHEN warehouse_size  = 'X-Small'  THEN 1
-                WHEN warehouse_size = 'Small'    THEN 2
-                WHEN warehouse_size = 'Medium'   THEN 4
-                WHEN warehouse_size = 'Large'    THEN 8
-                WHEN warehouse_size = 'X-Large'  THEN 16
-                WHEN warehouse_size = '2X-Large' THEN 32
-                WHEN warehouse_size = '3X-Large' THEN 64
-                WHEN warehouse_size = '4X-Large' THEN 128
+            CASE WHEN warehouse_size = 'X-Small' THEN 1
+                 WHEN warehouse_size = 'Small'    THEN 2
+                 WHEN warehouse_size = 'Medium'   THEN 4
+                 WHEN warehouse_size = 'Large'    THEN 8
+                 WHEN warehouse_size = 'X-Large'  THEN 16
+                 WHEN warehouse_size = '2X-Large' THEN 32
+                 WHEN warehouse_size = '3X-Large' THEN 64
+                 WHEN warehouse_size = '4X-Large' THEN 128
                 ELSE 1
             END as WAREHOUSE_PRICE
         FROM
@@ -79,7 +80,7 @@ WITH qs AS (
             EXECUTION_STATUS = 'SUCCESS'
             AND QUERY_TYPE NOT IN
             ('COMMIT', 'USE', 'BEGIN_TRANSACTION', 'DESCRIBE', 'ROLLBACK', 'SHOW', 'ALTER_SESSION', 'GRANT')
-            AND START_TIME <= TO_TIMESTAMP_TZ({crawler_last_run})
+            AND START_TIME <= CURRENT_DATE - INTERVAL '1 DAY'
             AND START_TIME >= CURRENT_DATE - INTERVAL '2 WEEK'
     )
     SELECT
@@ -172,15 +173,16 @@ async def main():
 
     # wait for the worker to start
     time.sleep(3)
+    start_time_epoch = int((datetime.now() - timedelta(days=5)).timestamp())
 
     await miner_workflow.start(
         {
             "miner_args": {
                 "database_name_cleaned": "SNOWFLAKE",
                 "schema_name_cleaned": "ACCOUNT_USAGE",
-                "mining_start_date": "1731723638",
-                "crawler_last_run": "1732155638",
-                "chunk_size": 1000,
+                "miner_start_time_epoch": start_time_epoch,
+                "chunk_size": 500,
+                "current_marker": start_time_epoch,
                 "timestamp_column": "START_TIME",
                 "sql_replace_from": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
                 "sql_replace_to": "ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
