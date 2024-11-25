@@ -17,16 +17,6 @@ environments:
   default:
     values:
       - namespaces:
-          dapr: atlan-secure-agent
-          cloudnativePg: atlan-secure-agent
-          postgresCluster: atlan-secure-agent
-          certManager: atlan-secure-agent
-          temporalOperator: atlan-secure-agent
-          minioOperator: atlan-secure-agent
-          minioTenant: atlan-secure-agent
-  atlan-namespaces:
-    values:
-      - namespaces:
           dapr: atlan-dapr
           cloudnativePg: atlan-cloudnative-pg
           postgresCluster: atlan-postgres
@@ -34,6 +24,17 @@ environments:
           temporalOperator: atlan-temporal-operator
           minioOperator: atlan-minio-operator
           minioTenant: atlan-minio-tenant
+
+  unified:
+    values:
+      - namespaces:
+          dapr: atlan-secure-agent
+          cloudnativePg: atlan-secure-agent
+          postgresCluster: atlan-secure-agent
+          certManager: atlan-secure-agent
+          temporalOperator: atlan-secure-agent
+          minioOperator: atlan-secure-agent
+          minioTenant: atlan-secure-agent
 
 ---
 releases:

@@ -23,6 +23,9 @@ app:
 
   priorityClassName: ""
 
+  daprStateStore:
+    postgresClusterNamespace: "atlan-postgres"
+
   # Annotations for pod
   podAnnotations:
     dapr.io/enabled: "true"
