@@ -8,7 +8,10 @@ from pyatlan.model.assets import (
     Function,
     Schema,
     SnowflakePipe,
+    SnowflakeStream,
+    SnowflakeTag,
     Table,
+    TagAttachment,
     View,
 )
 
@@ -53,6 +56,9 @@ class AtlasTransformer(TransformerInterface):
             "COLUMN": self._create_column_entity,
             "PIPE": self._create_pipe_entity,
             "FUNCTION": self._create_function_entity,
+            "TAG": self._create_tag_entity,
+            "TAG_REF": self._create_tag_ref_entity,
+            "STREAM": self._create_stream_entity,
         }
 
         creator = entity_creators.get(typename.upper())
@@ -106,6 +112,7 @@ class AtlasTransformer(TransformerInterface):
             assert data["table_name"] is not None, "Table name cannot be None"
             assert data["table_catalog"] is not None, "Table catalog cannot be None"
             assert data["table_schema"] is not None, "Table schema cannot be None"
+
             sql_table = None
 
             if data.get("table_type") == "TABLE":
@@ -113,6 +120,42 @@ class AtlasTransformer(TransformerInterface):
                     name=data["table_name"],
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
+
+                if data.get("is_iceberg") == "YES":
+                    sql_table.attributes.table_type = "ICEBERG"
+                elif data.get("is_temporary") == "YES":
+                    sql_table.attributes.table_type = "TEMPORARY"
+
+                if iceberg_table_type := data.get("iceberg_table_type", "").upper():
+                    sql_table.attributes.iceberg_table_type = iceberg_table_type
+                if catalog_name := data.get("catalog_name"):
+                    sql_table.attributes.iceberg_catalog_name = catalog_name
+                if catalog_table_name := data.get("catalog_table_name"):
+                    sql_table.attributes.iceberg_catalog_table_name = catalog_table_name
+                if catalog_namespace := data.get("catalog_namespace"):
+                    sql_table.attributes.iceberg_catalog_table_namespace = (
+                        catalog_namespace
+                    )
+                if external_volume := data.get("external_volume_name"):
+                    sql_table.attributes.table_external_volume_name = external_volume
+                if base_location := data.get("base_location"):
+                    sql_table.attributes.iceberg_table_base_location = base_location
+                if catalog_source := data.get("catalog_source"):
+                    sql_table.attributes.iceberg_catalog_source = catalog_source
+                if retention_time := data.get("retention_time", -1):
+                    if retention_time != -1:
+                        sql_table.attributes.table_retention_time = retention_time
+
+                if data.get("is_dynamic") == "YES":
+                    view_definition = data.get("view_definition_list", "")
+                    if isinstance(view_definition, list) and view_definition:
+                        values = list(view_definition[0].values())
+                        sql_table.attributes.definition = values[0] if values else ""
+                    else:
+                        sql_table.attributes.definition = str(view_definition)
+                else:
+                    sql_table.attributes.definition = data.get("view_definition", "")
+
             else:
                 sql_table: View = View.creator(
                     name=data["table_name"],
@@ -135,6 +178,7 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Column]:
         try:
+            # TODO: For all types, which are required attributes, and which aren't
             assert data["column_name"] is not None, "Column name cannot be None"
             assert data["table_catalog"] is not None, "Table catalog cannot be None"
             assert data["table_schema"] is not None, "Table schema cannot be None"
@@ -155,6 +199,13 @@ class AtlasTransformer(TransformerInterface):
                 parent_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}",
                 parent_type=parent_type,
                 order=data["ordinal_position"],
+                # TODO: In the column extraction, we don't have is_partition, primary_key, is_foreign
+                # is_partition=data["is_partition"] == "YES",
+                # is_primary=data["primary_key"] == "YES",
+                # is_foreign=data["is_foreign"] == "YES",
+                max_length=data.get("character_maximum_length", 0),
+                precision=data.get("numeric_precision", 0),
+                numeric_scale=data.get("numeric_scale", 0),
             )
             sql_column.attributes.data_type = data.get("data_type", "")
             sql_column.attributes.is_nullable = data.get("is_nullable", "YES") == "YES"
@@ -179,20 +230,16 @@ class AtlasTransformer(TransformerInterface):
         try:
             assert data["pipe_name"] is not None, "Pipe name cannot be None"
             assert data["definition"] is not None, "Pipe definition cannot be None"
-            assert (
-                data["is_autoingest_enabled"] is not None
-            ), "Is auto ingest enabled cannot be None"
-            assert (
-                data["notification_channel_name"] is not None
-            ), "Notification channel name cannot be None"
 
             snowflake_pipe = SnowflakePipe.create(
                 name=data["pipe_name"],
                 definition=data["definition"],
-                snowflake_pipe_is_auto_ingest_enabled=data["is_autoingest_enabled"],
-                snowflake_pipe_notification_channel_name=data[
-                    "notification_channel_name"
-                ],
+                snowflake_pipe_is_auto_ingest_enabled=data.get(
+                    "is_autoingest_enabled", None
+                ),
+                snowflake_pipe_notification_channel_name=data.get(
+                    "notification_channel_name", None
+                ),
             )
 
             snowflake_pipe.attributes.atlan_schema = Schema.creator(
@@ -226,21 +273,116 @@ class AtlasTransformer(TransformerInterface):
                 data["function_language"] is not None
             ), "Function language cannot be None"
 
+            data_type = data.get("data_type", "")
+            function_type = "Scalar"
+            if "table" in data_type:
+                function_type = "TABLE"
+
+            # TODO: Creator has not been implemented yet
             function = Function.create(
                 name=data["function_name"],
-                function_arguments=data["argument_signature"],
+                function_arguments=data["argument_signature"][1:-1].split(", "),
                 function_definition=data["function_definition"],
-                function_is_external=data["is_external"] == "YES",
-                function_is_memoizable=data["is_memoizable"] == "YES",
-                # TODO: Can't find secure in snowflake functions
-                # function_is_secure=,
                 function_language=data["function_language"],
-                # TODO: Can't find return type and function_type in snowflake functions
-                # function_return_type=data[],
-                # function_type=,
+                function_return_type=data_type,
+                function_type=function_type,
             )
 
+            if data.get("is_secure") is not None:
+                function.attributes.function_is_secure = data.get("is_secure") == "YES"
+
+            if data.get("is_external", None) is not None:
+                function.attributes.function_is_external = (
+                    data.get("is_external") == "YES"
+                )
+
+            if data.get("is_data_metric", None) is not None:
+                function.attributes.function_is_d_m_f = (
+                    data.get("is_data_metric") == "YES"
+                )
+
+            if data.get("is_memoizable", None) is not None:
+                function.attributes.function_is_memoizable = (
+                    data.get("is_memoizable") == "YES"
+                )
+
             return function
+        except AssertionError as e:
+            logger.error(f"Error creating ColumnEntity: {str(e)}")
+            return None
+
+    def _create_tag_entity(
+        self, data: Dict[str, Any], base_qualified_name: str
+    ) -> Optional[SnowflakeTag]:
+        try:
+            assert data["tag_name"] is not None, "Tag name cannot be None"
+            assert data["tag_id"] is not None, "Tag id cannot be None"
+
+            # TODO: Do we need to fill last_sync_run_at, last_sync_run, source_updated_at, etc.
+            # TODO: Creator has not been implemented yet
+            tag = SnowflakeTag.create(
+                name=data["tag_name"],
+                tag_id=data["tag_id"],
+                allowed_values=data.get("tag_allowed_values", []),
+                source_updated_at=data["last_altered"],
+            )
+
+            # TODO: Is this required?
+            tag.attributes.atlan_schema = Schema.creator(
+                name=data["tag_schema"],
+                database_qualified_name=f"{base_qualified_name}/{data['tag_catalog']}",
+            )
+
+            return tag
+        except AssertionError as e:
+            logger.error(f"Error creating ColumnEntity: {str(e)}")
+            return None
+
+    def _create_tag_ref_entity(
+        self, data: Dict[str, Any], base_qualified_name: str
+    ) -> Optional[TagAttachment]:
+        try:
+            assert data["tag_name"] is not None, "Tag name cannot be None"
+
+            # TODO: Creator has not been implemented yet
+            tag_attachment = TagAttachment.create(
+                name=data["tag_name"],
+                tag_attachment_string_value=data["tag_value"],
+            )
+
+            return tag_attachment
+        except AssertionError as e:
+            logger.error(f"Error creating ColumnEntity: {str(e)}")
+            return None
+
+    def _create_stream_entity(
+        self, data: Dict[str, Any], base_qualified_name: str
+    ) -> Optional[SnowflakeStream]:
+        try:
+            assert data["name"] is not None, "Stream name cannot be None"
+            assert data["type"] is not None, "Stream type cannot be None"
+            assert data["source_type"] is not None, "Stream source type cannot be None"
+            assert data["mode"] is not None, "Stream mode cannot be None"
+            assert data["stale"] is not None, "Stream stale cannot be None"
+            assert data["stale_after"] is not None, "Stream stale after cannot be None"
+
+            # TODO: description
+            # TODO: Creator has not been implemented yet
+            snowflake_stream = SnowflakeStream.create(
+                name=data["name"],
+                stream_type=data["type"],
+                stream_source_type=data["source_type"],
+                stream_mode=data["mode"],
+                stream_is_stale=data["stale"],
+                stream_stale_after=data["stale_after"],
+            )
+
+            snowflake_stream.attributes.atlan_schema = Schema.creator(
+                name=data["schema_name"],
+                database_qualified_name=f"{base_qualified_name}/{data['database_name']}",
+            )
+
+            return snowflake_stream
         except AssertionError as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
