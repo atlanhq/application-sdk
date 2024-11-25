@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from typing import Optional
 
 from uvicorn import Config, Server
 from uvicorn._types import ASGIApplication
@@ -22,10 +23,11 @@ class AtlanAPIApplication(AtlanApplication, ABC):
 
     def __init__(
         self,
-        auth_controller: WorkflowAuthControllerInterface | None = None,
-        metadata_controller: WorkflowMetadataControllerInterface | None = None,
-        preflight_check_controller: WorkflowPreflightCheckControllerInterface
-        | None = None,
+        auth_controller: Optional[WorkflowAuthControllerInterface] = None,
+        metadata_controller: Optional[WorkflowMetadataControllerInterface] = None,
+        preflight_check_controller: Optional[
+            WorkflowPreflightCheckControllerInterface
+        ] = None,
         config: AtlanAPIApplicationConfig = AtlanAPIApplicationConfig(),
     ):
         super().__init__(

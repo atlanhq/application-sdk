@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Optional
 
 from application_sdk.app import models
 from application_sdk.app.database import get_engine
@@ -14,16 +15,17 @@ class AtlanApplicationConfig:
 
 
 class AtlanApplication(ABC):
-    auth_controller: WorkflowAuthControllerInterface | None
-    metadata_controller: WorkflowMetadataControllerInterface | None
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface | None
+    auth_controller: Optional[WorkflowAuthControllerInterface]
+    metadata_controller: Optional[WorkflowMetadataControllerInterface]
+    preflight_check_controller: Optional[WorkflowPreflightCheckControllerInterface]
 
     def __init__(
         self,
-        auth_controller: WorkflowAuthControllerInterface | None = None,
-        metadata_controller: WorkflowMetadataControllerInterface | None = None,
-        preflight_check_controller: WorkflowPreflightCheckControllerInterface
-        | None = None,
+        auth_controller: Optional[WorkflowAuthControllerInterface] = None,
+        metadata_controller: Optional[WorkflowMetadataControllerInterface] = None,
+        preflight_check_controller: Optional[
+            WorkflowPreflightCheckControllerInterface
+        ] = None,
         config: AtlanApplicationConfig = AtlanApplicationConfig(),
     ):
         self.auth_controller = auth_controller
