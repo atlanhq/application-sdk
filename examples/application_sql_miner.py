@@ -115,21 +115,19 @@ class SampleSQLMinerWorkflowBuilder(SQLWorkflowBuilder):
         return super().build(workflow=workflow or SampleSQLMinerWorkflow())
 
 
-class SnowflakeResourceConfig(SQLResourceConfig):
+class SnowflakeSQLResource(SQLResource):
     def get_sqlalchemy_connection_string(self) -> str:
-        credentials = self.credentials
-
-        encoded_password = quote_plus(credentials["password"])
-        base_url = f"snowflake://{credentials['user']}:{encoded_password}@{credentials['account_id']}"
+        encoded_password = quote_plus(self.config.credentials["password"])
+        base_url = f"snowflake://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['account_id']}"
 
         # FIXME: add more params
-        if credentials.get("warehouse"):
-            base_url = f"{base_url}?warehouse={credentials['warehouse']}"
-        if credentials.get("role"):
+        if self.config.credentials.get("warehouse"):
+            base_url = f"{base_url}?warehouse={self.config.credentials['warehouse']}"
+        if self.config.credentials.get("role"):
             if "?" in base_url:
-                base_url = f"{base_url}&role={credentials['role']}"
+                base_url = f"{base_url}&role={self.config.credentials['role']}"
             else:
-                base_url = f"{base_url}?role={credentials['role']}"
+                base_url = f"{base_url}?role={self.config.credentials['role']}"
 
         return base_url
 
@@ -150,12 +148,7 @@ async def main():
     transformer = AtlasTransformer(
         connector_name=APPLICATION_NAME, connector_type="sql"
     )
-    sql_resource = SnowflakeResource(
-        SnowflakeResourceConfig(
-            database_dialect="snowflake",
-            database_driver="snowflake",
-        )
-    )
+    sql_resource = SnowflakeSQLResource(SQLResourceConfig())
 
     miner_workflow: SQLWorkflow = (
         SampleSQLMinerWorkflowBuilder()
@@ -189,10 +182,10 @@ async def main():
                 "crawler_last_run": "1732155638",
                 "chunk_size": 1000,
                 "timestamp_column": "START_TIME",
-                "SQL_REPLACE_FROM": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
-                "SQL_REPLACE_TO": "ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
-                "RANGED_SQL_START_KEY": "[START_MARKER]",
-                "RANGED_SQL_END_KEY": "[END_MARKER]",
+                "sql_replace_from": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
+                "sql_replace_to": "ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
+                "ranged_sql_start_key": "[START_MARKER]",
+                "ranged_sql_end_key": "[END_MARKER]",
             },
             "credentials": {
                 "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),

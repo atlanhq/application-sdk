@@ -17,7 +17,7 @@ class WorkflowAuthControllerInterface(WorkflowControllerInterface, ABC):
     """
 
     @abstractmethod
-    def test_auth(self) -> bool:
+    async def test_auth(self) -> bool:
         raise NotImplementedError
 
 

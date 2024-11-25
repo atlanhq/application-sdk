@@ -119,10 +119,12 @@ class SQLMinerWorkflow(SQLWorkflow):
             timestamp_column=miner_args.get("timestamp_column", "START_TIME"),
             chunk_size=miner_args.get("chunk_size", 200),
             current_marker=miner_args.get("current_marker", "1731723638"),
-            sql_ranged_replace_from="ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([MARKER], 3)",
-            sql_ranged_replace_to="ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
-            ranged_sql_start_key="[START_MARKER]",
-            ranged_sql_end_key="[END_MARKER]",
+            sql_ranged_replace_from=miner_args.get("sql_replace_from", ""),
+            sql_ranged_replace_to=miner_args.get("sql_replace_to", ""),
+            ranged_sql_start_key=miner_args.get(
+                "ranged_sql_start_key", "[START_MARKER]"
+            ),
+            ranged_sql_end_key=miner_args.get("ranged_sql_end_key", "[END_MARKER]"),
             sql_resource=self.sql_resource,
         )
 
