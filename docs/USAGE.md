@@ -9,11 +9,15 @@ poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 
 ## Table of Contents
 1. [Convert your application to an Atlan Platform application](#convert-your-application-to-an-atlan-platform-application)
-2. [Use the PaaS system](#use-the-paas-system)
-3. [Add workflows to your application](#add-workflows-to-your-application)
+2. [Configuring the application](#configuring-the-application)
+3. [Use the PaaS system](#use-the-paas-system)
+4. [Add workflows to your application](#add-workflows-to-your-application)
 
 ### Convert your application to an Atlan Platform application
 Refer to the [Atlan Platform Application](../application_sdk/app/README.md) module to convert your application to an Atlan Platform application.
+
+### Configuring the application
+Refer to the [Configuration](../application_sdk/docs/CONFIGURATION.md) section to configure the application.
 
 
 ### Use the PaaS system

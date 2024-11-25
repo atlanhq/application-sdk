@@ -36,7 +36,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
         super().__init__()
 
-    def test_auth(self) -> bool:
+    async def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
@@ -45,7 +45,9 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL)
+            rows = []
+            async for row in self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL):
+                rows.append(row)
             return True
         except Exception as e:
             logger.error(f"Failed to authenticate with the given credentials: {str(e)}")

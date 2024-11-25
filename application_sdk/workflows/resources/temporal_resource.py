@@ -1,7 +1,6 @@
 """TODO: Module docstring"""
 
 import logging
-import os
 import uuid
 from abc import ABC
 from typing import Any, Dict, Sequence
@@ -17,6 +16,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
+from application_sdk.workflows.resources.constants import TemporalConstants
 
 logger = get_logger(__name__)
 
@@ -28,16 +28,16 @@ class ResourceInterface(ABC):
     async def load(self):
         pass
 
-    def set_credentials(self, _: Dict[str, Any]):
+    def set_credentials(self, credentials: Dict[str, Any]):
         pass
 
 
 class TemporalConfig:
-    host = os.getenv("host", "localhost")
-    port = os.getenv("port", "7233")
-    application_name = os.getenv("application_name", "default")
+    host = TemporalConstants.HOST.value
+    port = TemporalConstants.PORT.value
+    application_name = TemporalConstants.APPLICATION_NAME.value
     # FIXME: causes issue with different namespace, TBR.
-    namespace: str = "default"
+    namespace: str = TemporalConstants.NAMESPACE.value
 
     def __init__(
         self,
