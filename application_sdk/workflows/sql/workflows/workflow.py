@@ -4,13 +4,13 @@ import os
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
+import pandas as pd
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
 from application_sdk.inputs.secretstore import SecretStore
-from application_sdk.outputs import JsonOutput
-from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
+from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -20,6 +20,7 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
+from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
@@ -179,11 +180,44 @@ class SQLWorkflow(WorkflowInterface):
                     f"Error processing row for {typename}: {row_error}"
                 )
 
+    @staticmethod
+    def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
+        """
+        Method to prepare the query with the include and exclude filters
+        """
+        try:
+            include_filter = workflow_args.get(
+                "metadata", workflow_args.get("form_data", {})
+            ).get("include_filter", "{}")
+            exclude_filter = workflow_args.get(
+                "metadata", workflow_args.get("form_data", {})
+            ).get("exclude_filter", "{}")
+            temp_table_regex = workflow_args.get(
+                "metadata", workflow_args.get("form_data", {})
+            ).get("temp_table_regex", "")
+            normalized_include_regex, normalized_exclude_regex, exclude_table = (
+                prepare_filters(
+                    include_filter,
+                    exclude_filter,
+                    temp_table_regex,
+                )
+            )
+            return query.format(
+                normalized_include_regex=normalized_include_regex,
+                normalized_exclude_regex=normalized_exclude_regex,
+                exclude_table=exclude_table,
+            )
+        except Exception as e:
+            logger.error(f"Error preparing query [{query}]:  {e}")
+
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine, query=self.fetch_database_sql
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_database_sql, workflow_args=workflow_args
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
@@ -191,7 +225,7 @@ class SQLWorkflow(WorkflowInterface):
             typename="database",
         ),
     )
-    async def fetch_databases(self, batch_input, raw_output):
+    async def fetch_databases(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process databases from the database.
 
@@ -203,8 +237,11 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine, query=self.fetch_schema_sql
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_schema_sql, workflow_args=workflow_args
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
@@ -212,7 +249,7 @@ class SQLWorkflow(WorkflowInterface):
             typename="schema",
         ),
     )
-    async def fetch_schemas(self, batch_input, raw_output):
+    async def fetch_schemas(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process schemas from the database.
 
@@ -224,8 +261,11 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.fetch_table_sql
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_table_sql, workflow_args=workflow_args
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
@@ -233,7 +273,7 @@ class SQLWorkflow(WorkflowInterface):
             typename="table",
         ),
     )
-    async def fetch_tables(self, batch_input, raw_output):
+    async def fetch_tables(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process tables from the database.
 
@@ -245,8 +285,11 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.fetch_column_sql
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_column_sql, workflow_args=workflow_args
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw",
@@ -254,7 +297,7 @@ class SQLWorkflow(WorkflowInterface):
             typename="column",
         ),
     )
-    async def fetch_columns(self, batch_input, raw_output):
+    async def fetch_columns(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process columns from the database.
 

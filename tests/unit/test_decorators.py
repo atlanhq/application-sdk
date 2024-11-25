@@ -4,7 +4,7 @@ from sqlalchemy.sql import text
 
 from application_sdk import activity_pd
 from application_sdk.inputs.sql_query import SQLQueryInput
-from application_sdk.outputs import JsonOutput
+from application_sdk.outputs.json import JsonOutput
 
 
 class TestDecorators:
@@ -14,7 +14,7 @@ class TestDecorators:
         @activity_pd(
             batch_input=lambda self: SQLQueryInput(engine, "SELECT 1 as value")
         )
-        async def func(self, batch_input: pd.DataFrame, **kwargs):
+        async def func(self, batch_input: pd.DataFrame):
             assert len(batch_input) == 1
 
         await func(self)
@@ -39,7 +39,7 @@ class TestDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @activity_pd(
-            batch_input=lambda self: SQLQueryInput(engine, "SELECT 1 as value"),
+            batch_input=lambda self, arg: SQLQueryInput(engine, "SELECT 1 as value"),
             out1=lambda self, arg: JsonOutput(
                 output_path="/tmp/raw", upload_file_prefix="raw", typename="table"
             ),
@@ -52,7 +52,9 @@ class TestDecorators:
         async def func(self, batch_input, out1, out2):
             return {"out1": batch_input, "out2": batch_input.map(lambda x: x + 1)}
 
-        arg = {}
+        arg = {
+            "metadata_sql": "SELECT * FROM information_schema.tables",
+        }
         await func(self, arg)
         # Check files generated
         with open("/tmp/raw/table-1.json") as f:

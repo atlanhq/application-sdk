@@ -1,57 +1,42 @@
-from typing import Any, Dict, Iterator
+from typing import Any, Iterator
 
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from application_sdk import logging
 from application_sdk.inputs import Input
-from application_sdk.workflows.sql.utils import prepare_filters
+
+logger = logging.get_logger(__name__)
 
 
 class SQLQueryInput(Input):
     query: str | None
     engine: Engine | None
+    chunk_size: int | None
 
-    def __init__(self, engine: Engine, query: str | None = None):
+    def __init__(
+        self, engine: Engine, query: str | None = None, chunk_size: int = 100000
+    ):
         self.query = query
         self.engine = engine
+        self.chunk_size = chunk_size
 
-    def get_batched_df(self, workflow_args) -> Iterator[pd.DataFrame]:
-        self._prepare_query(workflow_args)
-        with self.engine.connect() as conn:
-            return pd.read_sql_query(text(self.query), conn, chunksize=100000)
+    def get_batched_df(self) -> Iterator[pd.DataFrame]:
+        try:
+            with self.engine.connect() as conn:
+                return pd.read_sql_query(
+                    text(self.query), conn, chunksize=self.chunk_size
+                )
+        except Exception as e:
+            logger.error(f"Error reading batched data from SQL: {str(e)}")
 
-    def get_df(self, workflow_args: Dict[str, Any] = None) -> pd.DataFrame:
-        if workflow_args:
-            self._prepare_query(workflow_args)
-        with self.engine.connect() as conn:
-            return pd.read_sql_query(text(self.query), conn)
-
-    def _prepare_query(self, workflow_args: Dict[str, Any]):
-        """
-        Method to prepare the query with the include and exclude filters
-        """
-        include_filter = workflow_args.get(
-            "metadata", workflow_args.get("form_data", {})
-        ).get("include_filter", "{}")
-        exclude_filter = workflow_args.get(
-            "metadata", workflow_args.get("form_data", {})
-        ).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get(
-            "metadata", workflow_args.get("form_data", {})
-        ).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, exclude_table = (
-            prepare_filters(
-                include_filter,
-                exclude_filter,
-                temp_table_regex,
-            )
-        )
-        self.query = self.query.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-            exclude_table=exclude_table,
-        )
+    def get_df(self) -> pd.DataFrame:
+        try:
+            with self.engine.connect() as conn:
+                return pd.read_sql_query(text(self.query), conn)
+        except Exception as e:
+            logger.error(f"Error reading data from SQL: {str(e)}")
 
     def get_key(self, key: str) -> Any:
         raise AttributeError("SQLQueryInput does not support get_key method")

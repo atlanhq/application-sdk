@@ -40,7 +40,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         super().__init__()
 
     @activity_pd(
-        batch_input=lambda self: self.sql_resource.sql_input(
+        batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(
             self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL
         )
     )

@@ -8,6 +8,7 @@ from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -143,8 +144,11 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
         return True, ""
 
     @activity_pd(
-        batch_input=lambda self, args: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.TABLES_CHECK_SQL
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            SQLWorkflow.prepare_query(
+                query=self.TABLES_CHECK_SQL, workflow_args=workflow_args
+            ),
         )
     )
     async def tables_check(self, batch_input, **kwargs) -> Dict[str, Any]:

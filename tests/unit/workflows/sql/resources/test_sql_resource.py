@@ -79,7 +79,7 @@ async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with(args)
+    mock_run_query.assert_called_once_with()
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
@@ -103,7 +103,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with(args)
+    mock_run_query.assert_called_once_with()
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
@@ -128,7 +128,7 @@ async def test_fetch_metadata_with_result_keys(
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
-    mock_run_query.assert_called_once_with(args)
+    mock_run_query.assert_called_once_with()
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
@@ -150,7 +150,7 @@ async def test_fetch_metadata_with_error(
         await resource.fetch_metadata(args)
 
     # Assertions
-    mock_run_query.assert_called_once_with(args)
+    mock_run_query.assert_called_once_with()
 
 
 @pytest.mark.asyncio
