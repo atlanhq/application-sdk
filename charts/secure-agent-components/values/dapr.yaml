@@ -1,6 +1,6 @@
 global:
   registry: ghcr.io/dapr
-  tag: 'edge'
+  tag: '1.14.4'
   dnsSuffix: ".cluster.local"
   logAsJson: false
   imagePullPolicy: IfNotPresent

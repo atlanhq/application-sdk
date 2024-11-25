@@ -2,7 +2,7 @@ apiVersion: temporal.io/v1beta1
 kind: TemporalNamespace
 metadata:
   name: default
-  namespace: temporal
+  namespace: {{ .Values.temporal.namespace }}
 spec:
   description: "Default namespace"
   retentionPeriod: 168h

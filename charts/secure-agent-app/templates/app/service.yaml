@@ -8,10 +8,12 @@ metadata:
   labels:
     {{- include "app.labels" . | nindent 4 }}
 spec:
+  type: {{ .Values.app.service.type | default "ClusterIP" }}
   ports:
     - name: http
-      port: 80
-      targetPort: {{ .Values.app.containerPort }}
+      port: {{ .Values.app.service.servicePort }}
+      targetPort: {{ .Values.app.service.targetPort }}
+      protocol: {{ .Values.app.service.serviceProtocol | quote }}
   selector:
     {{- include "app.selectorLabels" . | nindent 4 }}
 {{- end }}

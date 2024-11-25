@@ -1,0 +1,122 @@
+---
+repositories:
+- name: dapr
+  url: https://dapr.github.io/helm-charts/
+- name: cloudnative-pg
+  url: https://cloudnative-pg.github.io/charts
+- name: temporal-operator
+  url: https://alexandrevilain.github.io/temporal-operator
+- name: cert-manager
+  url: https://charts.jetstack.io
+- name: minio
+  url: https://operator.min.io
+
+---
+# Define default values for global configurations
+environments:
+  default:
+    values:
+      - namespaces:
+          dapr: atlan-secure-agent
+          cloudnativePg: atlan-secure-agent
+          postgresCluster: atlan-secure-agent
+          certManager: atlan-secure-agent
+          temporalOperator: atlan-secure-agent
+          minioOperator: atlan-secure-agent
+          minioTenant: atlan-secure-agent
+  atlan-namespaces:
+    values:
+      - namespaces:
+          dapr: atlan-dapr
+          cloudnativePg: atlan-cloudnative-pg
+          postgresCluster: atlan-postgres
+          certManager: atlan-cert-manager
+          temporalOperator: atlan-temporal-operator
+          minioOperator: atlan-minio-operator
+          minioTenant: atlan-minio-tenant
+
+---
+releases:
+- name: dapr
+  namespace: '{{ .Environment.Values.namespaces.dapr }}'
+  createNamespace: true
+  chart: dapr/dapr
+  version: 1.14.4
+  disableValidation: true
+  missingFileHandler: Error
+  values:
+    - values/dapr.yaml
+
+- name: dapr-dashboard
+  namespace: '{{ .Environment.Values.namespaces.dapr }}'
+  createNamespace: true
+  chart: dapr/dapr-dashboard
+  version: 0.15.0
+  disableValidation: true
+  missingFileHandler: Error
+  values:
+    - values/dapr-dashboard.yaml
+
+- name: cloudnative-pg
+  namespace: '{{ .Environment.Values.namespaces.cloudnativePg }}'
+  createNamespace: true
+  chart: cloudnative-pg/cloudnative-pg
+  version: 0.22.1
+  disableValidation: true
+  wait: true  # Wait for cloudnative-pg to be ready
+  values:
+    - values/cloudnative-pg.yaml
+
+- name: postgres-cluster
+  namespace: '{{ .Environment.Values.namespaces.postgresCluster }}'
+  createNamespace: true
+  chart: cloudnative-pg/cluster
+  version: 0.1.0
+  disableValidation: true
+  wait: true  # Wait for postgres-cluster to be ready
+  values:
+    - values/cloudnative-pg-cluster.yaml
+  needs:
+    - '{{ .Environment.Values.namespaces.cloudnativePg }}/cloudnative-pg' # Ensure cloudnative-pg is deployed before postgres-cluster
+
+- name: cert-manager
+  namespace: '{{ .Environment.Values.namespaces.certManager }}'
+  createNamespace: true
+  chart: cert-manager/cert-manager
+  version: 1.16.1
+  disableValidation: true
+  wait: true  # Wait for cert-manager to be ready
+  values:
+    - values/cert-manager.yaml
+
+- name: temporal
+  namespace: '{{ .Environment.Values.namespaces.temporalOperator }}'
+  createNamespace: true
+  chart: temporal-operator/temporal-operator
+  version: 0.5.0
+  disableValidation: true
+  values:
+    - values/temporal-operator.yaml
+  needs:
+    - '{{ .Environment.Values.namespaces.certManager }}/cert-manager' # Ensure cert-manager is deployed before temporal
+
+- name: minio-operator
+  namespace: '{{ .Environment.Values.namespaces.minioOperator }}'
+  createNamespace: true
+  chart: minio/operator
+  version: 6.0.4
+  disableValidation: true
+  wait: true  # Wait for minio-operator to be ready
+  values:
+    - values/minio-operator.yaml
+
+- name: minio-tenant
+  namespace: '{{ .Environment.Values.namespaces.minioTenant }}'
+  createNamespace: true
+  chart: minio/tenant
+  version: 6.0.4
+  disableValidation: true
+  values:
+    - values/minio-tenant.yaml
+  needs:
+    - '{{ .Environment.Values.namespaces.minioOperator }}/minio-operator' # Ensure minio-operator is deployed before tenant

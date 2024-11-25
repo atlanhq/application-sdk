@@ -5,7 +5,7 @@ component: dashboard
 image:
   registry: docker.io/daprio
   name: dashboard
-  tag: 'edge'
+  tag: '0.15.0'
   imagePullPolicy: IfNotPresent
   imagePullSecrets: ""
 

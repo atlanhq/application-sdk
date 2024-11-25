@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    kubernetes.io/metadata.name: {{ .Values.temporal.namespace }}
+    name: {{ .Values.temporal.namespace }}
+  name: {{ .Values.temporal.namespace }}
+spec:
+  finalizers:
+  - kubernetes

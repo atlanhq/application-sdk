@@ -12,7 +12,7 @@ spec:
         user: {{ .Values.temporal.persistence.defaultStore.sql.user }}
         pluginName: postgres12
         databaseName: {{ .Values.temporal.persistence.defaultStore.sql.databaseName }}
-        connectAddr: {{ .Values.temporal.persistence.defaultStore.sql.connectAddr }}
+        connectAddr: '{{ tpl "postgres-cluster-rw.{{ .Values.temporal.persistence.postgresClusterNamespace }}.svc.cluster.local:5432" . }}'
         connectProtocol: tcp
         maxConnLifetime: 1h0m0s
         maxConns: 20
@@ -28,7 +28,7 @@ spec:
         user: {{ .Values.temporal.persistence.visibilityStore.sql.user }}
         pluginName: postgres12
         databaseName: {{ .Values.temporal.persistence.visibilityStore.sql.databaseName }}
-        connectAddr: {{ .Values.temporal.persistence.visibilityStore.sql.connectAddr }}
+        connectAddr: '{{ tpl "postgres-cluster-rw.{{ .Values.temporal.persistence.postgresClusterNamespace }}.svc.cluster.local:5432" . }}'
         connectProtocol: tcp
         maxConnLifetime: 1h0m0s
         maxConns: 20

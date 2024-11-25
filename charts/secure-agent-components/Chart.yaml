@@ -1,0 +1,19 @@
+apiVersion: v2
+name: atlan-secure-agent-components
+description: A Helm chart for Atlan Secure Agent Components
+keywords:
+  - atlan-secure-agent-components
+
+type: application
+# This is the chart version. This version number should be incremented each time you make changes
+version: 0.1.0
+# This is the version number of the application being deployed. This version number should be
+# incremented each time you make changes to the application.
+appVersion: 0.1.0
+
+home: http://atlan.com/
+icon: https://website-assets.atlan.com/img/atlan-blue.svg
+
+maintainers:
+  - name: Ujala Singh
+    email: ujala.singh@atlan.com
