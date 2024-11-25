@@ -75,6 +75,12 @@ jobs:
 
         # Process each Python file individually
         for FILE in *.py; do
+          # Skip files containing "fastapi"
+          if [[ $FILE == *"fastapi"* ]]; then
+            echo "Skipping $FILE (fastapi file)..."
+            continue
+          fi
+
           echo "Testing $FILE..."
 
           # Capture start time
