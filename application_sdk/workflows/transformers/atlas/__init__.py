@@ -74,12 +74,24 @@ class AtlasTransformer(TransformerInterface):
     ) -> Optional[Database]:
         try:
             assert data["datname"] is not None, "Database name cannot be None"
+
             sql_database = Database.creator(
                 name=data["datname"],
                 connection_qualified_name=f"{base_qualified_name}",
-                schema_count=data.get("schema_count", 0),
-                source_created_by=data.get("source_created_by", ""),
             )
+
+            sql_database.attributes.schema_count = data.get("schema_count", 0)
+
+            # TODO: These are not available in the attributes or database entity
+            # sql_database.attributes.description = data.get("remarks", "")
+            # sql_database.attributes.last_sync_run_at = data.get("lastSyncRunAt", None)
+            # sql_database.attributes.last_sync_workflow_name = data.get("lastSyncWorkflowName", None)
+            # sql_database.attributes.last_sync_run = data.get("lastSyncRun", None)
+            # sql_database.attributes.source_created_by = data.get("source_created_by", "")
+            # sql_database.attributes.source_created_at = data.get("source_created_at", "")
+            # sql_database.attributes.source_updated_at = data.get("source_updated_at", "")
+            # sql_database.attributes.source_id = data.get("source_id", "")
+            # sql_database.attributes.tenant_id = data.get("tenant_id", "")
 
             if data.get("created", None):
                 sql_database.attributes.source_created_at = data.get("created")
