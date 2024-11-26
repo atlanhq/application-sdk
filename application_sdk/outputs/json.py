@@ -86,9 +86,9 @@ class JsonOutput(Output):
     def __init__(self, output_path: str, upload_file_prefix: str, typename: str):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
-        self.typename = typename
         self.total_record_count = 0
         self.chunk_count = 0
+        self.typename = typename
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame):

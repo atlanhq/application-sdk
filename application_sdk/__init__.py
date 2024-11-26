@@ -1,7 +1,5 @@
 from functools import wraps
-from typing import Dict, Optional
-
-import pandas as pd
+from typing import Optional
 
 from application_sdk import logging
 from application_sdk.inputs import Input
@@ -16,7 +14,6 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
         async def new_fn(self, *args):
             fn_kwargs = {}
             outputs = {}
-            typename = None
             for name, arg in kwargs.items():
                 arg = arg(self, *args)
                 if isinstance(arg, Input):
@@ -24,22 +21,8 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 elif isinstance(arg, Output):
                     fn_kwargs[name] = arg
                     outputs[name] = arg
-                    typename = arg.typename
                 else:
                     fn_kwargs[name] = arg
-
-            async def process_ret(ret: Optional[Dict[str, pd.DataFrame]]):
-                if not ret or not isinstance(ret, dict):
-                    logger.info("Function did not return any data")
-                    return
-
-                for ret_name, ret_df in ret.items():
-                    if ret_name not in outputs:
-                        logger.warning(
-                            f"Output {ret_name} not found but function returned data"
-                        )
-                        continue
-                    await outputs[ret_name].write_df(ret_df)
 
             async def process_metadata():
                 for out in outputs.values():
@@ -52,16 +35,15 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 return await f(self, **fn_kwargs)
 
             # We'll get the data in chunks and write it to the outputs provided
-            chunk_count = 0
+            rets = []
             for df_batch in batch_input(self, *args).get_batched_df():
                 fn_kwargs["batch_input"] = df_batch
-                await process_ret(await f(self, **fn_kwargs))
+                rets.append(await f(self, **fn_kwargs))
                 del fn_kwargs["batch_input"]
-                chunk_count += 1
 
-            # In the end, we'll write the metadata and return the chunk count to the caller method
+            # In the end, we'll write the metadata and return the df to the caller method
             await process_metadata()
-            return {"typename": typename, "chunk_count": chunk_count}
+            return rets
 
         return new_fn
 

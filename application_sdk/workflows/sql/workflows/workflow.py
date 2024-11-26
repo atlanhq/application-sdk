@@ -229,7 +229,8 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        return {"raw_output": batch_input}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": raw_output.typename}
 
     @activity.defn
     @auto_heartbeater
@@ -253,7 +254,8 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        return {"raw_output": batch_input}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": raw_output.typename}
 
     @activity.defn
     @auto_heartbeater
@@ -277,7 +279,8 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        return {"raw_output": batch_input}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": raw_output.typename}
 
     @activity.defn
     @auto_heartbeater
@@ -301,7 +304,8 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        return {"raw_output": batch_input}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": raw_output.typename}
 
     @activity.defn
     @auto_heartbeater
@@ -402,15 +406,13 @@ class SQLWorkflow(WorkflowInterface):
 
         transform_activities: List[Any] = []
 
-        typename: str | None = raw_stat["typename"] or None
+        chunk_count = len(raw_stat)
+        if not chunk_count:
+            raise ValueError("Invalid chunk_count")
 
-        chunk_count = raw_stat.get("chunk_count", None)
-
+        typename = raw_stat[0].get("typename")
         if typename is None:
             raise ValueError("Invalid typename")
-
-        if chunk_count is None:
-            raise ValueError("Invalid chunk_count")
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
