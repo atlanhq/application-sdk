@@ -3,8 +3,8 @@
 
 echo "Linting the chart for secure agent components"
 helm dependency update
-helm lint ./atlan_charts/secure_agent_components
+helm lint ./atlan_charts/atlan_app_components
 
 echo "Linting the chart for secure agent app"
 helm dependency update
-helm lint ./atlan_charts/secure_agent_apps
+helm lint ./atlan_charts/atlan_apps
