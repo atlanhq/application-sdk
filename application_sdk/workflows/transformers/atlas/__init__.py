@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Any, Callable, Dict, Optional, Union
 
 from pyatlan.model.assets import (
@@ -6,7 +7,9 @@ from pyatlan.model.assets import (
     Column,
     Database,
     Function,
+    MaterialisedView,
     Schema,
+    SnowflakeDynamicTable,
     SnowflakePipe,
     SnowflakeStream,
     SnowflakeTag,
@@ -218,37 +221,114 @@ class AtlasTransformer(TransformerInterface):
             ), "Ordinal position cannot be None"
             assert data["data_type"] is not None, "Data type cannot be None"
 
-            parent_type = None
-            if data.get("table_type") == "TABLE":
-                parent_type = Table
-            else:
-                parent_type = View
+            view_definition = data.get("view_definition", "")
+            if isinstance(view_definition, list) and view_definition:
+                view_definition_values = view_definition[0].values()
+                view_definition = (
+                    list(view_definition_values)[0] if view_definition_values else ""
+                )
 
+            is_materialized = False
+            if view_definition:
+                materialized_pattern = (
+                    r"create( )+(or replace( )+)?(secure( )+)?materialized view"
+                )
+                is_materialized = bool(
+                    re.search(materialized_pattern, view_definition.lower())
+                )
+
+            parent_type = None
+            if data.get("table_type") == "MATERIALIZED VIEW" or is_materialized:
+                parent_type = MaterialisedView
+            elif data.get("table_type") == "VIEW":
+                parent_type = View
+            elif (
+                data.get("table_type") in ("DYNAMIC TABLE", "DYNAMIC_TABLE")
+                or data.get("is_dynamic") == "YES"
+            ):
+                parent_type = SnowflakeDynamicTable
+            else:
+                parent_type = Table
             sql_column = Column.creator(
                 name=data["column_name"],
                 parent_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}",
                 parent_type=parent_type,
                 order=data["ordinal_position"],
-                # TODO: In the column extraction, we don't have is_partition, primary_key, is_foreign
-                # is_partition=data["is_partition"] == "YES",
-                # is_primary=data["primary_key"] == "YES",
-                # is_foreign=data["is_foreign"] == "YES",
-                max_length=data.get("character_maximum_length", 0),
-                precision=data.get("numeric_precision", 0),
-                numeric_scale=data.get("numeric_scale", 0),
             )
-            sql_column.attributes.data_type = data.get("data_type", "")
-            sql_column.attributes.is_nullable = data.get("is_nullable", "YES") == "YES"
-            if data.get("table_type") == "TABLE":
-                sql_column.attributes.table = Table.creator(
+
+            # TODO: The description is not available in the attributes or column entity
+            # remarks = data.get('REMARKS')
+            # comment = data.get('COMMENT')
+            # if not (remarks and isinstance(remarks, str)) and comment:
+            #     # TODO: striptags from jinja
+            #     sql_column.attributes.description = comment[:100000]
+
+            sql_column.is_nullable = data.get("is_nullable", "YES") == "YES"
+            sql_column.is_partition = data.get("is_partition") == "YES"
+            if sql_column.is_partition:
+                sql_column.partition_order = data.get("partition_order", 0)
+
+            sql_column.is_primary = data.get("primary_key") == "YES"
+            sql_column.is_foreign = data.get("foreign_key") == "YES"
+
+            if data.get("character_maximum_length", None) is not None:
+                sql_column.max_length = data.get("character_maximum_length", 0)
+            if data.get("numeric_precision", None) is not None:
+                sql_column.precision = data.get("numeric_precision", 0)
+            if data.get("numeric_scale", None) is not None:
+                sql_column.numeric_scale = data.get("numeric_scale", 0)
+
+            if data.get("table_type") == "MATERIALIZED VIEW" or is_materialized:
+                sql_column.attributes.view_name = data["table_name"]
+                sql_column.attributes.view_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.materialised_view = MaterialisedView.creator(
                     name=data["table_name"],
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
-            else:
+            elif data.get("table_type") == "VIEW":
+                sql_column.attributes.view_name = data["table_name"]
+                sql_column.attributes.view_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
                 sql_column.attributes.view = View.creator(
                     name=data["table_name"],
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
+            elif (
+                data.get("table_type") in ("DYNAMIC TABLE", "DYNAMIC_TABLE")
+                or data.get("is_dynamic") == "YES"
+            ):
+                sql_column.attributes.table_name = data["table_name"]
+                sql_column.attributes.table_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.snowflake_dynamic_table = SnowflakeDynamicTable.creator(
+                    name=data["table_name"],
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                )
+            else:
+                sql_column.attributes.table_name = data["table_name"]
+                sql_column.attributes.table_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.table = Table.creator(
+                    name=data["table_name"],
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                )
+
+            if data.get("column_id"):
+                sql_column.source_id = data.get("column_id")
+                sql_column.catalog_id = data.get("table_catalog_id")
+                sql_column.schema_id = data.get("table_schema_id")
+                sql_column.table_id = data.get("table_id")
+
+            if data.get("character_octet_length") is not None:
+                sql_column.character_octet_length = data.get("character_octet_length")
+
+            sql_column.is_auto_increment = data.get("is_autoincrement") == "YES"
+            sql_column.is_generated = data.get("is_generatedcolumn") == "YES"
+
+            if data.get("extra_info"):
+                sql_column.extra_info = data.get("extra_info")
+            if data.get("buffer_length") is not None:
+                sql_column.buffer_length = data.get("buffer_length")
+            if data.get("column_size") is not None:
+                sql_column.column_size = data.get("column_size")
+
             return sql_column
         except AssertionError as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
