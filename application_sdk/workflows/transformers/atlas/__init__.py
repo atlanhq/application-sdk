@@ -428,7 +428,6 @@ class AtlasTransformer(TransformerInterface):
             assert data["tag_name"] is not None, "Tag name cannot be None"
             assert data["tag_id"] is not None, "Tag id cannot be None"
 
-            # TODO: Do we need to fill last_sync_run_at, last_sync_run, source_updated_at, etc.
             # TODO: Creator has not been implemented yet
             tag = SnowflakeTag.create(
                 name=data["tag_name"],
@@ -437,7 +436,6 @@ class AtlasTransformer(TransformerInterface):
                 source_updated_at=data["last_altered"],
             )
 
-            # TODO: Is this required?
             tag.attributes.atlan_schema = Schema.creator(
                 name=data["tag_schema"],
                 database_qualified_name=f"{base_qualified_name}/{data['tag_database']}",
