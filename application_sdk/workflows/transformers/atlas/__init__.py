@@ -1,5 +1,6 @@
 import logging
 import re
+from datetime import datetime
 from typing import Any, Callable, Dict, Optional, Union
 
 from pyatlan.model.assets import (
@@ -83,24 +84,31 @@ class AtlasTransformer(TransformerInterface):
                 connection_qualified_name=f"{base_qualified_name}",
             )
 
-            sql_database.attributes.schema_count = data.get("schema_count", 0)
+            if schema_count := data.get("schema_count", None):
+                sql_database.schema_count = schema_count
 
-            # TODO: These are not available in the attributes or database entity
-            # sql_database.attributes.description = data.get("remarks", "")
-            # sql_database.attributes.last_sync_run_at = data.get("lastSyncRunAt", None)
-            # sql_database.attributes.last_sync_workflow_name = data.get("lastSyncWorkflowName", None)
-            # sql_database.attributes.last_sync_run = data.get("lastSyncRun", None)
-            # sql_database.attributes.source_created_by = data.get("source_created_by", "")
-            # sql_database.attributes.source_created_at = data.get("source_created_at", "")
-            # sql_database.attributes.source_updated_at = data.get("source_updated_at", "")
+            if remarks := data.get("remarks", None):
+                sql_database.description = remarks
+
+            if last_sync_workflow_name := data.get("lastSyncWorkflowName", None):
+                sql_database.last_sync_workflow_name = last_sync_workflow_name
+
+            sql_database.last_sync_run_at = datetime.now()
+            # TODO:
+            # sql_database.last_sync_run = last_sync_run
+
+            if source_created_by := data.get("database_owner", None):
+                sql_database.source_created_by = source_created_by
+
+            # TODO: These are not available in the database entity
             # sql_database.attributes.source_id = data.get("source_id", "")
             # sql_database.attributes.tenant_id = data.get("tenant_id", "")
 
-            if data.get("created", None):
-                sql_database.attributes.source_created_at = data.get("created")
+            if created := data.get("created", None):
+                sql_database.source_created_at = created
 
-            if data.get("last_altered", None):
-                sql_database.attributes.source_updated_at = data.get("last_altered")
+            if last_altered := data.get("last_altered", None):
+                sql_database.source_updated_at = last_altered
 
             return sql_database
         except AssertionError as e:
@@ -136,18 +144,22 @@ class AtlasTransformer(TransformerInterface):
             if schema_owner := data.get("schema_owner", None):
                 sql_schema.source_created_by = schema_owner
 
-            if schema_id := data.get("schema_id", None):
-                sql_schema.source_id = schema_id
+            # TODO: This is not available in the attributes or schema entity
+            # if schema_id := data.get("schema_id", None):
+            #     sql_schema.source_id = schema_id
+            # if catalog_id := data.get("catalog_id", None):
+            #     sql_schema.catalog_id = catalog_id
+            # if is_managed_access := data.get("is_managed_access", None):
+            #     sql_schema.is_managed_access = is_managed_access
 
-            if catalog_id := data.get("catalog_id", None):
-                sql_schema.catalog_id = catalog_id
-
-            if is_managed_access := data.get("is_managed_access", None):
-                sql_schema.is_managed_access = is_managed_access
             sql_schema.attributes.database = Database.creator(
                 name=data["catalog_name"],
                 connection_qualified_name=f"{base_qualified_name}",
             )
+
+            sql_schema.last_sync_run_at = datetime.now()
+            # TODO:
+            # sql_schema.last_sync_run = last_sync_run
             return sql_schema
         except AssertionError as e:
             logger.error(f"Error creating SchemaEntity: {str(e)}")
@@ -201,7 +213,9 @@ class AtlasTransformer(TransformerInterface):
             if data.get("remarks", None) and isinstance(data["remarks"], str):
                 entity.description = data["remarks"]
 
-            entity.last_sync_run_at = data.get("now")
+            entity.last_sync_run_at = datetime.now()
+            # TODO:
+            # entity.last_sync_run = last_sync_run
 
             # TODO: Don't have workflow_name, crawler_name, tenant_id in the metadata
             # entity.last_sync_workflow_name = data.get("crawler_name")
@@ -211,8 +225,9 @@ class AtlasTransformer(TransformerInterface):
             if column_count := data.get("column_count", None):
                 entity.column_count = column_count
 
-            if source_id := data.get("TABLE_ID", None):
-                entity.source_id = source_id
+            # TODO: This is not available in the attributes or table entity
+            # if source_id := data.get("TABLE_ID", None):
+            #     entity.source_id = source_id
 
             if catalog_id := data.get("TABLE_CATALOG_ID", None):
                 entity.catalog_id = catalog_id
@@ -289,8 +304,9 @@ class AtlasTransformer(TransformerInterface):
             if last_altered := data.get("LAST_ALTERED", None):
                 entity.source_updated_at = last_altered
 
-            if table_id := data.get("TABLE_ID", None):
-                entity.source_id = table_id
+            if _ := data.get("TABLE_ID", None):
+                # TODO: This is not available in the attributes or table entity
+                # entity.source_id = table_id
                 entity.catalog_id = data.get("TABLE_CATALOG_ID")
                 entity.schema_id = data.get("TABLE_SCHEMA_ID")
 
@@ -423,24 +439,27 @@ class AtlasTransformer(TransformerInterface):
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
 
-            if data.get("column_id"):
-                sql_column.source_id = data.get("column_id")
-                sql_column.catalog_id = data.get("table_catalog_id")
-                sql_column.schema_id = data.get("table_schema_id")
-                sql_column.table_id = data.get("table_id")
+            # if data.get("column_id"):
+            #     # TODO: This is not available in the attributes or column entity
+            #     sql_column.source_id = data.get("column_id")
+            #     sql_column.catalog_id = data.get("table_catalog_id")
+            #     sql_column.schema_id = data.get("table_schema_id")
+            #     sql_column.table_id = data.get("table_id")
+            # if character_octet_length := data.get("character_octet_length", None):
+            #     sql_column.character_octet_length = character_octet_length
 
-            if data.get("character_octet_length") is not None:
-                sql_column.character_octet_length = data.get("character_octet_length")
+            # sql_column.is_auto_increment = data.get("is_autoincrement") == "YES"
+            # sql_column.is_generated = data.get("is_generatedcolumn") == "YES"
+            # if data.get("extra_info"):
+            #     sql_column.extra_info = data.get("extra_info")
+            # if data.get("buffer_length") is not None:
+            #     sql_column.buffer_length = data.get("buffer_length")
+            # if data.get("column_size") is not None:
+            #     sql_column.column_size = data.get("column_size")
 
-            sql_column.is_auto_increment = data.get("is_autoincrement") == "YES"
-            sql_column.is_generated = data.get("is_generatedcolumn") == "YES"
-
-            if data.get("extra_info"):
-                sql_column.extra_info = data.get("extra_info")
-            if data.get("buffer_length") is not None:
-                sql_column.buffer_length = data.get("buffer_length")
-            if data.get("column_size") is not None:
-                sql_column.column_size = data.get("column_size")
+            sql_column.last_sync_run_at = datetime.now()
+            # TODO:
+            # sql_column.last_sync_run = last_sync_run
 
             return sql_column
         except AssertionError as e:
@@ -469,6 +488,10 @@ class AtlasTransformer(TransformerInterface):
                 name=data["pipe_schema"],
                 database_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}",
             )
+
+            snowflake_pipe.last_sync_run_at = datetime.now()
+            # TODO:
+            # snowflake_pipe.last_sync_run = last_sync_run
 
             return snowflake_pipe
         except AssertionError as e:
@@ -529,6 +552,10 @@ class AtlasTransformer(TransformerInterface):
                     data.get("is_memoizable") == "YES"
                 )
 
+            function.last_sync_run_at = datetime.now()
+            # TODO:
+            # function.last_sync_run = last_sync_run
+
             return function
         except AssertionError as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
@@ -554,6 +581,10 @@ class AtlasTransformer(TransformerInterface):
                 database_qualified_name=f"{base_qualified_name}/{data['tag_database']}",
             )
 
+            tag.last_sync_run_at = datetime.now()
+            # TODO:
+            # tag.last_sync_run = last_sync_run
+
             return tag
         except AssertionError as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
@@ -570,6 +601,10 @@ class AtlasTransformer(TransformerInterface):
                 name=data["tag_name"],
                 tag_attachment_string_value=data["tag_value"],
             )
+
+            tag_attachment.last_sync_run_at = datetime.now()
+            # TODO:
+            # tag_attachment.last_sync_run = last_sync_run
 
             return tag_attachment
         except AssertionError as e:
@@ -602,6 +637,10 @@ class AtlasTransformer(TransformerInterface):
                 name=data["schema_name"],
                 database_qualified_name=f"{base_qualified_name}/{data['database_name']}",
             )
+
+            snowflake_stream.last_sync_run_at = datetime.now()
+            # TODO:
+            # snowflake_stream.last_sync_run = last_sync_run
 
             return snowflake_stream
         except AssertionError as e:
