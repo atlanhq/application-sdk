@@ -35,9 +35,6 @@ class SQLMinerWorkflow(SQLWorkflow):
             self.fetch_queries,
         ]
 
-    def store_credentials(self, credentials: Dict[str, Any]) -> str:
-        return SecretStore.store_credentials(credentials)
-
     async def fetch_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str
     ) -> int:
