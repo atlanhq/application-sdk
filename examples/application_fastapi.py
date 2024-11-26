@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from typing import Any, Dict, List
 
@@ -44,4 +43,5 @@ if __name__ == "__main__":
         preflight_check_controller=WorkflowPreflightCheckController(),
         workflow=SampleWorkflow(),
     )
-    asyncio.run(fast_api_app.start())
+    # Uncomment this to start the app locally
+    # asyncio.run(fast_api_app.start())
