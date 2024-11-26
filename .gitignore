@@ -162,4 +162,4 @@ cython_debug/
 .idea/
 .vscode
 Chart.lock
-charts/charts
+atlan_charts/*/charts

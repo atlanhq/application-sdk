@@ -24,6 +24,8 @@ environments:
           temporalOperator: atlan-temporal-operator
           minioOperator: atlan-minio-operator
           minioTenant: atlan-minio-tenant
+      - enableMinio:
+          enabled: true
 
   unified:
     values:
@@ -35,6 +37,8 @@ environments:
           temporalOperator: atlan-secure-agent
           minioOperator: atlan-secure-agent
           minioTenant: atlan-secure-agent
+      - enableMinio:
+          enabled: true
 
 ---
 releases:
@@ -107,6 +111,7 @@ releases:
   chart: minio/operator
   version: 6.0.4
   disableValidation: true
+  installed: {{ .Environment.Values.enableMinio.enabled }}
   wait: true  # Wait for minio-operator to be ready
   values:
     - values/minio_operator.yaml
@@ -117,6 +122,7 @@ releases:
   chart: minio/tenant
   version: 6.0.4
   disableValidation: true
+  installed: {{ .Environment.Values.enableMinio.enabled }}
   values:
     - values/minio_tenant.yaml
   needs:

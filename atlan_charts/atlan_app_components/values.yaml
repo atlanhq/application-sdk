@@ -77,3 +77,15 @@ temporal:
             - host
   metrics:
     enabled: true
+
+dapr:
+  components:
+    ## TO setup a state store, you need to provide the values mentioned in the documentation: https://docs.dapr.io/operations/components/setup-state-store/
+    statestore: 
+      enabled: false
+    ## TO setup a secret store, you need to provide the values mentioned in the documentation: https://docs.dapr.io/operations/components/setup-secret-store/
+    secretstore:
+      enabled: false
+    ## TO setup a pubsub, you need to provide the values mentioned in the documentation: https://docs.dapr.io/reference/components-reference/supported-bindings/
+    objectstore:
+      enabled: false

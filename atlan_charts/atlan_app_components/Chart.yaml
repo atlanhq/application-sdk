@@ -1,8 +1,8 @@
 apiVersion: v2
-name: atlan-secure-agent-app
-description: A Helm chart for Atlan Secure Agent App
+name: atlan-app-components
+description: A Helm chart for Atlan App Components
 keywords:
-  - atlan-secure-agent-app
+  - atlan-app-components
 
 type: application
 # This is the chart version. This version number should be incremented each time you make changes

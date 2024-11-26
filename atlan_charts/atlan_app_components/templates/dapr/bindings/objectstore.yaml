@@ -1,0 +1,10 @@
+{{- if .Values.dapr.components.objectstore.enabled }}
+{{ range .Values.dapr.components.objectstore.objects }}
+---
+{{ if typeIs "string" . }}
+    {{- tpl . $ }}
+{{- else }}
+    {{- tpl (toYaml .) $ }}
+{{- end }}
+{{ end }}
+{{- end }}

@@ -1,8 +1,8 @@
 apiVersion: v2
-name: atlan-secure-agent-components
-description: A Helm chart for Atlan Secure Agent Components
+name: atlan-app
+description: A Helm chart for Atlan App
 keywords:
-  - atlan-secure-agent-components
+  - atlan-app
 
 type: application
 # This is the chart version. This version number should be incremented each time you make changes
@@ -17,3 +17,11 @@ icon: https://website-assets.atlan.com/img/atlan-blue.svg
 maintainers:
   - name: Ujala Singh
     email: ujala.singh@atlan.com
+
+dependencies:
+  - name: atlan-app-components
+    version: 0.1.0
+    repository: file://../atlan_app_components
+    condition: atlan-app-components.enabled
+    tags:
+      - atlan-app-components

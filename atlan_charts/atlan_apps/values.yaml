@@ -1,0 +1,296 @@
+app:
+  # General settings
+  enabled: true
+  name: "phoenix-hello-world-app"
+  fullnameOverride: "phoenix-hello-world-app"
+  nameOverride: "phoenix-hello-world-app"
+  namespace: phoenix-hello-world-app
+
+  # Deployment settings
+  replicaCount: 1
+  image:
+    repository: harbor-phoenix.atlan.dev/applications/phoenix-hello-world-app
+    tag: main-latest
+  containerPort: 8000
+  imagePullSecrets:
+    - name: harbor-image-registry
+
+  nodeSelector: {}
+
+  tolerations: []
+
+  affinity: {}
+
+  priorityClassName: ""
+
+  daprStateStore:
+    postgresClusterNamespace: "atlan-postgres"
+
+  # Annotations for pod
+  podAnnotations:
+    dapr.io/enabled: "true"
+    dapr.io/app-id: "phoenix-hello-world-app"
+    dapr.io/app-port: "8000"
+
+  # Security context for the pod
+  securityContext: {}
+    # capabilities:
+    #   drop:
+    #   - ALL
+    # readOnlyRootFilesystem: true
+    # runAsNonRoot: true
+    # runAsUser: 1000
+
+  # Init containers
+  initContainers: []
+  #Environment variables
+  env:
+    - name: ATLAN_TEMPORAL_HOST
+      value: temporal-cluster-frontend.atlan-temporal.svc.cluster.local
+    - name: ATLAN_TEMPORAL_PORT
+      value: "7233"
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://0.0.0.0:8000/telemetry
+    - name: OTEL_EXPORTER_OTLP_PROTOCOL
+      value: "http/protobuf"
+    - name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED
+      value: "true"
+    - name: OTEL_PYTHON_EXCLUDED_URLS
+      value: "/telemetry/.*,/system/.*"
+
+  # Resources
+  resources:
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+    requests:
+      cpu: "250m"
+      memory: "256Mi"
+
+  # Service Account settings
+  serviceAccount:
+    create: true
+    annotations: {}
+
+  # Liveness and Readiness Probes
+  readinessProbe:
+    enabled: false
+    path: "/health/readiness"
+    port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+  livenessProbe:
+    enabled: false
+    path: "/health/livenesss"
+    port: 8000
+    initialDelaySeconds: 15
+    periodSeconds: 10
+
+  # Service settings
+  service:
+    type: ClusterIP
+    servicePort: 8000
+    targetPort: 8000
+    serviceProtocol: TCP
+
+  # Service Account Name
+  serviceAccountName: ""
+
+  # Ingress settings
+  ingress:
+    #would you like to enable ingress for this service
+    enabled: false
+    className: ""
+    #Annotations
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+    annotations: {}
+    ## Hostnames.
+    ## Must be provided if Ingress is enable.
+    hosts:
+    ## Path for grafana ingress
+      - host: 'repl{{ ConfigOption `DOMAIN_NAME` }}'
+        paths: [
+          /postgres-app
+        ]
+    ## TLS configuration for grafana Ingress
+    ## Secret must be manually created in the namespace
+    ##
+    tls:
+      host: 'repl{{ ConfigOption `DOMAIN_NAME` }}'
+      secretName: 'repl{{ ConfigOption `TLS_SECRET_NAME` }}'
+
+  # -- Array of extra K8s manifests to deploy
+  extraObjects: []
+
+atlan-app-components:
+  enabled: true
+  dapr:
+    components:
+      objectstore:
+        enabled: true
+        objects:
+          ## Minio Object Store for local development
+          - apiVersion: dapr.io/v1alpha1
+            kind: Component
+            metadata:
+              name: objectstore
+              namespace: phoenix-hello-world-app
+            spec:
+              type: bindings.aws.s3
+              version: v1
+              metadata:
+              - name: bucket
+                value: "dapr-objects"
+              - name: region
+                value: "us-east-1"
+              - name: endpoint
+                value: "https://myminio-hl.atlan-minio-tenant.svc.cluster.local:9000"
+              - name: accessKey
+                value: "minio"
+              - name: secretKey
+                value: "minio123"
+              - name: forcePathStyle
+                value: true
+              - name: disableSSL
+                value: false
+              - name: insecureSSL
+                value: true
+
+          ## AWS S3 Object Store
+          # - apiVersion: dapr.io/v1alpha1
+          #   kind: Component
+          #   metadata:
+          #     name: objectstore
+          #     namespace: phoenix-hello-world-app
+          #   spec:
+          #     type: bindings.aws.s3
+          #     version: v1
+          #     metadata:
+          #     - name: bucket
+          #       value: "mybucket"
+          #     - name: region
+          #       value: "us-west-2"
+          #     - name: endpoint
+          #       value: "s3.us-west-2.amazonaws.com"
+          #     - name: accessKey
+          #       value: "*****************"
+          #     - name: secretKey
+          #       value: "*****************"
+          #     - name: sessionToken
+          #       value: "mysession"
+          #     - name: decodeBase64
+          #       value: "<bool>"
+          #     - name: encodeBase64
+          #       value: "<bool>"
+          #     - name: forcePathStyle
+          #       value: "<bool>"
+          #     - name: disableSSL
+          #       value: "<bool>"
+          #     - name: insecureSSL
+          #       value: "<bool>"
+
+          ## GCS Object Store
+          # - apiVersion: dapr.io/v1alpha1
+          #   kind: Component
+          #   metadata:
+          #     name: objectstore
+          #     namespace: phoenix-hello-world-app
+          #   spec:
+          #     type: bindings.gcp.bucket
+          #     version: v1
+          #     metadata:
+          #     - name: bucket
+          #       value: "mybucket"
+          #     - name: type
+          #       value: "service_account"
+          #     - name: project_id
+          #       value: "project_111"
+          #     - name: private_key_id
+          #       value: "*************"
+          #     - name: client_email
+          #       value: "name@domain.com"
+          #     - name: client_id
+          #       value: "1111111111111111"
+          #     - name: auth_uri
+          #       value: "https://accounts.google.com/o/oauth2/auth"
+          #     - name: token_uri
+          #       value: "https://oauth2.googleapis.com/token"
+          #     - name: auth_provider_x509_cert_url
+          #       value: "https://www.googleapis.com/oauth2/v1/certs"
+          #     - name: client_x509_cert_url
+          #       value: "https://www.googleapis.com/robot/v1/metadata/x509/<project-name>.iam.gserviceaccount.com"
+          #     - name: private_key
+          #       value: "PRIVATE KEY"
+          #     - name: decodeBase64
+          #       value: "<bool>"
+          #     - name: encodeBase64
+          #       value: "<bool>"
+
+          ## Azure Blob Storage Object Store
+          # - apiVersion: dapr.io/v1alpha1
+          #   kind: Component
+          #   metadata:
+          #     name: objectstore
+          #     namespace: phoenix-hello-world-app
+          #   spec:
+          #     type: bindings.azure.blobstorage
+          #     version: v1
+          #     metadata:
+          #     - name: accountName
+          #       value: myStorageAccountName
+          #     - name: accountKey
+          #       value: ***********
+          #     - name: containerName
+          #       value: container1
+          #     - name: decodeBase64
+          #       value: <bool>
+          #     - name: getBlobRetryCount
+          #       value: <integer>
+          #     - name: publicAccessLevel
+          #       value: <publicAccessLevel>
+
+      statestore:
+        enabled: true
+        states:
+          ## Statestore component
+          - apiVersion: dapr.io/v1alpha1
+            kind: Component
+            metadata:
+              name: statestore
+              namespace: phoenix-hello-world-app
+            spec:
+              type: state.postgresql
+              # Note: setting "version" to "v2" is required to use the v2 of the component
+              version: v2
+              metadata:
+              # Connection string
+              - name: connectionString
+                secretKeyRef:
+                  name: dapr-pg-connection-string
+                  key:  connection-string
+              # Timeout for database operations, as a Go duration or number of seconds (optional)
+              - name: timeout
+                value: 20
+              # Prefix for the table where the data is stored (optional)
+              - name: tablePrefix
+                value: ""
+              # Name of the table where to store metadata used by Dapr (optional)
+              - name: metadataTableName
+                value: "dapr_metadata"
+              # Cleanup interval in seconds, to remove expired rows (optional)
+              - name: cleanupInterval
+                value: "1h"
+              # Maximum number of connections pooled by this component (optional)
+              - name: maxConns
+                value: 0
+              # Max idle time for connections before they're closed (optional)
+              - name: connectionMaxIdleTime
+                value: 0
+              # Controls the default mode for executing queries. (optional)
+              - name: queryExecMode
+                value: ""
+              # Uncomment this if you wish to use PostgreSQL as a state store for actors (optional)
+              - name: actorStateStore
+                value: "true"
