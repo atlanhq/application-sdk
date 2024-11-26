@@ -50,7 +50,9 @@ class TestDecorators:
             ),
         )
         async def func(self, batch_input, out1, out2):
-            return {"out1": batch_input, "out2": batch_input.map(lambda x: x + 1)}
+            await out1.write_df(batch_input)
+            await out2.write_df(batch_input.map(lambda x: x + 1))
+            return batch_input
 
         arg = {
             "metadata_sql": "SELECT * FROM information_schema.tables",
