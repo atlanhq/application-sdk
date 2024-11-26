@@ -116,6 +116,16 @@ class AtlasTransformer(TransformerInterface):
             )
             sql_schema.attributes.table_count = data.get("table_count", 0)
             sql_schema.attributes.views_count = data.get("view_count", 0)
+
+            # TODO: These are not available in the attributes or schema entity
+            # sql_schema.attributes.description = data.get("remarks", "")
+            # sql_schema.attributes.source_created_at = data.get("created")
+            # sql_schema.attributes.source_updated_at = data.get("last_altered")
+            # sql_schema.attributes.source_created_by = data.get("schema_owner", "")
+            # sql_schema.attributes.source_id = data.get("schema_id", "")
+            # sql_schema.attributes.catalog_id = data.get("catalog_id", "")
+            # sql_schema.attributes.is_managed_access = data.get("is_managed_access", "")
+
             sql_schema.attributes.database = Database.creator(
                 name=data["catalog_name"],
                 connection_qualified_name=f"{base_qualified_name}",
