@@ -117,18 +117,33 @@ class AtlasTransformer(TransformerInterface):
                 name=data["schema_name"],
                 database_qualified_name=f"{base_qualified_name}/{data['catalog_name']}",
             )
-            sql_schema.attributes.table_count = data.get("table_count", 0)
-            sql_schema.attributes.views_count = data.get("view_count", 0)
 
-            # TODO: These are not available in the attributes or schema entity
-            # sql_schema.attributes.description = data.get("remarks", "")
-            # sql_schema.attributes.source_created_at = data.get("created")
-            # sql_schema.attributes.source_updated_at = data.get("last_altered")
-            # sql_schema.attributes.source_created_by = data.get("schema_owner", "")
-            # sql_schema.attributes.source_id = data.get("schema_id", "")
-            # sql_schema.attributes.catalog_id = data.get("catalog_id", "")
-            # sql_schema.attributes.is_managed_access = data.get("is_managed_access", "")
+            if table_count := data.get("table_count", None):
+                sql_schema.table_count = table_count
 
+            if views_count := data.get("view_count", None):
+                sql_schema.views_count = views_count
+
+            if remarks := data.get("remarks", None):
+                sql_schema.description = remarks
+
+            if created := data.get("created", None):
+                sql_schema.source_created_at = created
+
+            if last_altered := data.get("last_altered", None):
+                sql_schema.source_updated_at = last_altered
+
+            if schema_owner := data.get("schema_owner", None):
+                sql_schema.source_created_by = schema_owner
+
+            if schema_id := data.get("schema_id", None):
+                sql_schema.source_id = schema_id
+
+            if catalog_id := data.get("catalog_id", None):
+                sql_schema.catalog_id = catalog_id
+
+            if is_managed_access := data.get("is_managed_access", None):
+                sql_schema.is_managed_access = is_managed_access
             sql_schema.attributes.database = Database.creator(
                 name=data["catalog_name"],
                 connection_qualified_name=f"{base_qualified_name}",
@@ -140,69 +155,167 @@ class AtlasTransformer(TransformerInterface):
 
     def _create_table_entity(
         self, data: Dict[str, Any], base_qualified_name: str
-    ) -> Optional[Union[Table, View]]:
+    ) -> Optional[Union[Table, View, MaterialisedView]]:
         try:
-            assert data["table_name"] is not None, "Table name cannot be None"
-            assert data["table_catalog"] is not None, "Table catalog cannot be None"
-            assert data["table_schema"] is not None, "Table schema cannot be None"
-
-            sql_table = None
-
-            if data.get("table_type") == "TABLE":
-                sql_table: Table = Table.creator(
+            entity = None
+            if data.get("table_type") == "MATERIALIZED VIEW":
+                entity = MaterialisedView.creator(
                     name=data["table_name"],
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    connection_qualified_name=base_qualified_name,
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
                 )
-
-                if data.get("is_iceberg") == "YES":
-                    sql_table.attributes.table_type = "ICEBERG"
-                elif data.get("is_temporary") == "YES":
-                    sql_table.attributes.table_type = "TEMPORARY"
-
-                if iceberg_table_type := data.get("iceberg_table_type", "").upper():
-                    sql_table.attributes.iceberg_table_type = iceberg_table_type
-                if catalog_name := data.get("catalog_name"):
-                    sql_table.attributes.iceberg_catalog_name = catalog_name
-                if catalog_table_name := data.get("catalog_table_name"):
-                    sql_table.attributes.iceberg_catalog_table_name = catalog_table_name
-                if catalog_namespace := data.get("catalog_namespace"):
-                    sql_table.attributes.iceberg_catalog_table_namespace = (
-                        catalog_namespace
-                    )
-                if external_volume := data.get("external_volume_name"):
-                    sql_table.attributes.table_external_volume_name = external_volume
-                if base_location := data.get("base_location"):
-                    sql_table.attributes.iceberg_table_base_location = base_location
-                if catalog_source := data.get("catalog_source"):
-                    sql_table.attributes.iceberg_catalog_source = catalog_source
-                if retention_time := data.get("retention_time", -1):
-                    if retention_time != -1:
-                        sql_table.attributes.table_retention_time = retention_time
-
-                if data.get("is_dynamic") == "YES":
-                    view_definition = data.get("view_definition_list", "")
-                    if isinstance(view_definition, list) and view_definition:
-                        values = list(view_definition[0].values())
-                        sql_table.attributes.definition = values[0] if values else ""
-                    else:
-                        sql_table.attributes.definition = str(view_definition)
-                else:
-                    sql_table.attributes.definition = data.get("view_definition", "")
-
+            elif data.get("table_type") == "VIEW":
+                entity = View.creator(
+                    name=data["table_name"],
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    connection_qualified_name=base_qualified_name,
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
+                )
+            elif (
+                data.get("table_type") == "DYNAMIC TABLE"
+                or data.get("is_dynamic") == "YES"
+            ):
+                entity = SnowflakeDynamicTable.creator(
+                    name=data["table_name"],
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    connection_qualified_name=base_qualified_name,
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
+                )
             else:
-                sql_table: View = View.creator(
+                entity = Table.creator(
                     name=data["table_name"],
                     schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    connection_qualified_name=base_qualified_name,
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
                 )
-                sql_table.attributes.definition = data.get("VIEW_DEFINITION", "")
-            sql_table.attributes.atlan_schema = Schema.creator(
+
+            if data.get("remarks", None) and isinstance(data["remarks"], str):
+                entity.description = data["remarks"]
+
+            entity.last_sync_run_at = data.get("now")
+
+            # TODO: Don't have workflow_name, crawler_name, tenant_id in the metadata
+            # entity.last_sync_workflow_name = data.get("crawler_name")
+            # entity.last_sync_run = data.get("workflow_name")
+            # entity.tenant_id = data.get("tenant_id")
+
+            if column_count := data.get("column_count", None):
+                entity.column_count = column_count
+
+            if source_id := data.get("TABLE_ID", None):
+                entity.source_id = source_id
+
+            if catalog_id := data.get("TABLE_CATALOG_ID", None):
+                entity.catalog_id = catalog_id
+
+            if schema_id := data.get("TABLE_SCHEMA_ID", None):
+                entity.schema_id = schema_id
+
+            if last_ddl := data.get("LAST_DDL", None):
+                entity.last_ddl = last_ddl
+
+            if last_ddl_by := data.get("LAST_DDL_BY", None):
+                entity.last_ddl_by = last_ddl_by
+
+            if is_secure := data.get("IS_SECURE", None):
+                entity.is_secure = is_secure
+
+            if retention_time := data.get("RETENTION_TIME", None):
+                entity.retention_time = retention_time
+
+            if stage_url := data.get("STAGE_URL", None):
+                entity.stage_url = stage_url
+
+            if is_insertable_into := data.get("IS_INSERTABLE_INTO", None):
+                entity.is_insertable_into = is_insertable_into
+
+            if num_part_key_cols := data.get("NUMBER_COLUMNS_IN_PART_KEY", None):
+                entity.number_columns_in_part_key = num_part_key_cols
+
+            if part_key_cols := data.get("COLUMNS_PARTICIPATING_IN_PART_KEY", None):
+                entity.columns_participating_in_part_key = part_key_cols
+
+            if is_typed := data.get("IS_TYPED", None):
+                entity.is_typed = is_typed
+
+            if auto_clustering := data.get("AUTO_CLUSTERING_ON", None):
+                entity.auto_clustering_on = auto_clustering
+
+            if engine := data.get("ENGINE", None):
+                entity.engine = engine
+
+            if auto_increment := data.get("AUTO_INCREMENT", None):
+                entity.auto_increment = auto_increment
+
+            if row_count := data.get("row_count", None):
+                entity.row_count = row_count
+
+            if bytes_size := data.get("bytes", None):
+                entity.size_bytes = bytes_size
+
+            if is_transient := data.get("is_transient", None):
+                entity.custom_metadata = {"is_transient": is_transient}
+
+            entity.attributes.atlan_schema = Schema.creator(
                 name=data["table_schema"],
                 database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
             )
-            sql_table.attributes.column_count = data.get("column_count", 0)
-            sql_table.attributes.row_count = data.get("row_count", 0)
-            sql_table.attributes.size_bytes = data.get("size_bytes", 0)
-            return sql_table
+
+            if view_definition := data.get("VIEW_DEFINITION", None):
+                if isinstance(view_definition, list) and view_definition:
+                    view_def_values = list(view_definition[0].values())
+                    if view_def_values:
+                        entity.definition = view_def_values[0]
+                    else:
+                        entity.definition = ""
+                else:
+                    entity.definition = str(view_definition)
+
+            if table_owner := data.get("TABLE_OWNER", None):
+                entity.source_created_by = table_owner
+
+            if created_at := data.get("CREATED", None):
+                entity.source_created_at = created_at
+
+            if last_altered := data.get("LAST_ALTERED", None):
+                entity.source_updated_at = last_altered
+
+            if table_id := data.get("TABLE_ID", None):
+                entity.source_id = table_id
+                entity.catalog_id = data.get("TABLE_CATALOG_ID")
+                entity.schema_id = data.get("TABLE_SCHEMA_ID")
+
+            if last_ddl := data.get("LAST_DDL", None):
+                entity.last_ddl = last_ddl
+
+            if last_ddl_by := data.get("LAST_DDL_BY", None):
+                entity.last_ddl_by = last_ddl_by
+
+            if is_secure := data.get("IS_SECURE", None):
+                entity.is_secure = is_secure
+
+            if retention_time := data.get("RETENTION_TIME", None):
+                entity.retention_time = retention_time
+
+            if stage_url := data.get("STAGE_URL", None):
+                entity.stage_url = stage_url
+
+            if is_insertable := data.get("IS_INSERTABLE_INTO", None):
+                entity.is_insertable_into = is_insertable
+
+            if num_part_cols := data.get("NUMBER_COLUMNS_IN_PART_KEY", None):
+                entity.number_columns_in_part_key = num_part_cols
+
+            return entity
         except AssertionError as e:
             logger.error(f"Error creating TableEntity: {str(e)}")
             return None
