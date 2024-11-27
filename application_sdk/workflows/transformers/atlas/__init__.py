@@ -111,7 +111,6 @@ class AtlasTransformer(TransformerInterface):
             if last_sync_workflow_name := data.get("lastSyncWorkflowName", None):
                 sql_database.last_sync_workflow_name = last_sync_workflow_name
 
-            # TODO: Time format?
             sql_database.last_sync_run_at = datetime.now()
 
             if source_created_by := data.get("database_owner", None):
@@ -209,7 +208,6 @@ class AtlasTransformer(TransformerInterface):
                 connection_qualified_name=f"{base_qualified_name}",
             )
 
-            # TODO: Time format?
             sql_schema.last_sync_run_at = datetime.now()
             return sql_schema
         except AssertionError as e:
@@ -355,13 +353,16 @@ class AtlasTransformer(TransformerInterface):
         try:
             # TODO: For all types, which are required attributes, and which aren't
             assert data["column_name"] is not None, "Column name cannot be None"
-            assert data["table_catalog"] is not None, "Table catalog cannot be None"
-            assert data["table_schema"] is not None, "Table schema cannot be None"
+            assert data["table_type"] is not None, "Table type cannot be None"
+            assert data["table_cat"] is not None, "Table catalog cannot be None"
+            assert data["table_schem"] is not None, "Table schema cannot be None"
             assert data["table_name"] is not None, "Table name cannot be None"
-            assert (
-                data["ordinal_position"] is not None
-            ), "Ordinal position cannot be None"
             assert data["data_type"] is not None, "Data type cannot be None"
+
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}",
 
             view_definition = data.get("view_definition", "")
             if isinstance(view_definition, list) and view_definition:
@@ -391,89 +392,122 @@ class AtlasTransformer(TransformerInterface):
                 parent_type = SnowflakeDynamicTable
             else:
                 parent_type = Table
+
+            order = None
+            if (
+                data.get("ordinal_position", None)
+                or data.get("column_id", None)
+                or data.get("internal_column_id", None)
+            ):
+                order = data.get(
+                    "ordinal_position",
+                    data.get("column_id", data.get("internal_column_id", "")),
+                )
+
             sql_column = Column.creator(
                 name=data["column_name"],
-                parent_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}",
+                parent_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}",
                 parent_type=parent_type,
-                order=data["ordinal_position"],
+                order=int(order),
             )
+            sql_column.database_name = data["table_cat"]
+            sql_column.schema_name = data["table_schem"]
 
-            # TODO: The description is not available in the attributes or column entity
-            # TODO: Should be available
-            # remarks = data.get('REMARKS')
-            # comment = data.get('COMMENT')
-            # if not (remarks and isinstance(remarks, str)) and comment:
-            #     # TODO: striptags from jinja
-            #     sql_column.attributes.description = comment[:100000]
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                sql_column.description = process_text(remarks)
 
-            sql_column.is_nullable = data.get("is_nullable", "YES") == "YES"
-            sql_column.is_partition = data.get("is_partition") == "YES"
-            if sql_column.is_partition:
-                sql_column.partition_order = data.get("partition_order", 0)
+            if nullable := data.get("is_nullable", None):
+                sql_column.is_nullable = nullable == "YES"
 
-            sql_column.is_primary = data.get("primary_key") == "YES"
-            sql_column.is_foreign = data.get("foreign_key") == "YES"
+            if is_partition := data.get("is_partition", None):
+                sql_column.is_partition = is_partition == "YES"
+                if sql_column.is_partition:
+                    sql_column.partition_order = data.get("partition_order", 0)
+
+            if primary_key := data.get("primary_key", None):
+                sql_column.is_primary = primary_key == "YES"
+
+            if foreign_key := data.get("foreign_key", None):
+                sql_column.is_foreign = foreign_key == "YES"
 
             if data.get("character_maximum_length", None) is not None:
                 sql_column.max_length = data.get("character_maximum_length", 0)
+
             if data.get("numeric_precision", None) is not None:
                 sql_column.precision = data.get("numeric_precision", 0)
+
             if data.get("numeric_scale", None) is not None:
                 sql_column.numeric_scale = data.get("numeric_scale", 0)
 
             if data.get("table_type") == "MATERIALIZED VIEW" or is_materialized:
-                sql_column.attributes.view_name = data["table_name"]
-                sql_column.attributes.view_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.view_name = json.dumps(data["table_name"])
+                sql_column.attributes.view_qualified_name = json.dumps(
+                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                )
                 sql_column.attributes.materialised_view = MaterialisedView.creator(
                     name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             elif data.get("table_type") == "VIEW":
-                sql_column.attributes.view_name = data["table_name"]
-                sql_column.attributes.view_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.view_name = json.dumps(data["table_name"])
+                sql_column.attributes.view_qualified_name = json.dumps(
+                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                )
                 sql_column.attributes.view = View.creator(
                     name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             elif (
                 data.get("table_type") in ("DYNAMIC TABLE", "DYNAMIC_TABLE")
                 or data.get("is_dynamic") == "YES"
             ):
-                sql_column.attributes.table_name = data["table_name"]
-                sql_column.attributes.table_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.table_name = json.dumps(data["table_name"])
+                sql_column.attributes.table_qualified_name = json.dumps(
+                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                )
                 sql_column.attributes.snowflake_dynamic_table = SnowflakeDynamicTable.creator(
                     name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             else:
-                sql_column.attributes.table_name = data["table_name"]
-                sql_column.attributes.table_qualified_name = f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
+                sql_column.attributes.table_name = json.dumps(data["table_name"])
+                sql_column.attributes.table_qualified_name = json.dumps(
+                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                )
                 sql_column.attributes.table = Table.creator(
                     name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
 
-            # if data.get("column_id"):
-            #     # TODO: This is not available in the attributes or column entity
-            #     sql_column.source_id = data.get("column_id")
-            #     sql_column.catalog_id = data.get("table_catalog_id")
-            #     sql_column.schema_id = data.get("table_schema_id")
-            #     sql_column.table_id = data.get("table_id")
-            # if character_octet_length := data.get("character_octet_length", None):
-            #     sql_column.character_octet_length = character_octet_length
+            if not sql_column.custom_attributes:
+                sql_column.custom_attributes = {}
 
-            # sql_column.is_auto_increment = data.get("is_autoincrement") == "YES"
-            # sql_column.is_generated = data.get("is_generatedcolumn") == "YES"
-            # if data.get("extra_info"):
-            #     sql_column.extra_info = data.get("extra_info")
-            # if data.get("buffer_length") is not None:
-            #     sql_column.buffer_length = data.get("buffer_length")
-            # if data.get("column_size") is not None:
-            #     sql_column.column_size = data.get("column_size")
+            sql_column.custom_attributes["is_self_referencing"] = data.get(
+                "is_self_referencing", "NO"
+            )
+
+            if data.get("column_id", None):
+                sql_column.custom_attributes["source_id"] = data.get("column_id")
+                sql_column.custom_attributes["catalog_id"] = data.get(
+                    "table_catalog_id"
+                )
+                sql_column.custom_attributes["schema_id"] = data.get("table_schema_id")
+                sql_column.custom_attributes["table_id"] = data.get("table_id")
+
+            sql_column.custom_attributes["character_octet_length"] = data.get(
+                "character_octet_length", None
+            )
+            sql_column.custom_attributes["is_auto_increment"] = data.get(
+                "is_autoincrement"
+            )
+            sql_column.custom_attributes["is_generated"] = data.get(
+                "is_generatedcolumn"
+            )
+            sql_column.custom_attributes["extra_info"] = data.get("extra_info", None)
+            sql_column.custom_attributes["buffer_length"] = data.get("buffer_length")
+            sql_column.custom_attributes["column_size"] = data.get("column_size")
 
             sql_column.last_sync_run_at = datetime.now()
-            # TODO:
-            # sql_column.last_sync_run = last_sync_run
 
             return sql_column
         except AssertionError as e:
