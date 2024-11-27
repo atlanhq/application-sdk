@@ -41,10 +41,10 @@ class TestDecorators:
         @activity_pd(
             batch_input=lambda self, arg: SQLQueryInput(engine, "SELECT 1 as value"),
             out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/raw", upload_file_prefix="raw"
+                output_path="/tmp/raw/table", upload_file_prefix="raw"
             ),
             out2=lambda self, arg: JsonOutput(
-                output_path="/tmp/transformed",
+                output_path="/tmp/transformed/table",
                 upload_file_prefix="transformed",
             ),
         )
@@ -58,7 +58,7 @@ class TestDecorators:
         }
         await func(self, arg)
         # Check files generated
-        with open("/tmp/raw/table-1.json") as f:
+        with open("/tmp/raw/table/1.json") as f:
             assert f.read().strip() == '{"value":1}'
-        with open("/tmp/transformed/table-1.json") as f:
+        with open("/tmp/transformed/table/1.json") as f:
             assert f.read().strip() == '{"value":2}'
