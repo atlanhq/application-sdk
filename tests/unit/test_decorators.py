@@ -41,12 +41,11 @@ class TestDecorators:
         @activity_pd(
             batch_input=lambda self, arg: SQLQueryInput(engine, "SELECT 1 as value"),
             out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/raw", upload_file_prefix="raw", typename="table"
+                output_path="/tmp/raw", upload_file_prefix="raw"
             ),
             out2=lambda self, arg: JsonOutput(
                 output_path="/tmp/transformed",
                 upload_file_prefix="transformed",
-                typename="table",
             ),
         )
         async def func(self, batch_input, out1, out2):
