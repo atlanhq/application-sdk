@@ -19,21 +19,75 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.utils.activity import auto_heartbeater
+from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = logging.getLogger(__name__)
 
 
 @workflow.defn
-class SQLMinerWorkflow(SQLWorkflow):
+class SQLMinerWorkflow(WorkflowInterface):
     fetch_queries_sql = ""
+
+    sql_resource: SQLResource | None = None
+
+    application_name: str = "sql-miner"
+    batch_size: int = 100000
+
+    # Note: the defaults are passed as temporal tries to initialize the workflow with no args
+    def __init__(self):
+        super().__init__()
+
+    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLMinerWorkflow":
+        self.sql_resource = sql_resource
+        return self
+
+    def set_application_name(self, application_name: str) -> "SQLMinerWorkflow":
+        self.application_name = application_name
+        return self
+
+    def set_batch_size(self, batch_size: int) -> "SQLMinerWorkflow":
+        self.batch_size = batch_size
+        return self
+
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "SQLMinerWorkflow":
+        super().set_temporal_resource(temporal_resource)
+        return self
 
     def get_activities(self) -> List[Callable[..., Any]]:
         return [
             self.get_query_batches,
             self.fetch_queries,
-        ]
+        ] + super().get_activities()
+
+    def store_credentials(self, credentials: Dict[str, Any]) -> str:
+        return SecretStore.store_credentials(credentials)
+
+    async def start(
+        self, workflow_args: Dict[str, Any], workflow_class: Any | None = None
+    ) -> Dict[str, Any]:
+        """
+        Run the workflow.
+
+        :param workflow_args: The workflow arguments.
+        :return: The workflow results.
+        """
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
+
+        self.sql_resource.set_credentials(workflow_args["credentials"])
+        await self.sql_resource.load()
+
+        workflow_args["credential_guid"] = self.store_credentials(
+            workflow_args["credentials"]
+        )
+        del workflow_args["credentials"]
+
+        workflow_class = workflow_class or self.__class__
+
+        return await super().start(workflow_args, workflow_class)
 
     async def fetch_data(
         self, workflow_args: Dict[str, Any], query: str, typename: str

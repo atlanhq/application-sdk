@@ -27,14 +27,12 @@ from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
-from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
+from application_sdk.workflows.sql.builders.builder import SQLMinerBuilder
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
 from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "snowflake"
@@ -111,9 +109,9 @@ class SampleSQLMinerWorkflow(SQLMinerWorkflow):
     fetch_queries_sql = FETCH_QUERIES_SQL
 
 
-class SampleSQLMinerWorkflowBuilder(SQLWorkflowBuilder):
-    def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
-        return super().build(workflow=workflow or SampleSQLMinerWorkflow())
+class SampleSQLMinerWorkflowBuilder(SQLMinerBuilder):
+    def build(self, miner: SQLMinerWorkflow | None = None) -> SQLMinerWorkflow:
+        return super().build(miner=miner or SampleSQLMinerWorkflow())
 
 
 class SnowflakeSQLResource(SQLResource):
@@ -146,14 +144,10 @@ async def main():
     )
     await temporal_resource.load()
 
-    transformer = AtlasTransformer(
-        connector_name=APPLICATION_NAME, connector_type="sql"
-    )
     sql_resource = SnowflakeSQLResource(SQLResourceConfig())
 
-    miner_workflow: SQLWorkflow = (
+    miner_workflow: SQLMinerWorkflow = (
         SampleSQLMinerWorkflowBuilder()
-        .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
         .set_sql_resource(sql_resource)
         .build()
