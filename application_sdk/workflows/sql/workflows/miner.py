@@ -5,6 +5,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Coroutine, Dict, List
 
+from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
@@ -23,6 +24,21 @@ from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = logging.getLogger(__name__)
+
+
+class MinerArgs(BaseModel):
+    database_name_cleaned: str
+    schema_name_cleaned: str
+    timestamp_column: str
+    chunk_size: int
+    current_marker: int
+    sql_replace_from: str
+    sql_replace_to: str
+    ranged_sql_start_key: str
+    ranged_sql_end_key: str
+    miner_start_time_epoch: int = Field(
+        default_factory=lambda: int((datetime.now() - timedelta(days=14)).timestamp())
+    )
 
 
 @workflow.defn
@@ -295,39 +311,24 @@ class SQLMinerWorkflow(WorkflowInterface):
     async def get_query_batches(
         self, workflow_args: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        miner_args = workflow_args.get("miner_args", {})
-
-        assert (
-            "database_name_cleaned" in miner_args
-        ), "database_name_cleaned is required"
-        assert "schema_name_cleaned" in miner_args, "schema_name_cleaned is required"
-        assert "timestamp_column" in miner_args, "timestamp_column is required"
-        assert "chunk_size" in miner_args, "chunk_size is required"
-        assert "current_marker" in miner_args, "current_marker is required"
-        assert "sql_replace_from" in miner_args, "sql_replace_from is required"
-        assert "sql_replace_to" in miner_args, "sql_replace_to is required"
-        assert "ranged_sql_start_key" in miner_args, "ranged_sql_start_key is required"
-        assert "ranged_sql_end_key" in miner_args, "ranged_sql_end_key is required"
+        miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
 
         queries_sql_query = self.fetch_queries_sql.format(
-            database_name_cleaned=miner_args["database_name_cleaned"],
-            schema_name_cleaned=miner_args["schema_name_cleaned"],
-            miner_start_time_epoch=miner_args.get(
-                "miner_start_time_epoch",
-                int((datetime.now() - timedelta(days=14)).timestamp()),
-            ),
+            database_name_cleaned=miner_args.database_name_cleaned,
+            schema_name_cleaned=miner_args.schema_name_cleaned,
+            miner_start_time_epoch=miner_args.miner_start_time_epoch,
         )
 
         try:
             parallel_markers = await self.parallelize_query(
                 query=queries_sql_query,
-                timestamp_column=miner_args["timestamp_column"],
-                chunk_size=miner_args.get("chunk_size", 500),
-                current_marker=str(miner_args["current_marker"]),
-                sql_ranged_replace_from=miner_args["sql_replace_from"],
-                sql_ranged_replace_to=miner_args["sql_replace_to"],
-                ranged_sql_start_key=miner_args["ranged_sql_start_key"],
-                ranged_sql_end_key=miner_args["ranged_sql_end_key"],
+                timestamp_column=miner_args.timestamp_column,
+                chunk_size=miner_args.chunk_size,
+                current_marker=str(miner_args.current_marker),
+                sql_ranged_replace_from=miner_args.sql_replace_from,
+                sql_ranged_replace_to=miner_args.sql_replace_to,
+                ranged_sql_start_key=miner_args.ranged_sql_start_key,
+                ranged_sql_end_key=miner_args.ranged_sql_end_key,
             )
         except Exception as e:
             logger.error(f"Failed to parallelize queries: {e}")
