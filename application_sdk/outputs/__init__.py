@@ -11,7 +11,6 @@ logger = logging.get_logger(__name__)
 class Output(ABC):
     output_path: str
     upload_file_prefix: str
-    typename: str
     total_record_count: int
     chunk_count: int
 
@@ -31,7 +30,7 @@ class Output(ABC):
             }
 
             # Write the metadata to a json file
-            output_file_name = f"{self.output_path}/{self.typename}-metadata.json"
+            output_file_name = f"{self.output_path}/metadata.json"
             df = pd.DataFrame(metadata)
             df.to_json(output_file_name, orient="records", lines=True)
 

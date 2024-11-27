@@ -83,12 +83,11 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
 
 class JsonOutput(Output):
-    def __init__(self, output_path: str, upload_file_prefix: str, typename: str):
+    def __init__(self, output_path: str, upload_file_prefix: str):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
         self.total_record_count = 0
         self.chunk_count = 0
-        self.typename = typename
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame):
@@ -100,9 +99,7 @@ class JsonOutput(Output):
             self.total_record_count += len(df)
 
             # Write the dataframe to a json file
-            output_file_name = (
-                f"{self.output_path}/{self.typename}-{str(self.chunk_count)}.json"
-            )
+            output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
             df.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store

@@ -217,9 +217,8 @@ class SQLWorkflow(WorkflowInterface):
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw",
+            output_path=f"{workflow_args['output_path']}/raw/database",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="database",
         ),
     )
     async def fetch_databases(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
@@ -230,7 +229,7 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched databases.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": raw_output.typename}
+        return {"batch_input": batch_input, "typename": "database"}
 
     @activity.defn
     @auto_heartbeater
@@ -242,9 +241,8 @@ class SQLWorkflow(WorkflowInterface):
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw",
+            output_path=f"{workflow_args['output_path']}/raw/schema",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="schema",
         ),
     )
     async def fetch_schemas(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
@@ -255,7 +253,7 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched schemas.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": raw_output.typename}
+        return {"batch_input": batch_input, "typename": "schema"}
 
     @activity.defn
     @auto_heartbeater
@@ -267,9 +265,8 @@ class SQLWorkflow(WorkflowInterface):
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw",
+            output_path=f"{workflow_args['output_path']}/raw/table",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="table",
         ),
     )
     async def fetch_tables(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
@@ -280,7 +277,7 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched tables.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": raw_output.typename}
+        return {"batch_input": batch_input, "typename": "table"}
 
     @activity.defn
     @auto_heartbeater
@@ -292,9 +289,8 @@ class SQLWorkflow(WorkflowInterface):
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw",
+            output_path=f"{workflow_args['output_path']}/raw/column",
             upload_file_prefix=workflow_args["output_prefix"],
-            typename="column",
         ),
     )
     async def fetch_columns(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
@@ -305,7 +301,7 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched columns.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": raw_output.typename}
+        return {"batch_input": batch_input, "typename": "column"}
 
     @activity.defn
     @auto_heartbeater
