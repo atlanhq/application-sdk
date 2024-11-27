@@ -534,18 +534,50 @@ class AtlasTransformer(TransformerInterface):
     ) -> Optional[SnowflakePipe]:
         try:
             assert data["pipe_name"] is not None, "Pipe name cannot be None"
-            assert data["definition"] is not None, "Pipe definition cannot be None"
+            assert data["pipe_catalog"] is not None, "Pipe catalog cannot be None"
+            assert data["pipe_schema"] is not None, "Pipe schema cannot be None"
+
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}",
 
             snowflake_pipe = SnowflakePipe.create(
                 name=data["pipe_name"],
-                definition=data["definition"],
-                snowflake_pipe_is_auto_ingest_enabled=data.get(
-                    "is_autoingest_enabled", None
-                ),
-                snowflake_pipe_notification_channel_name=data.get(
-                    "notification_channel_name", None
-                ),
+                connection_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}/{data['pipe_schema']}",
+                database_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}",
+                schema_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}/{data['pipe_schema']}",
             )
+            snowflake_pipe.database_name = json.dumps(data["pipe_catalog"])
+            snowflake_pipe.schema_name = json.dumps(data["pipe_schema"])
+
+            if source_owners := data.get("source_owners", None):
+                snowflake_pipe.source_owners = json.dumps(source_owners)
+
+            if created := data.get("created", None):
+                snowflake_pipe.source_created_at = datetime.strptime(
+                    created, "%Y-%m-%dT%H:%M:%S.%f%z"
+                )
+
+            if definition := data.get("definition", None):
+                snowflake_pipe.definition = json.dumps(definition)
+
+            if snowflake_pipe_is_auto_ingest_enabled := data.get(
+                "is_autoingest_enabled", None
+            ):
+                snowflake_pipe.snowflake_pipe_is_auto_ingest_enabled = (
+                    snowflake_pipe_is_auto_ingest_enabled == "YES"
+                )
+
+            if snowflake_pipe_notification_channel_name := data.get(
+                "notification_channel_name", None
+            ):
+                snowflake_pipe.snowflake_pipe_notification_channel_name = json.dumps(
+                    snowflake_pipe_notification_channel_name
+                )
+
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                snowflake_pipe.description = process_text(remarks)
 
             snowflake_pipe.attributes.atlan_schema = Schema.creator(
                 name=json.dumps(data["pipe_schema"]),
@@ -553,8 +585,6 @@ class AtlasTransformer(TransformerInterface):
             )
 
             snowflake_pipe.last_sync_run_at = datetime.now()
-            # TODO:
-            # snowflake_pipe.last_sync_run = last_sync_run
 
             return snowflake_pipe
         except AssertionError as e:
@@ -733,16 +763,105 @@ class AtlasTransformer(TransformerInterface):
     ) -> Optional[TagAttachment]:
         try:
             assert data["tag_name"] is not None, "Tag name cannot be None"
+            assert data["tag_database"] is not None, "Tag database cannot be None"
+            assert data["tag_schema"] is not None, "Tag schema cannot be None"
+            assert data["object_cat"] is not None, "Object cat cannot be None"
+            assert data["object_schema"] is not None, "Object schema cannot be None"
+
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}",
 
             # TODO: Creator has not been implemented yet
             tag_attachment = TagAttachment.create(
                 name=json.dumps(data["tag_name"]),
-                tag_attachment_string_value=data["tag_value"],
+                connection_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}",
+                database_qualified_name=f"{base_qualified_name}/{data['tag_database']}",
+                schema_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}",
+                tag_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}/{data['tag_name']}",
             )
 
+            object_cat = data.get("object_cat", "")
+            object_schema = data.get("object_schema", "")
+
+            tag_attachment.object_database_qualified_name = json.dumps(
+                f"{base_qualified_name}/{object_cat}"
+            )
+            tag_attachment.object_schema_qualified_name = json.dumps(
+                f"{base_qualified_name}/{object_cat}/{object_schema}"
+            )
+            tag_attachment.object_database_name = json.dumps(object_cat)
+            tag_attachment.object_schema_name = json.dumps(object_schema)
+
+            if data.get("domain", None):
+                tag_attachment.object_domain = json.dumps(data.get("domain"))
+
+            if data.get("object_name", None):
+                tag_attachment.object_name = json.dumps(data.get("object_name"))
+
+            tag_attachment.database_name = json.dumps(data["tag_database"])
+            tag_attachment.schema_name = json.dumps(data["tag_schema"])
+
+            if source_id := data.get("tag_id", None):
+                tag_attachment.source_tag_id = json.dumps(source_id)
+
+            if tag_attachment_string_value := data.get("tag_value", None):
+                tag_attachment.tag_attachment_string_value = json.dumps(
+                    tag_attachment_string_value
+                )
+
+            if object_domain := data.get("domain", None):
+                tag_attachment.object_domain = json.dumps(object_domain)
+
+            if object_name := data.get("object_name", None):
+                tag_attachment.object_name = json.dumps(object_name)
+
+            if object_domain := data.get("domain", None):
+                object_cat = data.get("object_cat", "")
+                object_schema = data.get("object_schema", "")
+                object_name = data.get("object_name", "")
+                column_name = data.get("column_name", "")
+
+                object_qualified_name = ""
+                if object_domain == "DATABASE":
+                    object_qualified_name = f"{base_qualified_name}/{object_name}"
+                elif object_domain == "SCHEMA":
+                    object_qualified_name = (
+                        f"{base_qualified_name}/{object_cat}/{object_name}"
+                    )
+                elif object_domain in ["TABLE", "STREAM", "PIPE"]:
+                    object_qualified_name = f"{base_qualified_name}/{object_cat}/{object_schema}/{object_name}"
+                elif object_domain == "COLUMN":
+                    object_qualified_name = f"{base_qualified_name}/{object_cat}/{object_schema}/{object_name}/{column_name}"
+
+                tag_attachment.object_qualified_name = json.dumps(object_qualified_name)
+
+            if classification_defs := data.get("classification_defs", []):
+                tag_name = data.get("tag_name", "").upper()
+                matching_defs = [
+                    c
+                    for c in classification_defs
+                    if c.get("displayName", "").upper() == tag_name
+                ]
+
+                if matching_defs:
+                    oldest_def = min(
+                        matching_defs, key=lambda x: x.get("createTime", float("inf"))
+                    )
+                    tag_attachment.mapped_classification_name = json.dumps(
+                        oldest_def.get("name")
+                    )
+                else:
+                    tag_attachment.mapped_classification_name = json.dumps(
+                        data.get("mappedClassificationName", "")
+                    )
+            else:
+                tag_attachment.mapped_classification_name = json.dumps(
+                    data.get("mappedClassificationName", "")
+                )
+
             tag_attachment.last_sync_run_at = datetime.now()
-            # TODO:
-            # tag_attachment.last_sync_run = last_sync_run
 
             return tag_attachment
         except AssertionError as e:
@@ -760,16 +879,69 @@ class AtlasTransformer(TransformerInterface):
             assert data["stale"] is not None, "Stream stale cannot be None"
             assert data["stale_after"] is not None, "Stream stale after cannot be None"
 
-            # TODO: description
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}",
+
             # TODO: Creator has not been implemented yet
             snowflake_stream = SnowflakeStream.create(
                 name=json.dumps(data["name"]),
-                stream_type=data["type"],
-                stream_source_type=data["source_type"],
-                stream_mode=data["mode"],
-                stream_is_stale=data["stale"],
-                stream_stale_after=data["stale_after"],
+                database_qualified_name=f"{base_qualified_name}/{data['database_name']}",
+                schema_qualified_name=f"{base_qualified_name}/{data['database_name']}/{data['schema_name']}",
+                connection_qualified_name=base_qualified_name,
             )
+            snowflake_stream.database_name = json.dumps(data["database_name"])
+            snowflake_stream.schema_name = json.dumps(data["schema_name"])
+
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                snowflake_stream.description = process_text(remarks)
+
+            if source_type := data.get("source_type", None):
+                if "Table" in source_type:
+                    if table_name := data["table_name"].split(".")[-1]:
+                        snowflake_stream.table_qualified_name = json.dumps(
+                            f"{base_qualified_name}/{table_name}"
+                        )
+                        snowflake_stream.table_name = json.dumps(table_name)
+                elif source_type == "View":
+                    if view_name := data["table_name"].split(".")[-1]:
+                        snowflake_stream.view_qualified_name = json.dumps(
+                            f"{base_qualified_name}/{view_name}"
+                        )
+                        snowflake_stream.view_name = json.dumps(view_name)
+
+            if source_owners := data.get("owner", None):
+                snowflake_stream.source_owners = json.dumps(source_owners)
+
+            if stream_type := data.get("type", None):
+                snowflake_stream.snowflake_stream_type = json.dumps(stream_type)
+
+            if stream_source_type := data.get("source_type", None):
+                snowflake_stream.snowflake_stream_source_type = json.dumps(
+                    stream_source_type
+                )
+
+            if stream_mode := data.get("mode", None):
+                snowflake_stream.snowflake_stream_mode = json.dumps(stream_mode)
+
+            if stale := data.get("stale", None):
+                snowflake_stream.snowflake_stream_is_stale = stale == "true"
+
+            if created_on := data.get("created_on", None):
+                if isinstance(created_on, str):
+                    snowflake_stream.source_created_at = datetime.strptime(
+                        created_on, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    )
+
+            if stale_after := data.get("stale_after", None):
+                if isinstance(stale_after, str):
+                    snowflake_stream.attributes.stream_stale_after = datetime.strptime(
+                        stale_after, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    )
+
+            if stale := data.get("stale", None):
+                snowflake_stream.attributes.stream_is_stale = stale == "true"
 
             snowflake_stream.attributes.atlan_schema = Schema.creator(
                 name=json.dumps(data["schema_name"]),
@@ -777,8 +949,6 @@ class AtlasTransformer(TransformerInterface):
             )
 
             snowflake_stream.last_sync_run_at = datetime.now()
-            # TODO:
-            # snowflake_stream.last_sync_run = last_sync_run
 
             return snowflake_stream
         except AssertionError as e:
