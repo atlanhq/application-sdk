@@ -118,12 +118,12 @@ class AtlasTransformer(TransformerInterface):
 
             if created := data.get("created", None):
                 sql_database.source_created_at = datetime.strptime(
-                    created, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    created, "%Y-%m-%dT%H:%M:%S.%f%z"
                 )
 
             if last_altered := data.get("last_altered", None):
                 sql_database.source_updated_at = datetime.strptime(
-                    last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
                 )
 
             if not sql_database.custom_attributes:
@@ -142,12 +142,12 @@ class AtlasTransformer(TransformerInterface):
 
                     if created := extra_info[0].get("created"):
                         sql_database.source_created_at = datetime.strptime(
-                            created, "%Y-%m-%dT%H:%M:%S:%fZ"
+                            created, "%Y-%m-%dT%H:%M:%S.%f%z"
                         )
 
                     if last_altered := extra_info[0].get("last_altered"):
                         sql_database.source_updated_at = datetime.strptime(
-                            last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                            last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
                         )
 
             return sql_database
@@ -184,12 +184,12 @@ class AtlasTransformer(TransformerInterface):
 
             if created := data.get("created", None):
                 sql_schema.source_created_at = datetime.strptime(
-                    created, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    created, "%Y-%m-%dT%H:%M:%S.%f%z"
                 )
 
             if last_altered := data.get("last_altered", None):
                 sql_schema.source_updated_at = datetime.strptime(
-                    last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
                 )
 
             if schema_owner := data.get("schema_owner", None):
@@ -201,11 +201,11 @@ class AtlasTransformer(TransformerInterface):
             if schema_id := data.get("schema_id", None):
                 sql_schema.custom_attributes["source_id"] = schema_id
 
-            if schema_id := data.get("catalog_id", None):
-                sql_schema.custom_attributes["catalog_id"] = schema_id
+            if catalog_id := data.get("catalog_id", None):
+                sql_schema.custom_attributes["catalog_id"] = catalog_id
 
-            if schema_id := data.get("is_managed_access", None):
-                sql_schema.custom_attributes["catalog_id"] = schema_id
+            if is_managed_access := data.get("is_managed_access", None):
+                sql_schema.custom_attributes["is_managed_access"] = is_managed_access
 
             sql_schema.attributes.database = Database.creator(
                 name=json.dumps(data["catalog_name"]),
@@ -306,12 +306,12 @@ class AtlasTransformer(TransformerInterface):
 
             if created_at := data.get("created", None):
                 entity.source_created_at = datetime.strptime(
-                    created_at, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    created_at, "%Y-%m-%dT%H:%M:%S.%f%z"
                 )
 
             if last_altered := data.get("last_altered", None):
                 entity.source_updated_at = datetime.strptime(
-                    last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
                 )
 
             # Custom attributes
@@ -637,7 +637,7 @@ class AtlasTransformer(TransformerInterface):
                 tag_id=data["tag_id"],
                 allowed_values=data.get("tag_allowed_values", []),
                 source_updated_at=datetime.strptime(
-                    data["last_altered"], "%Y-%m-%dT%H:%M:%S:%fZ"
+                    data["last_altered"], "%Y-%m-%dT%H:%M:%S.%f%z"
                 ),
             )
 
