@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 from datetime import datetime
@@ -23,6 +24,18 @@ from application_sdk.workflows.transformers import TransformerInterface
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+# TODO: Move this somewhere else
+def process_text(text: str, max_length: int = 100000) -> str:
+    if len(text) > max_length:
+        text = text[:max_length] + "..."
+
+    text = re.sub(r"<[^>]+>", "", text)
+
+    text = json.dumps(text)
+
+    return text
 
 
 class AtlasTransformer(TransformerInterface):
@@ -77,6 +90,11 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Database]:
         try:
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}"
+
             assert data["datname"] is not None, "Database name cannot be None"
 
             sql_database = Database.creator(
@@ -87,28 +105,49 @@ class AtlasTransformer(TransformerInterface):
             if schema_count := data.get("schema_count", None):
                 sql_database.schema_count = schema_count
 
-            if remarks := data.get("remarks", None):
-                sql_database.description = remarks
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                sql_database.description = process_text(remarks)
 
             if last_sync_workflow_name := data.get("lastSyncWorkflowName", None):
                 sql_database.last_sync_workflow_name = last_sync_workflow_name
 
             sql_database.last_sync_run_at = datetime.now()
-            # TODO:
-            # sql_database.last_sync_run = last_sync_run
 
             if source_created_by := data.get("database_owner", None):
                 sql_database.source_created_by = source_created_by
 
-            # TODO: These are not available in the database entity
-            # sql_database.attributes.source_id = data.get("source_id", "")
-            # sql_database.attributes.tenant_id = data.get("tenant_id", "")
-
             if created := data.get("created", None):
-                sql_database.source_created_at = created
+                sql_database.source_created_at = datetime.strptime(
+                    created, "%Y-%m-%dT%H:%M:%S:%fZ"
+                )
 
             if last_altered := data.get("last_altered", None):
-                sql_database.source_updated_at = last_altered
+                sql_database.source_updated_at = datetime.strptime(
+                    last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                )
+
+            if database_id := data.get("database_id", None):
+                if not sql_database.custom_attributes:
+                    sql_database.custom_attributes = {}
+                sql_database.custom_attributes["source_id"] = database_id
+
+            if extra_info := data.get("extra_info", []):
+                if len(extra_info) > 0:
+                    if comment := extra_info[0].get("comment"):
+                        sql_database.description = process_text(comment)[:100000]
+
+                    if database_owner := extra_info[0].get("database_owner"):
+                        sql_database.source_created_by = database_owner
+
+                    if created := extra_info[0].get("created"):
+                        sql_database.source_created_at = datetime.strptime(
+                            created, "%Y-%m-%dT%H:%M:%S:%fZ"
+                        )
+
+                    if last_altered := extra_info[0].get("last_altered"):
+                        sql_database.source_updated_at = datetime.strptime(
+                            last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                        )
 
             return sql_database
         except AssertionError as e:
@@ -217,9 +256,8 @@ class AtlasTransformer(TransformerInterface):
             # TODO:
             # entity.last_sync_run = last_sync_run
 
-            # TODO: Don't have workflow_name, crawler_name, tenant_id in the metadata
+            # TODO: Don't have crawler_name, tenant_id in the metadata
             # entity.last_sync_workflow_name = data.get("crawler_name")
-            # entity.last_sync_run = data.get("workflow_name")
             # entity.tenant_id = data.get("tenant_id")
 
             if column_count := data.get("column_count", None):
@@ -228,48 +266,34 @@ class AtlasTransformer(TransformerInterface):
             # TODO: This is not available in the attributes or table entity
             # if source_id := data.get("TABLE_ID", None):
             #     entity.source_id = source_id
-
-            if catalog_id := data.get("TABLE_CATALOG_ID", None):
-                entity.catalog_id = catalog_id
-
-            if schema_id := data.get("TABLE_SCHEMA_ID", None):
-                entity.schema_id = schema_id
-
-            if last_ddl := data.get("LAST_DDL", None):
-                entity.last_ddl = last_ddl
-
-            if last_ddl_by := data.get("LAST_DDL_BY", None):
-                entity.last_ddl_by = last_ddl_by
-
-            if is_secure := data.get("IS_SECURE", None):
-                entity.is_secure = is_secure
-
-            if retention_time := data.get("RETENTION_TIME", None):
-                entity.retention_time = retention_time
-
-            if stage_url := data.get("STAGE_URL", None):
-                entity.stage_url = stage_url
-
-            if is_insertable_into := data.get("IS_INSERTABLE_INTO", None):
-                entity.is_insertable_into = is_insertable_into
-
-            if num_part_key_cols := data.get("NUMBER_COLUMNS_IN_PART_KEY", None):
-                entity.number_columns_in_part_key = num_part_key_cols
-
-            if part_key_cols := data.get("COLUMNS_PARTICIPATING_IN_PART_KEY", None):
-                entity.columns_participating_in_part_key = part_key_cols
-
-            if is_typed := data.get("IS_TYPED", None):
-                entity.is_typed = is_typed
-
-            if auto_clustering := data.get("AUTO_CLUSTERING_ON", None):
-                entity.auto_clustering_on = auto_clustering
-
-            if engine := data.get("ENGINE", None):
-                entity.engine = engine
-
-            if auto_increment := data.get("AUTO_INCREMENT", None):
-                entity.auto_increment = auto_increment
+            # if catalog_id := data.get("table_catalog_id", None):
+            #     entity.catalog_id = catalog_id
+            # if schema_id := data.get("table_schema_id", None):
+            #     entity.schema_id = schema_id
+            # if last_ddl := data.get("last_ddl", None):
+            #     entity.last_ddl = last_ddl
+            # if last_ddl_by := data.get("last_ddl_by", None):
+            #     entity.last_ddl_by = last_ddl_by
+            # if is_secure := data.get("is_secure", None):
+            #     entity.is_secure = is_secure
+            # if retention_time := data.get("retention_time", None):
+            #     entity.retention_time = retention_time
+            # if stage_url := data.get("stage_url", None):
+            #     entity.stage_url = stage_url
+            # if is_insertable_into := data.get("is_insertable_into", None):
+            #     entity.is_insertable_into = is_insertable_into
+            # if num_part_key_cols := data.get("number_columns_in_part_key", None):
+            #     entity.number_columns_in_part_key = num_part_key_cols
+            # if part_key_cols := data.get("columns_participating_in_part_key", None):
+            #     entity.columns_participating_in_part_key = part_key_cols
+            # if is_typed := data.get("is_typed", None):
+            #     entity.is_typed = is_typed
+            # if auto_clustering := data.get("auto_clustering_on", None):
+            #     entity.auto_clustering_on = auto_clustering
+            # if engine := data.get("engine", None):
+            #     entity.engine = engine
+            # if auto_increment := data.get("auto_increment", None):
+            #     entity.auto_increment = auto_increment
 
             if row_count := data.get("row_count", None):
                 entity.row_count = row_count
@@ -277,15 +301,12 @@ class AtlasTransformer(TransformerInterface):
             if bytes_size := data.get("bytes", None):
                 entity.size_bytes = bytes_size
 
-            if is_transient := data.get("is_transient", None):
-                entity.custom_metadata = {"is_transient": is_transient}
-
             entity.attributes.atlan_schema = Schema.creator(
                 name=data["table_schema"],
                 database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
             )
 
-            if view_definition := data.get("VIEW_DEFINITION", None):
+            if view_definition := data.get("view_definition", None):
                 if isinstance(view_definition, list) and view_definition:
                     view_def_values = list(view_definition[0].values())
                     if view_def_values:
@@ -295,41 +316,21 @@ class AtlasTransformer(TransformerInterface):
                 else:
                     entity.definition = str(view_definition)
 
-            if table_owner := data.get("TABLE_OWNER", None):
+            if table_owner := data.get("table_owner", None):
                 entity.source_created_by = table_owner
 
-            if created_at := data.get("CREATED", None):
+            if created_at := data.get("created", None):
                 entity.source_created_at = created_at
 
-            if last_altered := data.get("LAST_ALTERED", None):
+            if last_altered := data.get("last_altered", None):
                 entity.source_updated_at = last_altered
 
-            if _ := data.get("TABLE_ID", None):
+            if _ := data.get("table_id", None):
                 # TODO: This is not available in the attributes or table entity
                 # entity.source_id = table_id
-                entity.catalog_id = data.get("TABLE_CATALOG_ID")
-                entity.schema_id = data.get("TABLE_SCHEMA_ID")
-
-            if last_ddl := data.get("LAST_DDL", None):
-                entity.last_ddl = last_ddl
-
-            if last_ddl_by := data.get("LAST_DDL_BY", None):
-                entity.last_ddl_by = last_ddl_by
-
-            if is_secure := data.get("IS_SECURE", None):
-                entity.is_secure = is_secure
-
-            if retention_time := data.get("RETENTION_TIME", None):
-                entity.retention_time = retention_time
-
-            if stage_url := data.get("STAGE_URL", None):
-                entity.stage_url = stage_url
-
-            if is_insertable := data.get("IS_INSERTABLE_INTO", None):
-                entity.is_insertable_into = is_insertable
-
-            if num_part_cols := data.get("NUMBER_COLUMNS_IN_PART_KEY", None):
-                entity.number_columns_in_part_key = num_part_cols
+                # entity.catalog_id = data.get("table_catalog_id")
+                # entity.schema_id = data.get("table_schema_id")
+                pass
 
             return entity
         except AssertionError as e:
@@ -386,6 +387,7 @@ class AtlasTransformer(TransformerInterface):
             )
 
             # TODO: The description is not available in the attributes or column entity
+            # TODO: Should be available
             # remarks = data.get('REMARKS')
             # comment = data.get('COMMENT')
             # if not (remarks and isinstance(remarks, str)) and comment:
