@@ -581,6 +581,15 @@ class AtlasTransformer(TransformerInterface):
             assert (
                 data["function_language"] is not None
             ), "Function language cannot be None"
+            assert (
+                data["function_catalog"] is not None
+            ), "Function catalog cannot be None"
+            assert data["function_schema"] is not None, "Function schema cannot be None"
+
+            # TODO:
+            # "lastSyncWorkflowName": {{external_map['crawler_name'] | tojson}},
+            # "lastSyncRun": {{external_map['workflow_name'] | tojson}},
+            # "tenantId": {{external_map['tenant_id'] | tojson}},
 
             data_type = data.get("data_type", "")
             function_type = "Scalar"
@@ -593,11 +602,16 @@ class AtlasTransformer(TransformerInterface):
                 function_arguments=data["argument_signature"][1:-1].split(", "),
                 function_definition=data["function_definition"],
                 function_language=data["function_language"],
-                function_return_type=data_type,
+                function_return_type=json.dumps(data_type),
                 function_type=function_type,
+                database_qualified_name=f"{base_qualified_name}/{data['function_catalog']}",
+                schema_qualified_name=f"{base_qualified_name}/{data['function_catalog']}/{data['function_schema']}",
+                connection_qualified_name=f"{base_qualified_name}/{data['function_catalog']}/{data['function_schema']}",
             )
+            function.database_name = json.dumps(data["function_catalog"])
+            function.schema_name = json.dumps(data["function_schema"])
 
-            if data.get("is_secure") is not None:
+            if data.get("is_secure", None) is not None:
                 function.attributes.function_is_secure = data.get("is_secure") == "YES"
 
             if data.get("is_external", None) is not None:
@@ -615,9 +629,25 @@ class AtlasTransformer(TransformerInterface):
                     data.get("is_memoizable") == "YES"
                 )
 
+            if data.get("function_owner", None) is not None:
+                function.attributes.source_created_by = data.get("function_owner")
+
+            if data.get("created", None) is not None:
+                function.attributes.source_created_at = datetime.strptime(
+                    data.get("created"), "%Y-%m-%dT%H:%M:%S.%f%z"
+                )
+
+            if data.get("last_altered", None) is not None:
+                function.attributes.source_updated_at = datetime.strptime(
+                    data.get("last_altered"), "%Y-%m-%dT%H:%M:%S.%f%z"
+                )
+
             function.last_sync_run_at = datetime.now()
-            # TODO:
-            # function.last_sync_run = last_sync_run
+
+            function.attributes.atlan_schema = Schema.creator(
+                name=json.dumps(data["function_schema"]),
+                database_qualified_name=f"{base_qualified_name}/{data['function_catalog']}",
+            )
 
             return function
         except AssertionError as e:
