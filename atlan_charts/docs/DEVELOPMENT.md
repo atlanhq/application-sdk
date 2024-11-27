@@ -11,7 +11,7 @@ This repository contains two Helm charts: `atlan-app` and `atlan-app-components`
     - [Bucket Configuration](#bucket-configuration)
 
 ## Chart Overview
-1. Atlan App Components
+**1. Atlan App Components**
 
 - **Chart Name:** atlan-app-components
 - **Description:** Deploys foundational components required for Atlan's services, such as Temporal, MinIO, Dapr, and PostgreSQL.
@@ -20,7 +20,7 @@ This repository contains two Helm charts: `atlan-app` and `atlan-app-components`
     - Includes dependencies for services like Temporal Operator, Cert Manager, and CloudNative PostgreSQL.
     - Configurable namespaces and options for enabling/disabling specific components like MinIO.
 
-2. Atlan App
+**2. Atlan App**
 
 - **Chart Name:** atlan-app
 - **Description:** Deploys the Atlan application by leveraging atlan-app-components as a dependency.
