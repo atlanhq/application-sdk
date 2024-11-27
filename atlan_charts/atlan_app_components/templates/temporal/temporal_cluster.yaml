@@ -11,7 +11,7 @@ spec:
     defaultStore:
       sql:
         user: {{ .Values.temporal.persistence.defaultStore.sql.user }}
-        pluginName: postgres12
+        pluginName: {{ .Values.temporal.persistence.defaultStore.sql.pluginName }}
         databaseName: {{ .Values.temporal.persistence.defaultStore.sql.databaseName }}
         connectAddr: '{{ tpl "postgres-cluster-rw.{{ .Values.temporal.persistence.postgresClusterNamespace }}.svc.cluster.local:5432" . }}'
         connectProtocol: tcp
@@ -27,7 +27,7 @@ spec:
     visibilityStore:
       sql:
         user: {{ .Values.temporal.persistence.visibilityStore.sql.user }}
-        pluginName: postgres12
+        pluginName: {{ .Values.temporal.persistence.visibilityStore.sql.pluginName }}
         databaseName: {{ .Values.temporal.persistence.visibilityStore.sql.databaseName }}
         connectAddr: '{{ tpl "postgres-cluster-rw.{{ .Values.temporal.persistence.postgresClusterNamespace }}.svc.cluster.local:5432" . }}'
         connectProtocol: tcp

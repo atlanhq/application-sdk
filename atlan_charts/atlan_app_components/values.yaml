@@ -18,12 +18,14 @@ temporal:
       sql:
         user: app_admin
         databaseName: temporal
+        pluginName: postgres12
       passwordSecretRef:
         name: postgres-creds
     visibilityStore:
       sql:
         user: app_admin
         databaseName: temporal_visibility
+        pluginName: postgres12
       passwordSecretRef:
         name: postgres-creds
   frontend:
