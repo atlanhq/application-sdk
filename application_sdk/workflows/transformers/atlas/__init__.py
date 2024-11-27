@@ -98,7 +98,7 @@ class AtlasTransformer(TransformerInterface):
             assert data["datname"] is not None, "Database name cannot be None"
 
             sql_database = Database.creator(
-                name=data["datname"],
+                name=json.dumps(data["datname"]),
                 connection_qualified_name=f"{base_qualified_name}",
             )
 
@@ -168,7 +168,7 @@ class AtlasTransformer(TransformerInterface):
             # "tenantId": "{{external_map['tenant_id']}}",
 
             sql_schema = Schema.creator(
-                name=data["schema_name"],
+                name=json.dumps(data["schema_name"]),
                 database_qualified_name=f"{base_qualified_name}/{data['catalog_name']}",
             )
             sql_schema.database_name = data["catalog_name"]
@@ -183,10 +183,14 @@ class AtlasTransformer(TransformerInterface):
                 sql_schema.description = process_text(remarks)
 
             if created := data.get("created", None):
-                sql_schema.source_created_at = created
+                sql_schema.source_created_at = datetime.strptime(
+                    created, "%Y-%m-%dT%H:%M:%S:%fZ"
+                )
 
             if last_altered := data.get("last_altered", None):
-                sql_schema.source_updated_at = last_altered
+                sql_schema.source_updated_at = datetime.strptime(
+                    last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                )
 
             if schema_owner := data.get("schema_owner", None):
                 sql_schema.source_created_by = schema_owner
@@ -204,7 +208,7 @@ class AtlasTransformer(TransformerInterface):
                 sql_schema.custom_attributes["catalog_id"] = schema_id
 
             sql_schema.attributes.database = Database.creator(
-                name=data["catalog_name"],
+                name=json.dumps(data["catalog_name"]),
                 connection_qualified_name=f"{base_qualified_name}",
             )
 
@@ -218,129 +222,138 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Union[Table, View, MaterialisedView]]:
         try:
+            assert data["table_name"] is not None, "Table name cannot be None"
+            assert data["table_cat"] is not None, "Table catalog cannot be None"
+            assert data["table_schem"] is not None, "Table schema cannot be None"
+            assert data["table_type"] is not None, "Table type cannot be None"
+            assert data["table_owner"] is not None, "Table owner cannot be None"
+
+            # TODO:
+            # entity.last_sync_run = last_sync_run
+            # entity.last_sync_workflow_name = data.get("crawler_name")
+            # entity.tenant_id = data.get("tenant_id")
             entity = None
             if data.get("table_type") == "MATERIALIZED VIEW":
                 entity = MaterialisedView.creator(
-                    name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    name=json.dumps(data["table_name"]),
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
-                    schema_name=data["table_schema"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
+                    schema_name=data["table_schem"],
                     database_name=data["table_catalog"],
                 )
             elif data.get("table_type") == "VIEW":
                 entity = View.creator(
-                    name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    name=json.dumps(data["table_name"]),
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
-                    schema_name=data["table_schema"],
-                    database_name=data["table_catalog"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
+                    schema_name=data["table_schem"],
+                    database_name=data["table_cat"],
                 )
             elif (
                 data.get("table_type") == "DYNAMIC TABLE"
                 or data.get("is_dynamic") == "YES"
             ):
                 entity = SnowflakeDynamicTable.creator(
-                    name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    name=json.dumps(data["table_name"]),
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
-                    schema_name=data["table_schema"],
-                    database_name=data["table_catalog"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
+                    schema_name=data["table_schem"],
+                    database_name=data["table_cat"],
                 )
             else:
                 entity = Table.creator(
-                    name=data["table_name"],
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    name=json.dumps(data["table_name"]),
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
-                    schema_name=data["table_schema"],
-                    database_name=data["table_catalog"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
+                    schema_name=data["table_schem"],
+                    database_name=data["table_cat"],
                 )
 
-            if data.get("remarks", None) and isinstance(data["remarks"], str):
-                entity.description = data["remarks"]
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                entity.description = process_text(remarks)
 
             entity.last_sync_run_at = datetime.now()
-            # TODO:
-            # entity.last_sync_run = last_sync_run
-
-            # TODO: Don't have crawler_name, tenant_id in the metadata
-            # entity.last_sync_workflow_name = data.get("crawler_name")
-            # entity.tenant_id = data.get("tenant_id")
 
             if column_count := data.get("column_count", None):
-                entity.column_count = column_count
-
-            # TODO: This is not available in the attributes or table entity
-            # if source_id := data.get("TABLE_ID", None):
-            #     entity.source_id = source_id
-            # if catalog_id := data.get("table_catalog_id", None):
-            #     entity.catalog_id = catalog_id
-            # if schema_id := data.get("table_schema_id", None):
-            #     entity.schema_id = schema_id
-            # if last_ddl := data.get("last_ddl", None):
-            #     entity.last_ddl = last_ddl
-            # if last_ddl_by := data.get("last_ddl_by", None):
-            #     entity.last_ddl_by = last_ddl_by
-            # if is_secure := data.get("is_secure", None):
-            #     entity.is_secure = is_secure
-            # if retention_time := data.get("retention_time", None):
-            #     entity.retention_time = retention_time
-            # if stage_url := data.get("stage_url", None):
-            #     entity.stage_url = stage_url
-            # if is_insertable_into := data.get("is_insertable_into", None):
-            #     entity.is_insertable_into = is_insertable_into
-            # if num_part_key_cols := data.get("number_columns_in_part_key", None):
-            #     entity.number_columns_in_part_key = num_part_key_cols
-            # if part_key_cols := data.get("columns_participating_in_part_key", None):
-            #     entity.columns_participating_in_part_key = part_key_cols
-            # if is_typed := data.get("is_typed", None):
-            #     entity.is_typed = is_typed
-            # if auto_clustering := data.get("auto_clustering_on", None):
-            #     entity.auto_clustering_on = auto_clustering
-            # if engine := data.get("engine", None):
-            #     entity.engine = engine
-            # if auto_increment := data.get("auto_increment", None):
-            #     entity.auto_increment = auto_increment
+                entity.column_count = round(int(column_count))
 
             if row_count := data.get("row_count", None):
-                entity.row_count = row_count
+                entity.row_count = round(int(row_count))
 
             if bytes_size := data.get("bytes", None):
                 entity.size_bytes = bytes_size
 
             entity.attributes.atlan_schema = Schema.creator(
-                name=data["table_schema"],
-                database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                name=json.dumps(data["table_schem"]),
+                database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
             )
 
-            if view_definition := data.get("view_definition", None):
-                if isinstance(view_definition, list) and view_definition:
+            if view_definition := data.get("view_definition", ""):
+                if view_definition and isinstance(view_definition, list):
                     view_def_values = list(view_definition[0].values())
                     if view_def_values:
-                        entity.definition = view_def_values[0]
+                        entity.definition = json.dumps(view_def_values[0])
                     else:
                         entity.definition = ""
                 else:
-                    entity.definition = str(view_definition)
+                    entity.definition = json.dumps(str(view_definition))
 
-            if table_owner := data.get("table_owner", None):
-                entity.source_created_by = table_owner
+            entity.source_created_by = data["table_owner"]
 
             if created_at := data.get("created", None):
-                entity.source_created_at = created_at
+                entity.source_created_at = datetime.strptime(
+                    created_at, "%Y-%m-%dT%H:%M:%S:%fZ"
+                )
 
             if last_altered := data.get("last_altered", None):
-                entity.source_updated_at = last_altered
+                entity.source_updated_at = datetime.strptime(
+                    last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
+                )
 
-            if _ := data.get("table_id", None):
-                # TODO: This is not available in the attributes or table entity
-                # entity.source_id = table_id
-                # entity.catalog_id = data.get("table_catalog_id")
-                # entity.schema_id = data.get("table_schema_id")
+            # Custom attributes
+            if not entity.custom_attributes:
+                entity.custom_attributes = {}
+
+            if is_transient := data.get("is_transient", None):
+                entity.custom_attributes["is_transient"] = is_transient
+
+            if table_id := data.get("table_id", None):
+                entity.custom_attributes["source_id"] = table_id
+                entity.custom_attributes["catalog_id"] = data.get("table_catalog_id")
+                entity.custom_attributes["schema_id"] = data.get("table_schema_id")
                 pass
+
+            if last_ddl := data.get("last_ddl", None):
+                entity.custom_attributes["last_ddl"] = last_ddl
+            if last_ddl_by := data.get("last_ddl_by", None):
+                entity.custom_attributes["last_ddl_by"] = last_ddl_by
+
+            entity.custom_attributes["is_secure"] = data.get("is_secure", None)
+            entity.custom_attributes["retention_time"] = data.get(
+                "retention_time", None
+            )
+            entity.custom_attributes["stage_url"] = data.get("stage_url", None)
+            entity.custom_attributes["is_insertable_into"] = data.get(
+                "is_insertable_into", None
+            )
+            entity.custom_attributes["number_columns_in_part_key"] = data.get(
+                "number_columns_in_part_key", None
+            )
+            entity.custom_attributes["columns_participating_in_part_key"] = data.get(
+                "columns_participating_in_part_key", None
+            )
+            entity.custom_attributes["is_typed"] = data.get("is_typed", None)
+            entity.custom_attributes["auto_clustering_on"] = data.get(
+                "auto_clustering_on", None
+            )
+            entity.custom_attributes["engine"] = data.get("engine", None)
+            entity.custom_attributes["auto_increment"] = data.get(
+                "auto_increment", None
+            )
 
             return entity
         except AssertionError as e:
@@ -368,7 +381,9 @@ class AtlasTransformer(TransformerInterface):
             if isinstance(view_definition, list) and view_definition:
                 view_definition_values = view_definition[0].values()
                 view_definition = (
-                    list(view_definition_values)[0] if view_definition_values else ""
+                    json.dumps(list(view_definition_values)[0])
+                    if view_definition_values
+                    else ""
                 )
 
             is_materialized = False
@@ -405,7 +420,7 @@ class AtlasTransformer(TransformerInterface):
                 )
 
             sql_column = Column.creator(
-                name=data["column_name"],
+                name=json.dumps(data["column_name"]),
                 parent_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}",
                 parent_type=parent_type,
                 order=int(order),
@@ -445,7 +460,7 @@ class AtlasTransformer(TransformerInterface):
                     f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
                 )
                 sql_column.attributes.materialised_view = MaterialisedView.creator(
-                    name=data["table_name"],
+                    name=json.dumps(data["table_name"]),
                     schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             elif data.get("table_type") == "VIEW":
@@ -454,7 +469,7 @@ class AtlasTransformer(TransformerInterface):
                     f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
                 )
                 sql_column.attributes.view = View.creator(
-                    name=data["table_name"],
+                    name=json.dumps(data["table_name"]),
                     schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             elif (
@@ -466,7 +481,7 @@ class AtlasTransformer(TransformerInterface):
                     f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
                 )
                 sql_column.attributes.snowflake_dynamic_table = SnowflakeDynamicTable.creator(
-                    name=data["table_name"],
+                    name=json.dumps(data["table_name"]),
                     schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             else:
@@ -475,7 +490,7 @@ class AtlasTransformer(TransformerInterface):
                     f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
                 )
                 sql_column.attributes.table = Table.creator(
-                    name=data["table_name"],
+                    name=json.dumps(data["table_name"]),
                     schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
 
@@ -533,7 +548,7 @@ class AtlasTransformer(TransformerInterface):
             )
 
             snowflake_pipe.attributes.atlan_schema = Schema.creator(
-                name=data["pipe_schema"],
+                name=json.dumps(data["pipe_schema"]),
                 database_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}",
             )
 
@@ -574,7 +589,7 @@ class AtlasTransformer(TransformerInterface):
 
             # TODO: Creator has not been implemented yet
             function = Function.create(
-                name=data["function_name"],
+                name=json.dumps(data["function_name"]),
                 function_arguments=data["argument_signature"][1:-1].split(", "),
                 function_definition=data["function_definition"],
                 function_language=data["function_language"],
@@ -621,11 +636,13 @@ class AtlasTransformer(TransformerInterface):
                 name=data["tag_name"],
                 tag_id=data["tag_id"],
                 allowed_values=data.get("tag_allowed_values", []),
-                source_updated_at=data["last_altered"],
+                source_updated_at=datetime.strptime(
+                    data["last_altered"], "%Y-%m-%dT%H:%M:%S:%fZ"
+                ),
             )
 
             tag.attributes.atlan_schema = Schema.creator(
-                name=data["tag_schema"],
+                name=json.dumps(data["tag_schema"]),
                 database_qualified_name=f"{base_qualified_name}/{data['tag_database']}",
             )
 
@@ -646,7 +663,7 @@ class AtlasTransformer(TransformerInterface):
 
             # TODO: Creator has not been implemented yet
             tag_attachment = TagAttachment.create(
-                name=data["tag_name"],
+                name=json.dumps(data["tag_name"]),
                 tag_attachment_string_value=data["tag_value"],
             )
 
@@ -673,7 +690,7 @@ class AtlasTransformer(TransformerInterface):
             # TODO: description
             # TODO: Creator has not been implemented yet
             snowflake_stream = SnowflakeStream.create(
-                name=data["name"],
+                name=json.dumps(data["name"]),
                 stream_type=data["type"],
                 stream_source_type=data["source_type"],
                 stream_mode=data["mode"],
@@ -682,7 +699,7 @@ class AtlasTransformer(TransformerInterface):
             )
 
             snowflake_stream.attributes.atlan_schema = Schema.creator(
-                name=data["schema_name"],
+                name=json.dumps(data["schema_name"]),
                 database_qualified_name=f"{base_qualified_name}/{data['database_name']}",
             )
 
