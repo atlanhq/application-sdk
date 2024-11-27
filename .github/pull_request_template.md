@@ -27,11 +27,11 @@
 <!-- Describe the tests you've added/modified to verify your changes -->
 - Added/modified unit tests: [ ] Yes / [ ] No
 - Added/modified integration tests: [ ] Yes / [ ] No
-- Test coverage percentage: 
+- Test coverage percentage:
 - Tested scenarios:
-  1. 
-  2. 
-  3. 
+  1.
+  2.
+  3.
 
 ### Checklist
 <!-- Confirm that your code meets the following requirements -->
@@ -56,7 +56,7 @@
 ### Additional Context
 <!-- Add any other context about the PR here -->
 - Related JIRA Ticket: [PROJ-XXX]
-- Related issues: 
+- Related issues:
 - Screenshots (if applicable):
 - Performance impact:
 - Security considerations:
@@ -72,8 +72,8 @@
 
 ### PR Naming Convention
 <!-- Recommended PR title format -->
-**Recommended Title Format**: 
+**Recommended Title Format**:
 `[PROJ-XXX] Brief description of changes`
 
-**Example**: 
+**Example**:
 `[PROJ-1234] Add authentication middleware to SDK`
