@@ -257,7 +257,10 @@ tenant:
   #    - name: my-minio-bucket
   #         objectLock: false        # optional
   #         region: us-east-1        # optional
-  buckets: [ ]
+  buckets:
+    - name: app-objects
+      objectLock: false
+      region: us-east-1
   ###
   # Array of Kubernetes secrets from which the Operator generates MinIO users during tenant provisioning.
   #
