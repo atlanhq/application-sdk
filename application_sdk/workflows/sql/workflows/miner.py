@@ -101,6 +101,9 @@ class SQLMinerWorkflow(WorkflowInterface):
         :return: The fetched data.
         :raises Exception: If the data cannot be fetched.
         """
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
+
         output_path = workflow_args["output_path"]
         start_marker = workflow_args["start_marker"]
         end_marker = workflow_args["end_marker"]
@@ -118,9 +121,6 @@ class SQLMinerWorkflow(WorkflowInterface):
                     chunk_size=-1,  # -1 means no chunking
                 ) as raw_writer,
             ):
-                if self.sql_resource is None:
-                    raise ValueError("SQL resource is not set")
-
                 async for batch in self.sql_resource.run_query(query, self.batch_size):
                     # Write raw data
                     await raw_writer.write_list(batch)
@@ -128,7 +128,7 @@ class SQLMinerWorkflow(WorkflowInterface):
                 return await raw_writer.close()
 
         except Exception as e:
-            logger.error(f"Error fetching databases: {e}")
+            logger.error(f"Error fetching queries: {e}")
             raise e
 
     @activity.defn
@@ -144,7 +144,7 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         await self.fetch_data(workflow_args, workflow_args["sql_query"], "queries")
 
-    async def _process_query_chunk(
+    async def parallelize_query(
         self,
         query: str,
         timestamp_column: str,
@@ -154,7 +154,6 @@ class SQLMinerWorkflow(WorkflowInterface):
         sql_ranged_replace_to: str,
         ranged_sql_start_key: str,
         ranged_sql_end_key: str,
-        parallel_markers: List[Dict[str, Any]],
     ):
         """
         Processes a single chunk of the query, collecting timestamp ranges.
@@ -173,6 +172,11 @@ class SQLMinerWorkflow(WorkflowInterface):
         Returns:
             Tuple of (final chunk count, records in last chunk)
         """
+        if chunk_size <= 0:
+            raise ValueError("Chunk size must be greater than 0")
+
+        parallel_markers: List[Dict[str, Any]] = []
+
         marked_sql = query.replace(ranged_sql_start_key, current_marker)
         rewritten_query = f"WITH T AS ({marked_sql}) SELECT {timestamp_column} FROM T ORDER BY {timestamp_column} ASC"
         logger.info(f"Executing query: {rewritten_query}")
@@ -230,7 +234,9 @@ class SQLMinerWorkflow(WorkflowInterface):
                 ranged_sql_end_key=ranged_sql_end_key,
             )
 
-        return len(parallel_markers), record_count
+        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
+
+        return parallel_markers
 
     def _create_chunked_query(
         self,
@@ -284,56 +290,6 @@ class SQLMinerWorkflow(WorkflowInterface):
             }
         )
 
-    async def parallelize_query(
-        self,
-        query: str,
-        timestamp_column: str,
-        chunk_size: int,
-        current_marker: str,
-        sql_ranged_replace_from: str,
-        sql_ranged_replace_to: str,
-        ranged_sql_start_key: str,
-        ranged_sql_end_key: str,
-    ) -> List[Dict[str, Any]]:
-        """
-        Parallelizes a SQL query by breaking it into chunks based on timestamp ranges.
-
-        Args:
-            query: The SQL query to parallelize
-            timestamp_column: Column name containing the timestamp to chunk by, e.g. START_TIME
-            chunk_size: Number of records per chunk
-            current_marker: Starting timestamp marker
-            sql_ranged_replace_from: Original SQL fragment to replace
-            sql_ranged_replace_to: SQL fragment with range placeholders
-            ranged_sql_start_key: Placeholder for range start timestamp eg: [START_MARKER]
-            ranged_sql_end_key: Placeholder for range end timestamp eg: [END_MARKER]
-
-        Returns:
-            List of dictionaries containing chunked queries and their metadata
-        """
-        if chunk_size <= 0:
-            raise ValueError("chunk_size must be greater than 0")
-
-        parallel_markers: List[Dict[str, Any]] = []
-
-        try:
-            await self._process_query_chunk(
-                query=query,
-                timestamp_column=timestamp_column,
-                chunk_size=chunk_size,
-                current_marker=current_marker,
-                sql_ranged_replace_from=sql_ranged_replace_from,
-                sql_ranged_replace_to=sql_ranged_replace_to,
-                ranged_sql_start_key=ranged_sql_start_key,
-                ranged_sql_end_key=ranged_sql_end_key,
-                parallel_markers=parallel_markers,
-            )
-        except Exception as e:
-            logger.error(f"Failed to process SQL: {e}")
-            raise e
-
-        return parallel_markers
-
     @activity.defn
     @auto_heartbeater
     async def get_query_batches(
@@ -362,16 +318,20 @@ class SQLMinerWorkflow(WorkflowInterface):
             ),
         )
 
-        parallel_markers = await self.parallelize_query(
-            query=queries_sql_query,
-            timestamp_column=miner_args["timestamp_column"],
-            chunk_size=miner_args.get("chunk_size", 500),
-            current_marker=str(miner_args["current_marker"]),
-            sql_ranged_replace_from=miner_args["sql_replace_from"],
-            sql_ranged_replace_to=miner_args["sql_replace_to"],
-            ranged_sql_start_key=miner_args["ranged_sql_start_key"],
-            ranged_sql_end_key=miner_args["ranged_sql_end_key"],
-        )
+        try:
+            parallel_markers = await self.parallelize_query(
+                query=queries_sql_query,
+                timestamp_column=miner_args["timestamp_column"],
+                chunk_size=miner_args.get("chunk_size", 500),
+                current_marker=str(miner_args["current_marker"]),
+                sql_ranged_replace_from=miner_args["sql_replace_from"],
+                sql_ranged_replace_to=miner_args["sql_replace_to"],
+                ranged_sql_start_key=miner_args["ranged_sql_start_key"],
+                ranged_sql_end_key=miner_args["ranged_sql_end_key"],
+            )
+        except Exception as e:
+            logger.error(f"Failed to parallelize queries: {e}")
+            raise e
 
         logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
 
