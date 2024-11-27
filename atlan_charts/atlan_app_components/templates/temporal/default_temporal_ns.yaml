@@ -1,8 +1,9 @@
+{{- if .Values.temporal.TemporalNamespace.enabled }}
 apiVersion: temporal.io/v1beta1
 kind: TemporalNamespace
 metadata:
   name: default
-  namespace: {{ .Values.temporal.namespace }}
+  namespace: {{ .Values.temporal.namespace.name }}
 spec:
   description: "Default namespace"
   retentionPeriod: 168h
@@ -10,3 +11,4 @@ spec:
   allowDeletion: true
   clusterRef:
     name: temporal-cluster
+{{- end }}

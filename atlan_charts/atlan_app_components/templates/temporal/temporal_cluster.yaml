@@ -1,8 +1,9 @@
+{{- if .Values.temporal.enabled }}
 apiVersion: temporal.io/v1beta1
 kind: TemporalCluster
 metadata:
   name: {{ .Values.temporal.name }}
-  namespace: {{ .Values.temporal.namespace }}
+  namespace: {{ .Values.temporal.namespace.name }}
 spec:
   version: {{ .Values.temporal.version }}
   numHistoryShards: {{ .Values.temporal.numHistoryShards }}
@@ -105,3 +106,4 @@ spec:
       matching.numTaskqueueWritePartitions:
       - value: 5
         constraints: {}
+{{- end }}

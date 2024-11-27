@@ -94,12 +94,13 @@ releases:
   values:
     - values/cert_manager.yaml
 
-- name: temporal
+- name: temporal-operator
   namespace: '{{ .Environment.Values.namespaces.temporalOperator }}'
   createNamespace: true
   chart: temporal-operator/temporal-operator
   version: 0.5.0
   disableValidation: true
+  wait: true  # Wait for temporal-operator to be ready
   values:
     - values/temporal_operator.yaml
   needs:
@@ -127,3 +128,14 @@ releases:
     - values/minio_tenant.yaml
   needs:
     - '{{ .Environment.Values.namespaces.minioOperator }}/minio-operator' # Ensure minio-operator is deployed before tenant
+
+- name: atlan-app-components
+  chart: "."
+  version: 0.1.0
+  disableValidation: true
+  values:
+    - values.yaml
+  needs:
+    - '{{ .Environment.Values.namespaces.dapr }}/dapr' # Ensure dapr is deployed before atlan-app-components
+    - '{{ .Environment.Values.namespaces.postgresCluster }}/postgres-cluster' # Ensure postgres-cluster is deployed before atlan-app-components
+    - '{{ .Environment.Values.namespaces.temporalOperator }}/temporal-operator' # Ensure temporal-operator is deployed before atlan-app-components

@@ -1,3 +1,4 @@
+---
 app:
   # General settings
   enabled: true
@@ -126,6 +127,17 @@ app:
 
 atlan-app-components:
   enabled: true
+  helmfile:
+    preInstallJob:
+      enabled: true
+  temporal:
+    namespace:
+      create: false
+    enabled: false
+    TemporalNamespace:
+      enabled: false
+    syncPostgresSecret:
+      enabled: false
   dapr:
     components:
       objectstore:
@@ -135,14 +147,14 @@ atlan-app-components:
           - apiVersion: dapr.io/v1alpha1
             kind: Component
             metadata:
-              name: objectstore
+              name: phoenix-hello-world-app-objectstore
               namespace: phoenix-hello-world-app
             spec:
               type: bindings.aws.s3
               version: v1
               metadata:
               - name: bucket
-                value: "dapr-objects"
+                value: "app-objects"
               - name: region
                 value: "us-east-1"
               - name: endpoint
@@ -258,7 +270,7 @@ atlan-app-components:
           - apiVersion: dapr.io/v1alpha1
             kind: Component
             metadata:
-              name: statestore
+              name: phoenix-hello-world-app-statestore
               namespace: phoenix-hello-world-app
             spec:
               type: state.postgresql

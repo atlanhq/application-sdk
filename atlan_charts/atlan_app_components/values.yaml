@@ -1,6 +1,14 @@
+---
 temporal:
+  enabled: true
+  TemporalNamespace:
+    enabled: true
+  syncPostgresSecret:
+    enabled: true
   name: temporal-cluster
-  namespace: atlan-temporal
+  namespace:
+    name: atlan-temporal
+    create: true
   version: "1.23.0"
   numHistoryShards: 512
   persistence:
