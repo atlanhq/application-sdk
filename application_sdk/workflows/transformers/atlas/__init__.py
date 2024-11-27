@@ -111,6 +111,7 @@ class AtlasTransformer(TransformerInterface):
             if last_sync_workflow_name := data.get("lastSyncWorkflowName", None):
                 sql_database.last_sync_workflow_name = last_sync_workflow_name
 
+            # TODO: Time format?
             sql_database.last_sync_run_at = datetime.now()
 
             if source_created_by := data.get("database_owner", None):
@@ -126,9 +127,10 @@ class AtlasTransformer(TransformerInterface):
                     last_altered, "%Y-%m-%dT%H:%M:%S:%fZ"
                 )
 
+            if not sql_database.custom_attributes:
+                sql_database.custom_attributes = {}
+
             if database_id := data.get("database_id", None):
-                if not sql_database.custom_attributes:
-                    sql_database.custom_attributes = {}
                 sql_database.custom_attributes["source_id"] = database_id
 
             if extra_info := data.get("extra_info", []):
@@ -160,10 +162,17 @@ class AtlasTransformer(TransformerInterface):
         try:
             assert data["schema_name"] is not None, "Schema name cannot be None"
             assert data["catalog_name"] is not None, "Catalog name cannot be None"
+
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}",
+
             sql_schema = Schema.creator(
                 name=data["schema_name"],
                 database_qualified_name=f"{base_qualified_name}/{data['catalog_name']}",
             )
+            sql_schema.database_name = data["catalog_name"]
 
             if table_count := data.get("table_count", None):
                 sql_schema.table_count = table_count
@@ -171,8 +180,8 @@ class AtlasTransformer(TransformerInterface):
             if views_count := data.get("view_count", None):
                 sql_schema.views_count = views_count
 
-            if remarks := data.get("remarks", None):
-                sql_schema.description = remarks
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                sql_schema.description = process_text(remarks)
 
             if created := data.get("created", None):
                 sql_schema.source_created_at = created
@@ -183,22 +192,25 @@ class AtlasTransformer(TransformerInterface):
             if schema_owner := data.get("schema_owner", None):
                 sql_schema.source_created_by = schema_owner
 
-            # TODO: This is not available in the attributes or schema entity
-            # if schema_id := data.get("schema_id", None):
-            #     sql_schema.source_id = schema_id
-            # if catalog_id := data.get("catalog_id", None):
-            #     sql_schema.catalog_id = catalog_id
-            # if is_managed_access := data.get("is_managed_access", None):
-            #     sql_schema.is_managed_access = is_managed_access
+            if not sql_schema.custom_attributes:
+                sql_schema.custom_attributes = {}
+
+            if schema_id := data.get("schema_id", None):
+                sql_schema.custom_attributes["source_id"] = schema_id
+
+            if schema_id := data.get("catalog_id", None):
+                sql_schema.custom_attributes["catalog_id"] = schema_id
+
+            if schema_id := data.get("is_managed_access", None):
+                sql_schema.custom_attributes["catalog_id"] = schema_id
 
             sql_schema.attributes.database = Database.creator(
                 name=data["catalog_name"],
                 connection_qualified_name=f"{base_qualified_name}",
             )
 
+            # TODO: Time format?
             sql_schema.last_sync_run_at = datetime.now()
-            # TODO:
-            # sql_schema.last_sync_run = last_sync_run
             return sql_schema
         except AssertionError as e:
             logger.error(f"Error creating SchemaEntity: {str(e)}")
