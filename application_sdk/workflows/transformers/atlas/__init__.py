@@ -599,17 +599,31 @@ class AtlasTransformer(TransformerInterface):
             # TODO: Creator has not been implemented yet
             function = Function.create(
                 name=json.dumps(data["function_name"]),
-                function_arguments=data["argument_signature"][1:-1].split(", "),
-                function_definition=data["function_definition"],
-                function_language=data["function_language"],
-                function_return_type=json.dumps(data_type),
-                function_type=function_type,
                 database_qualified_name=f"{base_qualified_name}/{data['function_catalog']}",
                 schema_qualified_name=f"{base_qualified_name}/{data['function_catalog']}/{data['function_schema']}",
                 connection_qualified_name=f"{base_qualified_name}/{data['function_catalog']}/{data['function_schema']}",
             )
             function.database_name = json.dumps(data["function_catalog"])
             function.schema_name = json.dumps(data["function_schema"])
+
+            if function_type := data.get("function_type", None):
+                function.attributes.function_type = function_type
+
+            if function_return_type := data.get("function_return_type", None):
+                function.attributes.function_return_type = json.dumps(
+                    function_return_type
+                )
+
+            if function_language := data.get("function_language", None):
+                function.attributes.function_language = json.dumps(function_language)
+
+            if function_definition := data.get("function_definition", None):
+                function.attributes.function_definition = json.dumps(
+                    function_definition
+                )
+
+            if function_arguments := data.get("function_arguments", None):
+                function.attributes.function_arguments = json.dumps(function_arguments)
 
             if data.get("is_secure", None) is not None:
                 function.attributes.function_is_secure = data.get("is_secure") == "YES"
@@ -661,15 +675,44 @@ class AtlasTransformer(TransformerInterface):
             assert data["tag_name"] is not None, "Tag name cannot be None"
             assert data["tag_id"] is not None, "Tag id cannot be None"
 
+            # TODO:
+            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
+            # "lastSyncRun": "{{external_map['workflow_name']}}",
+            # "tenantId": "{{external_map['tenant_id']}}",
+
             # TODO: Creator has not been implemented yet
             tag = SnowflakeTag.create(
-                name=data["tag_name"],
+                name=json.dumps(data["tag_name"]),
                 tag_id=data["tag_id"],
                 allowed_values=data.get("tag_allowed_values", []),
                 source_updated_at=datetime.strptime(
                     data["last_altered"], "%Y-%m-%dT%H:%M:%S.%f%z"
                 ),
+                connection_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}",
+                database_qualified_name=f"{base_qualified_name}/{data['tag_database']}",
+                schema_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}",
             )
+            tag.database_name = json.dumps(data["tag_database"])
+            tag.schema_name = json.dumps(data["tag_schema"])
+
+            if data.get("tag_owner", None) is not None:
+                tag.source_owners = json.dumps(data.get("tag_owner"))
+
+            if remarks := data.get("remarks", None) or data.get("comment", None):
+                tag.description = process_text(remarks)
+
+            if created := data.get("created", None):
+                tag.source_created_at = datetime.strptime(
+                    created, "%Y-%m-%dT%H:%M:%S.%f%z"
+                )
+
+            if last_altered := data.get("last_altered", None):
+                tag.source_updated_at = datetime.strptime(
+                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
+                )
+
+            if allowed_values := data.get("tag_allowed_values", None):
+                tag.allowed_values = json.dumps(allowed_values)
 
             tag.attributes.atlan_schema = Schema.creator(
                 name=json.dumps(data["tag_schema"]),
