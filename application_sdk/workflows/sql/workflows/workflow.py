@@ -232,10 +232,18 @@ class SQLWorkflow(WorkflowInterface):
                 temp_table_regex,
             )
         )
+
+        exclude_empty_tables = workflow_args.get("metadata", {}).get(
+            "exclude_empty_tables", False
+        )
+        exclude_views = workflow_args.get("metadata", {}).get("exclude_views", False)
+
         table_sql_query = self.fetch_table_sql.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
+            exclude_empty_tables=exclude_empty_tables,
+            exclude_views=exclude_views,
         )
         chunk_count = await self.fetch_data(workflow_args, table_sql_query, "table")
         return {"typename": "table", "chunk_count": chunk_count}
@@ -259,10 +267,18 @@ class SQLWorkflow(WorkflowInterface):
                 temp_table_regex,
             )
         )
+
+        exclude_empty_tables = workflow_args.get("metadata", {}).get(
+            "exclude_empty_tables", False
+        )
+        exclude_views = workflow_args.get("metadata", {}).get("exclude_views", False)
+
         column_sql_query = self.fetch_column_sql.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
             exclude_table=exclude_table,
+            exclude_empty_tables=exclude_empty_tables,
+            exclude_views=exclude_views,
         )
 
         chunk_count = await self.fetch_data(workflow_args, column_sql_query, "column")

@@ -161,6 +161,8 @@ async def main():
                 "use_jdbc_internal_methods": "true",
                 "authentication": "BASIC",
                 "extraction-method": "direct",
+                "exclude_views": True,
+                "exclude_empty_tables": False,
             },
         }
     )
