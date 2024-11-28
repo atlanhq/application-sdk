@@ -41,12 +41,12 @@ class PreflightCheckRequest(BaseModel):
                 "credentials": {
                     "host": "host",
                     "port": 5432,
-                    "user": "postgres",
+                    "user": "username",
                     "password": "password",
-                    "database": "postgres",
+                    "database": "databasename",
                 },
                 "form_data": {
-                    "include_filter": '{"^postgres$":["^public$","^airflow$"]}',
+                    "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
                     "exclude_filter": "{}",
                     "temp_table_regex": "",
                 },
@@ -120,13 +120,13 @@ class StartWorkflowRequest(BaseModel):
                 "credentials": {
                     "host": "",
                     "port": 5432,
-                    "user": "postgres",
-                    "password": "",
-                    "database": "postgres",
+                    "user": "username",
+                    "password": "password",
+                    "database": "databasename",
                 },
                 "connection": {"connection": "dev"},
                 "metadata": {
-                    "include_filter": '{"^postgres$":["^public$","^airflow$"]}',
+                    "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
                     "exclude_filter": "{}",
                     "temp_table_regex": "",
                     "advanced_config_strategy": "default",
