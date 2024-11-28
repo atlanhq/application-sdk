@@ -21,21 +21,10 @@ from pyatlan.model.assets import (
 )
 
 from application_sdk.workflows.transformers import TransformerInterface
+from application_sdk.workflows.transformers.utils import process_text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-# TODO: Move this somewhere else
-def process_text(text: str, max_length: int = 100000) -> str:
-    if len(text) > max_length:
-        text = text[:max_length]
-
-    text = re.sub(r"<[^>]+>", "", text)
-
-    text = json.dumps(text)
-
-    return text
 
 
 class AtlasTransformer(TransformerInterface):
