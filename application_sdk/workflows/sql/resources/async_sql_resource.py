@@ -4,6 +4,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
+from application_sdk.inputs.sql_query import AsyncSQLQueryInput
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
@@ -16,6 +17,7 @@ class AsyncSQLResource(SQLResource):
     config: SQLResourceConfig
     connection: AsyncConnection | None = None
     engine: AsyncEngine | None = None
+    sql_input = AsyncSQLQueryInput
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"

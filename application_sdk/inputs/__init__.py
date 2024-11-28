@@ -11,11 +11,11 @@ logger = logging.get_logger(__name__)
 
 class Input(abc.ABC):
     @abstractmethod
-    def get_batched_df(self) -> Iterator[pd.DataFrame]:
+    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         raise NotImplementedError
 
     @abstractmethod
-    def get_df(self) -> pd.DataFrame:
+    def get_dataframe(self) -> pd.DataFrame:
         raise NotImplementedError
 
     @abstractmethod

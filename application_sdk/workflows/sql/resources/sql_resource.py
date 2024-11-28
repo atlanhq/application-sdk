@@ -70,6 +70,7 @@ class SQLResource(ResourceInterface):
         batch_input=lambda self, args: self.sql_input(
             self.engine,
             args["metadata_sql"],
+            chunk_size=None,
         )
     )
     async def fetch_metadata(
