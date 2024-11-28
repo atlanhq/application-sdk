@@ -256,7 +256,7 @@ class AtlasTransformer(TransformerInterface):
                     connection_qualified_name=base_qualified_name,
                     database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
                     schema_name=data["table_schem"],
-                    database_name=data["table_catalog"],
+                    database_name=data["table_cat"],
                 )
             elif data.get("table_type") == "VIEW":
                 entity = View.creator(
@@ -308,7 +308,10 @@ class AtlasTransformer(TransformerInterface):
                 database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
             )
 
-            if view_definition := data.get("view_definition", ""):
+            # Table doesn't have definition
+            if entity.type_name != "Table" and (
+                view_definition := data.get("view_definition", "")
+            ):
                 if view_definition and isinstance(view_definition, list):
                     view_def_values = list(view_definition[0].values())
                     if view_def_values:
@@ -398,6 +401,17 @@ class AtlasTransformer(TransformerInterface):
             assert (
                 "data_type" in data and data["data_type"] is not None
             ), "Data type cannot be None or missing"
+            assert (
+                "ordinal_position" in data
+                or "column_id" in data
+                or "internal_column_id" in data
+            ), "Column order cannot be None or missing"
+
+            order = data.get(
+                "ordinal_position",
+                data.get("column_id", data.get("internal_column_id", None)),
+            )
+            assert order is not None, "Column order cannot be None"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
@@ -431,6 +445,8 @@ class AtlasTransformer(TransformerInterface):
                 data.get("table_type") in ("DYNAMIC TABLE", "DYNAMIC_TABLE")
                 or data.get("is_dynamic") == "YES"
             ):
+                # TODO: parent_type cannot be DynamicTable - https://github.com/atlanhq/atlan-python/blob/main/pyatlan/generator/templates/methods/attribute/column.jinja2#L83
+                # But in jinja template, its possible for it to be a SnowflakeDynamicTable - https://github.com/atlanhq/marketplace-packages/blob/master/packages/atlan/snowflake/transformers/table_view.jinja2#L8
                 parent_type = SnowflakeDynamicTable
             else:
                 parent_type = Table
@@ -500,7 +516,7 @@ class AtlasTransformer(TransformerInterface):
                     schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
                 )
             elif (
-                data.get("table_type") in ("DYNAMIC TABLE", "DYNAMIC_TABLE")
+                data.get("table_type") == "DYNAMIC TABLE"
                 or data.get("is_dynamic") == "YES"
             ):
                 sql_column.attributes.table_name = json.dumps(data["table_name"])
