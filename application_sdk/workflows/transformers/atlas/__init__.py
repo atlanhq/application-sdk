@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # TODO: Move this somewhere else
 def process_text(text: str, max_length: int = 100000) -> str:
     if len(text) > max_length:
-        text = text[:max_length] + "..."
+        text = text[:max_length]
 
     text = re.sub(r"<[^>]+>", "", text)
 
@@ -95,7 +95,9 @@ class AtlasTransformer(TransformerInterface):
             # "lastSyncRun": "{{external_map['workflow_name']}}",
             # "tenantId": "{{external_map['tenant_id']}}"
 
-            assert data["datname"] is not None, "Database name cannot be None"
+            assert (
+                "datname" in data and data["datname"] is not None
+            ), "Database name cannot be None or missing"
 
             sql_database = Database.creator(
                 name=json.dumps(data["datname"]),
@@ -135,7 +137,7 @@ class AtlasTransformer(TransformerInterface):
             if extra_info := data.get("extra_info", []):
                 if len(extra_info) > 0:
                     if comment := extra_info[0].get("comment"):
-                        sql_database.description = process_text(comment)[:100000]
+                        sql_database.description = process_text(comment)
 
                     if database_owner := extra_info[0].get("database_owner"):
                         sql_database.source_created_by = database_owner
@@ -159,8 +161,12 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Schema]:
         try:
-            assert data["schema_name"] is not None, "Schema name cannot be None"
-            assert data["catalog_name"] is not None, "Catalog name cannot be None"
+            assert (
+                "schema_name" in data and data["schema_name"] is not None
+            ), "Schema name cannot be None or missing"
+            assert (
+                "catalog_name" in data and data["catalog_name"] is not None
+            ), "Catalog name cannot be None or missing"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
@@ -222,11 +228,21 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Union[Table, View, MaterialisedView]]:
         try:
-            assert data["table_name"] is not None, "Table name cannot be None"
-            assert data["table_cat"] is not None, "Table catalog cannot be None"
-            assert data["table_schem"] is not None, "Table schema cannot be None"
-            assert data["table_type"] is not None, "Table type cannot be None"
-            assert data["table_owner"] is not None, "Table owner cannot be None"
+            assert (
+                "table_name" in data and data["table_name"] is not None
+            ), "Table name cannot be None or missing"
+            assert (
+                "table_cat" in data and data["table_cat"] is not None
+            ), "Table catalog cannot be None or missing"
+            assert (
+                "table_schem" in data and data["table_schem"] is not None
+            ), "Table schema cannot be None or missing"
+            assert (
+                "table_type" in data and data["table_type"] is not None
+            ), "Table type cannot be None or missing"
+            assert (
+                "table_owner" in data and data["table_owner"] is not None
+            ), "Table owner cannot be None or missing"
 
             # TODO:
             # entity.last_sync_run = last_sync_run
@@ -364,13 +380,24 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Column]:
         try:
-            # TODO: For all types, which are required attributes, and which aren't
-            assert data["column_name"] is not None, "Column name cannot be None"
-            assert data["table_type"] is not None, "Table type cannot be None"
-            assert data["table_cat"] is not None, "Table catalog cannot be None"
-            assert data["table_schem"] is not None, "Table schema cannot be None"
-            assert data["table_name"] is not None, "Table name cannot be None"
-            assert data["data_type"] is not None, "Data type cannot be None"
+            assert (
+                "column_name" in data and data["column_name"] is not None
+            ), "Column name cannot be None or missing"
+            assert (
+                "table_type" in data and data["table_type"] is not None
+            ), "Table type cannot be None or missing"
+            assert (
+                "table_cat" in data and data["table_cat"] is not None
+            ), "Table catalog cannot be None or missing"
+            assert (
+                "table_schem" in data and data["table_schem"] is not None
+            ), "Table schema cannot be None or missing"
+            assert (
+                "table_name" in data and data["table_name"] is not None
+            ), "Table name cannot be None or missing"
+            assert (
+                "data_type" in data and data["data_type"] is not None
+            ), "Data type cannot be None or missing"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
@@ -533,9 +560,15 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[SnowflakePipe]:
         try:
-            assert data["pipe_name"] is not None, "Pipe name cannot be None"
-            assert data["pipe_catalog"] is not None, "Pipe catalog cannot be None"
-            assert data["pipe_schema"] is not None, "Pipe schema cannot be None"
+            assert (
+                "pipe_name" in data and data["pipe_name"] is not None
+            ), "Pipe name cannot be None or missing"
+            assert (
+                "pipe_catalog" in data and data["pipe_catalog"] is not None
+            ), "Pipe catalog cannot be None or missing"
+            assert (
+                "pipe_schema" in data and data["pipe_schema"] is not None
+            ), "Pipe schema cannot be None or missing"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
@@ -595,26 +628,31 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[Function]:
         try:
-            assert data["function_name"] is not None, "Function name cannot be None"
             assert (
-                data["argument_signature"] is not None
+                "function_name" in data and data["function_name"] is not None
+            ), "Function name cannot be None"
+            assert (
+                "argument_signature" in data and data["argument_signature"] is not None
             ), "Function argument signature cannot be None"
             assert (
-                data["function_definition"] is not None
+                "function_definition" in data
+                and data["function_definition"] is not None
             ), "Function definition cannot be None"
             assert (
-                data["is_external"] is not None
+                "is_external" in data and data["is_external"] is not None
             ), "Function is_external name cannot be None"
             assert (
-                data["is_memoizable"] is not None
+                "is_memoizable" in data and data["is_memoizable"] is not None
             ), "Function is_memoizable cannot be None"
             assert (
-                data["function_language"] is not None
+                "function_language" in data and data["function_language"] is not None
             ), "Function language cannot be None"
             assert (
-                data["function_catalog"] is not None
+                "function_catalog" in data and data["function_catalog"] is not None
             ), "Function catalog cannot be None"
-            assert data["function_schema"] is not None, "Function schema cannot be None"
+            assert (
+                "function_schema" in data and data["function_schema"] is not None
+            ), "Function schema cannot be None"
 
             # TODO:
             # "lastSyncWorkflowName": {{external_map['crawler_name'] | tojson}},
@@ -702,8 +740,12 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[SnowflakeTag]:
         try:
-            assert data["tag_name"] is not None, "Tag name cannot be None"
-            assert data["tag_id"] is not None, "Tag id cannot be None"
+            assert (
+                "tag_name" in data and data["tag_name"] is not None
+            ), "Tag name cannot be None"
+            assert (
+                "tag_id" in data and data["tag_id"] is not None
+            ), "Tag id cannot be None"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
@@ -762,11 +804,21 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[TagAttachment]:
         try:
-            assert data["tag_name"] is not None, "Tag name cannot be None"
-            assert data["tag_database"] is not None, "Tag database cannot be None"
-            assert data["tag_schema"] is not None, "Tag schema cannot be None"
-            assert data["object_cat"] is not None, "Object cat cannot be None"
-            assert data["object_schema"] is not None, "Object schema cannot be None"
+            assert (
+                "tag_name" in data and data["tag_name"] is not None
+            ), "Tag name cannot be None"
+            assert (
+                "tag_database" in data and data["tag_database"] is not None
+            ), "Tag database cannot be None"
+            assert (
+                "tag_schema" in data and data["tag_schema"] is not None
+            ), "Tag schema cannot be None"
+            assert (
+                "object_cat" in data and data["object_cat"] is not None
+            ), "Object cat cannot be None"
+            assert (
+                "object_schema" in data and data["object_schema"] is not None
+            ), "Object schema cannot be None"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
@@ -872,12 +924,24 @@ class AtlasTransformer(TransformerInterface):
         self, data: Dict[str, Any], base_qualified_name: str
     ) -> Optional[SnowflakeStream]:
         try:
-            assert data["name"] is not None, "Stream name cannot be None"
-            assert data["type"] is not None, "Stream type cannot be None"
-            assert data["source_type"] is not None, "Stream source type cannot be None"
-            assert data["mode"] is not None, "Stream mode cannot be None"
-            assert data["stale"] is not None, "Stream stale cannot be None"
-            assert data["stale_after"] is not None, "Stream stale after cannot be None"
+            assert (
+                "name" in data and data["name"] is not None
+            ), "Stream name cannot be None"
+            assert (
+                "type" in data and data["type"] is not None
+            ), "Stream type cannot be None"
+            assert (
+                "source_type" in data and data["source_type"] is not None
+            ), "Stream source type cannot be None"
+            assert (
+                "mode" in data and data["mode"] is not None
+            ), "Stream mode cannot be None"
+            assert (
+                "stale" in data and data["stale"] is not None
+            ), "Stream stale cannot be None"
+            assert (
+                "stale_after" in data and data["stale_after"] is not None
+            ), "Stream stale after cannot be None"
 
             # TODO:
             # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
