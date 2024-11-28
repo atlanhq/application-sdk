@@ -49,11 +49,11 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
 
         self.sql_resource.set_credentials(credential)
         await self.sql_resource.load()
-
-        return await self.sql_resource.fetch_metadata(
-            metadata_sql=self.METADATA_SQL,
-            database_alias_key=self.DATABASE_ALIAS_KEY,
-            schema_alias_key=self.SCHEMA_ALIAS_KEY,
-            database_result_key=self.DATABASE_KEY,
-            schema_result_key=self.SCHEMA_KEY,
-        )
+        args = {
+            "metadata_sql": self.METADATA_SQL,
+            "database_alias_key": self.DATABASE_ALIAS_KEY,
+            "schema_alias_key": self.SCHEMA_ALIAS_KEY,
+            "database_result_key": self.DATABASE_KEY,
+            "schema_result_key": self.SCHEMA_KEY,
+        }
+        return await self.sql_resource.fetch_metadata(args)
