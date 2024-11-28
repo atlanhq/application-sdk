@@ -6,10 +6,11 @@ from pydantic import BaseModel, Field
 
 
 class TestAuthRequest(BaseModel):
-    credential: Dict[str, Any] = Field(
-        description="A dictionary containing authentication credentials",
-        min_items=1,  # Ensures the dictionary is not empty
-    )
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
 
 
 class TestAuthResponse(BaseModel):

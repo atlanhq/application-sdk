@@ -102,7 +102,7 @@ class FastAPIApplication(AtlanAPIApplication):
         super().register_routes()
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
-        await self.auth_controller.test_auth(body.credential)
+        await self.auth_controller.test_auth(credential=body.model_dump())
         return TestAuthResponse(success=True, message="Authentication successful")
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:

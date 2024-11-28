@@ -45,7 +45,9 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
             self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL
         )
     )
-    async def test_auth(self, batch_input: pd.DataFrame) -> bool:
+    async def test_auth(
+        self, batch_input: pd.DataFrame, credential: Dict[str, Any]
+    ) -> bool:
         """
         Test the authentication credentials.
 

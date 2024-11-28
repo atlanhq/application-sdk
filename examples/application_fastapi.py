@@ -44,4 +44,6 @@ if __name__ == "__main__":
         workflow=SampleWorkflow(),
     )
     # Uncomment this to start the app locally
-    # asyncio.run(fast_api_app.start())
+    import asyncio
+
+    asyncio.run(fast_api_app.start())
