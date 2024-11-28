@@ -797,8 +797,6 @@ class AtlasTransformer(TransformerInterface):
             )
 
             tag.last_sync_run_at = datetime.now()
-            # TODO:
-            # tag.last_sync_run = last_sync_run
 
             return tag
         except AssertionError as e:
