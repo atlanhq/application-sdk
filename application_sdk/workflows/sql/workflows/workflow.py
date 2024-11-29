@@ -376,7 +376,7 @@ class SQLWorkflow(WorkflowInterface):
 
             batches.append(
                 [
-                    f"{typename}-{i}.json"
+                    f"{typename}/{i}.json"
                     for i in range(
                         current_batch_start + 1,
                         current_batch_start + current_batch_count + 1,
