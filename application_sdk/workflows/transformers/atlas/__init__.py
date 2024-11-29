@@ -49,13 +49,21 @@ class AtlasTransformer(TransformerInterface):
         self.connector_name = connector_name
 
     def transform_metadata(
-        self, typename: str, data: Dict[str, Any], **kwargs: Any
+        self,
+        typename: str,
+        data: Dict[str, Any],
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
+        **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         base_qualified_name = kwargs.get(
             "base_qualified_name", f"default/{self.connector_name}/{self.current_epoch}"
         )
 
-        entity_creators: Dict[str, Callable[[Dict[str, Any], str], Optional[SQL]]] = {
+        entity_creators: Dict[
+            str, Callable[[Dict[str, Any], str, str, str, str], Optional[SQL]]
+        ] = {
             "DATABASE": self._create_database_entity,
             "SCHEMA": self._create_schema_entity,
             "TABLE": self._create_table_entity,
@@ -69,21 +77,27 @@ class AtlasTransformer(TransformerInterface):
 
         creator = entity_creators.get(typename.upper())
         if creator:
-            entity = creator(data, base_qualified_name)
+            entity = creator(
+                data,
+                base_qualified_name,
+                tenant_id=tenant_id,
+                workflow_name=workflow_name,
+                crawler_name=crawler_name,
+            )
             return entity.dict()
         else:
             logger.error(f"Unknown typename: {typename}")
             return None
 
     def _create_database_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[Database]:
         try:
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}"
-
             assert (
                 "datname" in data and data["datname"] is not None
             ), "Database name cannot be None or missing"
@@ -92,6 +106,10 @@ class AtlasTransformer(TransformerInterface):
                 name=json.dumps(data["datname"]),
                 connection_qualified_name=f"{base_qualified_name}",
             )
+
+            sql_database.tenant_id = tenant_id
+            sql_database.last_sync_run = workflow_name
+            sql_database.last_sync_workflow_name = crawler_name
 
             if schema_count := data.get("schema_count", None):
                 sql_database.schema_count = schema_count
@@ -147,7 +165,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_schema_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[Schema]:
         try:
             assert (
@@ -157,16 +180,15 @@ class AtlasTransformer(TransformerInterface):
                 "catalog_name" in data and data["catalog_name"] is not None
             ), "Catalog name cannot be None or missing"
 
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}",
-
             sql_schema = Schema.creator(
                 name=json.dumps(data["schema_name"]),
                 database_qualified_name=f"{base_qualified_name}/{data['catalog_name']}",
             )
             sql_schema.database_name = data["catalog_name"]
+
+            sql_schema.tenant_id = tenant_id
+            sql_schema.last_sync_run = workflow_name
+            sql_schema.last_sync_workflow_name = crawler_name
 
             if table_count := data.get("table_count", None):
                 sql_schema.table_count = table_count
@@ -214,7 +236,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_table_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[Union[Table, View, MaterialisedView]]:
         try:
             assert (
@@ -233,10 +260,6 @@ class AtlasTransformer(TransformerInterface):
                 "table_owner" in data and data["table_owner"] is not None
             ), "Table owner cannot be None or missing"
 
-            # TODO:
-            # entity.last_sync_run = last_sync_run
-            # entity.last_sync_workflow_name = data.get("crawler_name")
-            # entity.tenant_id = data.get("tenant_id")
             entity = None
             if data.get("table_type") == "MATERIALIZED VIEW":
                 entity = MaterialisedView.creator(
@@ -277,6 +300,10 @@ class AtlasTransformer(TransformerInterface):
                     schema_name=data["table_schem"],
                     database_name=data["table_cat"],
                 )
+
+            entity.tenant_id = tenant_id
+            entity.last_sync_run = workflow_name
+            entity.last_sync_workflow_name = crawler_name
 
             if remarks := data.get("remarks", None) or data.get("comment", None):
                 entity.description = process_text(remarks)
@@ -369,7 +396,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_column_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[Column]:
         try:
             assert (
@@ -401,11 +433,6 @@ class AtlasTransformer(TransformerInterface):
                 data.get("column_id", data.get("internal_column_id", None)),
             )
             assert order is not None, "Column order cannot be None"
-
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}",
 
             view_definition = data.get("view_definition", "")
             if isinstance(view_definition, list) and view_definition:
@@ -459,6 +486,10 @@ class AtlasTransformer(TransformerInterface):
             )
             sql_column.database_name = data["table_cat"]
             sql_column.schema_name = data["table_schem"]
+
+            sql_column.tenant_id = tenant_id
+            sql_column.last_sync_run = workflow_name
+            sql_column.last_sync_workflow_name = crawler_name
 
             if remarks := data.get("remarks", None) or data.get("comment", None):
                 sql_column.description = process_text(remarks)
@@ -562,7 +593,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_pipe_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[SnowflakePipe]:
         try:
             assert (
@@ -575,11 +611,6 @@ class AtlasTransformer(TransformerInterface):
                 "pipe_schema" in data and data["pipe_schema"] is not None
             ), "Pipe schema cannot be None or missing"
 
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}",
-
             snowflake_pipe = SnowflakePipe.create(
                 name=data["pipe_name"],
                 connection_qualified_name=f"{base_qualified_name}/{data['pipe_catalog']}/{data['pipe_schema']}",
@@ -588,6 +619,10 @@ class AtlasTransformer(TransformerInterface):
             )
             snowflake_pipe.database_name = json.dumps(data["pipe_catalog"])
             snowflake_pipe.schema_name = json.dumps(data["pipe_schema"])
+
+            snowflake_pipe.tenant_id = tenant_id
+            snowflake_pipe.last_sync_run = workflow_name
+            snowflake_pipe.last_sync_workflow_name = crawler_name
 
             if source_owners := data.get("source_owners", None):
                 snowflake_pipe.source_owners = json.dumps(source_owners)
@@ -630,7 +665,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_function_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[Function]:
         try:
             assert (
@@ -659,11 +699,6 @@ class AtlasTransformer(TransformerInterface):
                 "function_schema" in data and data["function_schema"] is not None
             ), "Function schema cannot be None"
 
-            # TODO:
-            # "lastSyncWorkflowName": {{external_map['crawler_name'] | tojson}},
-            # "lastSyncRun": {{external_map['workflow_name'] | tojson}},
-            # "tenantId": {{external_map['tenant_id'] | tojson}},
-
             data_type = data.get("data_type", "")
             function_type = "Scalar"
             if "table" in data_type:
@@ -678,6 +713,10 @@ class AtlasTransformer(TransformerInterface):
             )
             function.database_name = json.dumps(data["function_catalog"])
             function.schema_name = json.dumps(data["function_schema"])
+
+            function.tenant_id = tenant_id
+            function.last_sync_run = workflow_name
+            function.last_sync_workflow_name = crawler_name
 
             if function_type := data.get("function_type", None):
                 function.attributes.function_type = function_type
@@ -742,7 +781,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_tag_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[SnowflakeTag]:
         try:
             assert (
@@ -751,11 +795,6 @@ class AtlasTransformer(TransformerInterface):
             assert (
                 "tag_id" in data and data["tag_id"] is not None
             ), "Tag id cannot be None"
-
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}",
 
             # TODO: Creator has not been implemented yet
             tag = SnowflakeTag.create(
@@ -771,6 +810,10 @@ class AtlasTransformer(TransformerInterface):
             )
             tag.database_name = json.dumps(data["tag_database"])
             tag.schema_name = json.dumps(data["tag_schema"])
+
+            tag.tenant_id = tenant_id
+            tag.last_sync_run = workflow_name
+            tag.last_sync_workflow_name = crawler_name
 
             if data.get("tag_owner", None) is not None:
                 tag.source_owners = json.dumps(data.get("tag_owner"))
@@ -804,7 +847,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_tag_ref_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[TagAttachment]:
         try:
             assert (
@@ -823,11 +871,6 @@ class AtlasTransformer(TransformerInterface):
                 "object_schema" in data and data["object_schema"] is not None
             ), "Object schema cannot be None"
 
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}",
-
             # TODO: Creator has not been implemented yet
             tag_attachment = TagAttachment.create(
                 name=json.dumps(data["tag_name"]),
@@ -836,6 +879,9 @@ class AtlasTransformer(TransformerInterface):
                 schema_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}",
                 tag_qualified_name=f"{base_qualified_name}/{data['tag_database']}/{data['tag_schema']}/{data['tag_name']}",
             )
+            tag_attachment.tenant_id = tenant_id
+            tag_attachment.last_sync_run = workflow_name
+            tag_attachment.last_sync_workflow_name = crawler_name
 
             object_cat = data.get("object_cat", "")
             object_schema = data.get("object_schema", "")
@@ -924,7 +970,12 @@ class AtlasTransformer(TransformerInterface):
             return None
 
     def _create_stream_entity(
-        self, data: Dict[str, Any], base_qualified_name: str
+        self,
+        data: Dict[str, Any],
+        base_qualified_name: str,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> Optional[SnowflakeStream]:
         try:
             assert (
@@ -946,11 +997,6 @@ class AtlasTransformer(TransformerInterface):
                 "stale_after" in data and data["stale_after"] is not None
             ), "Stream stale after cannot be None"
 
-            # TODO:
-            # "lastSyncWorkflowName": "{{external_map['crawler_name']}}",
-            # "lastSyncRun": "{{external_map['workflow_name']}}",
-            # "tenantId": "{{external_map['tenant_id']}}",
-
             # TODO: Creator has not been implemented yet
             snowflake_stream = SnowflakeStream.create(
                 name=json.dumps(data["name"]),
@@ -960,6 +1006,10 @@ class AtlasTransformer(TransformerInterface):
             )
             snowflake_stream.database_name = json.dumps(data["database_name"])
             snowflake_stream.schema_name = json.dumps(data["schema_name"])
+
+            snowflake_stream.tenant_id = tenant_id
+            snowflake_stream.last_sync_run = workflow_name
+            snowflake_stream.last_sync_workflow_name = crawler_name
 
             if remarks := data.get("remarks", None) or data.get("comment", None):
                 snowflake_stream.description = process_text(remarks)

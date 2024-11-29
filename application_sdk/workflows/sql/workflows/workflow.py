@@ -151,6 +151,9 @@ class SQLWorkflow(WorkflowInterface):
         results: List[Dict[str, Any]],
         typename: str,
         writer: JSONChunkedObjectStoreWriter,
+        tenant_id: str,
+        workflow_name: str,
+        crawler_name: str,
     ) -> None:
         """
         Process a batch of results.
@@ -163,8 +166,17 @@ class SQLWorkflow(WorkflowInterface):
 
         for row in results:
             try:
+                if not self.transformer:
+                    raise ValueError("Transformer is not set")
+
                 transformed_metadata: Optional[Dict[str, Any]] = (
-                    self.transformer.transform_metadata(typename, row)
+                    self.transformer.transform_metadata(
+                        typename,
+                        row,
+                        tenant_id=tenant_id,
+                        workflow_name=workflow_name,
+                        crawler_name=crawler_name,
+                    )
                 )
                 if transformed_metadata is not None:
                     await writer.write(transformed_metadata)
@@ -314,6 +326,17 @@ class SQLWorkflow(WorkflowInterface):
         output_path = workflow_args["output_path"]
         output_prefix = workflow_args["output_prefix"]
 
+        tenant_id = workflow_args.get("metadata", {}).get("namespace")
+        workflow_name = workflow_args.get("metadata", {}).get("name")
+        crawler_name = (
+            f"{workflow_args.get('connection', {}).get('connection')}-crawler"
+            if workflow_args.get("connection", {}).get("connection", None)
+            else None
+        )
+
+        if not tenant_id or not workflow_name or not crawler_name:
+            raise ValueError("Invalid tenant_id, workflow_name, or crawler_name")
+
         transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
         transform_files_output_prefix = output_prefix
 
@@ -333,7 +356,14 @@ class SQLWorkflow(WorkflowInterface):
             raw_data: List[Any] = []
             for chunk in batch:
                 raw_data += await raw_reader.read_chunk(chunk)
-                await self._transform_batch(raw_data, typename, transformed_writer)
+                await self._transform_batch(
+                    raw_data,
+                    typename,
+                    transformed_writer,
+                    tenant_id=tenant_id,
+                    workflow_name=workflow_name,
+                    crawler_name=crawler_name,
+                )
 
             write_data = await transformed_writer.write_metadata()
             return write_data["total_record_count"]
@@ -454,6 +484,15 @@ class SQLWorkflow(WorkflowInterface):
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
+
+        if not workflow_args.get("metadata"):
+            workflow_args["metadata"] = {}
+
+        if not workflow_args.get("metadata", {}).get("namespace"):
+            workflow_args["metadata"]["namespace"] = "default"
+
+        if not workflow_args.get("metadata", {}).get("name"):
+            workflow_args["metadata"]["name"] = f"atlan-snowflake-{workflow_run_id}"
 
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
