@@ -511,13 +511,13 @@ class SQLWorkflow(WorkflowInterface):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
-        if not workflow_args.get("metadata"):
+        if not workflow_args.get("metadata", None):
             workflow_args["metadata"] = {}
 
-        if not workflow_args.get("metadata", {}).get("namespace"):
+        if not workflow_args.get("metadata", {}).get("namespace", None):
             workflow_args["metadata"]["namespace"] = "default"
 
-        if not workflow_args.get("metadata", {}).get("name"):
+        if not workflow_args.get("metadata", {}).get("name", None):
             workflow_args["metadata"]["name"] = f"atlan-snowflake-{workflow_run_id}"
 
         fetch_and_transforms = [
