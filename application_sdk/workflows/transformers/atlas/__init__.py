@@ -68,11 +68,11 @@ class AtlasTransformer(TransformerInterface):
             "SCHEMA": self._create_schema_entity,
             "TABLE": self._create_table_entity,
             "COLUMN": self._create_column_entity,
-            "PIPE": self._create_pipe_entity,
             "FUNCTION": self._create_function_entity,
-            "TAG": self._create_tag_entity,
             "TAG_REF": self._create_tag_ref_entity,
-            "STREAM": self._create_stream_entity,
+            "SNOWFLAKE_PIPE": self._create_snowflake_pipe_entity,
+            "SNOWFLAKE_TAG": self._create_snowflake_tag_entity,
+            "SNOWFLAKE_STREAM": self._create_snowflake_stream_entity,
         }
 
         creator = entity_creators.get(typename.upper())
@@ -592,7 +592,7 @@ class AtlasTransformer(TransformerInterface):
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
-    def _create_pipe_entity(
+    def _create_snowflake_pipe_entity(
         self,
         data: Dict[str, Any],
         base_qualified_name: str,
@@ -780,7 +780,7 @@ class AtlasTransformer(TransformerInterface):
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
-    def _create_tag_entity(
+    def _create_snowflake_tag_entity(
         self,
         data: Dict[str, Any],
         base_qualified_name: str,
@@ -969,7 +969,7 @@ class AtlasTransformer(TransformerInterface):
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
-    def _create_stream_entity(
+    def _create_snowflake_stream_entity(
         self,
         data: Dict[str, Any],
         base_qualified_name: str,
