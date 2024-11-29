@@ -33,7 +33,13 @@ def test_create_database_entity_basic(
         "owner_role_type": "ROLE",
     }
 
-    result = atlas_transformer._create_database_entity(data, base_qualified_name)  # type: ignore
+    result = atlas_transformer._create_database_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
 
     assert result is not None
     assert result.name == '"TEST_DB"'
@@ -75,7 +81,13 @@ def test_create_database_entity_with_long_description(
         "owner_role_type": "ROLE",
     }
 
-    result = atlas_transformer._create_database_entity(data, base_qualified_name)  # type: ignore
+    result = atlas_transformer._create_database_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
 
     assert result is not None
     assert result.name == '"TEST_DB"'
@@ -128,9 +140,13 @@ def test_create_database_entity_without_datname(
         "owner_role_type": "ROLE",
     }
 
-    database_entity = atlas_transformer._create_database_entity(  # type: ignore
-        data, base_qualified_name
-    )
+    database_entity = atlas_transformer._create_database_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert database_entity is None
 
 
@@ -149,7 +165,13 @@ def test_create_database_entity_with_extra_info(
         ],
     }
 
-    result = atlas_transformer._create_database_entity(data, base_qualified_name)  # type: ignore
+    result = atlas_transformer._create_database_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
 
     assert result is not None
     assert result.description == json.dumps("Extra info comment")
@@ -198,19 +220,37 @@ def test_create_table_entities(
     }
     # Test view
     data["table_type"] = "VIEW"
-    entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert isinstance(entity, View)
     assert entity is not None
 
     # Test materialized view
     data["table_type"] = "MATERIALIZED VIEW"
-    entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert entity is not None
     assert isinstance(entity, MaterialisedView)
 
     # Test dynamic table
     data["table_type"] = "DYNAMIC TABLE"
-    entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert entity is not None
     assert isinstance(entity, SnowflakeDynamicTable)
     assert entity.definition == json.dumps(
@@ -219,7 +259,13 @@ def test_create_table_entities(
 
     # Test regular table
     data["table_type"] = "BASE TABLE"
-    entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert entity is not None
     assert entity.attributes.column_count == 10
     assert entity.attributes.row_count == 1000
@@ -274,7 +320,13 @@ def test_table_entity_with_long_description(
 
     # Test regular table
     data["table_type"] = "BASE TABLE"
-    entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert entity is not None
     assert entity.attributes.column_count == 10
     assert entity.attributes.row_count == 1000
@@ -294,36 +346,72 @@ def test_table_entity_missing_required_fields(
     }
 
     # Test missing table name
-    table_entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    table_entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert table_entity is None
 
     # Test missing table catalog
     data["table_name"] = "test_table"
     data["table_cat"] = None
-    table_entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    table_entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert table_entity is None
 
     # Test missing table schema
     data["table_cat"] = "test_catalog"
     data["table_schem"] = None
-    table_entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    table_entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert table_entity is None
 
     # Test missing table type
     data["table_schem"] = "test_schema"
     data["table_type"] = None
-    table_entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    table_entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert table_entity is None
 
     # Test missing table owner
     data["table_type"] = "BASE TABLE"
     data["table_owner"] = None
-    table_entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    table_entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert table_entity is None
 
     # Data has all required fields
     data["table_owner"] = "test_owner"
-    table_entity = atlas_transformer._create_table_entity(data, base_qualified_name)  # type: ignore
+    table_entity = atlas_transformer._create_table_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert table_entity is not None
 
 
@@ -344,7 +432,13 @@ def test_schema_entity_creation(
         "is_managed_access": "YES",
     }
 
-    schema_entity = atlas_transformer._create_schema_entity(data, base_qualified_name)  # type: ignore
+    schema_entity = atlas_transformer._create_schema_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert schema_entity is not None
     assert schema_entity.name == '"test_schema"'
     assert schema_entity.database_name == "test_catalog"
@@ -384,7 +478,13 @@ def test_schema_entity_creation_with_long_description(
         "is_managed_access": "YES",
     }
 
-    schema_entity = atlas_transformer._create_schema_entity(data, base_qualified_name)  # type: ignore
+    schema_entity = atlas_transformer._create_schema_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert schema_entity is not None
     assert schema_entity.name == '"test_schema"'
     assert schema_entity.database_name == "test_catalog"
@@ -418,18 +518,36 @@ def test_schema_entity_missing_required_fields(
     }
 
     # Test missing schema name
-    schema_entity = atlas_transformer._create_schema_entity(data, base_qualified_name)  # type: ignore
+    schema_entity = atlas_transformer._create_schema_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert schema_entity is None
 
     # Test missing catalog name
     data["schema_name"] = "test_schema"
     data["catalog_name"] = None
-    schema_entity = atlas_transformer._create_schema_entity(data, base_qualified_name)  # type: ignore
+    schema_entity = atlas_transformer._create_schema_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert schema_entity is None
 
     # Data has all required fields
     data["catalog_name"] = "test_catalog"
-    schema_entity = atlas_transformer._create_schema_entity(data, base_qualified_name)  # type: ignore
+    schema_entity = atlas_transformer._create_schema_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert schema_entity is not None
 
 
@@ -466,7 +584,13 @@ def test_column_entity_creation(
         "column_size": 255,
     }
 
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.name == '"test_column"'
     assert column_entity.database_name == "test_catalog"
@@ -521,48 +645,96 @@ def test_column_entity_missing_required_fields(
     }
 
     # Test missing column name
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Test missing table type
     data["column_name"] = "test_column"
     data["table_type"] = None
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Test missing table catalog
     data["table_type"] = "TABLE"
     data["table_cat"] = None
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Test missing table schema
     data["table_cat"] = "test_catalog"
     data["table_schem"] = None
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Test missing table name
     data["table_schem"] = "test_schema"
     data["table_name"] = None
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Test missing data type
     data["table_name"] = "test_table"
     data["data_type"] = None
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Test missing column order
     data["data_type"] = "VARCHAR"
     data["ordinal_position"] = None
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is None
 
     # Data has all required fields
     data["ordinal_position"] = 1
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
 
 
@@ -581,7 +753,13 @@ def test_column_entity_with_long_description(
         "ordinal_position": 1,
     }
 
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert (
         column_entity.description is not None
@@ -601,19 +779,37 @@ def test_column_entity_order(
         "ordinal_position": 1,
         "data_type": "VARCHAR",
     }
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.order == 1
 
     del data["ordinal_position"]
     data["column_id"] = "10"
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.order == 10
 
     del data["column_id"]
     data["internal_column_id"] = "789"
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.order == 789
 
@@ -633,7 +829,13 @@ def test_column_entity_view_types(
     # Test MATERIALIZED VIEW
     data = base_data.copy()
     data["table_type"] = "MATERIALIZED VIEW"
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.attributes.view_name == '"test_table"'
     assert hasattr(column_entity.attributes, "materialised_view")
@@ -641,7 +843,13 @@ def test_column_entity_view_types(
     # Test VIEW
     data = base_data.copy()
     data["table_type"] = "VIEW"
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.attributes.view_name == '"test_table"'
     assert hasattr(column_entity.attributes, "view")
@@ -649,7 +857,13 @@ def test_column_entity_view_types(
     # Test regular TABLE
     data = base_data.copy()
     data["table_type"] = "TABLE"
-    column_entity = atlas_transformer._create_column_entity(data, base_qualified_name)  # type: ignore
+    column_entity = atlas_transformer._create_column_entity(
+        data,
+        base_qualified_name,
+        tenant_id="default",
+        workflow_name="test_workflow",
+        crawler_name="test_crawler",
+    )  # type: ignore
     assert column_entity is not None
     assert column_entity.attributes.table_name == '"test_table"'
     assert hasattr(column_entity.attributes, "table")
