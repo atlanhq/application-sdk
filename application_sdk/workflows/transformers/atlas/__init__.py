@@ -248,10 +248,10 @@ class AtlasTransformer(TransformerInterface):
                 "table_name" in data and data["table_name"] is not None
             ), "Table name cannot be None or missing"
             assert (
-                "table_cat" in data and data["table_cat"] is not None
+                "table_catalog" in data and data["table_catalog"] is not None
             ), "Table catalog cannot be None or missing"
             assert (
-                "table_schem" in data and data["table_schem"] is not None
+                "table_schema" in data and data["table_schema"] is not None
             ), "Table schema cannot be None or missing"
             assert (
                 "table_type" in data and data["table_type"] is not None
@@ -264,20 +264,20 @@ class AtlasTransformer(TransformerInterface):
             if data.get("table_type") == "MATERIALIZED VIEW":
                 entity = MaterialisedView.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
-                    schema_name=data["table_schem"],
-                    database_name=data["table_cat"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
                 )
             elif data.get("table_type") == "VIEW":
                 entity = View.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
-                    schema_name=data["table_schem"],
-                    database_name=data["table_cat"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
                 )
             elif (
                 data.get("table_type") == "DYNAMIC TABLE"
@@ -285,20 +285,20 @@ class AtlasTransformer(TransformerInterface):
             ):
                 entity = SnowflakeDynamicTable.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
-                    schema_name=data["table_schem"],
-                    database_name=data["table_cat"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
                 )
             else:
                 entity = Table.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                     connection_qualified_name=base_qualified_name,
-                    database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
-                    schema_name=data["table_schem"],
-                    database_name=data["table_cat"],
+                    database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
+                    schema_name=data["table_schema"],
+                    database_name=data["table_catalog"],
                 )
 
             entity.tenant_id = tenant_id
@@ -320,8 +320,8 @@ class AtlasTransformer(TransformerInterface):
                 entity.size_bytes = bytes_size
 
             entity.attributes.atlan_schema = Schema.creator(
-                name=json.dumps(data["table_schem"]),
-                database_qualified_name=f"{base_qualified_name}/{data['table_cat']}",
+                name=json.dumps(data["table_schema"]),
+                database_qualified_name=f"{base_qualified_name}/{data['table_catalog']}",
             )
 
             # Table doesn't have definition
@@ -411,10 +411,10 @@ class AtlasTransformer(TransformerInterface):
                 "table_type" in data and data["table_type"] is not None
             ), "Table type cannot be None or missing"
             assert (
-                "table_cat" in data and data["table_cat"] is not None
+                "table_catalog" in data and data["table_catalog"] is not None
             ), "Table catalog cannot be None or missing"
             assert (
-                "table_schem" in data and data["table_schem"] is not None
+                "table_schema" in data and data["table_schema"] is not None
             ), "Table schema cannot be None or missing"
             assert (
                 "table_name" in data and data["table_name"] is not None
@@ -480,12 +480,12 @@ class AtlasTransformer(TransformerInterface):
 
             sql_column = Column.creator(
                 name=json.dumps(data["column_name"]),
-                parent_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}",
+                parent_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}",
                 parent_type=parent_type,
                 order=int(order),
             )
-            sql_column.database_name = data["table_cat"]
-            sql_column.schema_name = data["table_schem"]
+            sql_column.database_name = data["table_catalog"]
+            sql_column.schema_name = data["table_schema"]
 
             sql_column.tenant_id = tenant_id
             sql_column.last_sync_run = workflow_name
@@ -520,20 +520,20 @@ class AtlasTransformer(TransformerInterface):
             if data.get("table_type") == "MATERIALIZED VIEW" or is_materialized:
                 sql_column.attributes.view_name = json.dumps(data["table_name"])
                 sql_column.attributes.view_qualified_name = json.dumps(
-                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                    f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
                 )
                 sql_column.attributes.materialised_view = MaterialisedView.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
             elif data.get("table_type") == "VIEW":
                 sql_column.attributes.view_name = json.dumps(data["table_name"])
                 sql_column.attributes.view_qualified_name = json.dumps(
-                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                    f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
                 )
                 sql_column.attributes.view = View.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
             elif (
                 data.get("table_type") == "DYNAMIC TABLE"
@@ -541,20 +541,20 @@ class AtlasTransformer(TransformerInterface):
             ):
                 sql_column.attributes.table_name = json.dumps(data["table_name"])
                 sql_column.attributes.table_qualified_name = json.dumps(
-                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                    f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
                 )
                 sql_column.attributes.snowflake_dynamic_table = SnowflakeDynamicTable.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
             else:
                 sql_column.attributes.table_name = json.dumps(data["table_name"])
                 sql_column.attributes.table_qualified_name = json.dumps(
-                    f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}/{data['table_name']}"
+                    f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}/{data['table_name']}"
                 )
                 sql_column.attributes.table = Table.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualified_name=f"{base_qualified_name}/{data['table_cat']}/{data['table_schem']}",
+                    schema_qualiftable_schemied_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
 
             if not sql_column.custom_attributes:
