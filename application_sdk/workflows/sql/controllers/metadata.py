@@ -46,11 +46,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     async def fetch_metadata(self) -> List[Dict[str, str]]:
         if not self.sql_resource:
             raise ValueError("SQL Resource not defined")
-        args = {
-            "metadata_sql": self.METADATA_SQL,
-            "database_alias_key": self.DATABASE_ALIAS_KEY,
-            "schema_alias_key": self.SCHEMA_ALIAS_KEY,
-            "database_result_key": self.DATABASE_KEY,
-            "schema_result_key": self.SCHEMA_KEY,
-        }
-        return await self.sql_resource.fetch_metadata(args)
+        return await self.sql_resource.fetch_metadata(
+            metadata_sql=self.METADATA_SQL,
+            database_alias_key=self.DATABASE_ALIAS_KEY,
+            schema_alias_key=self.SCHEMA_ALIAS_KEY,
+            database_result_key=self.DATABASE_KEY,
+            schema_result_key=self.SCHEMA_KEY,
+        )

@@ -6,7 +6,7 @@ from typing import Any, List
 
 import orjson
 
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.paas.objectstore import ObjectStore
 
 logger = logging.getLogger(__name__)
 

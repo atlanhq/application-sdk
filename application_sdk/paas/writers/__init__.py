@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.paas.objectstore import ObjectStore
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

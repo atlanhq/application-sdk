@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
+from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 
 
 class TestJSONChunkedObjectStoreWriterScale:

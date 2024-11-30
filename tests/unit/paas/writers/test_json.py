@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
+from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 
 # from hypothesis import given, settings
 # from hypothesis import strategies as st

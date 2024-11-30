@@ -1,8 +1,5 @@
 import logging
 
-import pandas as pd
-
-from application_sdk import activity_pd
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
@@ -39,12 +36,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
         super().__init__()
 
-    @activity_pd(
-        batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL
-        )
-    )
-    async def test_auth(self, batch_input: pd.DataFrame) -> bool:
+    async def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
@@ -53,7 +45,9 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            batch_input.to_dict(orient="records")
+            rows = []
+            async for row in self.sql_resource.run_query(self.TEST_AUTHENTICATION_SQL):
+                rows.append(row)
             return True
         except Exception as e:
             logger.error(f"Failed to authenticate with the given credentials: {str(e)}")
