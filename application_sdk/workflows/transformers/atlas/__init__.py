@@ -554,7 +554,7 @@ class AtlasTransformer(TransformerInterface):
                 )
                 sql_column.attributes.table = Table.creator(
                     name=json.dumps(data["table_name"]),
-                    schema_qualiftable_schemied_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
+                    schema_qualified_name=f"{base_qualified_name}/{data['table_catalog']}/{data['table_schema']}",
                 )
 
             if not sql_column.custom_attributes:
