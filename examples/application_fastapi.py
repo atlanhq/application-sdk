@@ -22,7 +22,21 @@ class WorkflowMetadataController(WorkflowMetadataControllerInterface):
 
 class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {"databaseSchemaCheck": ["test"], "tablesCheck": ["test"]}
+        return {
+            "success": True,
+            "data": {
+                "databaseSchemaCheck": {
+                    "success": True,
+                    "successMessage": "Schemas and Databases check successful",
+                    "failureMessage": "",
+                },
+                "tablesCheck": {
+                    "success": True,
+                    "successMessage": "Tables check successful. Table count: 2",
+                    "failureMessage": "",
+                },
+            },
+        }
 
 
 class SampleWorkflow(WorkflowInterface):
@@ -43,6 +57,7 @@ if __name__ == "__main__":
         preflight_check_controller=WorkflowPreflightCheckController(),
         workflow=SampleWorkflow(),
     )
+
     # Uncomment this to start the app locally
     import asyncio
 

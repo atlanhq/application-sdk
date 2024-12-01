@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 class TestAuthRequest(BaseModel):
@@ -19,12 +19,15 @@ class TestAuthResponse(BaseModel):
 
 
 class FetchMetadataRequest(BaseModel):
-    credential: Dict[str, Any]
+    host: str
+    port: int
+    user: str
+    password: str
+    database: str
 
 
-class FetchMetadataResponse(BaseModel):
-    success: bool
-    metadata: List[Dict[str, str]]
+class FetchMetadataResponse(RootModel):
+    root: List[Dict[str, str]]
 
 
 class PreflightCheckRequest(BaseModel):
@@ -55,50 +58,19 @@ class PreflightCheckRequest(BaseModel):
         }
 
 
-class PreflightCheckStatus(BaseModel):
-    success: bool = Field(
-        ..., description="Indicates if the specific check was successful"
-    )
-    successMessage: str = Field(
-        ..., description="Message describing the success details"
-    )
-    failureMessage: str = Field(
-        ..., description="Message describing the failure details (empty if successful)"
-    )
-
-
-class PreflightCheckDataSchema(BaseModel):
-    databaseSchemaCheck: PreflightCheckStatus = Field(
-        ..., description="Result of the database schema check"
-    )
-    tablesCheck: PreflightCheckStatus = Field(
-        ..., description="Result of the tables check"
-    )
-
-
 class PreflightCheckResponse(BaseModel):
     success: bool = Field(
         ..., description="Indicates if the overall operation was successful"
     )
-    data: PreflightCheckDataSchema = Field(
-        ..., description="Details about the database schema and tables check"
-    )
+    data: Dict[str, Any] = Field(..., description="Response data")
 
     class Config:
         schema_extra = {
             "example": {
                 "success": True,
                 "data": {
-                    "databaseSchemaCheck": {
-                        "success": True,
-                        "successMessage": "Schemas and Databases check successful",
-                        "failureMessage": "",
-                    },
-                    "tablesCheck": {
-                        "success": True,
-                        "successMessage": "Tables check successful. Table count: 2",
-                        "failureMessage": "",
-                    },
+                    "successMessage": "Successfully checked",
+                    "failureMessage": "",
                 },
             }
         }

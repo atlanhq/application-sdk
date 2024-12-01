@@ -7,8 +7,8 @@ from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
 from sqlalchemy.orm import Session
 
 from application_sdk.app.database import get_session
-from application_sdk.app.rest.common.dto.telemetry import Trace
 from application_sdk.app.rest.common.interfaces.traces import Traces
+from application_sdk.app.rest.common.models.telemetry import Trace
 
 router = APIRouter(
     prefix="/telemetry/v1/traces",

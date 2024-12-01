@@ -1,7 +1,10 @@
 from fastapi import APIRouter, FastAPI, status
 
 from application_sdk.app.rest import AtlanAPIApplication
-from application_sdk.app.rest.fastapi.dto.workflow import (
+from application_sdk.app.rest.fastapi.middlewares.error_handler import (
+    internal_server_error_handler,
+)
+from application_sdk.app.rest.fastapi.models.workflow import (
     FetchMetadataRequest,
     FetchMetadataResponse,
     PreflightCheckRequest,
@@ -11,9 +14,6 @@ from application_sdk.app.rest.fastapi.dto.workflow import (
     TestAuthRequest,
     TestAuthResponse,
     WorkflowData,
-)
-from application_sdk.app.rest.fastapi.middlewares.error_handler import (
-    internal_server_error_handler,
 )
 from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
@@ -106,8 +106,8 @@ class FastAPIApplication(AtlanAPIApplication):
         return TestAuthResponse(success=True, message="Authentication successful")
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
-        metadata = await self.metadata_controller.fetch_metadata(body.credential)
-        return FetchMetadataResponse(success=True, metadata=metadata)
+        metadata = await self.metadata_controller.fetch_metadata(body.model_dump())
+        return FetchMetadataResponse(metadata)
 
     async def preflight_check(
         self, body: PreflightCheckRequest
@@ -115,7 +115,7 @@ class FastAPIApplication(AtlanAPIApplication):
         preflight_check = await self.preflight_check_controller.preflight_check(
             body.form_data
         )
-        return PreflightCheckResponse(success=True, preflight_check=preflight_check)
+        return PreflightCheckResponse.parse_obj(preflight_check)
 
     async def start_workflow(self, body: StartWorkflowRequest) -> StartWorkflowResponse:
         workflow_data = await self.workflow.start(

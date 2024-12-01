@@ -7,8 +7,8 @@ from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
 
 from application_sdk.app.database import get_session
-from application_sdk.app.rest.common.dto.telemetry import Log
 from application_sdk.app.rest.common.interfaces.logs import Logs
+from application_sdk.app.rest.common.models.telemetry import Log
 
 router = APIRouter(
     prefix="/telemetry/v1/logs",
