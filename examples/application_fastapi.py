@@ -59,6 +59,5 @@ if __name__ == "__main__":
     )
 
     # Uncomment this to start the app locally
-    import asyncio
-
-    asyncio.run(fast_api_app.start())
+    # import asyncio
+    # asyncio.run(fast_api_app.start())

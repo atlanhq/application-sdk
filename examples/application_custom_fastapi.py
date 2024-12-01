@@ -65,5 +65,6 @@ if __name__ == "__main__":
         preflight_check_controller=WorkflowPreflightCheckController(),
         workflow=SampleWorkflow(),
     )
+
     # Uncomment to run the application locally
     # asyncio.run(fast_api_app.start())
