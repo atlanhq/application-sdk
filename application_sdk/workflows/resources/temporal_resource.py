@@ -69,10 +69,6 @@ class TemporalConfig:
 
 
 class TemporalResource(ResourceInterface):
-    workflow_class = ClassType
-    activities: Sequence[CallableType] = []
-    passthrough_modules: Sequence[str] = ["application_sdk", "os"]
-
     def __init__(
         self,
         temporal_config: TemporalConfig,
@@ -127,7 +123,10 @@ class TemporalResource(ResourceInterface):
             raise e
 
     def create_worker(
-        self, activities: Sequence[CallableType], workflow_class: Any
+        self,
+        activities: Sequence[CallableType],
+        workflow_classes: Sequence[ClassType],
+        passthrough_modules: Sequence[str],
     ) -> Worker:
         if not self.client:
             raise ValueError("Client is not loaded")
@@ -135,11 +134,11 @@ class TemporalResource(ResourceInterface):
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
-            workflows=[workflow_class],
+            workflows=workflow_classes,
             activities=activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                    *self.passthrough_modules
+                    *passthrough_modules
                 )
             ),
         )

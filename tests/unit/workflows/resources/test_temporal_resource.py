@@ -152,12 +152,15 @@ async def test_create_worker_without_client(
     mock_connect.return_value = mock_client
 
     # Mock workflow class and activities
-    workflow_class = MagicMock()
+    workflow_classes = [MagicMock(), MagicMock()]
     activities = [MagicMock(), MagicMock()]
+    passthrough_modules = ["application_sdk", "os"]
 
     # Run create_worker
     with pytest.raises(ValueError, match="Client is not loaded"):
-        temporal_resource.create_worker(activities, workflow_class)
+        temporal_resource.create_worker(
+            activities, workflow_classes, passthrough_modules
+        )
 
 
 @patch("application_sdk.workflows.resources.temporal_resource.Worker")
@@ -178,17 +181,20 @@ async def test_create_worker(
     await temporal_resource.load()
 
     # Mock workflow class and activities
-    workflow_class = MagicMock()
+    workflow_classes = [MagicMock(), MagicMock()]
     activities = [MagicMock(), MagicMock()]
+    passthrough_modules = ["application_sdk", "os"]
 
     # Run create_worker
-    worker = temporal_resource.create_worker(activities, workflow_class)
+    worker = temporal_resource.create_worker(
+        activities, workflow_classes, passthrough_modules
+    )
 
     # Verify Worker was instantiated with the expected parameters
     mock_worker_class.assert_called_once_with(
         temporal_resource.client,
         task_queue=temporal_resource.worker_task_queue,
-        workflows=[workflow_class],
+        workflows=workflow_classes,
         activities=activities,
         workflow_runner=ANY,
     )

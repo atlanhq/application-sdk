@@ -1,9 +1,13 @@
 import logging
 from abc import ABC
 
-from application_sdk.workflows.builder import WorkflowBuilderInterface
+from application_sdk.workflows.builder import (
+    MinerBuilderInterface,
+    WorkflowBuilderInterface,
+)
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers import TransformerInterface
 
@@ -40,4 +44,33 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
             workflow.set_sql_resource(self.sql_resource)
             .set_transformer(self.transformer)
             .set_temporal_resource(self.temporal_resource)
+        )
+
+
+class SQLMinerBuilder(MinerBuilderInterface, ABC):
+    sql_resource: SQLResource
+    transformer: TransformerInterface
+
+    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLMinerBuilder":
+        self.sql_resource = sql_resource
+        return self
+
+    def get_sql_resource(self) -> SQLResource:
+        return self.sql_resource
+
+    def set_transformer(self, transformer: TransformerInterface) -> "SQLMinerBuilder":
+        self.transformer = transformer
+        return self
+
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "SQLMinerBuilder":
+        super().set_temporal_resource(temporal_resource)
+        return self
+
+    def build(self, miner: SQLMinerWorkflow | None = None) -> SQLMinerWorkflow:
+        miner = miner or SQLMinerWorkflow()
+
+        return miner.set_sql_resource(self.sql_resource).set_temporal_resource(
+            self.temporal_resource
         )

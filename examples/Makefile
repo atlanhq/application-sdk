@@ -16,3 +16,9 @@ start-all:
 	make start-dapr &
 	make start-temporal-dev &
 	@echo "Services started. Proceeding..."
+
+stop-all:
+	@echo "Stopping all detached processes..."
+	@pkill -f "temporal server start-dev" || true
+	@pkill -f "dapr run --app-id app" || true
+	@echo "All detached processes stopped."

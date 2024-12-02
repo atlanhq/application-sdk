@@ -60,7 +60,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
             f"Uploaded file: {self.current_file_name} and removed local copy"
         )
 
-    async def upload_file(self, local_file_path: str):
+    async def upload_file(self, local_file_path: str) -> None:
         activity.logger.info(
             f"Uploading file: {local_file_path} to {self.upload_file_prefix}"
         )
