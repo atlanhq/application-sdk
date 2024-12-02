@@ -21,7 +21,7 @@ layout = html.Div(
                                 dbc.Label("SQLAlchemy Connection String"),
                                 dbc.Input(
                                     id="sqlalchemy_string",
-                                    placeholder="postgresql+psycopg2://scott:tiger@localhost:5432/mydatabase",
+                                    placeholder="postgresql+psycopg://scott:tiger@localhost:5432/mydatabase",
                                     type="text",
                                 ),
                                 html.Br(),
