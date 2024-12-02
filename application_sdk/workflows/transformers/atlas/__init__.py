@@ -160,7 +160,7 @@ class AtlasTransformer(TransformerInterface):
                         )
 
             return sql_database
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating DatabaseEntity: {str(e)}")
             return None
 
@@ -200,14 +200,14 @@ class AtlasTransformer(TransformerInterface):
                 sql_schema.description = process_text(remarks)
 
             if created := data.get("created", None):
-                sql_schema.source_created_at = datetime.strptime(
-                    created, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                sql_schema.source_created_at = datetime.fromtimestamp(
+                    created / 1000
+                ).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
             if last_altered := data.get("last_altered", None):
-                sql_schema.source_updated_at = datetime.strptime(
-                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                sql_schema.source_updated_at = datetime.fromtimestamp(
+                    last_altered / 1000
+                ).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
             if schema_owner := data.get("schema_owner", None):
                 sql_schema.source_created_by = schema_owner
@@ -231,7 +231,7 @@ class AtlasTransformer(TransformerInterface):
 
             sql_schema.last_sync_run_at = datetime.now()
             return sql_schema
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating SchemaEntity: {str(e)}")
             return None
 
@@ -391,7 +391,7 @@ class AtlasTransformer(TransformerInterface):
             )
 
             return entity
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating TableEntity: {str(e)}")
             return None
 
@@ -588,7 +588,7 @@ class AtlasTransformer(TransformerInterface):
             sql_column.last_sync_run_at = datetime.now()
 
             return sql_column
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
@@ -660,7 +660,7 @@ class AtlasTransformer(TransformerInterface):
             snowflake_pipe.last_sync_run_at = datetime.now()
 
             return snowflake_pipe
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
@@ -776,7 +776,7 @@ class AtlasTransformer(TransformerInterface):
             )
 
             return function
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
@@ -842,7 +842,7 @@ class AtlasTransformer(TransformerInterface):
             tag.last_sync_run_at = datetime.now()
 
             return tag
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
@@ -965,7 +965,7 @@ class AtlasTransformer(TransformerInterface):
             tag_attachment.last_sync_run_at = datetime.now()
 
             return tag_attachment
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
 
@@ -1068,6 +1068,6 @@ class AtlasTransformer(TransformerInterface):
             snowflake_stream.last_sync_run_at = datetime.now()
 
             return snowflake_stream
-        except AssertionError as e:
+        except Exception as e:
             logger.error(f"Error creating ColumnEntity: {str(e)}")
             return None
