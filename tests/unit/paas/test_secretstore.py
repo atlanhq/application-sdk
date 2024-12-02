@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.paas.secretstore import SecretStore
+from application_sdk.inputs.secretstore import SecretStore
 
 
 @pytest.fixture

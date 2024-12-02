@@ -6,7 +6,7 @@ from typing import Any, List
 
 import orjson
 
-from application_sdk.paas.objectstore import ObjectStore
+from application_sdk.inputs.objectstore import ObjectStore
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +41,10 @@ class ChunkedObjectStoreReaderInterface(ABC):
         pass
 
     async def __aenter__(self):
-        await self.download_file(f"{self.typename}-metadata.json")
+        await self.download_file(f"{self.typename}/metadata.json")
 
         with open(
-            os.path.join(self.local_file_path, f"{self.typename}-metadata.json")
+            os.path.join(self.local_file_path, f"{self.typename}/metadata.json")
         ) as f:
             json_data = f.read()
             data = orjson.loads(json_data)
