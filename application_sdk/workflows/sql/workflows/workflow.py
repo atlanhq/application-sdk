@@ -123,6 +123,9 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched data.
         :raises Exception: If the data cannot be fetched.
         """
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
+
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
@@ -134,9 +137,6 @@ class SQLWorkflow(WorkflowInterface):
                     raw_files_prefix, raw_files_output_prefix
                 ) as raw_writer,
             ):
-                if self.sql_resource is None:
-                    raise ValueError("SQL resource is not set")
-
                 async for batch in self.sql_resource.run_query(query, self.batch_size):
                     # Write raw data
                     await raw_writer.write_list(batch)
