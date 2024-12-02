@@ -42,7 +42,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
     @activity_pd(
         batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL
+            self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL, chunk_size=None
         )
     )
     async def test_auth(

@@ -63,7 +63,7 @@ def test_load(mock_create_engine: Any, resource: SQLResource):
     assert resource.connection == mock_connection
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -85,7 +85,7 @@ async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, resource: SQLResource
 ):
@@ -109,7 +109,7 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, resource: SQLResource
 ):
@@ -134,7 +134,7 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_df")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, resource: SQLResource
 ):

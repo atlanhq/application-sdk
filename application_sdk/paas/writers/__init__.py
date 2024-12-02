@@ -35,7 +35,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self.buffer_size = buffer_size
         self.current_buffer_size = 0
 
-        os.makedirs(os.path.dirname(self.local_file_prefix), exist_ok=True)
+        os.makedirs(self.local_file_prefix, exist_ok=True)
 
     @abstractmethod
     async def write(self, data: Dict[str, Any]) -> None:
