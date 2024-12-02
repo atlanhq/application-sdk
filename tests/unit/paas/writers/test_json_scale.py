@@ -33,12 +33,12 @@ class TestJSONChunkedObjectStoreWriterScale:
         await writer.write_metadata()
         await writer.close()
         # 3 files should be created in /tmp/test
-        files = os.listdir("/tmp/test")
+        files = os.listdir("/tmp/test/test")
         assert len(files) == 2
-        assert "test-metadata.json" in files
-        assert "test-1.json" in files
+        assert "metadata.json" in files
+        assert "1.json" in files
 
-        with open("/tmp/test/test-metadata.json", "r") as f:
+        with open("/tmp/test/test/metadata.json", "r") as f:
             metadata = f.read()
             assert metadata == '{"total_record_count":1000,"chunk_count":1}\n'
 
@@ -54,10 +54,10 @@ class TestJSONChunkedObjectStoreWriterScale:
         print(f"Time taken: {int(end_time - start_time)} seconds")
         assert end_time - start_time < 5  # should take less than 5 seconds
 
-        files = os.listdir("/tmp/test")
+        files = os.listdir("/tmp/test/test")
         assert len(files) == 6
 
-        with open("/tmp/test/test-metadata.json", "r") as f:
+        with open("/tmp/test/test/metadata.json", "r") as f:
             metadata = f.read()
             assert metadata == '{"total_record_count":100000,"chunk_count":5}\n'
 
@@ -73,9 +73,9 @@ class TestJSONChunkedObjectStoreWriterScale:
         print(f"Time taken: {int(end_time - start_time)} seconds")
         assert end_time - start_time < 50  # should take less than 50 seconds
 
-        files = os.listdir("/tmp/test")
+        files = os.listdir("/tmp/test/test")
         assert len(files) == 51
 
-        with open("/tmp/test/test-metadata.json", "r") as f:
+        with open("/tmp/test/test/metadata.json", "r") as f:
             metadata = f.read()
             assert metadata == '{"total_record_count":1000000,"chunk_count":50}\n'

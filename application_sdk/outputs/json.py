@@ -54,7 +54,7 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
             return
 
         # Write number of chunks
-        with open(f"{self.local_file_prefix}-metadata.json", mode="w") as f:
+        with open(f"{self.local_file_prefix}/metadata.json", mode="w") as f:
             f.write(
                 orjson.dumps(
                     {
@@ -65,7 +65,7 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                     option=orjson.OPT_APPEND_NEWLINE,
                 ).decode("utf-8")
             )
-        await self.upload_file(f"{self.local_file_prefix}-metadata.json")
+        await self.upload_file(f"{self.local_file_prefix}/metadata.json")
 
         return {
             "total_record_count": total_record_count or self.total_record_count,
@@ -77,7 +77,7 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
         self.current_file_number += 1
         self.current_file_name = (
-            f"{self.local_file_prefix}-{self.current_file_number}.json"
+            f"{self.local_file_prefix}/{self.current_file_number}.json"
             if self.chunk_size >= 0
             else f"{self.local_file_prefix}.json"
         )

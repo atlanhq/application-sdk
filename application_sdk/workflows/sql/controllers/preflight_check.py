@@ -149,6 +149,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
             SQLWorkflow.prepare_query(
                 query=self.TABLES_CHECK_SQL, workflow_args=workflow_args
             ),
+            chunk_size=None,
         )
     )
     async def tables_check(self, batch_input, **kwargs) -> Dict[str, Any]:
