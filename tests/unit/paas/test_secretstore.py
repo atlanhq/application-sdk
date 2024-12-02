@@ -8,7 +8,7 @@ from application_sdk.inputs.secretstore import SecretStore
 
 @pytest.fixture
 def mock_dapr_client():
-    with patch("application_sdk.paas.secretstore.DaprClient") as mock_client:
+    with patch("application_sdk.inputs.secretstore.DaprClient") as mock_client:
         yield mock_client.return_value
 
 
