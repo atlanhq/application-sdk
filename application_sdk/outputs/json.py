@@ -18,9 +18,8 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
     async def write(self, data: Dict[str, Any]) -> None:
         async with self.lock:
-            if (
-                self.current_file is None
-                or self.current_record_count >= self.chunk_size
+            if self.current_file is None or (
+                self.current_record_count >= self.chunk_size and self.chunk_size >= 0
             ):
                 await self._flush_buffer()
                 await self._create_new_file()
@@ -50,6 +49,10 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         await self.close_current_file()
 
     async def write_metadata(self, total_record_count: Optional[int] = None):
+        if self.chunk_size < 0:
+            # If chunk size is negative, we don't want to write metadata
+            return
+
         # Write number of chunks
         with open(f"{self.local_file_prefix}-metadata.json", mode="w") as f:
             f.write(
@@ -75,6 +78,8 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         self.current_file_number += 1
         self.current_file_name = (
             f"{self.local_file_prefix}-{self.current_file_number}.json"
+            if self.chunk_size >= 0
+            else f"{self.local_file_prefix}.json"
         )
         self.current_file = await aiofiles.open(self.current_file_name, mode="w")
 
