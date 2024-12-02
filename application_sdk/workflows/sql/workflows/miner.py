@@ -9,9 +9,9 @@ from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.paas.objectstore import ObjectStore
-from application_sdk.paas.secretstore import SecretStore
-from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
+from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.inputs.secretstore import SecretStore
+from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
