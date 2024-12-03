@@ -31,7 +31,9 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional
+
+from pyatlan.model.assets import Database
 
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -44,7 +46,6 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
-from application_sdk.workflows.transformers.phoenix.schema import DatabaseEntity
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
@@ -94,39 +95,30 @@ class SampleSQLWorkflow(SQLWorkflow):
     """
 
 
-class CustomDatabaseEntity(DatabaseEntity):
-    """
-    Custom Database entity class
-    """
-
-    @classmethod
-    def model_validate(
-        cls,
-        obj: Any,
-        *,
-        strict: bool | None = None,
-        from_attributes: bool | None = None,
-        context: Any | None = None,
-    ) -> "CustomDatabaseEntity":
-        obj["name"] = obj["name"].upper()
-        return super().model_validate(
-            obj, strict=strict, from_attributes=from_attributes, context=context
-        )
-
-
 class CustomTransformer(AtlasTransformer):
     def transform_metadata(
         self,
         typename: str,
         data: Dict[str, Any],
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_creator_map: Dict[str, Callable[[Dict[str, Any]], Optional[Any]]]
+        | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         # Note: This update the entity_creator_map to use the custom _create_database_entity method for Database entities
-        self.entity_class_definitions["DATABASE"] = CustomDatabaseEntity
-        return super().transform_metadata(
-            typename, data, entity_class_definitions, **kwargs
-        )
+        self.entity_creator_map["DATABASE"] = self._create_database_entity
+        return super().transform_metadata(typename, data, entity_creator_map, **kwargs)
+
+    def _create_database_entity(self, data: Dict[str, Any]) -> Optional[Database]:
+        try:
+            assert data["database"] is not None, "Database name cannot be None"
+            sql_database: Database = Database.creator(
+                name=data["datname"],
+                connection_qualified_name=self.base_qualified_name,
+            )
+            return sql_database
+        except AssertionError as e:
+            logger.error(f"Error creating DatabaseEntity: {str(e)}")
+            return None
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):

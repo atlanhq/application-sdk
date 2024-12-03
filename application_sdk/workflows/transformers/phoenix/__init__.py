@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Dict, Optional, Type
+from typing import Any, Callable, Dict, Optional
 
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.transformers.const import (
@@ -46,18 +46,21 @@ class PhoenixTransformer(TransformerInterface):
         self.namespace = Namespace(id=self.connector_temp, name=self.connector_temp)
         self.package = Package(id=self.connector_temp, name=self.connector_temp)
 
-        self.entity_class_definitions: Dict[str, Type[Any]] = {
-            DATABASE: DatabaseEntity,
-            SCHEMA: SchemaEntity,
-            TABLE: TableEntity,
-            COLUMN: ColumnEntity,
+        self.entity_creator_map: Dict[
+            str, Callable[[Dict[str, Any]], Optional[Any]]
+        ] = {
+            DATABASE: self._create_database_entity,
+            SCHEMA: self._create_schema_entity,
+            TABLE: self._create_table_entity,
+            COLUMN: self._create_column_entity,
         }
 
     def transform_metadata(
         self,
         typename: str,
         data: Dict[str, Any],
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        entity_creator_map: Dict[str, Callable[[Dict[str, Any]], Optional[Any]]]
+        | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -72,13 +75,11 @@ class PhoenixTransformer(TransformerInterface):
             Optional[str]: The json string of the transformed metadata.
         """
         type_name = typename.upper()
-        self.entity_class_definitions = (
-            entity_class_definitions or self.entity_class_definitions
-        )
+        self.entity_creator_map = entity_creator_map or self.entity_creator_map
 
-        entity_class = self.entity_class_definitions.get(type_name)
-        if entity_class:
-            entity = entity_class(**data)
+        creator = self.entity_creator_map.get(type_name)
+        if creator:
+            entity = creator(data)
             if entity:
                 return entity.model_dump()
             else:
