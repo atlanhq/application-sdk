@@ -22,47 +22,19 @@ class SQLQueryInput(Input):
         self.engine = engine
         self.chunk_size = chunk_size
 
-    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text(self.query))
-                while True:
-                    chunk = result.fetchmany(self.chunk_size)
-                    if not chunk:
-                        break
-
-                    for j in range(len(chunk)):
-                        row = chunk[j]
-                        temp_row = []
-                        for i in range(len(row)):
-                            if str(type(row[i])) == "<class 'datetime.datetime'>":
-                                temp_row.append(
-                                    row[i].strftime("%Y-%m-%dT%H:%M:%S.%f%z")
-                                )
-                            else:
-                                temp_row.append(row[i])
-                        chunk[j] = temp_row
-
-                    yield pd.DataFrame(chunk, columns=result.keys())
+                return pd.read_sql_query(
+                    text(self.query), conn, chunksize=self.chunk_size
+                )
         except Exception as e:
             logger.error(f"Error reading batched data from SQL: {str(e)}")
 
-    def get_dataframe(self) -> pd.DataFrame:
+    async def get_dataframe(self) -> pd.DataFrame:
         try:
             with self.engine.connect() as conn:
-                result = conn.execute(text(self.query))
-                rows = result.fetchall()
-                processed_rows = []
-                for row in rows:
-                    temp_row = []
-                    for val in row:
-                        if str(type(val)) == "<class 'datetime.datetime'>":
-                            temp_row.append(val.strftime("%Y-%m-%dT%H:%M:%S.%f%z"))
-                        else:
-                            temp_row.append(val)
-                    processed_rows.append(temp_row)
-
-                return pd.DataFrame(processed_rows, columns=result.keys())
+                return pd.read_sql_query(text(self.query), conn)
         except Exception as e:
             logger.error(f"Error reading data from SQL: {str(e)}")
 
