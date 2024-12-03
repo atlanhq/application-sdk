@@ -7,8 +7,8 @@ from opentelemetry.proto.logs.v1.logs_pb2 import LogsData
 from sqlalchemy.orm import Session
 
 from application_sdk.app.database import get_session
-from application_sdk.app.rest.interfaces.logs import Logs
-from application_sdk.app.rest.schemas import Log
+from application_sdk.app.rest.common.interfaces.logs import Logs
+from application_sdk.app.rest.common.models.telemetry import Log
 
 router = APIRouter(
     prefix="/telemetry/v1/logs",
@@ -78,3 +78,7 @@ async def create_logs(request: Request, session: Session = Depends(get_session))
         return Logs.create_logs(session, log_message)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def get_logs_router() -> APIRouter:
+    return router

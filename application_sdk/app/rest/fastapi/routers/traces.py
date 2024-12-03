@@ -7,8 +7,8 @@ from opentelemetry.proto.trace.v1.trace_pb2 import TracesData
 from sqlalchemy.orm import Session
 
 from application_sdk.app.database import get_session
-from application_sdk.app.rest.interfaces.traces import Traces
-from application_sdk.app.rest.schemas import Trace
+from application_sdk.app.rest.common.interfaces.traces import Traces
+from application_sdk.app.rest.common.models.telemetry import Trace
 
 router = APIRouter(
     prefix="/telemetry/v1/traces",
@@ -60,3 +60,7 @@ async def create_trace(trace: Request, session: Session = Depends(get_session)):
         return traces
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def get_traces_router() -> APIRouter:
+    return router

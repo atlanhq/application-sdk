@@ -48,3 +48,7 @@ async def ready():
     :return: A dictionary containing the status "ok".
     """
     return {"status": "ok"}
+
+
+def get_health_router() -> APIRouter:
+    return router
