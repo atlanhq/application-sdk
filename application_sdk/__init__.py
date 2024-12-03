@@ -35,13 +35,13 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 not hasattr(batch_input_obj, "chunk_size")
                 or not batch_input_obj.chunk_size
             ):
-                fn_kwargs["batch_input"] = await batch_input_obj.get_dataframe()
+                fn_kwargs["batch_input"] = batch_input_obj.get_dataframe()
                 fn_kwargs.update(*args)
                 return await f(self, **fn_kwargs)
 
             # if chunk_size is set, we'll get the data in chunks and write it to the outputs provided
             rets = []
-            for df_batch in await batch_input_obj.get_batched_dataframe():
+            for df_batch in batch_input_obj.get_batched_dataframe():
                 fn_kwargs["batch_input"] = df_batch
                 rets.append(await f(self, **fn_kwargs))
                 del fn_kwargs["batch_input"]
