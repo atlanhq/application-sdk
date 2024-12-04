@@ -11,7 +11,11 @@ on:
 
 jobs:
   test:
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
     - uses: actions/checkout@v3
@@ -20,7 +24,7 @@ jobs:
     - name: Install Dapr CLI
       run: |
         wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
-        dapr init --slim
+        dapr init --runtime-version 1.13.6 --slim
 
     # Install Temporal
     - name: Install Temporal CLI and Start Server
@@ -62,6 +66,9 @@ jobs:
       env:
         POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
         POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+        SNOWFLAKE_ACCOUNT_ID: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+        SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+        SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
       run: |
         cd examples
 

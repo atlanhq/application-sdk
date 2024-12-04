@@ -4,12 +4,14 @@ import os
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
+import pandas as pd
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
+from application_sdk import activity_pd
+from application_sdk.inputs.secretstore import SecretStore
+from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
-from application_sdk.paas.secretstore import SecretStore
-from application_sdk.paas.writers.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -121,6 +123,9 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched data.
         :raises Exception: If the data cannot be fetched.
         """
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
+
         output_path = workflow_args["output_path"]
 
         raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
@@ -132,9 +137,6 @@ class SQLWorkflow(WorkflowInterface):
                     raw_files_prefix, raw_files_output_prefix
                 ) as raw_writer,
             ):
-                if self.sql_resource is None:
-                    raise ValueError("SQL resource is not set")
-
                 async for batch in self.sql_resource.run_query(query, self.batch_size):
                     # Write raw data
                     await raw_writer.write_list(batch)
@@ -177,98 +179,131 @@ class SQLWorkflow(WorkflowInterface):
                     f"Error processing row for {typename}: {row_error}"
                 )
 
+    @staticmethod
+    def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
+        """
+        Method to prepare the query with the include and exclude filters
+        """
+        try:
+            include_filter = workflow_args.get(
+                "metadata", workflow_args.get("form_data", {})
+            ).get("include_filter", "{}")
+            exclude_filter = workflow_args.get(
+                "metadata", workflow_args.get("form_data", {})
+            ).get("exclude_filter", "{}")
+            temp_table_regex = workflow_args.get(
+                "metadata", workflow_args.get("form_data", {})
+            ).get("temp_table_regex", "")
+            normalized_include_regex, normalized_exclude_regex, exclude_table = (
+                prepare_filters(
+                    include_filter,
+                    exclude_filter,
+                    temp_table_regex,
+                )
+            )
+            return query.format(
+                normalized_include_regex=normalized_include_regex,
+                normalized_exclude_regex=normalized_exclude_regex,
+                exclude_table=exclude_table,
+            )
+        except Exception as e:
+            logger.error(f"Error preparing query [{query}]:  {e}")
+
     @activity.defn
     @auto_heartbeater
-    async def fetch_databases(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_database_sql, workflow_args=workflow_args
+            ),
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/database",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_databases(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process databases from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        chunk_count = await self.fetch_data(
-            workflow_args, self.fetch_database_sql, "database"
-        )
-        return {"typename": "database", "chunk_count": chunk_count}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": "database"}
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_schemas(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_schema_sql, workflow_args=workflow_args
+            ),
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/schema",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_schemas(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process schemas from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, _ = prepare_filters(
-            include_filter,
-            exclude_filter,
-            temp_table_regex,
-        )
-        schema_sql_query = self.fetch_schema_sql.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-        )
-        chunk_count = await self.fetch_data(workflow_args, schema_sql_query, "schema")
-        return {"typename": "schema", "chunk_count": chunk_count}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": "schema"}
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_tables(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_table_sql, workflow_args=workflow_args
+            ),
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/table",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_tables(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process tables from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, exclude_table = (
-            prepare_filters(
-                include_filter,
-                exclude_filter,
-                temp_table_regex,
-            )
-        )
-        table_sql_query = self.fetch_table_sql.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-            exclude_table=exclude_table,
-        )
-        chunk_count = await self.fetch_data(workflow_args, table_sql_query, "table")
-        return {"typename": "table", "chunk_count": chunk_count}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": "table"}
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_columns(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_column_sql, workflow_args=workflow_args
+            ),
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/column",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_columns(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
         """
         Fetch and process columns from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        include_filter = workflow_args.get("metadata", {}).get("include_filter", "{}")
-        exclude_filter = workflow_args.get("metadata", {}).get("exclude_filter", "{}")
-        temp_table_regex = workflow_args.get("metadata", {}).get("temp_table_regex", "")
-        normalized_include_regex, normalized_exclude_regex, exclude_table = (
-            prepare_filters(
-                include_filter,
-                exclude_filter,
-                temp_table_regex,
-            )
-        )
-        column_sql_query = self.fetch_column_sql.format(
-            normalized_include_regex=normalized_include_regex,
-            normalized_exclude_regex=normalized_exclude_regex,
-            exclude_table=exclude_table,
-        )
-
-        chunk_count = await self.fetch_data(workflow_args, column_sql_query, "column")
-        return {"typename": "column", "chunk_count": chunk_count}
+        await raw_output.write_df(batch_input)
+        return {"batch_input": batch_input, "typename": "column"}
 
     @activity.defn
     @auto_heartbeater
@@ -343,7 +378,7 @@ class SQLWorkflow(WorkflowInterface):
 
             batches.append(
                 [
-                    f"{typename}-{i}.json"
+                    f"{typename}/{i}.json"
                     for i in range(
                         current_batch_start + 1,
                         current_batch_start + current_batch_count + 1,
@@ -369,15 +404,13 @@ class SQLWorkflow(WorkflowInterface):
 
         transform_activities: List[Any] = []
 
-        typename: str | None = raw_stat["typename"] or None
+        chunk_count = len(raw_stat)
+        if not chunk_count:
+            raise ValueError("Invalid chunk_count")
 
-        chunk_count = raw_stat.get("chunk_count", None)
-
+        typename = raw_stat[0].get("typename")
         if typename is None:
             raise ValueError("Invalid typename")
-
-        if chunk_count is None:
-            raise ValueError("Invalid chunk_count")
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
@@ -419,16 +452,10 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         """
         if not self.sql_resource:
-            credentials = SecretStore.extract_credentials(
-                workflow_args["credential_guid"]
-            )
-            self.sql_resource = SQLResource(
-                SQLResourceConfig(
-                    credentials=credentials,
-                    database_driver=workflow_args["database_driver"],
-                    database_dialect=workflow_args["database_dialect"],
-                )
-            )
+            self.sql_resource = SQLResource(SQLResourceConfig())
+
+        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
+        self.sql_resource.set_credentials(credentials)
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(

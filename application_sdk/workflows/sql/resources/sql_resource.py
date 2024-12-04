@@ -2,11 +2,12 @@ import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
-from urllib.parse import quote_plus
 
 from sqlalchemy import create_engine, text
 from temporalio import activity
 
+from application_sdk import activity_pd
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
 
 logger = logging.getLogger(__name__)
@@ -22,14 +23,10 @@ class SQLResourceConfig:
         use_server_side_cursor: bool = True,
         credentials: Dict[str, Any] = None,
         sql_alchemy_connect_args: Dict[str, Any] = {},
-        database_driver: str | None = None,
-        database_dialect: str | None = None,
     ):
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
-        self.database_driver = database_driver
-        self.database_dialect = database_dialect
 
     def set_credentials(self, credentials: Dict[str, Any]):
         self.credentials = credentials
@@ -37,18 +34,12 @@ class SQLResourceConfig:
     def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return self.sql_alchemy_connect_args
 
-    def get_sqlalchemy_connection_string(self) -> str:
-        if not self.database_dialect or not self.database_driver:
-            raise ValueError("database_driver and database_dialect are required")
-
-        encoded_password = quote_plus(self.credentials["password"])
-        return f"{self.database_dialect}+{self.database_driver}://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
-
 
 class SQLResource(ResourceInterface):
     config: SQLResourceConfig
     connection = None
     engine = None
+    sql_input = SQLQueryInput
 
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
@@ -63,7 +54,7 @@ class SQLResource(ResourceInterface):
 
     async def load(self):
         self.engine = create_engine(
-            self.config.get_sqlalchemy_connection_string(),
+            self.get_sqlalchemy_connection_string(),
             connect_args=self.config.get_sqlalchemy_connect_args(),
             pool_pre_ping=True,
         )
@@ -72,8 +63,19 @@ class SQLResource(ResourceInterface):
     def set_credentials(self, credentials: Dict[str, Any]) -> None:
         self.config.set_credentials(credentials)
 
+    def get_sqlalchemy_connection_string(self) -> str:
+        raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
+
+    @activity_pd(
+        batch_input=lambda self, args: self.sql_input(
+            self.engine,
+            args["metadata_sql"],
+            chunk_size=None,
+        )
+    )
     async def fetch_metadata(
         self,
+        batch_input: str,
         metadata_sql: str,
         database_alias_key: str | None = None,
         schema_alias_key: str | None = None,
@@ -88,14 +90,13 @@ class SQLResource(ResourceInterface):
 
         result: List[Dict[Any, Any]] = []
         try:
-            async for batch in self.run_query(metadata_sql):
-                for row in batch:
-                    result.append(
-                        {
-                            database_result_key: row[database_alias_key],
-                            schema_result_key: row[schema_alias_key],
-                        }
-                    )
+            for row in batch_input.to_dict(orient="records"):
+                result.append(
+                    {
+                        database_result_key: row[database_alias_key],
+                        schema_result_key: row[schema_alias_key],
+                    }
+                )
 
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")

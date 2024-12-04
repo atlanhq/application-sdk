@@ -62,3 +62,20 @@ class WorkflowBuilderInterface(ABC):
     ) -> "WorkflowBuilderInterface":
         self.temporal_resource = temporal_resource
         return self
+
+
+class MinerBuilderInterface(ABC):
+    temporal_resource: TemporalResource
+
+    async def load_resources(self):
+        await self.temporal_resource.load()
+
+    @abstractmethod
+    def build(self) -> WorkflowInterface:
+        raise NotImplementedError("build method must be implemented")
+
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "MinerBuilderInterface":
+        self.temporal_resource = temporal_resource
+        return self

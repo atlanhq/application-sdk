@@ -7,8 +7,8 @@ from opentelemetry.proto.metrics.v1.metrics_pb2 import MetricsData
 from sqlalchemy.orm import Session
 
 from application_sdk.app.database import get_session
-from application_sdk.app.rest.interfaces.metrics import Metrics
-from application_sdk.app.rest.schemas import Metric
+from application_sdk.app.rest.common.interfaces.metrics import Metrics
+from application_sdk.app.rest.common.models.telemetry import Metric
 
 router = APIRouter(
     prefix="/telemetry/v1/metrics",
@@ -55,3 +55,7 @@ async def create_metrics(request: Request, session: Session = Depends(get_sessio
         return Metrics.create_metrics(session, metric_message)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def get_metrics_router() -> APIRouter:
+    return router

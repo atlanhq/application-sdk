@@ -21,5 +21,4 @@ stop-all:
 	@echo "Stopping all detached processes..."
 	@pkill -f "temporal server start-dev" || true
 	@pkill -f "dapr run --app-id app" || true
-	@pkill -f "python main.py" || true        # For run-app
 	@echo "All detached processes stopped."

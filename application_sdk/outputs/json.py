@@ -1,11 +1,15 @@
 import logging
+import os
 from typing import Any, Dict, Optional
 
 import aiofiles
 import orjson
+import pandas as pd
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.outputs import Output
 from application_sdk.paas.writers import ChunkedObjectStoreWriterInterface
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -14,9 +18,8 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
     async def write(self, data: Dict[str, Any]) -> None:
         async with self.lock:
-            if (
-                self.current_file is None
-                or self.current_record_count >= self.chunk_size
+            if self.current_file is None or (
+                self.current_record_count >= self.chunk_size and self.chunk_size >= 0
             ):
                 await self._flush_buffer()
                 await self._create_new_file()
@@ -46,8 +49,12 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         await self.close_current_file()
 
     async def write_metadata(self, total_record_count: Optional[int] = None):
+        if self.chunk_size < 0:
+            # If chunk size is negative, we don't want to write metadata
+            return
+
         # Write number of chunks
-        with open(f"{self.local_file_prefix}-metadata.json", mode="w") as f:
+        with open(f"{self.local_file_prefix}/metadata.json", mode="w") as f:
             f.write(
                 orjson.dumps(
                     {
@@ -58,7 +65,7 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                     option=orjson.OPT_APPEND_NEWLINE,
                 ).decode("utf-8")
             )
-        await self.upload_file(f"{self.local_file_prefix}-metadata.json")
+        await self.upload_file(f"{self.local_file_prefix}/metadata.json")
 
         return {
             "total_record_count": total_record_count or self.total_record_count,
@@ -70,9 +77,39 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
         self.current_file_number += 1
         self.current_file_name = (
-            f"{self.local_file_prefix}-{self.current_file_number}.json"
+            f"{self.local_file_prefix}/{self.current_file_number}.json"
+            if self.chunk_size >= 0
+            else f"{self.local_file_prefix}.json"
         )
         self.current_file = await aiofiles.open(self.current_file_name, mode="w")
 
         activity.logger.info(f"Created new file: {self.current_file_name}")
         self.current_record_count = 0
+
+
+class JsonOutput(Output):
+    def __init__(self, output_path: str, upload_file_prefix: str):
+        self.output_path = output_path
+        self.upload_file_prefix = upload_file_prefix
+        self.total_record_count = 0
+        self.chunk_count = 0
+        os.makedirs(f"{output_path}", exist_ok=True)
+
+    async def write_df(self, df: pd.DataFrame):
+        """
+        Method to write the dataframe to a json file and push it to the object store
+        """
+        try:
+            self.chunk_count += 1
+            self.total_record_count += len(df)
+
+            # Write the dataframe to a json file
+            output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
+            df.to_json(output_file_name, orient="records", lines=True)
+
+            # Push the file to the object store
+            await ObjectStore.push_file_to_object_store(
+                self.upload_file_prefix, output_file_name
+            )
+        except Exception as e:
+            activity.logger.error(f"Error writing dataframe to json: {str(e)}")

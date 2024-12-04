@@ -1,7 +1,6 @@
 """TODO: Module docstring"""
 
 import logging
-import os
 import uuid
 from abc import ABC
 from typing import Any, Dict, Sequence
@@ -17,6 +16,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
+from application_sdk.workflows.resources.constants import TemporalConstants
 
 logger = get_logger(__name__)
 
@@ -28,16 +28,16 @@ class ResourceInterface(ABC):
     async def load(self):
         pass
 
-    def set_credentials(self, _: Dict[str, Any]):
+    def set_credentials(self, credentials: Dict[str, Any]):
         pass
 
 
 class TemporalConfig:
-    host = os.getenv("host", "localhost")
-    port = os.getenv("port", "7233")
-    application_name = os.getenv("application_name", "default")
+    host = TemporalConstants.HOST.value
+    port = TemporalConstants.PORT.value
+    application_name = TemporalConstants.APPLICATION_NAME.value
     # FIXME: causes issue with different namespace, TBR.
-    namespace: str = "default"
+    namespace: str = TemporalConstants.NAMESPACE.value
 
     def __init__(
         self,
@@ -69,10 +69,6 @@ class TemporalConfig:
 
 
 class TemporalResource(ResourceInterface):
-    workflow_class = ClassType
-    activities: Sequence[CallableType] = []
-    passthrough_modules: Sequence[str] = ["application_sdk", "os"]
-
     def __init__(
         self,
         temporal_config: TemporalConfig,
@@ -127,7 +123,10 @@ class TemporalResource(ResourceInterface):
             raise e
 
     def create_worker(
-        self, activities: Sequence[CallableType], workflow_class: Any
+        self,
+        activities: Sequence[CallableType],
+        workflow_classes: Sequence[ClassType],
+        passthrough_modules: Sequence[str],
     ) -> Worker:
         if not self.client:
             raise ValueError("Client is not loaded")
@@ -135,11 +134,11 @@ class TemporalResource(ResourceInterface):
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
-            workflows=[workflow_class],
+            workflows=workflow_classes,
             activities=activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                    *self.passthrough_modules
+                    *passthrough_modules
                 )
             ),
         )

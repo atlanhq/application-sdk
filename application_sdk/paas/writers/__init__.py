@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.paas.objectstore import ObjectStore
+from application_sdk.inputs.objectstore import ObjectStore
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -35,7 +35,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self.buffer_size = buffer_size
         self.current_buffer_size = 0
 
-        os.makedirs(os.path.dirname(self.local_file_prefix), exist_ok=True)
+        os.makedirs(self.local_file_prefix, exist_ok=True)
 
     @abstractmethod
     async def write(self, data: Dict[str, Any]) -> None:
@@ -60,7 +60,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
             f"Uploaded file: {self.current_file_name} and removed local copy"
         )
 
-    async def upload_file(self, local_file_path: str):
+    async def upload_file(self, local_file_path: str) -> None:
         activity.logger.info(
             f"Uploading file: {local_file_path} to {self.upload_file_prefix}"
         )
