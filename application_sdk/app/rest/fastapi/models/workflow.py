@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field
 
 
 class TestAuthRequest(BaseModel):
@@ -26,8 +26,9 @@ class FetchMetadataRequest(BaseModel):
     database: str
 
 
-class FetchMetadataResponse(RootModel):
-    root: List[Dict[str, str]]
+class FetchMetadataResponse(BaseModel):
+    success: bool
+    data: List[Dict[str, str]]
 
 
 class PreflightCheckRequest(BaseModel):

@@ -16,6 +16,11 @@ class AtlanAPIApplicationConfig(AtlanApplicationConfig):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    def __init__(self, host: str = "0.0.0.0", port: int = 8000, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.host = host
+        self.port = port
+
 
 class AtlanAPIApplication(AtlanApplication, ABC):
     app: ASGIApplication
