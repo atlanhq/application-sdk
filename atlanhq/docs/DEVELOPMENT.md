@@ -72,13 +72,13 @@ This repository contains two Helm charts: `app` and `atlan`. These charts facili
     helmfile apply
     ```
     - If you want to install each components and app all in a single namespace, but this will require an update in all `values.yaml` files of the charts, run the below command:
-    ```bash
-    helmfile apply -e unified
-    ```
+        ```bash
+        helmfile apply -e unified
+        ```
     - If you just want to install the app all, run the below command:
-    ```bash
-    helmfile apply -e app
-    ```
+        ```bash
+        helmfile apply -e app
+        ```
 
 - This will:
     - Install foundational components like Temporal Operator, Dapr, MinIO, and PostgreSQL.
