@@ -129,6 +129,7 @@ async def main():
         temporal_resource=temporal_resource,
         temporal_activities=workflow.get_activities(),
         workflow_classes=[SQLWorkflow],
+        passthrough_modules=["application_sdk", "os", "pandas"],
     )
 
     # Start the worker in a separate thread
