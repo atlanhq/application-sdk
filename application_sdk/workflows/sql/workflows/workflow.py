@@ -162,11 +162,13 @@ class SQLWorkflow(WorkflowInterface):
         :param writer: The writer to use.
         :raises Exception: If the results cannot be processed.
         """
+        if self.transformer is None:
+            raise ValueError("Transformer is not set")
 
         for row in results:
             try:
                 transformed_metadata: Optional[Dict[str, Any]] = (
-                    self.transformer.transform_metadata(typename, row)
+                    self.transformer.transform_metadata(typename=typename, data=row)
                 )
                 if transformed_metadata is not None:
                     await writer.write(transformed_metadata)
