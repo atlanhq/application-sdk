@@ -26,7 +26,9 @@ environments:
           minioOperator: atlan-minio-operator
           minioTenant: atlan-minio-tenant
       - enableMinio:
-          enabled: true
+          enabled: false
+      - enableDaprDashboard:
+          enabled: false
 
   unified:
     values:
@@ -40,7 +42,9 @@ environments:
           minioOperator: atlan-secure-agent
           minioTenant: atlan-secure-agent
       - enableMinio:
-          enabled: true
+          enabled: false
+      - enableDaprDashboard:
+          enabled: false
 
 ---
 releases:
@@ -60,6 +64,7 @@ releases:
   chart: dapr/dapr-dashboard
   version: 0.15.0
   disableValidation: true
+  installed: {{ .Environment.Values.enableDaprDashboard.enabled }}
   missingFileHandler: Error
   values:
     - values/dapr_dashboard.yaml
