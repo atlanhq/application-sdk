@@ -53,7 +53,7 @@ class FastAPIApplication(AtlanAPIApplication):
         *args,
         **kwargs,
     ):
-        self.app = FastAPI(lifespan=config.lifespan)
+        self.app = FastAPI(lifespan=config.lifespan if config else None)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
