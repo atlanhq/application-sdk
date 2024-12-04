@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, RootModel
 
 
 class TestAuthRequest(BaseModel):
@@ -77,7 +77,11 @@ class PreflightCheckResponse(BaseModel):
         }
 
 
-class StartWorkflowRequest(BaseModel):
+class StartWorkflowRequest(RootModel):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing workflow configuration"
+    )
+
     class Config:
         schema_extra = {
             "example": {
