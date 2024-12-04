@@ -23,8 +23,7 @@ If you want to take a look at a step by step tutorial using some applications an
 To deploy this chart from source you can run from inside the `chart/dapr-shared` directory:
 
 ```
-helm install my-shared . --set shared.appId=<DAPR_APP_ID> --set shared.channelAddress=<REMOTE_URL> 
-
+helm install my-shared . --set shared.appId=<DAPR_APP_ID> --set shared.channelAddress=<REMOTE_URL>
 ```
 
 Where `<DAPR_APP_ID>` is the Dapr App Id that you can use in your components (for example for scopes)

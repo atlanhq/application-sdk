@@ -277,7 +277,7 @@ tests:
           value: --control-plane-address=control.plane.address:80
 
   - it: |
-      should set --placement-host-address=dapr-placement-server.dapr-system.svc.cluster.local:50005 
+      should set --placement-host-address=dapr-placement-server.dapr-system.svc.cluster.local:50005
         when shared.controlPlane.placementServerAddress is empty
     values:
       - ../values.yaml
@@ -290,7 +290,7 @@ tests:
           value: --placement-host-address=dapr-placement-server.dapr-system.svc.cluster.local:50005
 
   - it: |
-      should set --placement-host-address=placement.host.address:80 
+      should set --placement-host-address=placement.host.address:80
         when shared.controlPlane.placementServerAddress is equal to placement.host.address:80
     values:
       - ../values.yaml

@@ -122,7 +122,7 @@
           volumeMounts:
           - mountPath: /var/run/secrets/dapr.io/sentrytoken
             name: dapr-identity-token
-            readOnly: true    
+            readOnly: true
       {{- with .Values.affinity }}
       affinity:
         {{- toYaml . | nindent 8 }}

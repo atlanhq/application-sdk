@@ -21,7 +21,7 @@ tests:
     set:
       shared:
         service:
-          type: 
+          type:
     asserts:
       - equal:
           path: spec.type
