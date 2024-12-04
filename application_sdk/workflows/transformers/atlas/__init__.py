@@ -120,14 +120,14 @@ class AtlasTransformer(TransformerInterface):
                 sql_database.source_created_by = source_created_by
 
             if created := data.get("created", None):
-                sql_database.source_created_at = datetime.strptime(
-                    created, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                sql_database.source_created_at = datetime.fromtimestamp(
+                    created / 1000
+                ).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
             if last_altered := data.get("last_altered", None):
-                sql_database.source_updated_at = datetime.strptime(
-                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                sql_database.source_updated_at = datetime.fromtimestamp(
+                    last_altered / 1000
+                ).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
             if not sql_database.custom_attributes:
                 sql_database.custom_attributes = {}
@@ -333,15 +333,15 @@ class AtlasTransformer(TransformerInterface):
 
             entity.source_created_by = data["table_owner"]
 
-            if created_at := data.get("created", None):
-                entity.source_created_at = datetime.strptime(
-                    created_at, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+            if created := data.get("created", None):
+                entity.source_created_at = datetime.fromtimestamp(
+                    created / 1000
+                ).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
             if last_altered := data.get("last_altered", None):
-                entity.source_updated_at = datetime.strptime(
-                    last_altered, "%Y-%m-%dT%H:%M:%S.%f%z"
-                )
+                entity.source_updated_at = datetime.fromtimestamp(
+                    last_altered / 1000
+                ).strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
             # Custom attributes
             if not entity.custom_attributes:
