@@ -32,6 +32,7 @@ import os
 import threading
 import time
 from typing import Any, Dict, Optional, Type
+from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
@@ -40,10 +41,8 @@ from application_sdk.workflows.resources.temporal_resource import (
     TemporalResource,
 )
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
-from application_sdk.workflows.sql.resources.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
+from application_sdk.workflows.sql.resources.sql_resource import SQLResourceConfig
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
@@ -53,6 +52,12 @@ DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
 logger = logging.getLogger(__name__)
+
+
+class PostgreSQLResource(AsyncSQLResource):
+    def get_sqlalchemy_connection_string(self) -> str:
+        encoded_password: str = quote_plus(self.config.credentials["password"])
+        return f"postgresql+psycopg://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['host']}:{self.config.credentials['port']}/{self.config.credentials['database']}"
 
 
 class SampleSQLWorkflow(SQLWorkflow):
@@ -143,21 +148,14 @@ async def main():
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
-        .set_sql_resource(
-            SQLResource(
-                SQLResourceConfig(
-                    database_driver=DATABASE_DRIVER,
-                    database_dialect=DATABASE_DIALECT,
-                )
-            )
-        )
+        .set_sql_resource(PostgreSQLResource(SQLResourceConfig()))
         .build()
     )
 
     worker: WorkflowWorker = WorkflowWorker(
         temporal_resource=temporal_resource,
         temporal_activities=workflow.get_activities(),
-        workflow_class=SQLWorkflow,
+        workflow_classes=[SQLWorkflow],
     )
 
     # Start the worker in a separate thread
