@@ -78,16 +78,6 @@ class PreflightCheckResponse(BaseModel):
 
 
 class StartWorkflowRequest(BaseModel):
-    credentials: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing database credentials"
-    )
-    connection: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing connection details"
-    )
-    metadata: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing metadata configuration"
-    )
-
     class Config:
         schema_extra = {
             "example": {
