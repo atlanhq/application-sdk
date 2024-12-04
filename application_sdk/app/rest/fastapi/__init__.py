@@ -1,6 +1,6 @@
 from fastapi import APIRouter, FastAPI, status
 
-from application_sdk.app.rest import AtlanAPIApplication
+from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
 from application_sdk.app.rest.fastapi.middlewares.error_handler import (
     internal_server_error_handler,
 )
@@ -27,6 +27,14 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
+class FastApiApplicationConfig(AtlanAPIApplicationConfig):
+    lifespan = None
+
+    def __init__(self, lifespan=None, *args, **kwargs):
+        self.lifespan = lifespan
+        super().__init__(*args, **kwargs)
+
+
 class FastAPIApplication(AtlanAPIApplication):
     app: FastAPI
 
@@ -41,10 +49,11 @@ class FastAPIApplication(AtlanAPIApplication):
         preflight_check_controller: WorkflowPreflightCheckControllerInterface
         | None = None,
         workflow: WorkflowInterface | None = None,
+        config: FastApiApplicationConfig | None = None,
         *args,
         **kwargs,
     ):
-        self.app = FastAPI()
+        self.app = FastAPI(lifespan=config.lifespan)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
