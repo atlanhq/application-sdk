@@ -1,6 +1,6 @@
 from fastapi import APIRouter, FastAPI, status
 
-from application_sdk.app.rest import AtlanAPIApplication
+from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
 from application_sdk.app.rest.fastapi.middlewares.error_handler import (
     internal_server_error_handler,
 )
@@ -27,6 +27,14 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
+class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
+    lifespan = None
+
+    def __init__(self, lifespan=None, *args, **kwargs):
+        self.lifespan = lifespan
+        super().__init__(*args, **kwargs)
+
+
 class FastAPIApplication(AtlanAPIApplication):
     app: FastAPI
 
@@ -41,10 +49,11 @@ class FastAPIApplication(AtlanAPIApplication):
         preflight_check_controller: WorkflowPreflightCheckControllerInterface
         | None = None,
         workflow: WorkflowInterface | None = None,
+        config: FastAPIApplicationConfig | None = None,
         *args,
         **kwargs,
     ):
-        self.app = FastAPI()
+        self.app = FastAPI(lifespan=config.lifespan if config else None)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
@@ -64,10 +73,10 @@ class FastAPIApplication(AtlanAPIApplication):
         )
 
     def register_routers(self):
-        self.app.include_router(get_health_router(), prefix="/health")
-        self.app.include_router(get_logs_router(), prefix="/logs")
-        self.app.include_router(get_metrics_router(), prefix="/metrics")
-        self.app.include_router(get_traces_router(), prefix="/traces")
+        self.app.include_router(get_health_router())
+        self.app.include_router(get_logs_router())
+        self.app.include_router(get_metrics_router())
+        self.app.include_router(get_traces_router())
 
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
 
@@ -107,7 +116,7 @@ class FastAPIApplication(AtlanAPIApplication):
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
         metadata = await self.metadata_controller.fetch_metadata(body.model_dump())
-        return FetchMetadataResponse(metadata)
+        return FetchMetadataResponse(success=True, data=metadata)
 
     async def preflight_check(
         self, body: PreflightCheckRequest
@@ -115,11 +124,11 @@ class FastAPIApplication(AtlanAPIApplication):
         preflight_check = await self.preflight_check_controller.preflight_check(
             body.form_data
         )
-        return PreflightCheckResponse.parse_obj(preflight_check)
+        return PreflightCheckResponse(success=True, data=preflight_check)
 
     async def start_workflow(self, body: StartWorkflowRequest) -> StartWorkflowResponse:
         workflow_data = await self.workflow.start(
-            body.metadata, workflow_class=self.workflow.__class__
+            body.model_dump(), workflow_class=self.workflow.__class__
         )
         return StartWorkflowResponse(
             success=True,

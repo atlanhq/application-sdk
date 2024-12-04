@@ -56,7 +56,7 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            self.sql_resource.set_credential(credential)
+            self.sql_resource.set_credentials(credential)
             await self.sql_resource.load()
             batch_input.to_dict(orient="records")
             return True
