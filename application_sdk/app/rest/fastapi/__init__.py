@@ -27,7 +27,7 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
-class FastApiApplicationConfig(AtlanAPIApplicationConfig):
+class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
     lifespan = None
 
     def __init__(self, lifespan=None, *args, **kwargs):
@@ -49,7 +49,7 @@ class FastAPIApplication(AtlanAPIApplication):
         preflight_check_controller: WorkflowPreflightCheckControllerInterface
         | None = None,
         workflow: WorkflowInterface | None = None,
-        config: FastApiApplicationConfig | None = None,
+        config: FastAPIApplicationConfig | None = None,
         *args,
         **kwargs,
     ):
