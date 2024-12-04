@@ -99,6 +99,9 @@ class JsonOutput(Output):
         """
         Method to write the dataframe to a json file and push it to the object store
         """
+        if len(df) == 0:
+            return
+
         try:
             self.chunk_count += 1
             self.total_record_count += len(df)
