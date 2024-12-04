@@ -31,7 +31,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional, Type
 
 from pyatlan.model.assets import Database
 
@@ -95,30 +95,29 @@ class SampleSQLWorkflow(SQLWorkflow):
     """
 
 
+class PostgresDatabase(Database):
+    @classmethod
+    def parse_obj(cls, obj: Dict[str, Any]) -> Database:
+        database = Database.creator(
+            name=obj["datname"],
+            connection_qualified_name=obj["connection_qualified_name"],
+        )
+        return database
+
+
 class CustomTransformer(AtlasTransformer):
     def transform_metadata(
         self,
         typename: str,
         data: Dict[str, Any],
-        entity_creator_map: Dict[str, Callable[[Dict[str, Any]], Optional[Any]]]
-        | None = None,
+        entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
-        # Note: This update the entity_creator_map to use the custom _create_database_entity method for Database entities
-        self.entity_creator_map["DATABASE"] = self._create_database_entity
-        return super().transform_metadata(typename, data, entity_creator_map, **kwargs)
-
-    def _create_database_entity(self, data: Dict[str, Any]) -> Optional[Database]:
-        try:
-            assert data["database"] is not None, "Database name cannot be None"
-            sql_database: Database = Database.creator(
-                name=data["datname"],
-                connection_qualified_name=self.base_qualified_name,
-            )
-            return sql_database
-        except AssertionError as e:
-            logger.error(f"Error creating DatabaseEntity: {str(e)}")
-            return None
+        # Note: This update the entity_class_definitions to use the PostgresDatabase method for Database entities
+        self.entity_class_definitions["Database"] = PostgresDatabase
+        return super().transform_metadata(
+            typename, data, self.entity_class_definitions, **kwargs
+        )
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
