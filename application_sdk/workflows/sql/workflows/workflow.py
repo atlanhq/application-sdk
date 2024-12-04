@@ -405,8 +405,11 @@ class SQLWorkflow(WorkflowInterface):
         transform_activities: List[Any] = []
 
         chunk_count = len(raw_stat)
-        if not chunk_count:
+        if chunk_count is None:
             raise ValueError("Invalid chunk_count")
+
+        if chunk_count == 0:
+            return
 
         typename = raw_stat[0].get("typename")
         if typename is None:
