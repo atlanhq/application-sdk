@@ -40,7 +40,9 @@ class Schema(assets.Schema):
 
             schema = assets.Schema.creator(
                 name=obj["schema_name"],
-                database_qualified_name=f"{obj['connection_qualified_name']}/{obj['catalog_name']}",
+                database_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"], obj["catalog_name"]
+                ),
                 database_name=obj["catalog_name"],
                 connection_qualified_name=obj["connection_qualified_name"],
             )
@@ -67,10 +69,16 @@ class Table(assets.Table):
 
             sql_table = table_type.creator(
                 name=obj["table_name"],
-                schema_qualified_name=f"{obj['connection_qualified_name']}/{obj['table_catalog']}/{obj['table_schema']}",
+                schema_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                ),
                 schema_name=obj["table_schema"],
                 database_name=obj["table_catalog"],
-                database_qualified_name=f"{obj['connection_qualified_name']}/{obj['table_catalog']}",
+                database_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"], obj["table_catalog"]
+                ),
                 connection_qualified_name=obj["connection_qualified_name"],
             )
 
@@ -106,21 +114,44 @@ class Column(assets.Column):
 
             sql_column = assets.Column.creator(
                 name=obj["column_name"],
-                parent_qualified_name=f"{obj['connection_qualified_name']}/{obj['table_catalog']}/{obj['table_schema']}/{obj['table_name']}",
+                parent_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                    obj["table_name"],
+                ),
                 parent_type=parent_type,
                 order=obj["ordinal_position"],
                 parent_name=obj["table_name"],
                 database_name=obj["table_catalog"],
-                database_qualified_name=f"{obj['connection_qualified_name']}/{obj['table_catalog']}",
+                database_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"], obj["table_catalog"]
+                ),
                 schema_name=obj["table_schema"],
-                schema_qualified_name=f"{obj['connection_qualified_name']}/{obj['table_catalog']}/{obj['table_schema']}",
+                schema_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                ),
                 table_name=obj["table_name"],
-                table_qualified_name=f"{obj['connection_qualified_name']}/{obj['table_catalog']}/{obj['table_schema']}/{obj['table_name']}",
+                table_qualified_name=generate_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                    obj["table_name"],
+                ),
                 connection_qualified_name=obj["connection_qualified_name"],
             )
-            sql_column.attributes.data_type = obj.get("data_type", "")
+            sql_column.attributes.data_type = obj.get("data_type", None)
             sql_column.attributes.is_nullable = obj.get("is_nullable", "YES") == "YES"
 
             return sql_column
         except AssertionError as e:
             raise ValueError(f"Error creating Column Entity: {str(e)}")
+
+
+# utils
+
+
+def generate_qualified_name(connection_qualified_name: str, *args: str) -> str:
+    return f"{connection_qualified_name}/{'/'.join(args)}"
