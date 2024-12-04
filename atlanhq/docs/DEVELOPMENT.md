@@ -75,7 +75,7 @@ This repository contains two Helm charts: `app` and `atlan`. These charts facili
         ```bash
         helmfile apply -e unified
         ```
-    - If you just want to install the app all, run the below command:
+    - If you just want to install the app and make sure other components are already deployed, run the below command:
         ```bash
         helmfile apply -e app
         ```
