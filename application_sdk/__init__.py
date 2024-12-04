@@ -1,3 +1,4 @@
+import inspect
 from functools import wraps
 from typing import Optional
 
@@ -24,9 +25,10 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 else:
                     fn_kwargs[name] = arg
 
-            async def process_metadata():
-                for out in outputs.values():
-                    await out.write_metadata()
+            # If batch_input is not provided, we'll call the function directly
+            # since there is nothing to be read as the inputs
+            if batch_input is None:
+                return await f(self, **fn_kwargs)
 
             batch_input_obj = batch_input(self, *args)
             # We'll decide whether to read the data in chunks or not based on the chunk_size attribute
@@ -41,13 +43,18 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
 
             # if chunk_size is set, we'll get the data in chunks and write it to the outputs provided
             rets = []
-            for df_batch in await batch_input_obj.get_batched_dataframe():
+            # Check if async method is implemented for getting the batched dataframe
+            if inspect.iscoroutinefunction(batch_input_obj.get_batched_dataframe):
+                df_batches = await batch_input_obj.get_batched_dataframe()
+            else:
+                df_batches = batch_input_obj.get_batched_dataframe()
+
+            for df_batch in df_batches:
                 fn_kwargs["batch_input"] = df_batch
                 rets.append(await f(self, **fn_kwargs))
                 del fn_kwargs["batch_input"]
 
-            # In the end, we'll write the metadata and return the df to the caller method
-            await process_metadata()
+            # In the end, we'll return the df to the caller method
             return rets
 
         return new_fn

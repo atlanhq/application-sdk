@@ -9,9 +9,9 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
+from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.secretstore import SecretStore
 from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
-from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -148,12 +148,7 @@ class SQLWorkflow(WorkflowInterface):
             logger.error(f"Error fetching databases: {e}")
             raise e
 
-    async def _transform_batch(
-        self,
-        results: List[Dict[str, Any]],
-        typename: str,
-        writer: JSONChunkedObjectStoreWriter,
-    ) -> None:
+    async def _transform_batch(self, results: pd.DataFrame, typename: str) -> None:
         """
         Process a batch of results.
 
@@ -162,20 +157,24 @@ class SQLWorkflow(WorkflowInterface):
         :param writer: The writer to use.
         :raises Exception: If the results cannot be processed.
         """
+        transformed_metadata_list = []
+        # Replace NaN with None to avoid issues with JSON serialization
+        results = results.replace({float("nan"): None})
 
-        for row in results:
+        for row in results.to_dict(orient="records"):
             try:
                 transformed_metadata: Optional[Dict[str, Any]] = (
                     self.transformer.transform_metadata(typename, row)
                 )
                 if transformed_metadata is not None:
-                    await writer.write(transformed_metadata)
+                    transformed_metadata_list.append(transformed_metadata)
                 else:
                     activity.logger.warning(f"Skipped invalid {typename} data: {row}")
             except Exception as row_error:
                 activity.logger.error(
                     f"Error processing row for {typename}: {row_error}"
                 )
+        return pd.DataFrame(transformed_metadata_list)
 
     @staticmethod
     def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
@@ -229,7 +228,8 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched databases.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": "database"}
+        await raw_output.write_metadata()
+        return {"chunk_count": raw_output.chunk_count, "typename": "database"}
 
     @activity.defn
     @auto_heartbeater
@@ -253,7 +253,8 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched schemas.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": "schema"}
+        await raw_output.write_metadata()
+        return {"chunk_count": raw_output.chunk_count, "typename": "schema"}
 
     @activity.defn
     @auto_heartbeater
@@ -277,7 +278,8 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched tables.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": "table"}
+        await raw_output.write_metadata()
+        return {"chunk_count": raw_output.chunk_count, "typename": "table"}
 
     @activity.defn
     @auto_heartbeater
@@ -301,61 +303,44 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched columns.
         """
         await raw_output.write_df(batch_input)
-        return {"batch_input": batch_input, "typename": "column"}
+        await raw_output.write_metadata()
+        return {"chunk_count": raw_output.chunk_count, "typename": "column"}
 
     @activity.defn
     @auto_heartbeater
-    async def write_type_metadata(self, workflow_args: Dict[str, Any]):
-        chunk_count = workflow_args["chunk_count"]
-        record_count = workflow_args["record_count"]
-        output_path = workflow_args["output_path"]
-        output_prefix = workflow_args["output_prefix"]
-        typename = workflow_args["typename"]
-
-        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        transform_files_output_prefix = output_prefix
-
-        async with (
-            JSONChunkedObjectStoreWriter(
-                transform_files_prefix,
-                transform_files_output_prefix,
-                start_file_number=chunk_count,
-            ) as transformed_writer,
-        ):
-            await transformed_writer.write_metadata(total_record_count=record_count)
+    @activity_pd(
+        metadata_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
+            upload_file_prefix=workflow_args["output_prefix"],
+            chunk_count=workflow_args["chunk_count"],
+            total_record_count=workflow_args["record_count"],
+        )
+    )
+    async def write_type_metadata(self, metadata_output, batch_input=None):
+        await metadata_output.write_metadata()
 
     @activity.defn
     @auto_heartbeater
-    async def transform_data(self, workflow_args: Dict[str, Any]) -> int:
-        batch = workflow_args["batch"]
-        chunk_start = workflow_args["chunk_start"]
-        typename = workflow_args["typename"]
-        output_path = workflow_args["output_path"]
-        output_prefix = workflow_args["output_prefix"]
-
-        transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
-        transform_files_output_prefix = output_prefix
-
-        raw_files_prefix = os.path.join(output_path, "raw")
-        raw_files_output_prefix = workflow_args["output_prefix"]
-
-        async with (
-            JSONChunkedObjectStoreReader(
-                raw_files_prefix, raw_files_output_prefix, typename
-            ) as raw_reader,
-            JSONChunkedObjectStoreWriter(
-                transform_files_prefix,
-                transform_files_output_prefix,
-                start_file_number=chunk_start,
-            ) as transformed_writer,
-        ):
-            raw_data: List[Any] = []
-            for chunk in batch:
-                raw_data += await raw_reader.read_chunk(chunk)
-                await self._transform_batch(raw_data, typename, transformed_writer)
-
-            write_data = await transformed_writer.write_metadata()
-            return write_data["total_record_count"]
+    @activity_pd(
+        batch_input=lambda self, workflow_args: JsonInput(
+            path=f"{workflow_args['output_path']}/raw/",
+            batch=workflow_args["batch"],
+        ),
+        transformed_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
+            upload_file_prefix=workflow_args["output_prefix"],
+            chunk_start=workflow_args["chunk_start"],
+        ),
+    )
+    async def transform_data(self, batch_input, transformed_output):
+        typename = transformed_output.output_path.split("/")[-1]
+        for chunk in batch_input:
+            transformed_chunk = await self._transform_batch(chunk, typename)
+            await transformed_output.write_df(transformed_chunk)
+        return {
+            "total_record_count": transformed_output.total_record_count,
+            "chunk_count": transformed_output.chunk_count,
+        }
 
     def get_transform_batches(self, chunk_count: int, typename: str):
         # concurrency logic
@@ -402,7 +387,7 @@ class SQLWorkflow(WorkflowInterface):
 
         transform_activities: List[Any] = []
 
-        chunk_count = len(raw_stat)
+        chunk_count = sum(value.get("chunk_count", 0) for value in raw_stat)
         if not chunk_count:
             raise ValueError("Invalid chunk_count")
 
@@ -428,13 +413,25 @@ class SQLWorkflow(WorkflowInterface):
             )
 
         record_counts = await asyncio.gather(*transform_activities)
-        total_record_count = sum(record_counts)
+
+        # Calculate the parameters necessary for writing metadata
+        total_record_count = sum(
+            max(
+                record_output.get("total_record_count", 0)
+                for record_output in record_count
+            )
+            for record_count in record_counts
+        )
+        chunk_count = sum(
+            max(record_output.get("chunk_count", 0) for record_output in record_count)
+            for record_count in record_counts
+        )
 
         await workflow.execute_activity(
             self.write_type_metadata,
             {
                 "record_count": total_record_count,
-                "chunk_count": len(batches),
+                "chunk_count": chunk_count,
                 "typename": typename,
                 **workflow_args,
             },

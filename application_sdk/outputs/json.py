@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import aiofiles
 import orjson
@@ -88,11 +88,25 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
 
 class JsonOutput(Output):
-    def __init__(self, output_path: str, upload_file_prefix: str):
+    def __init__(
+        self,
+        output_path: str,
+        upload_file_prefix: str,
+        chunk_start: Optional[int] = None,
+        buffer_size: int = 1024 * 1024 * 10,
+        chunk_size: int = 100000,
+        total_record_count: int = 0,
+        chunk_count: int = 0,
+    ):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
-        self.total_record_count = 0
-        self.chunk_count = 0
+        self.chunk_start = chunk_start
+        self.total_record_count = total_record_count
+        self.chunk_count = chunk_count
+        self.buffer_size = buffer_size
+        self.chunk_size = chunk_size
+        self.buffer: List[pd.DataFrame] = []
+        self.current_buffer_size = 0
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame):
@@ -100,16 +114,45 @@ class JsonOutput(Output):
         Method to write the dataframe to a json file and push it to the object store
         """
         try:
-            self.chunk_count += 1
-            self.total_record_count += len(df)
+            # Split the DataFrame into chunks
+            partition = (
+                self.chunk_size
+                if self.chunk_start is None
+                else min(self.chunk_size, self.buffer_size)
+            )
+            chunks = [df[i : i + partition] for i in range(0, len(df), partition)]
 
-            # Write the dataframe to a json file
-            output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
-            df.to_json(output_file_name, orient="records", lines=True)
+            for chunk in chunks:
+                self.buffer.append(chunk)
+                self.current_buffer_size += len(chunk)
+
+                if self.current_buffer_size >= self.buffer_size:
+                    await self._flush_buffer()
+
+            await self._flush_buffer()
+
+        except Exception as e:
+            activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+
+    async def _flush_buffer(self):
+        if not self.buffer or not self.current_buffer_size:
+            return
+        combined_df = pd.concat(self.buffer)
+
+        # Write DataFrame to JSON file
+        if not combined_df.empty:
+            self.chunk_count += 1
+            self.total_record_count += len(combined_df)
+            if self.chunk_start is None:
+                output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
+            else:
+                output_file_name = f"{self.output_path}/{str(self.chunk_start+1)}-{str(self.chunk_count)}.json"
+            combined_df.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(
                 self.upload_file_prefix, output_file_name
             )
-        except Exception as e:
-            activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+
+        self.buffer.clear()
+        self.current_buffer_size = 0
