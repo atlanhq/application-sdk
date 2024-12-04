@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/quintush/helm-unittest/master/schema/helm-testsuite.json
+suite: test service
+templates:
+  - service.yaml
+tests:
+  - it: should set the service type
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        service:
+          type: "ClusterIP"
+    asserts:
+      - equal:
+          path: spec.type
+          value: "ClusterIP"
+
+  - it: should set the service type when the .Values.shared.service.type is empty
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        service:
+          type: 
+    asserts:
+      - equal:
+          path: spec.type
+          value: "ClusterIP"

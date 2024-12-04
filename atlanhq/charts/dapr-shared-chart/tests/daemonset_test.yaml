@@ -1,0 +1,491 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/quintush/helm-unittest/master/schema/helm-testsuite.json
+suite: test daemonset
+templates:
+  - daemonset.yaml
+tests:
+  - it: when the shared.strategy is daemonset should be create the daemonset resource
+    values:
+      - ./values/required.yaml
+    set:
+      shared.strategy: daemonset
+    asserts:
+      - isAPIVersion:
+          of: apps/v1
+
+  - it: when the shared.strategy is daemonset selectorLabels should be set
+    values:
+      - ./values/required.yaml
+    set:
+      shared.strategy: daemonset
+    asserts:
+      - isNotNull:
+          path: spec.selector.matchLabels
+
+  - it: should fail if shared.appId is not defined
+    set:
+      shared.remoteURL: https://local
+    asserts:
+      - failedTemplate:
+          errorMessage: .Values.shared.appId is required
+
+  - it: should not fail if shared.appId is defined
+    set:
+      shared.remoteURL: https://local
+      shared.appId: appId
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[9]
+          pattern: --app-id=[appId]+
+
+  - it: should set tolerations
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        remoteURL: https://local
+        appId: some-id
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+    asserts:
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            effect: NoSchedule
+            key: node-role.kubernetes.io/control-plane
+            operator: Exists
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            effect: NoSchedule
+            key: node-role.kubernetes.io/master
+            operator: Exists
+
+  - it: should set imagePullSecrets
+    values:
+      - ./values/required.yaml
+    set:
+      imagePullSecrets:
+        name: regcred
+    asserts:
+      - equal:
+          path: spec.template.spec.imagePullSecrets.name
+          value: regcred
+
+  - it: should set app-id annotation
+    values:
+      - ./values/required.yaml
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["dapr.io/app-id"]
+          value: appId
+
+  - it: should set annotation
+    values:
+      - ./values/required.yaml
+    set:
+      podAnnotations:
+        imageregistry: https://local
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations.imageregistry
+          value: https://local
+
+  - it: should set spec.template.spec.containers[0].pullPolicy
+    values:
+      - ./values/required.yaml
+    set:
+      shared.initContainer.image.pullPolicy: Always
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+
+  - it: |
+      should set DAPR_CONTROL_PLANE_NAMESPACE=dapr-system for spec.template.spec.containers[0].env when
+        shared.controlPlane.namespace is empty
+    values:
+      - ./values/required.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DAPR_CONTROL_PLANE_NAMESPACE
+            value: dapr-system
+
+  - it: |
+      should set DAPR_CONTROLPLANE_TRUST_DOMAIN=cluster.local for spec.template.spec.containers[0].env when
+        shared.controlPlane.trustDomain is empty
+    values:
+      - ./values/required.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DAPR_CONTROLPLANE_TRUST_DOMAIN
+            value: cluster.local
+
+  - it: |
+      should set DAPR_CONTROL_PLANE_NAMESPACE=dapr-namespace for spec.template.spec.containers[0].env when
+        shared.controlPlane.namespace is equal to dapr-namespace
+    values:
+      - ./values/required.yaml
+    set:
+      shared.controlPlane.namespace: dapr-namespace
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DAPR_CONTROL_PLANE_NAMESPACE
+            value: dapr-namespace
+
+  - it: should set spec.template.spec.containers[0].image
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        daprd:
+          image:
+            registry: https://local
+            name: daprd-image
+            tag: v0.0.1
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: https://local/daprd-image:v0.0.1
+
+  - it: should set spec.template.spec.containers[0].imagePullPolicy
+    values:
+      - ./values/required.yaml
+    set:
+      shared.daprd.image.pullPolicy: Always
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].imagePullPolicy
+          value: Always
+
+  - it: should set spec.template.spec.containers[0].args
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args[0]
+          value: /daprd
+      - equal:
+          path: spec.template.spec.containers[0].args[1]
+          value: --mode=kubernetes
+      - equal:
+          path: spec.template.spec.containers[0].args[2]
+          value: --log-level=info
+      - equal:
+          path: spec.template.spec.containers[0].args[3]
+          value: --log-as-json=true
+      - equal:
+          path: spec.template.spec.containers[0].args[4]
+          value: --dapr-http-port=3500
+      - equal:
+          path: spec.template.spec.containers[0].args[5]
+          value: --dapr-grpc-port=50001
+      - equal:
+          path: spec.template.spec.containers[0].args[6]
+          value: --dapr-internal-grpc-port=50002
+      - equal:
+          path: spec.template.spec.containers[0].args[7]
+          value: --dapr-listen-addresses=0.0.0.0
+      - equal:
+          path: spec.template.spec.containers[0].args[8]
+          value: --dapr-public-port=3501
+      - equal:
+          path: spec.template.spec.containers[0].args[9]
+          value: --app-id=appId
+      - equal:
+          path: spec.template.spec.containers[0].args[10]
+          value: --app-port=0
+      - equal:
+          path: spec.template.spec.containers[0].args[11]
+          value: --app-protocol=http
+      - equal:
+          path: spec.template.spec.containers[0].args[12]
+          value: --control-plane-address=dapr-api.dapr-system.svc.cluster.local:80
+      - equal:
+          path: spec.template.spec.containers[0].args[13]
+          value: --placement-host-address=dapr-placement-server.dapr-system.svc.cluster.local:50005
+      - equal:
+          path: spec.template.spec.containers[0].args[14]
+          value: --sentry-address=dapr-sentry.dapr-system.svc.cluster.local:80
+      - equal:
+          path: spec.template.spec.containers[0].args[15]
+          value: --enable-metrics=true
+      - equal:
+          path: spec.template.spec.containers[0].args[16]
+          value: --metrics-port=9090
+      - equal:
+          path: spec.template.spec.containers[0].args[17]
+          value: --enable-mtls=false
+      - equal:
+          path: spec.template.spec.containers[0].args[18]
+          value: --enable-api-logging=true
+      - equal:
+          path: spec.template.spec.containers[0].args[19]
+          value: --app-channel-address=https://local
+
+  - it: should fail when shared.remotePort is empty
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared.remotePort:
+    asserts:
+      - failedTemplate:
+          errorMessage: .Values.shared.remotePort is required
+
+  - it: should fail when shared.daprd.app.protocol is empty
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared.daprd.app.protocol:
+    asserts:
+      - failedTemplate:
+          errorMessage: .Values.shared.daprd.app.protocol is required
+
+  - it: should set --control-plane-address=dapr-api.dapr-system.svc.cluster.local:80 when shared.controlPlane.operatorAddress is empty
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared.controlPlane.operatorAddress:
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args[12]
+          value: --control-plane-address=dapr-api.dapr-system.svc.cluster.local:80
+
+  - it: should set --control-plane-address=control.plane.address:80 when shared.controlPlane.operatorAddress is equal to control.plane.address:80
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared.controlPlane.operatorAddress: control.plane.address:80
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args[12]
+          value: --control-plane-address=control.plane.address:80
+
+  - it: |
+      should set --placement-host-address=dapr-placement-server.dapr-system.svc.cluster.local:50005 
+        when shared.controlPlane.placementServerAddress is empty
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared.controlPlane.operatorAddress:
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args[13]
+          value: --placement-host-address=dapr-placement-server.dapr-system.svc.cluster.local:50005
+
+  - it: |
+      should set --placement-host-address=placement.host.address:80 
+        when shared.controlPlane.placementServerAddress is equal to placement.host.address:80
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared.controlPlane.operatorAddress: control.plane.address:80
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].args[12]
+          value: --control-plane-address=control.plane.address:80
+
+  # - it: should set APP_API_TOKEN if shared.daprd.app.token is true
+  #   values:
+  #     - ../values.yaml
+  #     - ./values/required.yaml
+  #   set:
+  #     shared.daprd.app.token: true
+  #   asserts:
+  #     - lengthEqual:
+  #         path: spec.template.spec.containers[0].env
+  #         count: 8
+
+  # - it: should not set APP_API_TOKEN if shared.daprd.app.token is false
+  #   values:
+  #     - ../values.yaml
+  #     - ./values/required.yaml
+  #   set:
+  #     shared.daprd.app.token: false
+  #   asserts:
+  #     - lengthEqual:
+  #         path: spec.template.spec.containers[0].env
+  #         count: 7
+
+  # - it: should set APP_API_TOKEN if shared.daprd.app.token is true
+  #   values:
+  #     - ../values.yaml
+  #     - ./values/required.yaml
+  #   set:
+  #     shared.daprd.app.token: true
+  #   asserts:
+  #     - contains:
+  #         path: spec.template.spec.containers[0].env
+  #         content:
+  #           name: DAPR_API_TOKEN
+  #           valueFrom:
+  #             secretKeyRef:
+  #               key: dapr-api-token
+  #               name: RELEASE-NAME-dapr-shared
+
+  # - it: should not set APP_API_TOKEN if shared.daprd.app.token is false
+  #   values:
+  #     - ../values.yaml
+  #     - ./values/required.yaml
+  #   set:
+  #     shared.daprd.app.token: true
+  #   asserts:
+  #     - notContains:
+  #         path: spec.template.spec.containers[0].env
+  #         content:
+  #           name: DAPR_API_TOKEN
+
+  - it: should set ports
+    values:
+      - ../values.yaml
+      - ./values/required.yaml
+    set:
+      shared:
+        daprd:
+          httpPort: 1111
+          grpcPort: 2222
+          internalGrpcPort: 3333
+          publicPort: 4444
+          metrics:
+            port: 5555
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].ports
+          value:
+            - name: http
+              containerPort: 1111
+              protocol: TCP
+            - name: grpc
+              containerPort: 2222
+              protocol: TCP
+            - name: internal-grpc
+              containerPort: 3333
+              protocol: TCP
+            - name: public-http
+              containerPort: 4444
+              protocol: TCP
+            - name: metrics
+              containerPort: 5555
+              protocol: TCP
+
+  - it: |
+      when shared.strategy is daemonset the spec.replicas should be empty
+    values:
+      - ./values/required.yaml
+    asserts:
+      - isNull:
+          path: spec.replicas
+
+  - it: when a shared.scheduling.nodeSelector is given it should be set
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: daemonset
+        scheduling:
+          nodeSelector:
+            agentpool: backend
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.agentpool
+          value: backend
+
+  - it: when shared.daprd.config is given, it should be set
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: daemonset
+        daprd:
+          config: appconfig
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--config=appconfig"
+
+  - it: when shared.daprd.appHealth.enabled is false, configuration parameters should not be present
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: daemonset
+        daprd:
+          appHealth:
+            enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-app-health-check=true"
+
+  - it: when shared.daprd.appHealth.enabled is true, configuration parameters should be set with defaults
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: daemonset
+        daprd:
+          appHealth:
+            enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-app-health-check=true"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-check-path=/healthz"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-interval=5"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-timeout=500"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-threshold=3"
+
+  - it: when shared.daprd.appHealth.enabled is true, configuration parameters should be set with given values
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: daemonset
+        daprd:
+          appHealth:
+            enabled: true
+            checkPath: "/check-health"
+            probeInterval: 7
+            probeTimeout: 3000
+            threshold: 2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-app-health-check=true"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-check-path=/check-health"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-interval=7"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-timeout=3000"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-threshold=2"

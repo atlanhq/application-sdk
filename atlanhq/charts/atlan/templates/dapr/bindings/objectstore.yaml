@@ -1,0 +1,36 @@
+{{- range .Values.dapr.components.objectstores }}
+{{- if .enabled }}
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: {{ .name }}
+  namespace: {{ .namespace }}
+spec:
+  type: {{ .spec.type }}
+  version: {{ .spec.version }}
+  metadata:
+{{- range .spec.metadata }}
+  - name: {{ .name }}
+    {{- if .secretKeyRef }}
+    secretKeyRef:
+      name: {{ .secretKeyRef.name }}
+      key: {{ .secretKeyRef.key }}
+    {{- else }}
+    value: {{ .value }}
+    {{- end }}
+{{- end }}
+{{- if .scopes }}
+scopes:
+  {{- range .scopes }}
+  - {{ . }}
+  {{- end }}
+{{- end }}
+{{- if .auth }}
+auth:
+  secretStore: {{ .auth.secretStore | default "kubernetes" }}
+{{- else }}
+auth:
+  secretStore: "kubernetes"
+{{- end }}
+{{- end }}
+{{- end }}

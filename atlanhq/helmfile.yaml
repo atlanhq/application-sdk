@@ -1,0 +1,73 @@
+---
+environments:
+  default:
+    values:
+      - enableAtlan:
+          enabled: true
+      - enableDaprShared:
+          enabled: true
+      - enableUnifiedAtlan:
+          enabled: false
+      - namespace:
+          atlan: atlan-temporal
+          daprShared: atlan-dapr-shared
+          app: phoenix-hello-world-app
+
+  app:
+    values:
+      - enableAtlan:
+          enabled: false
+      - enableDaprShared:
+          enabled: false
+
+  unified:
+    values:
+      - enableUnifiedAtlan:
+          enabled: true
+      - namespace:
+          atlan: atlan-secure-agent
+          daprShared: atlan-secure-agent
+          app: atlan-secure-agent
+---
+releases:
+  - name: atlan
+    chart: "./charts/atlan"
+    namespace: '{{ .Environment.Values.namespace.atlan }}'
+    version: 0.1.0
+    disableValidation: true
+    missingFileHandler: Error
+    installed: {{ .Environment.Values.enableAtlan.enabled }}
+    wait: true
+    hooks:
+      - events: ["prepare"]
+        command: "sh"
+        args:
+          - "-c"
+          - |
+            if {{ .Environment.Values.enableAtlan.enabled }}; then
+              if {{ .Environment.Values.enableUnifiedAtlan.enabled }}; then
+                helmfile apply -f ./charts/atlan/helmfile.yaml -e unified
+              else
+                helmfile apply -f ./charts/atlan/helmfile.yaml
+              fi
+            fi
+
+  - name: dapr-shared-chart
+    namespace: '{{ .Environment.Values.namespace.daprShared }}'
+    createNamespace: true
+    chart: "./charts/dapr-shared-chart"
+    version: 0.0.15
+    disableValidation: true
+    installed: {{ .Environment.Values.enableDaprShared.enabled }}
+    missingFileHandler: Error
+
+  - name: app
+    chart: "./charts/app"
+    namespace: '{{ .Environment.Values.namespace.app }}'
+    version: 0.1.0
+    disableValidation: true
+    missingFileHandler: Error
+    installed: true
+    needs:
+      - '{{ .Environment.Values.namespace.atlan }}/atlan'
+      - '{{ .Environment.Values.namespace.daprShared }}/dapr-shared-chart'

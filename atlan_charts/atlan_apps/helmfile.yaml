@@ -1,9 +1,0 @@
----
-releases:
-- name: atlan-apps
-  chart: "."
-  version: 0.1.0
-  disableValidation: true
-  missingFileHandler: Error
-  values:
-    - values.yaml

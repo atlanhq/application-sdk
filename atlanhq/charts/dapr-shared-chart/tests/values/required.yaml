@@ -1,0 +1,4 @@
+shared:
+  appId: appId
+  strategy: daemonset
+  remoteURL: https://local

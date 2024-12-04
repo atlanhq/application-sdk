@@ -1,0 +1,140 @@
+nameOverride: "atlan-dapr-shared"
+fullnameOverride: "atlan-dapr-shared"
+# security context for the pod
+podSecurityContext:
+  # capabilities:
+  #   drop:
+  #   - ALL
+  readOnlyRootFilesystem: true
+  runAsNonRoot: true
+  runAsUser: 1000
+shared:
+  # -- The Dapr App ID.
+  appId: "atlan"
+  # -- The default strategy to run dapr in shared mode. Possible values `daemonset`, `deployment`.
+  strategy: deployment
+  # -- The remote port.
+  remotePort: 0
+  remoteURL: https://local
+  deployment:
+    # -- The quantity of replicas. This property is set only when `shared.strategy` is equal to `deployment`
+    replicas: 1
+  log:
+    # -- The daprd log level.
+    level: info
+    # -- The daprd log format.
+    json: true
+  scheduler:
+    address: dapr-scheduler-server-0.dapr-scheduler-server.atlan-dapr.svc.cluster.local:50006
+  controlPlane:
+    # -- Namespace where Dapr Control Plane is.
+    namespace: "atlan-dapr"
+    # -- Trust Domain used by the Dapr Control Plane
+    trustDomain: "cluster.local"
+    # -- The Dapr Control Plane operator address.
+    operator:
+      address: dapr-api.atlan-dapr.svc.cluster.local
+      port: 443
+    # -- The Dapr Control Plane sentry address.
+    sentry:
+      address: dapr-sentry.atlan-dapr.svc.cluster.local
+      port: 443
+    # -- The Dapr Control Plane placement server address.
+    placementServer:
+      address: dapr-placement-server.atlan-dapr.svc.cluster.local
+      port: 50005
+  serviceAccount:
+    # -- Allows the option to create or not the service account.
+    create: true
+    # -- Kubernetes Service Account name.
+    name: ""
+    # Kubernetes Service Account annotations.
+    annotations: {}
+  service:
+    # -- The daprd service type.
+    type: "ClusterIP"
+  initContainer:
+    # -- The dapr API token.
+    token: ""
+    image:
+      # -- The dapr-shared image registry.
+      registry: "docker.io/daprio"
+      # -- The dapr-shared image name.
+      name: dapr-shared
+      # -- The dapr-shared-init image tag.
+      tag: 0.0.15
+      # -- The init container pull policy.
+      pullPolicy: Always
+  scheduling:
+    # -- node selector for shared Dapr
+    nodeSelector: {}
+  daprd:
+    serviceAccountIdentityToken:
+      audience: spiffe://cluster.local/ns/atlan-dapr/dapr-sentry
+    app:
+      # -- Dapr which protocol your application is using. Valid options are `http`` and `grpc``.
+      protocol: "http"
+    # -- Dapr API token to use for token based API authentication.
+    token: ""
+    gracefulShutdownSeconds: -1
+    # -- The HTTP port for the Dapr API.
+    httpPort: 3500
+    # -- gRPC port for the Dapr Internal API to listen on.
+    grpcPort: 50001
+    # -- gRPC port for the Dapr Internal API to listen on.
+    internalGrpcPort: 50002
+    # -- The HTTP public port for the Dapr API.
+    publicPort: 3501
+    # -- Comma separated list of IP addresses that daprd will listen to. Defaults to all in standalone mode. Defaults to [::1],127.0.0.1 in Kubernetes. To listen to all IPv4 addresses, use 0.0.0.0. To listen to all IPv6 addresses, use [::].
+    listenAddresses: "0.0.0.0"
+    # -- name of configuration
+    config: ""
+    image:
+      # -- Daprd image registry.
+      registry: "docker.io/daprio"
+      # -- Daprd image.
+      name: daprd
+      # -- Daprd image version.
+      tag: 1.14.4
+      # -- Daprd image pull policy.
+      pullPolicy: Always
+    metrics:
+      # -- Enable prometheus metric.
+      enabled: true
+      # -- Sets the port for the sidecar metrics server.
+      port: 9090
+    mtls:
+      # -- Enables automatic mTLS for daprd to daprd communication channels.
+      enabled: true
+    apiLogging:
+      # -- Enables API logging for the daprd.
+      enabled: true
+    appHealth:
+      # -- Enables the app health checks
+      enabled: true
+      # -- Path that Dapr invokes for health probes when the app channel is HTTP (this value is ignored if the app channel is using gRPC)
+      path: "/healthz"
+      # -- Number of seconds between each health probe
+      probeInterval: 5
+      # -- Timeout in milliseconds for health probe requests
+      probeTimeout: 500
+      # -- Max number of consecutive failures before the app is considered unhealthy
+      threshold: 3
+# @ignored
+tolerations:
+  # these tolerations are to have the daemonset runnable on control plane nodes
+  # remove them if your control plane nodes should not run pods
+  # @ignored
+  - key: node-role.kubernetes.io/control-plane
+    # @ignored
+    operator: Exists
+    # @ignored
+    effect: NoSchedule
+  # @ignored
+  - key: node-role.kubernetes.io/master
+    # @ignored
+    operator: Exists
+    # @ignored
+    effect: NoSchedule
+# @ignored
+affinity: {}

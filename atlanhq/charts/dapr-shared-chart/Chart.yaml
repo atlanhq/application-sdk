@@ -1,0 +1,4 @@
+apiVersion: v2
+description: Helm Chart For Dapr Shared Apps
+name: dapr-shared-chart
+version: 0.0.15

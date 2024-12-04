@@ -1,0 +1,101 @@
+---
+temporal:
+  enabled: true
+  TemporalNamespace:
+    enabled: true
+  syncPostgresSecret:
+    enabled: true
+  name: temporal-cluster
+  namespace:
+    name: atlan-temporal
+    create: true
+  version: "1.23.0"
+  numHistoryShards: 512
+  persistence:
+    ## This needs to be changed as per the namespace where postgres is deployed via helmfile
+    postgresClusterNamespace: atlan-postgres
+    defaultStore:
+      sql:
+        user: app_admin
+        databaseName: temporal
+        pluginName: postgres12
+      passwordSecretRef:
+        name: postgres-creds
+    visibilityStore:
+      sql:
+        user: app_admin
+        databaseName: temporal_visibility
+        pluginName: postgres12
+      passwordSecretRef:
+        name: postgres-creds
+  frontend:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  history:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  matching:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  worker:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+  ui:
+    replicas: 2
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 100m
+        memory: 256Mi
+    enabled: true
+    ingress:
+      enabled: false
+      className: "nginx" # or "traefik" or "alb" or "kong" or "custom"
+      annotations:
+        {}
+      hosts:
+        - host
+      tls:
+        - secretName: <secret-name>
+          hosts:
+            - host
+  metrics:
+    enabled: true
+
+dapr:
+  components:
+    ## TO setup a state store, you need to provide the values mentioned in the documentation: https://docs.dapr.io/operations/components/setup-state-store/
+    statestores:
+      - enabled: false
+    ## TO setup a secret store, you need to provide the values mentioned in the documentation: https://docs.dapr.io/operations/components/setup-secret-store/
+    secretstores:
+      - enabled: false
+    ## TO setup a pubsub, you need to provide the values mentioned in the documentation: https://docs.dapr.io/reference/components-reference/supported-bindings/
+    objectstores:
+      - enabled: false

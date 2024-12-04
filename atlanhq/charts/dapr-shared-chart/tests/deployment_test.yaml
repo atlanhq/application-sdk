@@ -1,0 +1,148 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/quintush/helm-unittest/master/schema/helm-testsuite.json
+suite: test deplyment
+templates:
+  - deployment.yaml
+tests:
+  - it: when the shared.strategy is deployment should not create the daemonset resource
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: "deployment"
+    asserts:
+      - isKind:
+          of: "Deployment"
+
+  - it: when the shared.strategy is deployment selectorLabels should be set
+    values:
+      - ./values/required.yaml
+    set:
+      shared.strategy: "deployment"
+    asserts:
+      - isNotNull:
+          path: spec.selector.matchLabels
+
+  - it: when shared.deployment.replicas is null the quantity of replicas should be 1
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        deployment:
+          replicas:
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+
+  - it: |
+      when shared.deployment.replicas is 3 and shared.strategy is deployment the 
+        spec.replicas filed should be 3
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        deployment:
+          replicas: 3
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 3
+
+  - it: when shared.scheduling.nodeSelector is given, it should be set
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        scheduling:
+          nodeSelector:
+            agentpool: backend
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector.agentpool
+          value: backend
+
+  - it: when shared.daprd.config is given, it should be set
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        daprd:
+          config: appconfig
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--config=appconfig"
+
+  - it: when shared.daprd.appHealth.enabled is false, configuration parameters should not be present
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        daprd:
+          appHealth:
+            enabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-app-health-check=true"
+
+  - it: when shared.daprd.appHealth.enabled is true, configuration parameters should be set with defaults
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        daprd:
+          appHealth:
+            enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-app-health-check=true"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-check-path=/healthz"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-interval=5"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-timeout=500"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-threshold=3"
+
+  - it: when shared.daprd.appHealth.enabled is true, configuration parameters should be set with given values
+    values:
+      - ./values/required.yaml
+    set:
+      shared:
+        strategy: deployment
+        daprd:
+          appHealth:
+            enabled: true
+            checkPath: "/check-health"
+            probeInterval: 7
+            probeTimeout: 3000
+            threshold: 2
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--enable-app-health-check=true"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-check-path=/check-health"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-interval=7"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-probe-timeout=3000"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--app-health-threshold=2"

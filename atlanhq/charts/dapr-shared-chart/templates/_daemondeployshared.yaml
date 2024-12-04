@@ -1,0 +1,137 @@
+{{- define "daemon-deploy-shared" }}
+  template:
+    metadata:
+      annotations:
+        dapr.io/app-id: {{ .Values.shared.appId }}
+      {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        dapr.io/app-id: {{ .Values.shared.appId }}
+        {{- include "dapr-shared.selectorLabels" . | nindent 8 }}
+    spec:
+      volumes:
+      - name: dapr-identity-token
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              audience: {{ .Values.shared.daprd.serviceAccountIdentityToken.audience }}
+              expirationSeconds: 7200
+              path: token
+      - name: shared-data
+        emptyDir: {}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "dapr-shared.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        - name: shared-init-container
+          image: "{{ .Values.shared.initContainer.image.registry }}/{{ .Values.shared.initContainer.image.name }}:{{ .Values.shared.initContainer.image.tag }}"
+          args:
+            - init
+            - --config-map={{ .Release.Name }}-shared-cm
+      containers:
+        - name: daprd
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.shared.daprd.image.registry }}/{{ .Values.shared.daprd.image.name }}:{{ .Values.shared.daprd.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.shared.daprd.image.pullPolicy }}
+          args:
+          - /daprd
+          - --mode=kubernetes
+          - --log-level={{ .Values.shared.log.level }}
+          - --log-as-json={{ .Values.shared.log.json }}
+          - --dapr-http-port={{ .Values.shared.daprd.httpPort }}
+          - --dapr-grpc-port={{ .Values.shared.daprd.grpcPort }}
+          - --dapr-internal-grpc-port={{ .Values.shared.daprd.internalGrpcPort }}
+          - --dapr-listen-addresses={{ .Values.shared.daprd.listenAddresses }}
+          - --dapr-public-port={{ .Values.shared.daprd.publicPort }}
+          - --app-id={{ required ".Values.shared.appId is required" .Values.shared.appId }}
+          - --app-port={{ required ".Values.shared.remotePort is required" .Values.shared.remotePort }}
+          - --dapr-graceful-shutdown-seconds={{ .Values.shared.daprd.gracefulShutdownSeconds }}
+          - --app-protocol={{ required ".Values.shared.daprd.app.protocol is required" .Values.shared.daprd.app.protocol }}
+          - --control-plane-address={{ .Values.shared.controlPlane.operator.address }}:{{ .Values.shared.controlPlane.operator.port }}
+          - --placement-host-address={{ .Values.shared.controlPlane.placementServer.address }}:{{ .Values.shared.controlPlane.placementServer.port }}
+          - --sentry-address={{ .Values.shared.controlPlane.sentry.address }}:{{ .Values.shared.controlPlane.sentry.port }}
+          - --enable-metrics={{ .Values.shared.daprd.metrics.enabled }}
+          - --metrics-port={{ .Values.shared.daprd.metrics.port }}
+          - --enable-mtls={{ .Values.shared.daprd.mtls.enabled }}
+          - --enable-api-logging={{ .Values.shared.daprd.apiLogging.enabled }}
+          - --app-channel-address={{ .Values.shared.remoteURL }}
+          - --config={{ .Values.shared.daprd.config }}
+          {{- if .Values.shared.daprd.appHealth.enabled }}
+          - --enable-app-health-check={{ .Values.shared.daprd.appHealth.enabled }}
+          - --app-health-check-path={{ default "/healthz" .Values.shared.daprd.appHealth.checkPath }}
+          - --app-health-probe-interval={{ .Values.shared.daprd.appHealth.probeInterval }}
+          - --app-health-probe-timeout={{ .Values.shared.daprd.appHealth.probeTimeout }}
+          - --app-health-threshold={{ .Values.shared.daprd.appHealth.threshold }}
+          {{- end }}
+          env:
+          - name: DAPR_TRUST_ANCHORS
+            valueFrom:
+              configMapKeyRef:
+                name: {{ .Release.Name }}-shared-cm
+                key: dapr-trust-anchors
+          - name: DAPR_CONTROLPLANE_NAMESPACE
+            value: {{ default "dapr-system" .Values.shared.controlPlane.namespace }}
+          - name: DAPR_SCHEDULER_HOST_ADDRESS
+            value: {{ default "dapr-system" .Values.shared.scheduler.address }}
+          - name: DAPR_API_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ include "dapr-shared.fullname" . }}
+                key: dapr-api-token
+          - name: DAPR_CONTROLPLANE_TRUST_DOMAIN
+            value: {{ .Values.shared.controlPlane.trustDomain }}
+          - name: NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: POD_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          ports:
+            - name: http
+              containerPort: {{ .Values.shared.daprd.httpPort }}
+              protocol: TCP
+            - name: grpc
+              containerPort: {{ .Values.shared.daprd.grpcPort }}
+              protocol: TCP
+            - name: internal-grpc
+              containerPort: {{ .Values.shared.daprd.internalGrpcPort }}
+              protocol: TCP
+            - name: public-http
+              containerPort: {{ .Values.shared.daprd.publicPort }}
+              protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.shared.daprd.metrics.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /v1.0/healthz
+              port: public-http
+          readinessProbe:
+            httpGet:
+              path: /v1.0/healthz
+              port: public-http
+          volumeMounts:
+          - mountPath: /var/run/secrets/dapr.io/sentrytoken
+            name: dapr-identity-token
+            readOnly: true    
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.shared.scheduling.nodeSelector }}
+      nodeSelector: {{- .Values.shared.scheduling.nodeSelector | toYaml | nindent 8 }}
+      {{- end }}
+{{ end -}}
