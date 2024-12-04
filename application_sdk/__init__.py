@@ -42,9 +42,10 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
             # if chunk_size is set, we'll get the data in chunks and write it to the outputs provided
             rets = []
             for df_batch in await batch_input_obj.get_batched_dataframe():
-                fn_kwargs["batch_input"] = df_batch
-                rets.append(await f(self, **fn_kwargs))
-                del fn_kwargs["batch_input"]
+                if len(df_batch) > 0:
+                    fn_kwargs["batch_input"] = df_batch
+                    rets.append(await f(self, **fn_kwargs))
+                    del fn_kwargs["batch_input"]
 
             # In the end, we'll write the metadata and return the df to the caller method
             await process_metadata()
