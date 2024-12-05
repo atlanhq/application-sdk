@@ -225,14 +225,11 @@ class Column(assets.Column):
             sql_column.attributes.is_nullable = obj.get("is_nullable", "YES") == "YES"
             sql_column.attributes.is_partition = obj.get("is_partition", None) == "YES"
             sql_column.attributes.partition_order = obj.get("partition_order", 0)
-            sql_column.attributes.primary_key = obj.get("primary_key", None) == "YES"
-            sql_column.attributes.foreign_key = obj.get("foreign_key", None) == "YES"
-            sql_column.attributes.character_maximum_length = obj.get(
-                "character_maximum_length", 0
-            )
-            sql_column.attributes.numeric_precision = obj.get("numeric_precision", 0)
+            sql_column.attributes.is_primary = obj.get("primary_key", None) == "YES"
+            sql_column.attributes.is_foreign = obj.get("foreign_key", None) == "YES"
+            sql_column.attributes.max_length = obj.get("character_maximum_length", 0)
+            sql_column.attributes.precision = obj.get("numeric_precision", 0)
             sql_column.attributes.numeric_scale = obj.get("numeric_scale", 0)
-            sql_column.attributes.is_identity = obj.get("is_identity", None) == "YES"
 
             if not sql_column.custom_attributes:
                 sql_column.custom_attributes = {}

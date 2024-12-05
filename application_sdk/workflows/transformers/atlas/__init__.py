@@ -100,9 +100,9 @@ class AtlasTransformer(TransformerInterface):
         workflow_run_id: str,
         data: Dict[str, Any],
     ) -> Any:
-        entity.last_sync_run = workflow_id
-        entity.last_sync_workflow_name = workflow_run_id
-        entity.last_sync_workflow_run_id = data.get("workflow_run_id")
+        entity.tenant_id = self.tenant_id
+        entity.last_sync_workflow_name = workflow_id
+        entity.last_sync_run = workflow_run_id
         entity.last_sync_run_at = datetime.now()
 
         if remarks := data.get("remarks", None) or data.get("comment", None):
