@@ -49,7 +49,7 @@ class FastAPIApplication(AtlanAPIApplication):
         preflight_check_controller: WorkflowPreflightCheckControllerInterface
         | None = None,
         workflow: WorkflowInterface | None = None,
-        config: FastAPIApplicationConfig | None = None,
+        config: FastAPIApplicationConfig = FastAPIApplicationConfig(),
         *args,
         **kwargs,
     ):
@@ -68,6 +68,7 @@ class FastAPIApplication(AtlanAPIApplication):
             auth_controller,
             metadata_controller,
             preflight_check_controller,
+            config,
             *args,
             **kwargs,
         )
