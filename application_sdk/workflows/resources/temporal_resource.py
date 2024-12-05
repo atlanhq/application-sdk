@@ -1,5 +1,3 @@
-"""TODO: Module docstring"""
-
 import logging
 import uuid
 from abc import ABC

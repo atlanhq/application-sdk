@@ -153,9 +153,8 @@ class SQLWorkflow(WorkflowInterface):
         results: List[Dict[str, Any]],
         typename: str,
         writer: JSONChunkedObjectStoreWriter,
-        tenant_id: str,
-        workflow_name: str,
-        crawler_name: str,
+        workflow_id: str,
+        workflow_run_id: str,
     ) -> None:
         """
         Process a batch of results.
@@ -165,6 +164,8 @@ class SQLWorkflow(WorkflowInterface):
         :param writer: The writer to use.
         :raises Exception: If the results cannot be processed.
         """
+        if self.transformer is None:
+            raise ValueError("Transformer is not set")
 
         for row in results:
             try:
@@ -175,9 +176,8 @@ class SQLWorkflow(WorkflowInterface):
                     self.transformer.transform_metadata(
                         typename,
                         row,
-                        tenant_id=tenant_id,
-                        workflow_name=workflow_name,
-                        crawler_name=crawler_name,
+                        workflow_id=workflow_id,
+                        workflow_run_id=workflow_run_id,
                     )
                 )
                 if transformed_metadata is not None:
@@ -354,16 +354,8 @@ class SQLWorkflow(WorkflowInterface):
         output_path = workflow_args["output_path"]
         output_prefix = workflow_args["output_prefix"]
 
-        tenant_id = workflow_args.get("metadata", {}).get("namespace")
-        workflow_name = workflow_args.get("metadata", {}).get("name")
-        crawler_name = (
-            f"{workflow_args.get('connection', {}).get('connection')}-crawler"
-            if workflow_args.get("connection", {}).get("connection", None)
-            else None
-        )
-
-        if not tenant_id or not workflow_name or not crawler_name:
-            raise ValueError("Invalid tenant_id, workflow_name, or crawler_name")
+        workflow_id = workflow_args.get("workflow_id", None)
+        workflow_run_id = workflow_args.get("workflow_run_id", None)
 
         transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
         transform_files_output_prefix = output_prefix
@@ -388,9 +380,8 @@ class SQLWorkflow(WorkflowInterface):
                     raw_data,
                     typename,
                     transformed_writer,
-                    tenant_id=tenant_id,
-                    workflow_name=workflow_name,
-                    crawler_name=crawler_name,
+                    workflow_id=workflow_id,
+                    workflow_run_id=workflow_run_id,
                 )
 
             write_data = await transformed_writer.write_metadata()
@@ -503,25 +494,18 @@ class SQLWorkflow(WorkflowInterface):
             )
 
         workflow_id = workflow_args["workflow_id"]
+        workflow_run_id = workflow.info().run_id
+        workflow_args["workflow_run_id"] = workflow_run_id
+
         workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
         )
 
-        workflow_run_id = workflow.info().run_id
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
-
-        if not workflow_args.get("metadata", None):
-            workflow_args["metadata"] = {}
-
-        if not workflow_args.get("metadata", {}).get("namespace", None):
-            workflow_args["metadata"]["namespace"] = "default"
-
-        if not workflow_args.get("metadata", {}).get("name", None):
-            workflow_args["metadata"]["name"] = f"atlan-snowflake-{workflow_run_id}"
 
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),

@@ -1,16 +1,23 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Type
 
 
 class TransformerInterface(ABC):
     @abstractmethod
     def transform_metadata(
-        self, typename: str, data: Dict[str, Any], **kwargs: Any
+        self,
+        typename: str,
+        data: Dict[str, Any],
+        workflow_id: str,
+        workflow_run_id: str,
+        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         """
         Transform the metadata into a json string.
 
         Args:
+            entity_class_definitions (Dict[str, Type[Any]] | None): The entity class definitions.
             typename (str): The type of the metadata.
             data (Dict[str, Any]): The metadata.
             **kwargs (Any): Additional arguments.

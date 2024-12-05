@@ -6,7 +6,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from application_sdk.app.models import Base, Log
-from application_sdk.app.rest.interfaces.logs import Logs
+from application_sdk.app.rest.common.interfaces.logs import Logs
 
 
 # Setting up an in-memory SQLite database for testing

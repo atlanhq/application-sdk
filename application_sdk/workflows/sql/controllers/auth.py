@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -44,7 +45,9 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
             self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL, chunk_size=None
         )
     )
-    async def test_auth(self, batch_input: pd.DataFrame) -> bool:
+    async def test_auth(
+        self, batch_input: pd.DataFrame, credential: Dict[str, Any]
+    ) -> bool:
         """
         Test the authentication credentials.
 
@@ -53,6 +56,8 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
+            self.sql_resource.set_credentials(credential)
+            await self.sql_resource.load()
             batch_input.to_dict(orient="records")
             return True
         except Exception as e:

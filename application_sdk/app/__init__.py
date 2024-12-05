@@ -1,4 +1,4 @@
-from abc import ABC, abstractmethod
+from abc import ABC
 from typing import Optional
 
 from application_sdk.app import models
@@ -10,34 +10,35 @@ from application_sdk.workflows.controllers import (
 )
 
 
-class AtlanApplicationBuilder(ABC):
-    auth_controller: WorkflowAuthControllerInterface | None
-    metadata_controller: WorkflowMetadataControllerInterface | None
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface | None
+class AtlanApplicationConfig:
+    pass
+
+
+class AtlanApplication(ABC):
+    auth_controller: Optional[WorkflowAuthControllerInterface]
+    metadata_controller: Optional[WorkflowMetadataControllerInterface]
+    preflight_check_controller: Optional[WorkflowPreflightCheckControllerInterface]
 
     def __init__(
         self,
-        auth_controller: Optional[WorkflowAuthControllerInterface] | None = None,
-        metadata_controller: Optional[WorkflowMetadataControllerInterface]
-        | None = None,
-        preflight_check_controller: Optional[WorkflowPreflightCheckControllerInterface]
-        | None = None,
+        auth_controller: Optional[WorkflowAuthControllerInterface] = None,
+        metadata_controller: Optional[WorkflowMetadataControllerInterface] = None,
+        preflight_check_controller: Optional[
+            WorkflowPreflightCheckControllerInterface
+        ] = None,
+        config: AtlanApplicationConfig = AtlanApplicationConfig(),
     ):
         self.auth_controller = auth_controller
         self.metadata_controller = metadata_controller
         self.preflight_check_controller = preflight_check_controller
 
-    @abstractmethod
-    def add_telemetry_routes(self) -> None:
-        raise NotImplementedError
+        self.config = config
 
-    def on_api_service_start(self):
+    async def on_app_start(self):
         models.Base.metadata.create_all(bind=get_engine())
 
-    @staticmethod
-    def on_api_service_stop():
+    async def on_app_stop(self):
         models.Base.metadata.drop_all(bind=get_engine())
 
-    @abstractmethod
-    def add_workflows_router(self) -> None:
-        raise NotImplementedError
+    async def start(self):
+        pass
