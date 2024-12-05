@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
@@ -42,6 +42,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
 
     def __init__(self, sql_resource: SQLResource | None = None):
         self.sql_resource = sql_resource
+
+    async def prepare(self, credentials: Dict[str, Any]) -> None:
+        self.sql_resource.set_credentials(credentials)
+        await self.sql_resource.load()
 
     async def fetch_metadata(self) -> List[Dict[str, str]]:
         if not self.sql_resource:

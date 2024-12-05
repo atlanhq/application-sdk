@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Dict
 
 import pandas as pd
 
@@ -38,6 +39,10 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
         self.sql_resource = sql_resource
 
         super().__init__()
+
+    async def prepare(self, credentials: Dict[str, Any]) -> None:
+        self.sql_resource.set_credentials(credentials)
+        await self.sql_resource.load()
 
     @activity_pd(
         batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(

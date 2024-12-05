@@ -17,6 +17,10 @@ class WorkflowAuthControllerInterface(WorkflowControllerInterface, ABC):
     """
 
     @abstractmethod
+    async def prepare(self, credentials: Dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    @abstractmethod
     async def test_auth(self) -> bool:
         raise NotImplementedError
 
@@ -25,6 +29,10 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     """
     Base class for workflow metadata Controllers
     """
+
+    @abstractmethod
+    async def prepare(self, credentials: Dict[str, Any]) -> None:
+        raise NotImplementedError
 
     @abstractmethod
     async def fetch_metadata(self) -> List[Dict[str, str]]:
