@@ -112,21 +112,15 @@ class AtlasTransformer(TransformerInterface):
             entity.source_created_by = source_created_by
 
         if created := data.get("created"):
-            entity.source_created_at = datetime.fromtimestamp(
-                created / 1000
-            )  # .strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+            entity.source_created_at = datetime.fromtimestamp(created / 1000)
 
         if last_altered := data.get("last_altered", None):
-            entity.source_updated_at = datetime.fromtimestamp(
-                last_altered / 1000
-            )  # .strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+            entity.source_updated_at = datetime.fromtimestamp(last_altered / 1000)
 
         if not entity.custom_attributes:
             entity.custom_attributes = {}
 
         if source_id := data.get("source_id", None):
             entity.custom_attributes["source_id"] = source_id
-
-        # TODO: review this with https://github.com/atlanhq/application-sdk/pull/28/files#diff-f39b1075a938bab74c5391d451ad43483bc3dd419f561a0dc8eb72d72442c596R138-R155
 
         return entity

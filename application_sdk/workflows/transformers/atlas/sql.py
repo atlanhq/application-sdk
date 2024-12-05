@@ -122,14 +122,12 @@ class Table(assets.Table):
             if not sql_table.custom_attributes:
                 sql_table.custom_attributes = {}
 
-            if is_transient := obj.get("is_transient", None):
-                sql_table.custom_attributes["is_transient"] = is_transient
+            sql_table.custom_attributes["is_transient"] = obj.get("is_transient", None)
 
             if table_id := obj.get("table_id", None):
                 sql_table.custom_attributes["source_id"] = table_id
                 sql_table.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
                 sql_table.custom_attributes["schema_id"] = obj.get("table_schema_id")
-                pass
 
             if last_ddl := obj.get("last_ddl", None):
                 sql_table.custom_attributes["last_ddl"] = last_ddl
