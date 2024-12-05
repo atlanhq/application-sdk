@@ -198,7 +198,11 @@ class SQLWorkflow(WorkflowInterface):
 
             # Return unmodified query if both filters are empty
             if include_filter == "{}" and exclude_filter == "{}":
-                return query.replace("{normalized_include_regex}", ".*").replace("{normalized_exclude_regex}", "^$").replace("{exclude_table}", "")
+                return (
+                    query.replace("{normalized_include_regex}", ".*")
+                    .replace("{normalized_exclude_regex}", "^$")
+                    .replace("{exclude_table}", "")
+                )
 
             normalized_include_regex, normalized_exclude_regex, exclude_table = (
                 prepare_filters(
