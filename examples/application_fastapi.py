@@ -11,12 +11,18 @@ from application_sdk.workflows.workflow import WorkflowInterface
 
 
 class WorkflowAuthController(WorkflowAuthControllerInterface):
-    async def test_auth(self, credential: Dict[str, Any]) -> bool:
+    async def prepare(self, credentials: Dict[str, Any]) -> None:
+        pass
+
+    async def test_auth(self) -> bool:
         return True
 
 
 class WorkflowMetadataController(WorkflowMetadataControllerInterface):
-    async def fetch_metadata(self, credential: Dict[str, str]) -> List[Dict[str, str]]:
+    async def prepare(self, credentials: Dict[str, Any]) -> None:
+        pass
+
+    async def fetch_metadata(self) -> List[Dict[str, str]]:
         return [{"database": "test", "schema": "test"}]
 
 
