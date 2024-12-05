@@ -2,6 +2,8 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
+from application_sdk.workflows.transformers.utils import build_phoenix_uri
+
 
 class Namespace(BaseModel):
     id: str
@@ -40,7 +42,7 @@ class DatabaseEntity(BaseObjectEntity):
         database = DatabaseEntity.parse_obj(obj)
         database.name = obj["database_name"]
         database.typeName = obj["typeName"].capitalize()
-        database.URI = build_uri(
+        database.URI = build_phoenix_uri(
             obj["connector_name"], obj["connector_type"], obj["database_name"]
         )
 
@@ -59,7 +61,7 @@ class SchemaEntity(BaseObjectEntity):
         schema = SchemaEntity.parse_obj(obj)
         schema.name = obj["schema_name"]
         schema.typeName = obj["typeName"].capitalize()
-        schema.URI = build_uri(
+        schema.URI = build_phoenix_uri(
             obj["connector_name"],
             obj["connector_type"],
             obj["catalog_name"],
@@ -83,7 +85,7 @@ class TableEntity(BaseObjectEntity):
         table = TableEntity.parse_obj(obj)
         table.name = obj["table_name"]
         table.typeName = obj["typeName"].capitalize()
-        table.URI = build_uri(
+        table.URI = build_phoenix_uri(
             obj["connector_name"],
             obj["connector_type"],
             obj["table_catalog"],
@@ -118,7 +120,7 @@ class ColumnEntity(BaseObjectEntity):
         column = ColumnEntity.parse_obj(obj)
         column.name = obj["column_name"]
         column.typeName = obj["typeName"].capitalize()
-        column.URI = build_uri(
+        column.URI = build_phoenix_uri(
             obj["connector_name"],
             obj["connector_type"],
             obj["table_catalog"],
@@ -137,7 +139,3 @@ class ColumnEntity(BaseObjectEntity):
 
 
 # utils
-
-
-def build_uri(connector_name: str, connector_type: str, *args: str) -> str:
-    return f"/{connector_name}/{connector_type}/{'/'.join(args)}"

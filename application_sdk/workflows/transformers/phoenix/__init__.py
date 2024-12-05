@@ -49,6 +49,8 @@ class PhoenixTransformer(TransformerInterface):
         self,
         typename: str,
         data: Dict[str, Any],
+        workflow_id: str,
+        workflow_run_id: str,
         entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
@@ -75,6 +77,8 @@ class PhoenixTransformer(TransformerInterface):
                 "typeName": type_name,
                 "connector_name": self.connector_name,
                 "connector_type": self.connector_type,
+                "workflow_id": workflow_id,
+                "workflow_run_id": workflow_run_id,
             }
         )
 

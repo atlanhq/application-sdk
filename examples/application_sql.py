@@ -113,8 +113,12 @@ async def main():
     )
     await temporal_resource.load()
 
+    tenant_id = os.getenv("TENANT_ID", "development")
+
     transformer = AtlasTransformer(
-        connector_name=APPLICATION_NAME, connector_type="sql"
+        connector_name=APPLICATION_NAME,
+        connector_type="sql",
+        tenant_id=tenant_id,
     )
 
     workflow: SQLWorkflow = (
@@ -160,6 +164,8 @@ async def main():
                 "use_jdbc_internal_methods": "true",
                 "authentication": "BASIC",
                 "extraction-method": "direct",
+                "exclude_views": True,
+                "exclude_empty_tables": False,
             },
         }
     )

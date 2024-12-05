@@ -153,6 +153,8 @@ class SQLWorkflow(WorkflowInterface):
         results: List[Dict[str, Any]],
         typename: str,
         writer: JSONChunkedObjectStoreWriter,
+        workflow_id: str,
+        workflow_run_id: str,
     ) -> None:
         """
         Process a batch of results.
@@ -167,8 +169,16 @@ class SQLWorkflow(WorkflowInterface):
 
         for row in results:
             try:
+                if not self.transformer:
+                    raise ValueError("Transformer is not set")
+
                 transformed_metadata: Optional[Dict[str, Any]] = (
-                    self.transformer.transform_metadata(typename=typename, data=row)
+                    self.transformer.transform_metadata(
+                        typename,
+                        row,
+                        workflow_id=workflow_id,
+                        workflow_run_id=workflow_run_id,
+                    )
                 )
                 if transformed_metadata is not None:
                     await writer.write(transformed_metadata)
@@ -201,10 +211,19 @@ class SQLWorkflow(WorkflowInterface):
                     temp_table_regex,
                 )
             )
+            exclude_empty_tables = workflow_args.get("metadata", {}).get(
+                "exclude_empty_tables", False
+            )
+            exclude_views = workflow_args.get("metadata", {}).get(
+                "exclude_views", False
+            )
+
             return query.format(
                 normalized_include_regex=normalized_include_regex,
                 normalized_exclude_regex=normalized_exclude_regex,
                 exclude_table=exclude_table,
+                exclude_empty_tables=exclude_empty_tables,
+                exclude_views=exclude_views,
             )
         except Exception as e:
             logger.error(f"Error preparing query [{query}]:  {e}")
@@ -335,6 +354,9 @@ class SQLWorkflow(WorkflowInterface):
         output_path = workflow_args["output_path"]
         output_prefix = workflow_args["output_prefix"]
 
+        workflow_id = workflow_args.get("workflow_id", None)
+        workflow_run_id = workflow_args.get("workflow_run_id", None)
+
         transform_files_prefix = os.path.join(output_path, "transformed", f"{typename}")
         transform_files_output_prefix = output_prefix
 
@@ -354,7 +376,13 @@ class SQLWorkflow(WorkflowInterface):
             raw_data: List[Any] = []
             for chunk in batch:
                 raw_data += await raw_reader.read_chunk(chunk)
-                await self._transform_batch(raw_data, typename, transformed_writer)
+                await self._transform_batch(
+                    raw_data,
+                    typename,
+                    transformed_writer,
+                    workflow_id=workflow_id,
+                    workflow_run_id=workflow_run_id,
+                )
 
             write_data = await transformed_writer.write_metadata()
             return write_data["total_record_count"]
@@ -466,13 +494,15 @@ class SQLWorkflow(WorkflowInterface):
             )
 
         workflow_id = workflow_args["workflow_id"]
+        workflow_run_id = workflow.info().run_id
+        workflow_args["workflow_run_id"] = workflow_run_id
+
         workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
         )
 
-        workflow_run_id = workflow.info().run_id
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path

@@ -8,6 +8,8 @@ class TransformerInterface(ABC):
         self,
         typename: str,
         data: Dict[str, Any],
+        workflow_id: str,
+        workflow_run_id: str,
         entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
