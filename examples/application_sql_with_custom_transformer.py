@@ -115,13 +115,20 @@ class CustomTransformer(AtlasTransformer):
         self,
         typename: str,
         data: Dict[str, Any],
+        workflow_id: str,
+        workflow_run_id: str,
         entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
         # Note: This update the entity_class_definitions to use the PostgresDatabase method for Database entities
         self.entity_class_definitions["Database"] = PostgresDatabase
         return super().transform_metadata(
-            typename, data, self.entity_class_definitions, **kwargs
+            typename,
+            data,
+            workflow_id,
+            workflow_run_id,
+            self.entity_class_definitions,
+            **kwargs,
         )
 
 
@@ -142,6 +149,7 @@ async def main():
         connector_name=APPLICATION_NAME,
         connector_type="sql",
         current_epoch="1234567890",
+        tenant_id="1234567890",
     )
 
     workflow: SQLWorkflow = (
