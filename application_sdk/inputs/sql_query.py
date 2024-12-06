@@ -17,7 +17,7 @@ class SQLQueryInput(Input):
     engine: Engine
     chunk_size: Optional[int]
 
-    def __init__(self, engine: Engine, query: str, chunk_size: Optional[int] = 100000):
+    def __init__(self, engine: Engine, query: str, chunk_size: Optional[int] = 30000):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
@@ -47,7 +47,7 @@ class AsyncSQLQueryInput(Input):
     engine: Engine
     chunk_size: Optional[int]
 
-    def __init__(self, engine: Engine, query: str, chunk_size: Optional[int] = 100000):
+    def __init__(self, engine: Engine, query: str, chunk_size: Optional[int] = 30000):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size

@@ -155,7 +155,7 @@ class SQLWorkflow(WorkflowInterface):
         writer: JSONChunkedObjectStoreWriter,
         workflow_id: str,
         workflow_run_id: str,
-    ) -> None:
+    ) -> int:
         """
         Process a batch of results.
 
@@ -188,6 +188,7 @@ class SQLWorkflow(WorkflowInterface):
                 activity.logger.error(
                     f"Error processing row for {typename}: {row_error}"
                 )
+        return writer.total_record_count
 
     @staticmethod
     def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
@@ -374,9 +375,10 @@ class SQLWorkflow(WorkflowInterface):
             ) as transformed_writer,
         ):
             raw_data: List[Any] = []
+            total_transformed_data = 0
             for chunk in batch:
                 raw_data += await raw_reader.read_chunk(chunk)
-                await self._transform_batch(
+                total_transformed_data += await self._transform_batch(
                     raw_data,
                     typename,
                     transformed_writer,
@@ -384,8 +386,7 @@ class SQLWorkflow(WorkflowInterface):
                     workflow_run_id=workflow_run_id,
                 )
 
-            write_data = await transformed_writer.write_metadata()
-            return write_data["total_record_count"]
+            return total_transformed_data
 
     def get_transform_batches(self, chunk_count: int, typename: str):
         # concurrency logic

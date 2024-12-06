@@ -88,31 +88,39 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
 
 
 class JsonOutput(Output):
-    def __init__(self, output_path: str, upload_file_prefix: str):
+    def __init__(
+        self, output_path: str, upload_file_prefix: str, chunk_size: int = 30000
+    ):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
         self.total_record_count = 0
         self.chunk_count = 0
+        self.chunk_size = chunk_size
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame):
         """
         Method to write the dataframe to a json file and push it to the object store
+        Processes the dataframe in batches of self.batch_size
         """
         if len(df) == 0:
             return
 
         try:
-            self.chunk_count += 1
-            self.total_record_count += len(df)
+            # Process dataframe in batches
+            for start_idx in range(0, len(df), self.chunk_size):
+                batch_df = df.iloc[start_idx : start_idx + self.chunk_size]
 
-            # Write the dataframe to a json file
-            output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
-            df.to_json(output_file_name, orient="records", lines=True)
+                self.chunk_count += 1
+                self.total_record_count += len(batch_df)
 
-            # Push the file to the object store
-            await ObjectStore.push_file_to_object_store(
-                self.upload_file_prefix, output_file_name
-            )
+                # Write the batch to a json file
+                output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
+                batch_df.to_json(output_file_name, orient="records", lines=True)
+
+                # Push the file to the object store
+                await ObjectStore.push_file_to_object_store(
+                    self.upload_file_prefix, output_file_name
+                )
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
