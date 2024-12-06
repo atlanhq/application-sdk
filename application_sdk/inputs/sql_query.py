@@ -1,5 +1,5 @@
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
+import concurrent
 from typing import Any, Iterator, Optional
 
 import pandas as pd
@@ -34,7 +34,7 @@ class SQLQueryInput(Input):
                     )
 
             # Run the blocking operation in a thread pool
-            with ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
                 return await asyncio.get_event_loop().run_in_executor(
                     executor, _execute_query
                 )
@@ -51,7 +51,7 @@ class SQLQueryInput(Input):
                     )
 
             # Run the blocking operation in a thread pool
-            with ThreadPoolExecutor() as executor:
+            with concurrent.futures.ThreadPoolExecutor() as executor:
                 return await asyncio.get_event_loop().run_in_executor(
                     executor, _execute_query
                 )
