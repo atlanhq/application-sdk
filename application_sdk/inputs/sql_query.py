@@ -1,3 +1,5 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterator, Optional
 
 import pandas as pd
@@ -24,17 +26,35 @@ class SQLQueryInput(Input):
 
     async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         try:
-            with self.engine.connect() as conn:
-                return pd.read_sql_query(
-                    text(self.query), conn, chunksize=self.chunk_size
+
+            def _execute_query():
+                with self.engine.connect() as conn:
+                    return pd.read_sql_query(
+                        text(self.query), conn, chunksize=self.chunk_size
+                    )
+
+            # Run the blocking operation in a thread pool
+            with ThreadPoolExecutor() as executor:
+                return await asyncio.get_event_loop().run_in_executor(
+                    executor, _execute_query
                 )
         except Exception as e:
             logger.error(f"Error reading batched data from SQL: {str(e)}")
 
     async def get_dataframe(self) -> pd.DataFrame:
         try:
-            with self.engine.connect() as conn:
-                return pd.read_sql_query(text(self.query), conn)
+
+            def _execute_query():
+                with self.engine.connect() as conn:
+                    return pd.read_sql_query(
+                        text(self.query), conn, chunksize=self.chunk_size
+                    )
+
+            # Run the blocking operation in a thread pool
+            with ThreadPoolExecutor() as executor:
+                return await asyncio.get_event_loop().run_in_executor(
+                    executor, _execute_query
+                )
         except Exception as e:
             logger.error(f"Error reading data from SQL: {str(e)}")
 
