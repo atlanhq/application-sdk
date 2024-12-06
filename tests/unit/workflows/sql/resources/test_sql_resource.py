@@ -11,11 +11,6 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 
 
-class TestSQLResource(SQLResource):
-    def get_sqlalchemy_connection_string(self) -> str:
-        return "test_connection_string"
-
-
 @pytest.fixture
 def config():
     # Create a sample SQLResourceConfig object with mock credentials
@@ -32,18 +27,19 @@ def config():
 
 
 @pytest.fixture
-def resource(config: SQLResourceConfig):
-    # Create a SQLResource object with the above config
-    return TestSQLResource(config=config)
+def sql_resource(config: SQLResourceConfig):
+    resource = SQLResource(config=config)
+    resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
+    return resource
 
 
 def test_init_without_config():
     with pytest.raises(ValueError, match="config is required"):
-        TestSQLResource()
+        SQLResource()
 
 
 @patch("application_sdk.workflows.sql.resources.sql_resource.create_engine")
-def test_load(mock_create_engine: Any, resource: SQLResource):
+def test_load(mock_create_engine: Any, sql_resource: SQLResource):
     # Mock the engine and connection
     mock_engine = MagicMock()
     mock_connection = MagicMock()
@@ -51,20 +47,20 @@ def test_load(mock_create_engine: Any, resource: SQLResource):
     mock_engine.connect.return_value = mock_connection
 
     # Run the load function
-    asyncio.run(resource.load())
+    asyncio.run(sql_resource.load())
 
     # Assertions to verify behavior
     mock_create_engine.assert_called_once_with(
-        resource.get_sqlalchemy_connection_string(),
-        connect_args=resource.config.get_sqlalchemy_connect_args(),
+        sql_resource.get_sqlalchemy_connection_string(),
+        connect_args=sql_resource.config.get_sqlalchemy_connect_args(),
         pool_pre_ping=True,
     )
-    assert resource.engine == mock_engine
-    assert resource.connection == mock_connection
+    assert sql_resource.engine == mock_engine
+    assert sql_resource.connection == mock_connection
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
+async def test_fetch_metadata(mock_run_query: Any, sql_resource: SQLResource):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     mock_run_query.return_value = pd.DataFrame(data)
@@ -78,7 +74,7 @@ async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
         "database_alias_key": "TABLE_CATALOG",
         "schema_alias_key": "TABLE_SCHEMA",
     }
-    result = await resource.fetch_metadata(args)
+    result = await sql_resource.fetch_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -87,7 +83,7 @@ async def test_fetch_metadata(mock_run_query: Any, resource: SQLResource):
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, resource: SQLResource
+    mock_run_query: Any, sql_resource: SQLResource
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -97,12 +93,12 @@ async def test_fetch_metadata_without_database_alias_key(
     metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    resource.default_database_alias_key = "TABLE_CATALOG"
-    resource.default_schema_alias_key = "TABLE_SCHEMA"
+    sql_resource.default_database_alias_key = "TABLE_CATALOG"
+    sql_resource.default_schema_alias_key = "TABLE_SCHEMA"
     args = {
         "metadata_sql": metadata_sql,
     }
-    result = await resource.fetch_metadata(args)
+    result = await sql_resource.fetch_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -111,7 +107,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, resource: SQLResource
+    mock_run_query: Any, sql_resource: SQLResource
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     mock_run_query.return_value = pd.DataFrame(data)
@@ -127,7 +123,7 @@ async def test_fetch_metadata_with_result_keys(
         "database_result_key": "DATABASE",
         "schema_result_key": "SCHEMA",
     }
-    result = await resource.fetch_metadata(args)
+    result = await sql_resource.fetch_metadata(args)
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
@@ -136,7 +132,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, resource: SQLResource
+    mock_run_query: AsyncMock, sql_resource: SQLResource
 ):
     mock_run_query.side_effect = Exception("Simulated query failure")
 
@@ -150,7 +146,7 @@ async def test_fetch_metadata_with_error(
             "database_alias_key": "TABLE_CATALOG",
             "schema_alias_key": "TABLE_SCHEMA",
         }
-        await resource.fetch_metadata(args)
+        await sql_resource.fetch_metadata(args)
 
     # Assertions
     mock_run_query.assert_called_once_with()
@@ -163,7 +159,7 @@ async def test_fetch_metadata_with_error(
     new_callable=MagicMock,
 )
 async def test_run_query(
-    mock_get_running_loop: MagicMock, mock_text: Any, resource: SQLResource
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_resource: SQLResource
 ):
     # Mock the query text
     query = "SELECT * FROM test_table"
@@ -205,8 +201,8 @@ async def test_run_query(
         ]
     )
 
-    resource.connection = MagicMock()
-    resource.connection.execute.return_value = mock_cursor
+    sql_resource.connection = MagicMock()
+    sql_resource.connection.execute.return_value = mock_cursor
 
     # Mock run_in_executor to return cursor and then batches
     mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -219,7 +215,7 @@ async def test_run_query(
 
     # Run run_query and collect all results
     results: list[dict[str, str]] = []
-    async for batch in resource.run_query(query):
+    async for batch in sql_resource.run_query(query):
         results.extend(batch)
 
     # Expected results formatted as dictionaries
@@ -239,7 +235,7 @@ async def test_run_query(
     new_callable=MagicMock,
 )
 async def test_run_query_with_error(
-    mock_get_running_loop: MagicMock, mock_text: Any, resource: SQLResource
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_resource: SQLResource
 ):
     # Mock the query text
     query = "SELECT * FROM test_table"
@@ -256,8 +252,8 @@ async def test_run_query_with_error(
 
     mock_cursor.cursor.description = [col1, col2]
 
-    resource.connection = MagicMock()
-    resource.connection.execute.return_value = mock_cursor
+    sql_resource.connection = MagicMock()
+    sql_resource.connection.execute.return_value = mock_cursor
 
     # Mock run_in_executor to return cursor and then batches
     mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -270,5 +266,5 @@ async def test_run_query_with_error(
     # Run run_query and collect all results
     results: list[dict[str, str]] = []
     with pytest.raises(Exception, match="Simulated query failure"):
-        async for batch in resource.run_query(query):
+        async for batch in sql_resource.run_query(query):
             results.extend(batch)

@@ -186,21 +186,15 @@ class SQLWorkflow(WorkflowInterface):
         Only fetches all metadata when both include and exclude filters are empty.
         """
         try:
-            include_filter = workflow_args.get(
-                "metadata", workflow_args.get("form_data", {})
-            ).get("include_filter", "{}")
-            exclude_filter = workflow_args.get(
-                "metadata", workflow_args.get("form_data", {})
-            ).get("exclude_filter", "{}")
-            temp_table_regex = workflow_args.get(
-                "metadata", workflow_args.get("form_data", {})
-            ).get("temp_table_regex", "")
+            metadata = workflow_args.get("metadata", workflow_args.get("form_data", {}))
+            include_filter = metadata.get("include_filter", "{}")
+            exclude_filter = metadata.get("exclude_filter", "{}")
+            temp_table_regex = metadata.get("temp_table_regex", "")
 
-            # Return unmodified query if both filters are empty
             if include_filter == "{}" and exclude_filter == "{}":
                 return (
-                    query.replace("{normalized_include_regex}", ".*")
-                    .replace("{normalized_exclude_regex}", "^$")
+                    query.replace("{normalized_exclude_regex}", "^$")
+                    .replace("{normalized_include_regex}", ".*")
                     .replace("{exclude_table}", "")
                 )
 
@@ -211,6 +205,10 @@ class SQLWorkflow(WorkflowInterface):
                     temp_table_regex,
                 )
             )
+
+            normalized_include_regex = normalized_include_regex.strip("'")
+            normalized_exclude_regex = normalized_exclude_regex.strip("'")
+
             return query.format(
                 normalized_include_regex=normalized_include_regex,
                 normalized_exclude_regex=normalized_exclude_regex,
@@ -218,6 +216,7 @@ class SQLWorkflow(WorkflowInterface):
             )
         except Exception as e:
             logger.error(f"Error preparing query [{query}]:  {e}")
+            return None
 
     @activity.defn
     @auto_heartbeater
