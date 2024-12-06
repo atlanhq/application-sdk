@@ -216,7 +216,6 @@ class SQLWorkflow(WorkflowInterface):
                 )
             )
 
-
             normalized_include_regex = normalized_include_regex.strip("'")
             normalized_exclude_regex = normalized_exclude_regex.strip("'")
 
