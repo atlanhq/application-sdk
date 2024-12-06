@@ -370,7 +370,6 @@ class SQLWorkflow(WorkflowInterface):
         typename = kwargs.get("typename")
         workflow_id = kwargs.get("workflow_id")
         workflow_run_id = kwargs.get("workflow_run_id")
-        # for chunk in batch_input:
         transformed_chunk = await self._transform_batch(
             batch_input, typename, workflow_id, workflow_run_id
         )
