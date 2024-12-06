@@ -33,6 +33,7 @@ releases:
   - name: atlan
     chart: "./charts/atlan"
     namespace: '{{ .Environment.Values.namespace.atlan }}'
+    createNamespace: true
     version: 0.1.0
     disableValidation: true
     missingFileHandler: Error
@@ -64,6 +65,7 @@ releases:
   - name: app
     chart: "./charts/app"
     namespace: '{{ .Environment.Values.namespace.app }}'
+    createNamespace: true
     version: 0.1.0
     disableValidation: true
     missingFileHandler: Error

@@ -96,6 +96,6 @@ dapr:
     ## TO setup a secret store, you need to provide the values mentioned in the documentation: https://docs.dapr.io/operations/components/setup-secret-store/
     secretstores:
       - enabled: false
-    ## TO setup a pubsub, you need to provide the values mentioned in the documentation: https://docs.dapr.io/reference/components-reference/supported-bindings/
+    ## TO setup an object store, you need to provide the values mentioned in the documentation: https://docs.dapr.io/reference/components-reference/supported-bindings/
     objectstores:
       - enabled: false
