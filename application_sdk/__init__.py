@@ -12,8 +12,8 @@ logger = logging.get_logger(__name__)
 def activity_pd(batch_input: Optional[Input] = None, **kwargs):
     def decorator(f):
         @wraps(f)
-        async def new_fn(self, *args, **inner_kwargs):
-            fn_kwargs = inner_kwargs
+        async def new_fn(self, *args):
+            fn_kwargs = dict(*args)
             outputs = {}
             for name, arg in kwargs.items():
                 arg = arg(self, *args)
@@ -37,8 +37,10 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 not hasattr(batch_input_obj, "chunk_size")
                 or not batch_input_obj.chunk_size
             ):
-                fn_kwargs["batch_input"] = await batch_input_obj.get_dataframe()
-                fn_kwargs.update(*args)
+                if inspect.iscoroutinefunction(batch_input_obj.get_batched_dataframe):
+                    fn_kwargs["batch_input"] = await batch_input_obj.get_dataframe()
+                else:
+                    fn_kwargs["batch_input"] = batch_input_obj.get_dataframe()
                 return await f(self, **fn_kwargs)
 
             # if chunk_size is set, we'll get the data in chunks and write it to the outputs provided

@@ -22,18 +22,26 @@ class JsonInput(Input):
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         try:
             for chunk in self.batch:
-                yield pd.read_json(
+                json_reader_obj = pd.read_json(
                     os.path.join(self.path, chunk),
                     chunksize=self.chunk_size,
                     lines=True,
                 )
+                yield from json_reader_obj
         except Exception as e:
             logger.error(f"Error reading batched data from JSON: {str(e)}")
 
-    async def get_dataframe(self) -> pd.DataFrame:
+    def get_dataframe(self) -> pd.DataFrame:
         try:
+            dataframes = []
             for chunk in self.batch:
-                return pd.read_json(os.path.join(self.path, chunk))
+                dataframes.append(
+                    pd.read_json(
+                        os.path.join(self.path, chunk),
+                        lines=True,
+                    )
+                )
+            return pd.concat(dataframes, ignore_index=True)
         except Exception as e:
             logger.error(f"Error reading data from JSON: {str(e)}")
 

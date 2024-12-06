@@ -246,7 +246,9 @@ class SQLWorkflow(WorkflowInterface):
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_databases(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
+    async def fetch_databases(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
         """
         Fetch and process databases from the database.
 
@@ -271,7 +273,9 @@ class SQLWorkflow(WorkflowInterface):
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_schemas(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
+    async def fetch_schemas(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
         """
         Fetch and process schemas from the database.
 
@@ -296,7 +300,9 @@ class SQLWorkflow(WorkflowInterface):
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_tables(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
+    async def fetch_tables(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
         """
         Fetch and process tables from the database.
 
@@ -321,7 +327,9 @@ class SQLWorkflow(WorkflowInterface):
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_columns(self, batch_input: pd.DataFrame, raw_output: JsonOutput):
+    async def fetch_columns(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
         """
         Fetch and process columns from the database.
 
@@ -342,7 +350,7 @@ class SQLWorkflow(WorkflowInterface):
             total_record_count=workflow_args["record_count"],
         )
     )
-    async def write_type_metadata(self, metadata_output, batch_input=None):
+    async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
         await metadata_output.write_metadata()
 
     @activity.defn
@@ -358,11 +366,15 @@ class SQLWorkflow(WorkflowInterface):
             chunk_start=workflow_args["chunk_start"],
         ),
     )
-    async def transform_data(self, batch_input, transformed_output):
-        typename = transformed_output.output_path.split("/")[-1]
-        for chunk in batch_input:
-            transformed_chunk = await self._transform_batch(chunk, typename)
-            await transformed_output.write_df(transformed_chunk)
+    async def transform_data(self, batch_input, transformed_output, **kwargs):
+        typename = kwargs.get("typename")
+        workflow_id = kwargs.get("workflow_id")
+        workflow_run_id = kwargs.get("workflow_run_id")
+        # for chunk in batch_input:
+        transformed_chunk = await self._transform_batch(
+            batch_input, typename, workflow_id, workflow_run_id
+        )
+        await transformed_output.write_df(transformed_chunk)
         return {
             "total_record_count": transformed_output.total_record_count,
             "chunk_count": transformed_output.chunk_count,
