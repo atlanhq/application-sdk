@@ -148,7 +148,13 @@ class SQLWorkflow(WorkflowInterface):
             logger.error(f"Error fetching databases: {e}")
             raise e
 
-    async def _transform_batch(self, results: pd.DataFrame, typename: str) -> None:
+    async def _transform_batch(
+        self,
+        results: pd.DataFrame,
+        typename: str,
+        workflow_id: str,
+        workflow_run_id: str,
+    ) -> None:
         """
         Process a batch of results.
 
@@ -157,14 +163,25 @@ class SQLWorkflow(WorkflowInterface):
         :param writer: The writer to use.
         :raises Exception: If the results cannot be processed.
         """
+        if self.transformer is None:
+            raise ValueError("Transformer is not set")
+
         transformed_metadata_list = []
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
         for row in results.to_dict(orient="records"):
             try:
+                if not self.transformer:
+                    raise ValueError("Transformer is not set")
+
                 transformed_metadata: Optional[Dict[str, Any]] = (
-                    self.transformer.transform_metadata(typename, row)
+                    self.transformer.transform_metadata(
+                        typename,
+                        row,
+                        workflow_id=workflow_id,
+                        workflow_run_id=workflow_run_id,
+                    )
                 )
                 if transformed_metadata is not None:
                     transformed_metadata_list.append(transformed_metadata)
@@ -198,10 +215,19 @@ class SQLWorkflow(WorkflowInterface):
                     temp_table_regex,
                 )
             )
+            exclude_empty_tables = workflow_args.get("metadata", {}).get(
+                "exclude_empty_tables", False
+            )
+            exclude_views = workflow_args.get("metadata", {}).get(
+                "exclude_views", False
+            )
+
             return query.format(
                 normalized_include_regex=normalized_include_regex,
                 normalized_exclude_regex=normalized_exclude_regex,
                 exclude_table=exclude_table,
+                exclude_empty_tables=exclude_empty_tables,
+                exclude_views=exclude_views,
             )
         except Exception as e:
             logger.error(f"Error preparing query [{query}]:  {e}")
@@ -388,8 +414,11 @@ class SQLWorkflow(WorkflowInterface):
         transform_activities: List[Any] = []
 
         chunk_count = sum(value.get("chunk_count", 0) for value in raw_stat)
-        if not chunk_count:
+        if chunk_count is None:
             raise ValueError("Invalid chunk_count")
+
+        if chunk_count == 0:
+            return
 
         typename = raw_stat[0].get("typename")
         if typename is None:
@@ -458,13 +487,15 @@ class SQLWorkflow(WorkflowInterface):
             )
 
         workflow_id = workflow_args["workflow_id"]
+        workflow_run_id = workflow.info().run_id
+        workflow_args["workflow_run_id"] = workflow_run_id
+
         workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
         )
 
-        workflow_run_id = workflow.info().run_id
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path

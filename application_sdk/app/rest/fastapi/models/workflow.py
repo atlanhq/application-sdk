@@ -5,12 +5,10 @@ from typing import Any, Dict, List
 from pydantic import BaseModel, Field, RootModel
 
 
-class TestAuthRequest(BaseModel):
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+class TestAuthRequest(RootModel):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing database credentials"
+    )
 
 
 class TestAuthResponse(BaseModel):
@@ -18,16 +16,15 @@ class TestAuthResponse(BaseModel):
     message: str
 
 
-class FetchMetadataRequest(BaseModel):
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+class FetchMetadataRequest(RootModel):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing database credentials"
+    )
 
 
-class FetchMetadataResponse(RootModel):
-    root: List[Dict[str, str]]
+class FetchMetadataResponse(BaseModel):
+    success: bool
+    data: List[Dict[str, str]]
 
 
 class PreflightCheckRequest(BaseModel):
@@ -76,15 +73,9 @@ class PreflightCheckResponse(BaseModel):
         }
 
 
-class StartWorkflowRequest(BaseModel):
-    credentials: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing database credentials"
-    )
-    connection: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing connection details"
-    )
-    metadata: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing metadata configuration"
+class StartWorkflowRequest(RootModel):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing workflow configuration"
     )
 
     class Config:

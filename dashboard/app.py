@@ -1,6 +1,11 @@
+import os
+
 import dash
 import dash_bootstrap_components as dbc
 from dash import Dash, html
+
+APP_DASHBOARD_PORT = int(os.getenv("APP_DASHBOARD_HTTP_PORT", 8050))
+APP_DASHBOARD_HOST = os.getenv("APP_DASHBOARD_HTTP_HOST", "0.0.0.0")
 
 dbc_css = "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates/dbc.min.css"
 app = Dash(
@@ -29,4 +34,4 @@ app.layout = html.Div(
 )
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8050, debug=False)
+    app.run(host=APP_DASHBOARD_HOST, port=APP_DASHBOARD_PORT, debug=False)

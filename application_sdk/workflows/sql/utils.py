@@ -51,12 +51,12 @@ def normalize_filters(filter_dict: Dict[str, List[str]], is_include: bool) -> Li
     for filtered_db, filtered_schemas in filter_dict.items():
         db = filtered_db.strip("^$")
         if not filtered_schemas:
-            normalized_filter_list.append(f"{db}.*")
+            normalized_filter_list.append(f"{db}\\.*")
         else:
             for schema in filtered_schemas:
                 sch = schema.lstrip(
                     "^"
                 )  # we do not strip out the $ as it is used to match the end of the string
-                normalized_filter_list.append(f"{db}.{sch}")
+                normalized_filter_list.append(f"{db}\\.{sch}")
 
     return normalized_filter_list

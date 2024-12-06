@@ -12,8 +12,8 @@ logger = logging.get_logger(__name__)
 def activity_pd(batch_input: Optional[Input] = None, **kwargs):
     def decorator(f):
         @wraps(f)
-        async def new_fn(self, *args):
-            fn_kwargs = {}
+        async def new_fn(self, *args, **inner_kwargs):
+            fn_kwargs = inner_kwargs
             outputs = {}
             for name, arg in kwargs.items():
                 arg = arg(self, *args)
@@ -50,9 +50,10 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 df_batches = batch_input_obj.get_batched_dataframe()
 
             for df_batch in df_batches:
-                fn_kwargs["batch_input"] = df_batch
-                rets.append(await f(self, **fn_kwargs))
-                del fn_kwargs["batch_input"]
+                if len(df_batch) > 0:
+                    fn_kwargs["batch_input"] = df_batch
+                    rets.append(await f(self, **fn_kwargs))
+                    del fn_kwargs["batch_input"]
 
             # In the end, we'll return the df to the caller method
             return rets

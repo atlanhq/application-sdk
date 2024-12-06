@@ -1,5 +1,5 @@
 """
-This example demonstrates how to create a SQL workflow for extracting metadata from a PostgreSQL database.
+This example demonstrates how to create a SQL workflow for extracting metadata from a PostgreSQL database with a custom transformer.
 It uses the Temporal workflow engine to manage the extraction process.
 
 Key components:
@@ -15,7 +15,7 @@ Workflow steps:
 4. Fetch schema information
 5. Fetch table information
 6. Fetch column information
-7. Transform the metadata into Atlas entities
+7. Transform the metadata into Atlas entities but using a custom transformer for Database entities
 8. Clean up the output directory
 9. Push results to object store
 
@@ -31,7 +31,10 @@ import logging
 import os
 import threading
 import time
+from typing import Any, Dict
 from urllib.parse import quote_plus
+
+from pyatlan.model.assets import Database
 
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -39,15 +42,14 @@ from application_sdk.workflows.resources.temporal_resource import (
 )
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
 from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
-from application_sdk.workflows.sql.resources.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.workflows.sql.resources.sql_resource import SQLResourceConfig
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
+from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
+DATABASE_DRIVER = "psycopg2"
+DATABASE_DIALECT = "postgresql"
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +62,7 @@ class PostgreSQLResource(AsyncSQLResource):
 
 class SampleSQLWorkflow(SQLWorkflow):
     fetch_database_sql = """
-    SELECT datname as database_name FROM pg_database WHERE datname = current_database();
+    SELECT * FROM pg_database WHERE datname = current_database();
     """
 
     fetch_schema_sql = """
@@ -97,7 +99,22 @@ class SampleSQLWorkflow(SQLWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    sql_resource: SQLResource | None = PostgreSQLResource(SQLResourceConfig())
+
+class PostgresDatabase(Database):
+    @classmethod
+    def parse_obj(cls, obj: Dict[str, Any]) -> Database:
+        database = Database.creator(
+            name=obj["datname"],
+            connection_qualified_name=obj["connection_qualified_name"],
+        )
+        return database
+
+
+class CustomTransformer(AtlasTransformer):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.entity_class_definitions["DATABASE"] = PostgresDatabase
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
@@ -113,12 +130,11 @@ async def main():
     )
     await temporal_resource.load()
 
-    tenant_id = os.getenv("TENANT_ID", "development")
-
-    transformer = AtlasTransformer(
+    transformer = CustomTransformer(
         connector_name=APPLICATION_NAME,
         connector_type="sql",
-        tenant_id=tenant_id,
+        current_epoch="1234567890",
+        tenant_id="1234567890",
     )
 
     workflow: SQLWorkflow = (
@@ -133,7 +149,6 @@ async def main():
         temporal_resource=temporal_resource,
         temporal_activities=workflow.get_activities(),
         workflow_classes=[SQLWorkflow],
-        passthrough_modules=["application_sdk", "os", "pandas"],
     )
 
     # Start the worker in a separate thread
@@ -154,6 +169,8 @@ async def main():
                 "password": os.getenv("POSTGRES_PASSWORD", "password"),
                 "database": os.getenv("POSTGRES_DATABASE", "postgres"),
             },
+            "database_driver": DATABASE_DRIVER,
+            "database_dialect": DATABASE_DIALECT,
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",
@@ -164,8 +181,6 @@ async def main():
                 "use_jdbc_internal_methods": "true",
                 "authentication": "BASIC",
                 "extraction-method": "direct",
-                "exclude_views": True,
-                "exclude_empty_tables": False,
             },
         }
     )
