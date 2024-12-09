@@ -125,7 +125,7 @@ class FastAPIApplication(AtlanAPIApplication):
         self, body: PreflightCheckRequest
     ) -> PreflightCheckResponse:
         preflight_check = await self.preflight_check_controller.preflight_check(
-            body.form_data
+            body.model_dump()
         )
         return PreflightCheckResponse(success=True, data=preflight_check)
 
