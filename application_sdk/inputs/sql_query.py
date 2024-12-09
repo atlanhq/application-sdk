@@ -46,9 +46,7 @@ class SQLQueryInput(Input):
 
             def _execute_query():
                 with self.engine.connect() as conn:
-                    return pd.read_sql_query(
-                        text(self.query), conn, chunksize=self.chunk_size
-                    )
+                    return pd.read_sql_query(text(self.query), conn)
 
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
