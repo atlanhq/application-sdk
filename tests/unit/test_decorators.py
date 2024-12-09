@@ -1,3 +1,6 @@
+from concurrent.futures import Future
+from unittest.mock import patch
+
 import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
@@ -7,8 +10,30 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 
 
+class MockSingleThreadExecutor:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    def submit(self, fn, *args, **kwargs):
+        future = Future()
+        try:
+            # Execute the function synchronously
+            result = fn(*args, **kwargs)
+            future.set_result(result)
+        except Exception as e:
+            future.set_exception(e)
+        return future
+
+
 class TestDecorators:
-    async def test_query_batch_basic(self):
+    @patch(
+        "concurrent.futures.ThreadPoolExecutor",
+        side_effect=MockSingleThreadExecutor,
+    )
+    async def test_query_batch_basic(self, _):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @activity_pd(
@@ -19,7 +44,11 @@ class TestDecorators:
 
         await func(self)
 
-    async def test_query_batch_multiple_chunks(self):
+    @patch(
+        "concurrent.futures.ThreadPoolExecutor",
+        side_effect=MockSingleThreadExecutor,
+    )
+    async def test_query_batch_multiple_chunks(self, _):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
@@ -35,7 +64,11 @@ class TestDecorators:
 
         await func(self)
 
-    async def test_query_write_basic(self):
+    @patch(
+        "concurrent.futures.ThreadPoolExecutor",
+        side_effect=MockSingleThreadExecutor,
+    )
+    async def test_query_write_basic(self, _):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @activity_pd(
