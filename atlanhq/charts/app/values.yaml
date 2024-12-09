@@ -26,7 +26,7 @@ app:
 
   # This is needed to set the secrets needed for the dapr state store component in default case.
   # If disabled then the user needs to provide the secret of the custom state store.
-  daprStateStoreSecret:
+  defaultDaprStateStoreSecret:
     enabled: true
     postgresClusterNamespace: atlan-postgres
     secretName: dapr-pg-connection-string
