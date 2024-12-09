@@ -113,7 +113,7 @@ async def main():
     )
     await temporal_resource.load()
 
-    tenant_id = os.getenv("ATLAN_TENANT_ID", "development")
+    tenant_id = os.getenv("TENANT_ID", "development")
 
     transformer = AtlasTransformer(
         connector_name=APPLICATION_NAME,
@@ -148,11 +148,11 @@ async def main():
     await workflow.start(
         {
             "credentials": {
-                "host": os.getenv("ATLAN_POSTGRES_HOST", "localhost"),
-                "port": os.getenv("ATLAN_POSTGRES_PORT", "5432"),
-                "user": os.getenv("ATLAN_POSTGRES_USER", "postgres"),
-                "password": os.getenv("ATLAN_POSTGRES_PASSWORD", "password"),
-                "database": os.getenv("ATLAN_POSTGRES_DATABASE", "postgres"),
+                "host": os.getenv("POSTGRES_HOST", "localhost"),
+                "port": os.getenv("POSTGRES_PORT", "5432"),
+                "user": os.getenv("POSTGRES_USER", "postgres"),
+                "password": os.getenv("POSTGRES_PASSWORD", "password"),
+                "database": os.getenv("POSTGRES_DATABASE", "postgres"),
             },
             "connection": {"connection": "dev"},
             "metadata": {

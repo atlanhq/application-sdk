@@ -21,7 +21,7 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 4. Run `make start-all` to start the Dapr runtime and Temporal server
 5. Run the example using `python application_sql.py` or using the VSCode launch configuration provided in the next section.
 
-### Run and Debug examples via VSCode or Cursor
+### Run and Debug examples via VSCode or Cursomr
 
 1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables and run the configuration
 
@@ -38,11 +38,11 @@ This folder contains sample applications that demonstrate how to use the Atlan S
       "justMyCode": false,
       "env": {
         "PYTHONPATH": "${workspaceFolder}",
-        "ATLAN_POSTGRES_HOST": "host",
-        "ATLAN_POSTGRES_PORT": "5432",
-        "ATLAN_POSTGRES_USER": "postgres",
-        "ATLAN_POSTGRES_PASSWORD": "password",
-        "ATLAN_POSTGRES_DATABASE": "postgres"
+        "POSTGRES_HOST": "host",
+        "POSTGRES_PORT": "5432",
+        "POSTGRES_USER": "postgres",
+        "POSTGRES_PASSWORD": "password",
+        "POSTGRES_DATABASE": "postgres"
       }
     },
     {
