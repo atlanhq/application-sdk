@@ -2,10 +2,10 @@
 app:
   # General settings
   enabled: true
-  name: "phoenix-hello-world-app"
-  fullnameOverride: "phoenix-hello-world-app"
-  nameOverride: "phoenix-hello-world-app"
-  namespace: phoenix-hello-world-app
+  name: "hello-world-app"
+  fullnameOverride: "hello-world-app"
+  nameOverride: "hello-world-app"
+  namespace: hello-world-app
 
   # Deployment settings
   replicaCount: 1
@@ -35,7 +35,7 @@ app:
   # Annotations for pod
   podAnnotations: {}
     # dapr.io/enabled: "true"
-    # dapr.io/app-id: "phoenix-hello-world-app"
+    # dapr.io/app-id: "hello-world-app"
     # dapr.io/app-port: "8000"
     # dapr.io/sidecar-cpu-limit: "500m"
     # dapr.io/sidecar-memory-limit: "512Mi"
@@ -49,6 +49,30 @@ app:
     #   - ALL
     runAsNonRoot: true
     runAsUser: 1000
+
+  hpa:
+    minReplicas: 2
+    maxReplicas: 5
+    metrics:
+      - type: Resource
+        resource:
+          name: cpu
+          target:
+            type: Utilization
+            averageUtilization: 80
+      - type: Resource
+        resource:
+          name: memory
+          target:
+            type: Utilization
+            averageUtilization: 80
+      # - type: External
+      #   external:
+      #     metric:
+      #       name: custom-metric
+      #     target:
+      #       type: AverageValue
+      #       averageValue: 200m
 
   # Init containers
   initContainers: []
@@ -158,7 +182,7 @@ atlan:
     components:
       objectstores:
         - enabled: true
-          name: phoenix-hello-world-app-objectstore
+          name: hello-world-app-objectstore
           # Namespace of shared dapr instance if sidercars are not used.
           # And if you are using sidecars, then this should be the namespace of the application.
           # https://docs.dapr.io/operations/components/component-scopes/
@@ -189,7 +213,7 @@ atlan:
         ## AWS S3 Object Store
         # - enabled: true
         #   name: objectstore
-        #   namespace: phoenix-hello-world-app
+        #   namespace: hello-world-app
         #   spec:
         #     type: bindings.aws.s3
         #     version: v1
@@ -220,7 +244,7 @@ atlan:
         ## GCS Object Store
         # - enabled: true
         #   name: objectstore
-        #   namespace: phoenix-hello-world-app
+        #   namespace: hello-world-app
         #   spec:
         #     type: bindings.gcp.bucket
         #     version: v1
@@ -255,7 +279,7 @@ atlan:
         ## Azure Blob Storage Object Store
         # - enabled: true
         #   name: objectstore
-        #   namespace: phoenix-hello-world-app
+        #   namespace: hello-world-app
         #   spec:
         #     type: bindings.azure.blobstorage
         #     version: v1
@@ -276,7 +300,7 @@ atlan:
       statestores:
         ## Statestore component
         - enabled: true
-          name: phoenix-hello-world-app-statestore
+          name: hello-world-app-statestore
           # Namespace of shared dapr instance if sidercars are not used.
           # And if you are using sidecars, then this should be the namespace of the application.
           # https://docs.dapr.io/operations/components/component-scopes/

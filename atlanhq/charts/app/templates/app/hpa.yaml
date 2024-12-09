@@ -1,0 +1,53 @@
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "app.fullname" . }}-hpa
+  namespace: {{ .Values.app.namespace | default "default" }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "app.fullname" . }}
+  minReplicas: {{ .Values.app.hpa.minReplicas | default 1 }}
+  maxReplicas: {{ .Values.app.hpa.maxReplicas | default 5 }}
+  metrics:
+    {{- if .Values.app.hpa.metrics }}
+    {{- range .Values.app.hpa.metrics }}
+    - type: {{ .type }}
+      {{- if eq .type "Resource" }}
+      resource:
+        name: {{ .resource.name }}
+        target:
+          type: {{ .resource.target.type }}
+          {{- if .resource.target.averageUtilization }}
+          averageUtilization: {{ .resource.target.averageUtilization }}
+          {{- end }}
+          {{- if .resource.target.averageValue }}
+          averageValue: {{ .resource.target.averageValue }}
+          {{- end }}
+      {{- end }}
+      {{- if eq .type "External" }}
+      external:
+        metric:
+          name: {{ .external.metric.name }}
+        target:
+          type: {{ .external.target.type }}
+          {{- if .external.target.averageValue }}
+          averageValue: {{ .external.target.averageValue }}
+          {{- end }}
+      {{- end }}
+    {{- end }}
+    {{- else }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 70
+    {{- end }}
