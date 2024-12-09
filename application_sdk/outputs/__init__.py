@@ -16,11 +16,11 @@ class Output(ABC):
 
     @abstractmethod
     async def write_df(self, df: pd.DataFrame) -> None:
-        raise NotImplementedError("write_df method must be implemented by subclass")
+        pass
 
     @abstractmethod
     async def write_batched_df(self, df: pd.DataFrame) -> None:
-        raise NotImplementedError("write_df method must be implemented by subclass")
+        pass
 
     async def write_metadata(self):
         """
