@@ -98,7 +98,7 @@ class JsonOutput(Output):
         self.chunk_size = chunk_size
         os.makedirs(f"{output_path}", exist_ok=True)
 
-    async def write_df(self, df: pd.DataFrame):
+    async def write_batched_df(self, df: pd.DataFrame) -> None:
         """
         Method to write the dataframe to a json file and push it to the object store
         Processes the dataframe in batches of self.chunk_size

@@ -15,8 +15,12 @@ class Output(ABC):
     chunk_count: int
 
     @abstractmethod
-    async def write_df(self, df: pd.DataFrame):
-        pass
+    async def write_df(self, df: pd.DataFrame) -> None:
+        raise NotImplementedError("write_df method must be implemented by subclass")
+
+    @abstractmethod
+    async def write_batched_df(self, df: pd.DataFrame) -> None:
+        raise NotImplementedError("write_df method must be implemented by subclass")
 
     async def write_metadata(self):
         """

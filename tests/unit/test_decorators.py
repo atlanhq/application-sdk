@@ -49,8 +49,8 @@ class TestDecorators:
             ),
         )
         async def func(self, batch_input, out1, out2):
-            await out1.write_df(batch_input)
-            await out2.write_df(batch_input.map(lambda x: x + 1))
+            await out1.write_batched_df(batch_input)
+            await out2.write_batched_df(batch_input.map(lambda x: x + 1))
             return batch_input
 
         arg = {

@@ -250,7 +250,7 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched databases.
         """
-        await raw_output.write_df(batch_input)
+        await raw_output.write_batched_df(batch_input)
         return {"batch_input": batch_input, "typename": "database"}
 
     @activity.defn
@@ -274,7 +274,7 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched schemas.
         """
-        await raw_output.write_df(batch_input)
+        await raw_output.write_batched_df(batch_input)
         return {"batch_input": batch_input, "typename": "schema"}
 
     @activity.defn
@@ -298,7 +298,7 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched tables.
         """
-        await raw_output.write_df(batch_input)
+        await raw_output.write_batched_df(batch_input)
         return {"batch_input": batch_input, "typename": "table"}
 
     @activity.defn
@@ -322,7 +322,7 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The fetched columns.
         """
-        await raw_output.write_df(batch_input)
+        await raw_output.write_batched_df(batch_input)
         return {"batch_input": batch_input, "typename": "column"}
 
     @activity.defn
