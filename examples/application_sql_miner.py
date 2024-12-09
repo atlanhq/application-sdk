@@ -167,7 +167,7 @@ async def main():
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(days=5)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
 
     await miner_workflow.start(
         {
@@ -175,7 +175,7 @@ async def main():
                 "database_name_cleaned": "SNOWFLAKE",
                 "schema_name_cleaned": "ACCOUNT_USAGE",
                 "miner_start_time_epoch": start_time_epoch,
-                "chunk_size": 500,
+                "chunk_size": 5000,
                 "current_marker": start_time_epoch,
                 "timestamp_column": "START_TIME",
                 "sql_replace_from": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
@@ -185,15 +185,15 @@ async def main():
             },
             "credentials": {
                 "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-                "user": os.getenv("SNOWFLAKE_USER", "postgres"),
+                "user": os.getenv("SNOWFLAKE_USER", "snowflake"),
                 "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
-                "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "compute_wh"),
-                "role": os.getenv("SNOWFLAKE_ROLE", "accountadmin"),
+                "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
+                "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
             },
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",
-                "include_filter": "{}",
+                "include_filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
                 "temp_table_regex": "",
                 "advanced_config_strategy": "default",
                 "use_source_schema_filtering": "false",
