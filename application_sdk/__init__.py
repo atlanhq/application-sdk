@@ -37,7 +37,7 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 not hasattr(batch_input_obj, "chunk_size")
                 or not batch_input_obj.chunk_size
             ):
-                if inspect.iscoroutinefunction(batch_input_obj.get_batched_dataframe):
+                if inspect.iscoroutinefunction(batch_input_obj.get_dataframe):
                     fn_kwargs["batch_input"] = await batch_input_obj.get_dataframe()
                 else:
                     fn_kwargs["batch_input"] = batch_input_obj.get_dataframe()
