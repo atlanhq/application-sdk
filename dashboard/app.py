@@ -4,8 +4,8 @@ import dash
 import dash_bootstrap_components as dbc
 from dash import Dash, html
 
-APP_DASHBOARD_PORT = int(os.getenv("APP_DASHBOARD_HTTP_PORT", 8050))
-APP_DASHBOARD_HOST = os.getenv("APP_DASHBOARD_HTTP_HOST", "0.0.0.0")
+APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_HTTP_PORT", 8050))
+APP_DASHBOARD_HOST = os.getenv("ATLAN_APP_DASHBOARD_HTTP_HOST", "0.0.0.0")
 
 dbc_css = "https://cdn.jsdelivr.net/gh/AnnMarieW/dash-bootstrap-templates/dbc.min.css"
 app = Dash(
