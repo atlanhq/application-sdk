@@ -101,7 +101,7 @@ class JsonOutput(Output):
     async def write_df(self, df: pd.DataFrame):
         """
         Method to write the dataframe to a json file and push it to the object store
-        Processes the dataframe in batches of self.batch_size
+        Processes the dataframe in batches of self.chunk_size
         """
         if len(df) == 0:
             return
