@@ -1,5 +1,7 @@
 import os
 from enum import Enum
+
+
 class TemporalConstants(Enum):
     HOST = os.getenv("ATLAN_TEMPORAL_HOST", "localhost")
     PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
