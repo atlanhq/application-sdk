@@ -216,9 +216,6 @@ class SQLWorkflow(WorkflowInterface):
                 )
             )
 
-            normalized_include_regex = normalized_include_regex.strip("'")
-            normalized_exclude_regex = normalized_exclude_regex.strip("'")
-
             exclude_empty_tables = workflow_args.get("metadata", {}).get(
                 "exclude_empty_tables", False
             )
