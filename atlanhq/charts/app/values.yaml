@@ -51,6 +51,7 @@ app:
     runAsUser: 1000
 
   hpa:
+    enabled: true
     minReplicas: 2
     maxReplicas: 5
     metrics:
