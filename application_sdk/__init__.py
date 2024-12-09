@@ -1,4 +1,6 @@
+import asyncio
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Optional
 
@@ -7,6 +9,21 @@ from application_sdk.inputs import Input
 from application_sdk.outputs import Output
 
 logger = logging.get_logger(__name__)
+
+
+executor = ThreadPoolExecutor()
+
+
+async def to_async(func, *args, **kwargs):
+    """
+    Wrapper method to convert a sync method to async
+    Used to convert the input method that are sync to async and keep the logic consistent
+    """
+    if inspect.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    else:
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(executor, func, *args, **kwargs)
 
 
 def activity_pd(batch_input: Optional[Input] = None, **kwargs):
@@ -38,19 +55,12 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 not hasattr(batch_input_obj, "chunk_size")
                 or not batch_input_obj.chunk_size
             ):
-                if inspect.iscoroutinefunction(batch_input_obj.get_dataframe):
-                    fn_kwargs["batch_input"] = await batch_input_obj.get_dataframe()
-                else:
-                    fn_kwargs["batch_input"] = batch_input_obj.get_dataframe()
+                fn_kwargs["batch_input"] = await to_async(batch_input_obj.get_dataframe)
                 return await f(self, **fn_kwargs)
 
             # if chunk_size is set, we'll get the data in chunks and write it to the outputs provided
             rets = []
-            # Check if async method is implemented for getting the batched dataframe
-            if inspect.iscoroutinefunction(batch_input_obj.get_batched_dataframe):
-                df_batches = await batch_input_obj.get_batched_dataframe()
-            else:
-                df_batches = batch_input_obj.get_batched_dataframe()
+            df_batches = await to_async(batch_input_obj.get_batched_dataframe)
 
             for df_batch in df_batches:
                 if len(df_batch) > 0:
