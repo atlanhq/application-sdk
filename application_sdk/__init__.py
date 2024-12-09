@@ -12,8 +12,9 @@ logger = logging.get_logger(__name__)
 def activity_pd(batch_input: Optional[Input] = None, **kwargs):
     def decorator(f):
         @wraps(f)
-        async def new_fn(self, *args):
+        async def new_fn(self, *args, **inner_kwargs):
             fn_kwargs = dict(*args)
+            fn_kwargs.update(inner_kwargs)
             outputs = {}
             for name, arg in kwargs.items():
                 arg = arg(self, *args)
