@@ -82,6 +82,7 @@ class SQLWorkflow(WorkflowInterface):
             self.fetch_columns,
             self.transform_data,
             self.write_type_metadata,
+            self.write_raw_type_metadata,
         ] + super().get_activities()
 
     def store_credentials(self, credentials: Dict[str, Any]) -> str:
@@ -256,8 +257,11 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched databases.
         """
         await raw_output.write_df(batch_input)
-        await raw_output.write_metadata()
-        return {"chunk_count": raw_output.chunk_count, "typename": "database"}
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "database",
+            "total_record_count": raw_output.total_record_count,
+        }
 
     @activity.defn
     @auto_heartbeater
@@ -283,8 +287,11 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched schemas.
         """
         await raw_output.write_df(batch_input)
-        await raw_output.write_metadata()
-        return {"chunk_count": raw_output.chunk_count, "typename": "schema"}
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "schema",
+            "total_record_count": raw_output.total_record_count,
+        }
 
     @activity.defn
     @auto_heartbeater
@@ -310,8 +317,11 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched tables.
         """
         await raw_output.write_df(batch_input)
-        await raw_output.write_metadata()
-        return {"chunk_count": raw_output.chunk_count, "typename": "table"}
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "table",
+            "total_record_count": raw_output.total_record_count,
+        }
 
     @activity.defn
     @auto_heartbeater
@@ -337,8 +347,11 @@ class SQLWorkflow(WorkflowInterface):
         :return: The fetched columns.
         """
         await raw_output.write_df(batch_input)
-        await raw_output.write_metadata()
-        return {"chunk_count": raw_output.chunk_count, "typename": "column"}
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "column",
+            "total_record_count": raw_output.total_record_count,
+        }
 
     @activity.defn
     @auto_heartbeater
@@ -351,6 +364,21 @@ class SQLWorkflow(WorkflowInterface):
         )
     )
     async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
+        await metadata_output.write_metadata()
+
+    @activity.defn
+    @auto_heartbeater
+    @activity_pd(
+        metadata_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/{workflow_args['typename']}",
+            upload_file_prefix=workflow_args["output_prefix"],
+            chunk_count=workflow_args["chunk_count"],
+            total_record_count=workflow_args["record_count"],
+        )
+    )
+    async def write_raw_type_metadata(
+        self, metadata_output, batch_input=None, **kwargs
+    ):
         await metadata_output.write_metadata()
 
     @activity.defn
@@ -421,12 +449,17 @@ class SQLWorkflow(WorkflowInterface):
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
         )
-
         transform_activities: List[Any] = []
 
-        chunk_count = sum(value.get("chunk_count", 0) for value in raw_stat)
+        chunk_count = max(value.get("chunk_count", 0) for value in raw_stat)
         if chunk_count is None:
             raise ValueError("Invalid chunk_count")
+
+        raw_total_record_count = max(
+            value.get("total_record_count", 0) for value in raw_stat
+        )
+        if raw_total_record_count is None:
+            raise ValueError("Invalid raw_total_record_count")
 
         if chunk_count == 0:
             return
@@ -434,6 +467,19 @@ class SQLWorkflow(WorkflowInterface):
         typename = raw_stat[0].get("typename")
         if typename is None:
             raise ValueError("Invalid typename")
+
+        # Write the raw metadata
+        await workflow.execute_activity(
+            self.write_raw_type_metadata,
+            {
+                "record_count": raw_total_record_count,
+                "chunk_count": chunk_count,
+                "typename": typename,
+                **workflow_args,
+            },
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
         batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
@@ -467,6 +513,7 @@ class SQLWorkflow(WorkflowInterface):
             for record_count in record_counts
         )
 
+        # Write the transformed metadata
         await workflow.execute_activity(
             self.write_type_metadata,
             {
