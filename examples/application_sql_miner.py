@@ -193,7 +193,7 @@ async def main():
             "connection": {"connection": "dev"},
             "metadata": {
                 "exclude_filter": "{}",
-                "include_filter": '{"^SNOWFLAKE$":["^SECURITY_ESSENTIALS$","^TRUST_CENTER$","^CIS_BENCHMARKS$","^ORGANIZATION_USAGE_LOCAL$","^THREAT_INTELLIGENCE$","^TRUST_CENTER_STATE$","^CIS_COMMON$","^TELEMETRY$","^THREAT_INTELLIGENCE_COMMON$","^LOCAL$","^EXTERNAL_ACCESS$"]}',
+                "include_filter": '{"^SNOWFLAKE$":["^TELEMETRY$","^THREAT_INTELLIGENCE_COMMON$","^LOCAL$","^EXTERNAL_ACCESS$"]}',
                 "temp_table_regex": "",
                 "advanced_config_strategy": "default",
                 "use_source_schema_filtering": "false",
