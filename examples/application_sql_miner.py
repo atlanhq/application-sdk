@@ -184,11 +184,11 @@ async def main():
                 "ranged_sql_end_key": "[END_MARKER]",
             },
             "credentials": {
-                "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-                "user": os.getenv("SNOWFLAKE_USER", "postgres"),
-                "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
-                "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "compute_wh"),
-                "role": os.getenv("SNOWFLAKE_ROLE", "accountadmin"),
+                "account_id": os.getenv("ATLAN_SNOWFLAKE_ACCOUNT_ID", "localhost"),
+                "user": os.getenv("ATLAN_SNOWFLAKE_USER", "postgres"),
+                "password": os.getenv("ATLAN_SNOWFLAKE_PASSWORD", "password"),
+                "warehouse": os.getenv("ATLAN_SNOWFLAKE_WAREHOUSE", "compute_wh"),
+                "role": os.getenv("ATLAN_SNOWFLAKE_ROLE", "accountadmin"),
             },
             "connection": {"connection": "dev"},
             "metadata": {
