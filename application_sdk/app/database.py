@@ -11,10 +11,10 @@ from sqlalchemy.orm import sessionmaker
 def get_engine():
     """Get the database engine."""
     sqlalchemy_database_url = (
-        os.getenv("ATLAN_SQLALCHEMY_DATABASE_URL", "sqlite:////tmp/app.db")
+        os.getenv("ATLAN_SQLALCHEMY_DATABASE_URL") or "sqlite:////tmp/app.db"
     )
     sqlalchemy_connect_args = (
-        os.getenv("ATLAN_SQLALCHEMY_CONNECT_ARGS", """{"check_same_thread": false}""")
+        os.getenv("ATLAN_SQLALCHEMY_CONNECT_ARGS") or """{"check_same_thread": false}"""
     )
 
     return create_engine(
