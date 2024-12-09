@@ -110,7 +110,7 @@ To test and interact with the application and its services, use port forwarding 
 
 - **Atlan Application**
     ```bash
-    kubectl port-forward svc/phoenix-hello-world-app 8000:8000
+    kubectl port-forward svc/hello-world-app 8000:8000
     ```
     - Access the Atlan application at: http://localhost:8000
 

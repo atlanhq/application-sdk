@@ -11,7 +11,7 @@ environments:
       - namespace:
           atlan: atlan-temporal
           daprShared: atlan-dapr-shared
-          app: phoenix-hello-world-app
+          app: hello-world-app
 
   app:
     values:
