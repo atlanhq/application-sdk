@@ -15,10 +15,6 @@ class Output(ABC):
     chunk_count: int
 
     @abstractmethod
-    async def write_df(self, df: pd.DataFrame) -> None:
-        pass
-
-    @abstractmethod
     async def write_batched_df(self, df: pd.DataFrame) -> None:
         pass
 
