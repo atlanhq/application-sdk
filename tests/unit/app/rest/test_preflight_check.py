@@ -130,3 +130,41 @@ class TestSQLPreflightCheck:
 
         prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
+
+    async def test_check_endpoint_both_filters(self, client, controller):
+        """Test the /check endpoint with both filters"""
+
+        controller.sql_resource.fetch_metadata.return_value = [
+            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
+            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
+        ]
+
+        payload = {
+            "credentials": {
+                "account_id": "qdgrryr-uv65759",
+                "port": 443,
+                "user": "abhishekagrawalatlan907",
+                "password": "Something@123",
+                "role": "ACCOUNTADMIN",
+                "warehouse": "COMPUTE_WH",
+            },
+            "form_data": {
+                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
+                "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
+                "temp_table_regex": "",
+            },
+        }
+
+        response = client.post("/workflows/v1/check", json=payload)
+        assert response.status_code == 200
+
+        expected_sql = """
+           SELECT count(*) as "count"
+           FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+           WHERE NOT TABLE_NAME RLIKE '$^'
+            AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PRIVATE$'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
+        """
+
+        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
+        assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
