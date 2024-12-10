@@ -27,8 +27,6 @@ class Database(assets.Database):
 
             database.attributes.schema_count = obj.get("schema_count", 0)
 
-            # Q: Can we use the `Attributes` class directly here?
-            # database.attributes = assets.Database.Attributes(**obj)
             return database
         except AssertionError as e:
             raise ValueError(f"Error creating Database Entity: {str(e)}")
@@ -122,40 +120,32 @@ class Table(assets.Table):
             if not sql_table.custom_attributes:
                 sql_table.custom_attributes = {}
 
-            sql_table.custom_attributes["is_transient"] = obj.get("is_transient", None)
+            sql_table.custom_attributes["is_transient"] = obj.get("is_transient")
 
-            if table_id := obj.get("table_id", None):
-                sql_table.custom_attributes["source_id"] = table_id
-                sql_table.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
-                sql_table.custom_attributes["schema_id"] = obj.get("table_schema_id")
+            sql_table.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
+            sql_table.custom_attributes["schema_id"] = obj.get("table_schema_id")
 
-            if last_ddl := obj.get("last_ddl", None):
-                sql_table.custom_attributes["last_ddl"] = last_ddl
-            if last_ddl_by := obj.get("last_ddl_by", None):
-                sql_table.custom_attributes["last_ddl_by"] = last_ddl_by
+            sql_table.custom_attributes["last_ddl"] = obj.get("last_ddl")
+            sql_table.custom_attributes["last_ddl_by"] = obj.get("last_ddl_by")
 
-            sql_table.custom_attributes["is_secure"] = obj.get("is_secure", None)
-            sql_table.custom_attributes["retention_time"] = obj.get(
-                "retention_time", None
-            )
-            sql_table.custom_attributes["stage_url"] = obj.get("stage_url", None)
+            sql_table.custom_attributes["is_secure"] = obj.get("is_secure")
+            sql_table.custom_attributes["retention_time"] = obj.get("retention_time")
+            sql_table.custom_attributes["stage_url"] = obj.get("stage_url")
             sql_table.custom_attributes["is_insertable_into"] = obj.get(
-                "is_insertable_into", None
+                "is_insertable_into"
             )
             sql_table.custom_attributes["number_columns_in_part_key"] = obj.get(
-                "number_columns_in_part_key", None
+                "number_columns_in_part_key"
             )
             sql_table.custom_attributes["columns_participating_in_part_key"] = obj.get(
-                "columns_participating_in_part_key", None
+                "columns_participating_in_part_key"
             )
-            sql_table.custom_attributes["is_typed"] = obj.get("is_typed", None)
+            sql_table.custom_attributes["is_typed"] = obj.get("is_typed")
             sql_table.custom_attributes["auto_clustering_on"] = obj.get(
-                "auto_clustering_on", None
+                "auto_clustering_on"
             )
-            sql_table.custom_attributes["engine"] = obj.get("engine", None)
-            sql_table.custom_attributes["auto_increment"] = obj.get(
-                "auto_increment", None
-            )
+            sql_table.custom_attributes["engine"] = obj.get("engine")
+            sql_table.custom_attributes["auto_increment"] = obj.get("auto_increment")
 
             return sql_table
         except AssertionError as e:
@@ -219,7 +209,7 @@ class Column(assets.Column):
                 ),
                 connection_qualified_name=obj["connection_qualified_name"],
             )
-            sql_column.attributes.data_type = obj.get("data_type", None)
+            sql_column.attributes.data_type = obj.get("data_type")
             sql_column.attributes.is_nullable = obj.get("is_nullable", "YES") == "YES"
             sql_column.attributes.is_partition = obj.get("is_partition", None) == "YES"
             sql_column.attributes.partition_order = obj.get("partition_order", 0)
@@ -236,11 +226,9 @@ class Column(assets.Column):
                 "is_self_referencing", "NO"
             )
 
-            if column_id := obj.get("column_id", None):
-                sql_column.custom_attributes["source_id"] = column_id
-                sql_column.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
-                sql_column.custom_attributes["schema_id"] = obj.get("table_schema_id")
-                sql_column.custom_attributes["table_id"] = obj.get("table_id")
+            sql_column.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
+            sql_column.custom_attributes["schema_id"] = obj.get("table_schema_id")
+            sql_column.custom_attributes["table_id"] = obj.get("table_id")
 
             sql_column.custom_attributes["character_octet_length"] = obj.get(
                 "character_octet_length", None

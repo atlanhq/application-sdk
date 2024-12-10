@@ -1,0 +1,17 @@
+{
+  "regular_database": {
+    "typeName": "Database",
+    "attributes": {
+      "name": "TEST_DB",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaCount": 5,
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "source_id": "db123"
+    }
+  }
+}

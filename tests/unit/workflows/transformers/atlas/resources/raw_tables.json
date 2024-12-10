@@ -1,0 +1,53 @@
+{
+  "regular_table": {
+    "table_name": "TEST_TABLE",
+    "table_catalog": "TEST_DB",
+    "table_schema": "TEST_SCHEMA",
+    "table_type": "TABLE",
+    "column_count": 10,
+    "row_count": 1000,
+    "size_bytes": 1024,
+    "comment": "Test table",
+    "is_transient": "NO",
+    "source_id": "table123",
+    "source_owner": "ADMIN",
+    "table_catalog_id": "db123",
+    "table_schema_id": "schema123",
+    "last_ddl": "2024-01-01",
+    "last_ddl_by": "ADMIN",
+    "is_secure": "YES",
+    "retention_time": 90,
+    "auto_clustering_on": "YES"
+  },
+  "regular_view": {
+    "table_name": "TEST_VIEW",
+    "table_catalog": "TEST_DB",
+    "table_schema": "TEST_SCHEMA",
+    "table_type": "VIEW",
+    "VIEW_DEFINITION": "SELECT * FROM TEST_TABLE",
+    "column_count": 5,
+    "is_secure": "YES"
+  },
+  "regular_materialized_view": {
+    "table_name": "TEST_MV",
+    "table_catalog": "TEST_DB",
+    "table_schema": "TEST_SCHEMA",
+    "table_type": "MATERIALIZED VIEW",
+    "VIEW_DEFINITION": "SELECT sum(amount) FROM transactions",
+    "column_count": 3,
+    "row_count": 100,
+    "size_bytes": 512,
+    "is_secure": "YES",
+    "auto_refresh": "YES"
+  },
+  "regular_dynamic_table": {
+    "table_name": "TEST_DYNAMIC",
+    "table_catalog": "TEST_DB",
+    "table_schema": "TEST_SCHEMA",
+    "table_type": "DYNAMIC TABLE",
+    "is_dynamic": "YES",
+    "column_count": 4,
+    "target_lag": "1 hour",
+    "warehouse": "COMPUTE_WH"
+  }
+}
