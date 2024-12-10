@@ -197,18 +197,22 @@ class SQLWorkflow(WorkflowInterface):
     @staticmethod
     def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
         """
-        Method to prepare the query with the include and exclude filters
+        Method to prepare the query with the include and exclude filters.
+        Only fetches all metadata when both include and exclude filters are empty.
         """
         try:
-            include_filter = workflow_args.get(
-                "metadata", workflow_args.get("form_data", {})
-            ).get("include_filter", "{}")
-            exclude_filter = workflow_args.get(
-                "metadata", workflow_args.get("form_data", {})
-            ).get("exclude_filter", "{}")
-            temp_table_regex = workflow_args.get(
-                "metadata", workflow_args.get("form_data", {})
-            ).get("temp_table_regex", "")
+            metadata = workflow_args.get("metadata", workflow_args.get("form_data", {}))
+            include_filter = metadata.get("include_filter", "{}")
+            exclude_filter = metadata.get("exclude_filter", "{}")
+            temp_table_regex = metadata.get("temp_table_regex", "")
+
+            if include_filter == "{}" and exclude_filter == "{}":
+                return (
+                    query.replace("{normalized_exclude_regex}", "^$")
+                    .replace("{normalized_include_regex}", ".*")
+                    .replace("{exclude_table}", "")
+                )
+
             normalized_include_regex, normalized_exclude_regex, exclude_table = (
                 prepare_filters(
                     include_filter,
@@ -216,6 +220,7 @@ class SQLWorkflow(WorkflowInterface):
                     temp_table_regex,
                 )
             )
+
             exclude_empty_tables = workflow_args.get("metadata", {}).get(
                 "exclude_empty_tables", False
             )
@@ -232,6 +237,7 @@ class SQLWorkflow(WorkflowInterface):
             )
         except Exception as e:
             logger.error(f"Error preparing query [{query}]:  {e}")
+            return None
 
     @activity.defn
     @auto_heartbeater
