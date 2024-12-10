@@ -36,7 +36,7 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
             for name, arg in kwargs.items():
                 arg = arg(self, *args)
                 if isinstance(arg, Input):
-                    fn_kwargs[name] = await arg.get_dataframe()
+                    fn_kwargs[name] = await to_async(arg.get_dataframe())
                 elif isinstance(arg, Output):
                     fn_kwargs[name] = arg
                     outputs[name] = arg

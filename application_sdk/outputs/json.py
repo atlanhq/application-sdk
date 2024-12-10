@@ -129,7 +129,7 @@ class JsonOutput(Output):
                 self.buffer.append(chunk)
                 self.current_buffer_size += len(chunk)
 
-                if self.current_buffer_size >= self.buffer_size:
+                if self.current_buffer_size >= partition:
                     await self._flush_buffer()
 
             await self._flush_buffer()
