@@ -1,17 +1,16 @@
 import json
-from unittest.mock import AsyncMock, Mock
 from typing import Any
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from fastapi.testclient import TestClient
-from fastapi import HTTPException
 
 from application_sdk.app.rest.fastapi import FastAPIApplication
+from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest
 
 
 class TestSQLPreflightCheck:
@@ -35,7 +34,9 @@ class TestSQLPreflightCheck:
         return controller
 
     @pytest.fixture
-    def app(self, controller: SQLWorkflowPreflightCheckController) -> FastAPIApplication:
+    def app(
+        self, controller: SQLWorkflowPreflightCheckController
+    ) -> FastAPIApplication:
         """Create FastAPI test application"""
         app = FastAPIApplication(preflight_check_controller=controller)
         app.register_routers()
@@ -166,9 +167,11 @@ class TestSQLPreflightCheck:
         prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
-    async def test_preflight_check_request_validation(self, controller: SQLWorkflowPreflightCheckController):
+    async def test_preflight_check_request_validation(
+        self, controller: SQLWorkflowPreflightCheckController
+    ):
         """Test validation of PreflightCheckRequest structure without API involvement"""
-        
+
         # Test with valid payload
         valid_data = {
             "credentials": {
@@ -183,14 +186,18 @@ class TestSQLPreflightCheck:
                 "temp_table_regex": "",
             },
         }
-        
+
         # Verify valid data can be parsed into PreflightCheckRequest
         request = PreflightCheckRequest(**valid_data)
         assert isinstance(request, PreflightCheckRequest)
-        
+
         # Verify form_data
-        assert json.loads(request.form_data["include_filter"]) == {"^TESTDB$": ["^PUBLIC$"]}
-        assert json.loads(request.form_data["exclude_filter"]) == {"^TESTDB$": ["^PRIVATE$"]}
+        assert json.loads(request.form_data["include_filter"]) == {
+            "^TESTDB$": ["^PUBLIC$"]
+        }
+        assert json.loads(request.form_data["exclude_filter"]) == {
+            "^TESTDB$": ["^PRIVATE$"]
+        }
         assert request.form_data["temp_table_regex"] == ""
 
         # Test with missing credentials
