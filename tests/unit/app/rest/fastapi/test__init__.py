@@ -1,26 +1,29 @@
 import json
 from unittest.mock import AsyncMock, Mock
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from fastapi import HTTPException
 
 from application_sdk.app.rest.fastapi import FastAPIApplication
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest
 
 
 class TestSQLPreflightCheck:
     @pytest.fixture
-    def mock_sql_resource(self):
+    def mock_sql_resource(self) -> Any:
         mock = Mock()
         mock.fetch_metadata = AsyncMock()
         mock.sql_input = AsyncMock()
         return mock
 
     @pytest.fixture
-    def controller(self, mock_sql_resource):
+    def controller(self, mock_sql_resource: Any) -> SQLWorkflowPreflightCheckController:
         controller = SQLWorkflowPreflightCheckController(mock_sql_resource)
         controller.TABLES_CHECK_SQL = """
             SELECT count(*) as "count"
@@ -32,7 +35,7 @@ class TestSQLPreflightCheck:
         return controller
 
     @pytest.fixture
-    def app(self, controller):
+    def app(self, controller: SQLWorkflowPreflightCheckController) -> FastAPIApplication:
         """Create FastAPI test application"""
         app = FastAPIApplication(preflight_check_controller=controller)
         app.register_routers()
@@ -40,11 +43,11 @@ class TestSQLPreflightCheck:
         return app
 
     @pytest.fixture
-    def client(self, app):
+    def client(self, app: FastAPIApplication) -> TestClient:
         """Create test client"""
         return TestClient(app.app)
 
-    def normalize_sql(self, sql):
+    def normalize_sql(self, sql: str) -> str:
         """Helper to normalize SQL for comparison"""
         return " ".join(sql.split()).strip().lower()
 
@@ -60,8 +63,6 @@ class TestSQLPreflightCheck:
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
                 "port": 443,
-                "user": "abhishekagrawalatlan907",
-                "password": "Something@123",
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
@@ -105,8 +106,6 @@ class TestSQLPreflightCheck:
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
                 "port": 443,
-                "user": "abhishekagrawalatlan907",
-                "password": "Something@123",
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
@@ -143,8 +142,6 @@ class TestSQLPreflightCheck:
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
                 "port": 443,
-                "user": "abhishekagrawalatlan907",
-                "password": "Something@123",
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
@@ -168,3 +165,53 @@ class TestSQLPreflightCheck:
 
         prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
+
+    async def test_preflight_check_request_validation(self, controller: SQLWorkflowPreflightCheckController):
+        """Test validation of PreflightCheckRequest structure without API involvement"""
+        
+        # Test with valid payload
+        valid_data = {
+            "credentials": {
+                "account_id": "qdgrryr-uv65759",
+                "port": 443,
+                "role": "ACCOUNTADMIN",
+                "warehouse": "COMPUTE_WH",
+            },
+            "form_data": {
+                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
+                "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
+                "temp_table_regex": "",
+            },
+        }
+        
+        # Verify valid data can be parsed into PreflightCheckRequest
+        request = PreflightCheckRequest(**valid_data)
+        assert isinstance(request, PreflightCheckRequest)
+        
+        # Verify form_data
+        assert json.loads(request.form_data["include_filter"]) == {"^TESTDB$": ["^PUBLIC$"]}
+        assert json.loads(request.form_data["exclude_filter"]) == {"^TESTDB$": ["^PRIVATE$"]}
+        assert request.form_data["temp_table_regex"] == ""
+
+        # Test with missing credentials
+        invalid_data = {
+            "form_data": {
+                "include_filter": "{}",
+                "exclude_filter": "{}",
+                "temp_table_regex": "",
+            }
+        }
+        with pytest.raises(ValueError):
+            PreflightCheckRequest(**invalid_data)
+
+        # Test with missing form_data fields
+        invalid_form_data = {
+            "credentials": {
+                "account_id": "qdgrryr-uv65759",
+                "port": 443,
+                "role": "ACCOUNTADMIN",
+                "warehouse": "COMPUTE_WH",
+            },
+        }
+        with pytest.raises(ValueError):
+            PreflightCheckRequest(**invalid_form_data)
