@@ -1,7 +1,6 @@
 import json
 import os
-import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
@@ -32,52 +31,64 @@ def transformer():
     )
 
 
+def assert_attributes(
+    transformed_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+    attributes: List[str],
+    is_custom: bool = False,
+):
+    attr_type = "customAttributes" if is_custom else "attributes"
+    for attr in attributes:
+        assert (
+            transformed_data[attr_type][attr] == expected_data[attr_type][attr]
+        ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+
+
 def test_table_transformation(
     transformer: AtlasTransformer,
     raw_data: Dict[str, Any],
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of regular tables"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "TABLE", raw_data["tables"][0], workflow_id, run_id
+        "TABLE", raw_data["regular_table"], "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is not None
-    expected_table = expected_data["tables"][0]
+    expected_table = expected_data["regular_table"]
 
-    # Test all table attributes
+    # Basic type assertion
     assert transformed_data["typeName"] == "Table"
-    assert (
-        transformed_data["attributes"]["name"] == expected_table["attributes"]["name"]
-    )
-    assert (
-        transformed_data["attributes"]["qualifiedName"]
-        == expected_table["attributes"]["qualifiedName"]
-    )
-    assert (
-        transformed_data["attributes"]["columnCount"]
-        == expected_table["attributes"]["columnCount"]
-    )
-    assert (
-        transformed_data["attributes"]["rowCount"]
-        == expected_table["attributes"]["rowCount"]
-    )
-    assert (
-        transformed_data["attributes"]["sizeBytes"]
-        == expected_table["attributes"]["sizeBytes"]
+
+    # Standard attributes verification
+    standard_attributes = [
+        "name",
+        "qualifiedName",
+        "columnCount",
+        "rowCount",
+        "sizeBytes",
+        "databaseName",
+        "schemaName",
+        "databaseQualifiedName",
+        "schemaQualifiedName",
+        "connectionQualifiedName",
+        "sourceCreatedBy",
+        "lastSyncRun",
+        "lastSyncWorkflowName",
+    ]
+    assert_attributes(transformed_data, expected_table, standard_attributes)
+
+    # Custom attributes verification
+    custom_attributes = ["is_transient", "source_id"]
+    assert_attributes(
+        transformed_data, expected_table, custom_attributes, is_custom=True
     )
 
-    # Test custom attributes
+    # Special handling for description as it's JSON
     assert (
-        transformed_data["customAttributes"]["is_transient"]
-        == expected_table["customAttributes"]["is_transient"]
-    )
-    assert (
-        transformed_data["customAttributes"]["source_id"]
-        == expected_table["customAttributes"]["source_id"]
+        json.loads(transformed_data["attributes"]["description"])
+        == expected_table["attributes"]["description"]
     )
 
 
@@ -87,22 +98,16 @@ def test_view_transformation(
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of views"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "VIEW", raw_data["views"][0], workflow_id, run_id
+        "VIEW", raw_data["regular_view"], "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is not None
-    expected_view = expected_data["views"][0]
+    expected_view = expected_data["regular_view"]
 
-    # Test view-specific attributes
     assert transformed_data["typeName"] == "View"
-    assert (
-        transformed_data["attributes"]["definition"]
-        == expected_view["attributes"]["definition"]
-    )
+    assert_attributes(transformed_data, expected_view, ["definition"])
 
 
 def test_materialized_view_transformation(
@@ -111,19 +116,16 @@ def test_materialized_view_transformation(
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of materialized views"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "TABLE", raw_data["materialized_views"][0], workflow_id, run_id
+        "TABLE",
+        raw_data["regular_materialized_view"],
+        "test_workflow_id",
+        "test_run_id",
     )
 
     assert transformed_data is not None
-    expected_mv = expected_data["materialized_views"][0]
+    expected_mv = expected_data["regular_materialized_view"]
 
-    # Test materialized view specific attributes
     assert transformed_data["typeName"] == "MaterialisedView"
-    assert (
-        transformed_data["attributes"]["definition"]
-        == expected_mv["attributes"]["definition"]
-    )
+    assert_attributes(transformed_data, expected_mv, ["definition"])

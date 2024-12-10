@@ -1,7 +1,6 @@
 import json
 import os
-import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
@@ -32,67 +31,51 @@ def transformer():
     )
 
 
+def assert_attributes(
+    transformed_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+    attributes: List[str],
+    is_custom: bool = False,
+):
+    attr_type = "customAttributes" if is_custom else "attributes"
+    for attr in attributes:
+        assert (
+            transformed_data[attr_type][attr] == expected_data[attr_type][attr]
+        ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+
+
 def test_regular_column_transformation(
     transformer: AtlasTransformer,
     raw_data: Dict[str, Any],
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of regular table columns"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "COLUMN", raw_data["regular_columns"][0], workflow_id, run_id
+        "COLUMN", raw_data["regular_columns"], "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is not None
-    expected_column = expected_data["regular_columns"][0]
+    expected_column = expected_data["regular_columns"]
 
-    # Test basic attributes
     assert transformed_data["typeName"] == "Column"
-    assert (
-        transformed_data["attributes"]["name"] == expected_column["attributes"]["name"]
-    )
-    assert (
-        transformed_data["attributes"]["qualifiedName"]
-        == expected_column["attributes"]["qualifiedName"]
-    )
-    assert (
-        transformed_data["attributes"]["dataType"]
-        == expected_column["attributes"]["dataType"]
-    )
-    assert (
-        transformed_data["attributes"]["order"]
-        == expected_column["attributes"]["order"]
-    )
 
-    # Test nullable and constraints
-    assert (
-        transformed_data["attributes"]["isNullable"]
-        == expected_column["attributes"]["isNullable"]
-    )
-    assert (
-        transformed_data["attributes"]["isPrimary"]
-        == expected_column["attributes"]["isPrimary"]
-    )
-    assert (
-        transformed_data["attributes"]["isForeign"]
-        == expected_column["attributes"]["isForeign"]
-    )
-
-    # Test data type specifics
-    assert (
-        transformed_data["attributes"]["maxLength"]
-        == expected_column["attributes"]["maxLength"]
-    )
-    assert (
-        transformed_data["attributes"]["precision"]
-        == expected_column["attributes"]["precision"]
-    )
-    assert (
-        transformed_data["attributes"]["numericScale"]
-        == expected_column["attributes"]["numericScale"]
-    )
+    # Standard attributes verification
+    standard_attributes = [
+        "name",
+        "qualifiedName",
+        "dataType",
+        "order",
+        "isNullable",
+        "isPrimary",
+        "isForeign",
+        "maxLength",
+        "precision",
+        "numericScale",
+        "lastSyncRun",
+        "lastSyncWorkflowName",
+    ]
+    assert_attributes(transformed_data, expected_column, standard_attributes)
 
 
 def test_view_column_transformation(
@@ -101,32 +84,16 @@ def test_view_column_transformation(
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of view columns"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "COLUMN", raw_data["view_columns"][0], workflow_id, run_id
+        "COLUMN", raw_data["view_columns"], "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is not None
-    expected_column = expected_data["view_columns"][0]
+    expected_column = expected_data["view_columns"]
 
-    # Test view column specific attributes
-    assert (
-        transformed_data["attributes"]["name"] == expected_column["attributes"]["name"]
-    )
-    assert (
-        transformed_data["attributes"]["dataType"]
-        == expected_column["attributes"]["dataType"]
-    )
-    assert (
-        transformed_data["attributes"]["precision"]
-        == expected_column["attributes"]["precision"]
-    )
-    assert (
-        transformed_data["attributes"]["numericScale"]
-        == expected_column["attributes"]["numericScale"]
-    )
+    standard_attributes = ["name", "dataType", "precision", "numericScale"]
+    assert_attributes(transformed_data, expected_column, standard_attributes)
 
     # Test view relationship
     assert "view" in transformed_data["attributes"]
@@ -142,32 +109,19 @@ def test_materialized_view_column_transformation(
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of materialized view columns"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "COLUMN", raw_data["materialized_view_columns"][0], workflow_id, run_id
+        "COLUMN",
+        raw_data["materialized_view_columns"],
+        "test_workflow_id",
+        "test_run_id",
     )
 
     assert transformed_data is not None
-    expected_column = expected_data["materialized_view_columns"][0]
+    expected_column = expected_data["materialized_view_columns"]
 
-    # Test materialized view column specific attributes
-    assert (
-        transformed_data["attributes"]["name"] == expected_column["attributes"]["name"]
-    )
-    assert (
-        transformed_data["attributes"]["dataType"]
-        == expected_column["attributes"]["dataType"]
-    )
-    assert (
-        transformed_data["attributes"]["precision"]
-        == expected_column["attributes"]["precision"]
-    )
-    assert (
-        transformed_data["attributes"]["numericScale"]
-        == expected_column["attributes"]["numericScale"]
-    )
+    standard_attributes = ["name", "dataType", "precision", "numericScale"]
+    assert_attributes(transformed_data, expected_column, standard_attributes)
 
     # Test materialized view relationship
     assert "materialisedView" in transformed_data["attributes"]
@@ -187,32 +141,25 @@ def test_column_with_custom_attributes(
     expected_data: Dict[str, Any],
 ):
     """Test column transformation with custom attributes"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "COLUMN", raw_data["columns_with_custom_attrs"][0], workflow_id, run_id
+        "COLUMN",
+        raw_data["columns_with_custom_attrs"],
+        "test_workflow_id",
+        "test_run_id",
     )
 
     assert transformed_data is not None
-    expected_column = expected_data["columns_with_custom_attrs"][0]
+    expected_column = expected_data["columns_with_custom_attrs"]
 
-    # Test custom attributes
-    assert (
-        transformed_data["customAttributes"]["is_self_referencing"]
-        == expected_column["customAttributes"]["is_self_referencing"]
-    )
-    assert (
-        transformed_data["customAttributes"]["source_id"]
-        == expected_column["customAttributes"]["source_id"]
-    )
-    assert (
-        transformed_data["customAttributes"]["is_auto_increment"]
-        == expected_column["customAttributes"]["is_auto_increment"]
-    )
-    assert (
-        transformed_data["customAttributes"]["is_generated"]
-        == expected_column["customAttributes"]["is_generated"]
+    custom_attributes = [
+        "is_self_referencing",
+        "source_id",
+        "is_auto_increment",
+        "is_generated",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
     )
 
     # Test table relationship
@@ -225,14 +172,10 @@ def test_column_with_custom_attributes(
 
 def test_column_invalid_data(transformer: AtlasTransformer):
     """Test column transformation with invalid data"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
-    # Test missing required fields
     invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
-
     transformed_data = transformer.transform_metadata(
-        "COLUMN", invalid_data, workflow_id, run_id
+        "COLUMN", invalid_data, "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is None

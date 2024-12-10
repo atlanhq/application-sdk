@@ -1,7 +1,7 @@
 import json
 import os
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
@@ -32,86 +32,61 @@ def transformer():
     )
 
 
+def assert_attributes(
+    transformed_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+    attributes: List[str],
+    is_custom: bool = False,
+):
+    attr_type = "customAttributes" if is_custom else "attributes"
+    for attr in attributes:
+        assert (
+            transformed_data[attr_type][attr] == expected_data[attr_type][attr]
+        ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+
+
 def test_regular_schema_transformation(
     transformer: AtlasTransformer,
     raw_data: Dict[str, Any],
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of regular schemas"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
-
     transformed_data = transformer.transform_metadata(
-        "SCHEMA", raw_data["schemas"][0], workflow_id, run_id
+        "SCHEMA", raw_data["regular_schema"], "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is not None
-    expected_schema = expected_data["schemas"][0]
+    expected_schema = expected_data["regular_schema"]
 
-    # Test basic attributes
+    # Basic type assertion
     assert transformed_data["typeName"] == "Schema"
-    assert (
-        transformed_data["attributes"]["name"] == expected_schema["attributes"]["name"]
-    )
-    assert (
-        transformed_data["attributes"]["qualifiedName"]
-        == expected_schema["attributes"]["qualifiedName"]
-    )
-    assert (
-        transformed_data["attributes"]["databaseName"]
-        == expected_schema["attributes"]["databaseName"]
-    )
-    assert (
-        transformed_data["attributes"]["databaseQualifiedName"]
-        == expected_schema["attributes"]["databaseQualifiedName"]
+
+    # Standard attributes verification
+    standard_attributes = [
+        "name",
+        "qualifiedName",
+        "databaseName",
+        "databaseQualifiedName",
+        "tableCount",
+        "viewsCount",
+        "lastSyncRun",
+        "lastSyncWorkflowName",
+    ]
+    assert_attributes(transformed_data, expected_schema, standard_attributes)
+
+    # Custom attributes verification
+    custom_attributes = ["source_id", "catalog_id", "is_managed_access"]
+    assert_attributes(
+        transformed_data, expected_schema, custom_attributes, is_custom=True
     )
 
-    # Test counts
-    assert (
-        transformed_data["attributes"]["tableCount"]
-        == expected_schema["attributes"]["tableCount"]
-    )
-    assert (
-        transformed_data["attributes"]["viewsCount"]
-        == expected_schema["attributes"]["viewsCount"]
-    )
-
-    # Test custom attributes
-    assert (
-        transformed_data["customAttributes"]["catalog_id"]
-        == expected_schema["customAttributes"]["catalog_id"]
-    )
-    assert (
-        transformed_data["customAttributes"]["is_managed_access"]
-        == expected_schema["customAttributes"]["is_managed_access"]
-    )
-
-
-def test_schema_with_metadata(
-    transformer: AtlasTransformer,
-    raw_data: Dict[str, Any],
-    expected_data: Dict[str, Any],
-):
-    """Test schema transformation with additional metadata"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
-
-    transformed_data = transformer.transform_metadata(
-        "SCHEMA", raw_data["schemas_with_metadata"][0], workflow_id, run_id
-    )
-
-    assert transformed_data is not None
-    expected_schema = expected_data["schemas_with_metadata"][0]
-
-    # Test metadata attributes
+    # Special handling for description as it's JSON
     assert (
         json.loads(transformed_data["attributes"]["description"])
         == expected_schema["attributes"]["description"]
     )
-    assert (
-        transformed_data["attributes"]["sourceCreatedBy"]
-        == expected_schema["attributes"]["sourceCreatedBy"]
-    )
+
+    # Special handling for timestamps
     assert (
         transformed_data["attributes"]["sourceCreatedAt"].timestamp()
         == expected_schema["attributes"]["sourceCreatedAt"]
@@ -119,6 +94,12 @@ def test_schema_with_metadata(
     assert (
         transformed_data["attributes"]["sourceUpdatedAt"].timestamp()
         == expected_schema["attributes"]["sourceUpdatedAt"]
+    )
+
+    # Regular metadata attribute
+    assert (
+        transformed_data["attributes"]["sourceCreatedBy"]
+        == expected_schema["attributes"]["sourceCreatedBy"]
     )
 
 

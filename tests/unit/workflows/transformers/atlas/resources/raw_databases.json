@@ -1,29 +1,9 @@
 {
-  "databases": [
-    {
-      "database_name": "TEST_DB",
-      "connection_qualified_name": "default/snowflake/1728518400",
-      "schema_count": 5,
-      "source_id": "db123",
-      "is_managed": "YES",
-      "retention_time": 90,
-      "created_on": "2024-01-01",
-      "source_owner": "ADMIN"
-    }
-  ],
-  "databases_with_metadata": [
-    {
-      "database_name": "PROD_DB",
-      "connection_qualified_name": "default/snowflake/1728518400",
-      "schema_count": 10,
-      "source_id": "db456",
-      "is_managed": "YES",
-      "retention_time": 90,
-      "created_on": "2024-01-01",
-      "source_owner": "PROD_ADMIN",
-      "comment": "Production database",
-      "region": "us-east-1",
-      "tags": ["prod", "critical"]
-    }
-  ]
+  "regular_database": {
+    "database_name": "TEST_DB",
+    "schema_count": 5,
+    "source_id": "db123",
+    "created_on": "2024-01-01",
+    "source_owner": "ADMIN"
+  }
 }

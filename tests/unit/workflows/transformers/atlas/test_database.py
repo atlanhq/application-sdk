@@ -1,7 +1,7 @@
 import json
 import os
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import pytest
 
@@ -32,45 +32,51 @@ def transformer():
     )
 
 
+def assert_attributes(
+    transformed_data: Dict[str, Any],
+    expected_db: Dict[str, Any],
+    attributes: List[str],
+    is_custom: bool = False,
+):
+    attr_type = "customAttributes" if is_custom else "attributes"
+    for attr in attributes:
+        assert (
+            transformed_data[attr_type][attr] == expected_db[attr_type][attr]
+        ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
+
+
 def test_database_transformation(
     transformer: AtlasTransformer,
     raw_data: Dict[str, Any],
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of raw database metadata"""
-    workflow_id = str(uuid.uuid4())
-    run_id = str(uuid.uuid4())
 
     transformed_data = transformer.transform_metadata(
-        "DATABASE", raw_data["databases"][0], workflow_id, run_id
+        "DATABASE", raw_data["regular_database"], "test_workflow_id", "test_run_id"
     )
 
     assert transformed_data is not None
-    expected_db = expected_data["databases"][0]
+    expected_db = expected_data["regular_database"]
 
-    # Test all database attributes
+    # Basic type assertion
     assert transformed_data["typeName"] == "Database"
-    assert transformed_data["attributes"]["name"] == expected_db["attributes"]["name"]
-    assert (
-        transformed_data["attributes"]["qualifiedName"]
-        == expected_db["attributes"]["qualifiedName"]
-    )
-    assert (
-        transformed_data["attributes"]["schemaCount"]
-        == expected_db["attributes"]["schemaCount"]
-    )
-    assert (
-        transformed_data["attributes"]["connectionQualifiedName"]
-        == expected_db["attributes"]["connectionQualifiedName"]
-    )
-    assert transformed_data["attributes"]["lastSyncRun"] == run_id
-    assert transformed_data["attributes"]["lastSyncWorkflowName"] == workflow_id
 
-    # Test custom attributes
-    assert (
-        transformed_data["customAttributes"]["source_id"]
-        == expected_db["customAttributes"]["source_id"]
-    )
+    # Standard attributes verification
+    standard_attributes = [
+        "name",
+        "qualifiedName",
+        "schemaCount",
+        "connectionQualifiedName",
+        "lastSyncRun",
+        "lastSyncWorkflowName",
+        "sourceCreatedBy",
+    ]
+    assert_attributes(transformed_data, expected_db, standard_attributes)
+
+    # Custom attributes verification
+    custom_attributes = ["source_id"]
+    assert_attributes(transformed_data, expected_db, custom_attributes, is_custom=True)
 
 
 def test_database_invalid_data(transformer: AtlasTransformer):

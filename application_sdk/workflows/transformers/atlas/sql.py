@@ -27,8 +27,6 @@ class Database(assets.Database):
 
             database.attributes.schema_count = obj.get("schema_count", 0)
 
-            # Q: Can we use the `Attributes` class directly here?
-            # database.attributes = assets.Database.Attributes(**obj)
             return database
         except AssertionError as e:
             raise ValueError(f"Error creating Database Entity: {str(e)}")
