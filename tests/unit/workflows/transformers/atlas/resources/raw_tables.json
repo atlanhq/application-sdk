@@ -10,7 +10,7 @@
       "row_count": 1000,
       "size_bytes": 1024,
       "is_transient": "NO",
-      "table_id": "table123",
+      "source_id": "table123",
       "table_catalog_id": "db123",
       "table_schema_id": "schema123",
       "last_ddl": "2024-01-01",
