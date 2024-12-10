@@ -1,0 +1,43 @@
+{
+  "databases": [
+    {
+      "typeName": "Database",
+      "attributes": {
+        "name": "TEST_DB",
+        "qualifiedName": "default/snowflake/1728518400/TEST_DB",
+        "schemaCount": 5,
+        "connectionQualifiedName": "default/snowflake/1728518400",
+        "lastSyncRun": "",
+        "lastSyncWorkflowName": ""
+      },
+      "customAttributes": {
+        "source_id": "db123",
+        "is_managed": "YES",
+        "retention_time": 90
+      }
+    }
+  ],
+  "databases_with_metadata": [
+    {
+      "typeName": "Database",
+      "attributes": {
+        "name": "PROD_DB",
+        "qualifiedName": "default/snowflake/1728518400/PROD_DB",
+        "schemaCount": 10,
+        "connectionQualifiedName": "default/snowflake/1728518400",
+        "description": "Production database",
+        "owner": "PROD_ADMIN",
+        "createTime": 1704067200000,
+        "lastSyncRun": "",
+        "lastSyncWorkflowName": ""
+      },
+      "customAttributes": {
+        "source_id": "db456",
+        "is_managed": "YES",
+        "retention_time": 90,
+        "region": "us-east-1",
+        "tags": ["prod", "critical"]
+      }
+    }
+  ]
+}

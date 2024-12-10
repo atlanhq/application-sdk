@@ -1,0 +1,31 @@
+{
+  "schemas": [
+    {
+      "schema_name": "TEST_SCHEMA",
+      "catalog_name": "TEST_DB",
+      "connection_qualified_name": "default/snowflake/1728518400",
+      "table_count": 5,
+      "views_count": 2,
+      "catalog_id": "schema123",
+      "is_managed_access": "YES"
+    }
+  ],
+  "schemas_with_metadata": [
+    {
+      "schema_name": "PROD_SCHEMA",
+      "catalog_name": "PROD_DB",
+      "connection_qualified_name": "default/snowflake/1728518400",
+      "table_count": 10,
+      "views_count": 5,
+      "catalog_id": "schema456",
+      "is_managed_access": "YES",
+      "comment": "Production schema for customer data",
+      "source_owner": "PROD_ADMIN",
+      "created": 1728518400000,
+      "last_altered": 1728518400000,
+      "retention_time": 90,
+      "is_transient": "NO",
+      "is_managed": "YES"
+    }
+  ]
+}

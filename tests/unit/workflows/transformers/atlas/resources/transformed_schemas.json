@@ -1,0 +1,45 @@
+{
+  "schemas": [
+    {
+      "typeName": "Schema",
+      "attributes": {
+        "name": "TEST_SCHEMA",
+        "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+        "databaseName": "TEST_DB",
+        "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+        "connectionQualifiedName": "default/snowflake/1728518400",
+        "tableCount": 5,
+        "viewsCount": 2
+      },
+      "customAttributes": {
+        "catalog_id": "schema123",
+        "is_managed_access": "YES"
+      }
+    }
+  ],
+  "schemas_with_metadata": [
+    {
+      "typeName": "Schema",
+      "attributes": {
+        "name": "PROD_SCHEMA",
+        "qualifiedName": "default/snowflake/1728518400/PROD_DB/PROD_SCHEMA",
+        "databaseName": "PROD_DB",
+        "databaseQualifiedName": "default/snowflake/1728518400/PROD_DB",
+        "connectionQualifiedName": "default/snowflake/1728518400",
+        "tableCount": 10,
+        "viewsCount": 5,
+        "description": "Production schema for customer data",
+        "sourceCreatedBy": "PROD_ADMIN",
+        "sourceCreatedAt": 1728518400,
+        "sourceUpdatedAt": 1728518400
+      },
+      "customAttributes": {
+        "catalog_id": "schema456",
+        "is_managed_access": "YES",
+        "retention_time": 90,
+        "is_transient": "NO",
+        "is_managed": "YES"
+      }
+    }
+  ]
+}
