@@ -380,6 +380,8 @@ class Function(assets.Function):
                     obj["function_schema"],
                 ),
                 connection_qualified_name=obj["connection_qualified_name"],
+                schema_name=obj["function_schema"],
+                database_name=obj["function_catalog"],
             )
             function.attributes.database_name = obj["function_catalog"]
             function.attributes.schema_name = obj["function_schema"]
@@ -417,6 +419,98 @@ class Function(assets.Function):
 
 
 class TagAttachment(assets.TagAttachment):
+    @overload
+    @classmethod
+    def creator(
+        cls,
+        *,
+        name: str,
+    ) -> "TagAttachment": ...
+
+    @overload
+    @classmethod
+    def creator(
+        cls,
+        *,
+        name: str,
+        schema_qualified_name: str,
+        schema_name: str,
+        database_name: str,
+        database_qualified_name: str,
+        connection_qualified_name: str,
+    ) -> "TagAttachment": ...
+
+    @classmethod
+    @init_guid
+    def creator(
+        cls,
+        *,
+        name: str,
+        schema_qualified_name: str,
+        schema_name: Optional[str] = None,
+        database_name: Optional[str] = None,
+        database_qualified_name: Optional[str] = None,
+        connection_qualified_name: Optional[str] = None,
+    ) -> "TagAttachment":
+        validate_required_fields(
+            ["name", "schema_qualified_name"], [name, schema_qualified_name]
+        )
+        attributes = TagAttachment.Attributes.create(
+            name=name,
+            schema_qualified_name=schema_qualified_name,
+            schema_name=schema_name,
+            database_name=database_name,
+            database_qualified_name=database_qualified_name,
+            connection_qualified_name=connection_qualified_name,
+        )
+        return cls(attributes=attributes)
+
+    class Attributes(assets.TagAttachment.Attributes):
+        @classmethod
+        @init_guid
+        def create(
+            cls,
+            *,
+            name: str,
+            schema_qualified_name: str,
+            schema_name: Optional[str] = None,
+            database_name: Optional[str] = None,
+            database_qualified_name: Optional[str] = None,
+            connection_qualified_name: Optional[str] = None,
+        ) -> "TagAttachment.Attributes":
+            validate_required_fields(
+                ["name, schema_qualified_name"], [name, schema_qualified_name]
+            )
+            if connection_qualified_name:
+                connector_name = AtlanConnectorType.get_connector_name(
+                    connection_qualified_name
+                )
+            else:
+                connection_qn, connector_name = AtlanConnectorType.get_connector_name(
+                    schema_qualified_name, "schema_qualified_name", 5
+                )
+
+            fields = schema_qualified_name.split("/")
+            qualified_name = f"{schema_qualified_name}/{name}"
+            connection_qualified_name = connection_qualified_name or connection_qn
+            database_name = database_name or fields[3]
+            schema_name = schema_name or fields[4]
+            database_qualified_name = (
+                database_qualified_name
+                or f"{connection_qualified_name}/{database_name}"
+            )
+
+            return TagAttachment.Attributes(
+                name=name,
+                qualified_name=qualified_name,
+                database_name=database_name,
+                database_qualified_name=database_qualified_name,
+                schema_name=schema_name,
+                schema_qualified_name=schema_qualified_name,
+                connector_name=connector_name,
+                connection_qualified_name=connection_qualified_name,
+            )
+
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.TagAttachment:
         try:
@@ -430,20 +524,15 @@ class TagAttachment(assets.TagAttachment):
                 "tag_schema" in obj and obj["tag_schema"] is not None
             ), "Tag schema cannot be None"
             assert (
-                "object_cat" in obj and obj["object_cat"] is not None
-            ), "Object cat cannot be None"
+                "object_database" in obj and obj["object_database"] is not None
+            ), "Object database cannot be None"
             assert (
                 "object_schema" in obj and obj["object_schema"] is not None
             ), "Object schema cannot be None"
 
-            # TODO: Creator has not been implemented yet in pyatlan
-            tag_attachment = assets.TagAttachment.create(
+            tag_attachment = TagAttachment.create(
                 name=obj["tag_name"],
-                connection_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["tag_database"],
-                    obj["tag_schema"],
-                ),
+                connection_qualified_name=obj["connection_qualified_name"],
                 database_qualified_name=build_atlas_qualified_name(
                     obj["connection_qualified_name"], obj["tag_database"]
                 ),
@@ -452,20 +541,14 @@ class TagAttachment(assets.TagAttachment):
                     obj["tag_database"],
                     obj["tag_schema"],
                 ),
-                tag_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["tag_database"],
-                    obj["tag_schema"],
-                    obj["tag_name"],
-                ),
             )
-            tag_attachment.tenant_id = obj.get("tenant_id", None)
-            tag_attachment.last_sync_run = obj.get("last_sync_run", None)
-            tag_attachment.last_sync_workflow_name = obj.get(
-                "last_sync_workflow_name", None
+            tag_attachment.tag_qualified_name = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["tag_database"],
+                obj["tag_schema"],
+                obj["tag_name"],
             )
-
-            object_cat = obj.get("object_cat", "")
+            object_cat = obj.get("object_database", "")
             object_schema = obj.get("object_schema", "")
 
             tag_attachment.attributes.object_database_qualified_name = (
