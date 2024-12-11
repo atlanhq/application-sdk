@@ -82,6 +82,7 @@ class SQLWorkflow(WorkflowInterface):
             self.fetch_columns,
             self.transform_data,
             self.write_type_metadata,
+            self.preflight_check,
         ] + super().get_activities()
 
     def store_credentials(self, credentials: Dict[str, Any]) -> str:
@@ -507,6 +508,13 @@ class SQLWorkflow(WorkflowInterface):
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
+        )
+
+        await workflow.execute_activity(
+            self.preflight_check,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
         )
 
         output_prefix = workflow_args["output_prefix"]

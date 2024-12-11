@@ -31,12 +31,6 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
         self.transformer = transformer
         return self
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalResource
-    ) -> "SQLWorkflowBuilder":
-        super().set_temporal_resource(temporal_resource)
-        return self
-
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
         workflow = workflow or SQLWorkflow()
 
@@ -44,6 +38,7 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
             workflow.set_sql_resource(self.sql_resource)
             .set_transformer(self.transformer)
             .set_temporal_resource(self.temporal_resource)
+            .set_preflight_check_controller(self.preflight_check_controller)
         )
 
 
