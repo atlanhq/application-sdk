@@ -1,8 +1,10 @@
 import json
 import logging
-from typing import Any, Dict, Union
+from typing import Any, Dict, Optional, Union, overload
 
 from pyatlan.model import assets
+from pyatlan.model.enums import AtlanConnectorType
+from pyatlan.utils import init_guid, validate_required_fields
 
 from application_sdk.workflows.transformers.utils import build_atlas_qualified_name
 
@@ -247,6 +249,98 @@ class Column(assets.Column):
 
 
 class Function(assets.Function):
+    @overload
+    @classmethod
+    def creator(
+        cls,
+        *,
+        name: str,
+    ) -> "Function": ...
+
+    @overload
+    @classmethod
+    def creator(
+        cls,
+        *,
+        name: str,
+        schema_qualified_name: str,
+        schema_name: str,
+        database_name: str,
+        database_qualified_name: str,
+        connection_qualified_name: str,
+    ) -> "Function": ...
+
+    @classmethod
+    @init_guid
+    def creator(
+        cls,
+        *,
+        name: str,
+        schema_qualified_name: str,
+        schema_name: Optional[str] = None,
+        database_name: Optional[str] = None,
+        database_qualified_name: Optional[str] = None,
+        connection_qualified_name: Optional[str] = None,
+    ) -> "Function":
+        validate_required_fields(
+            ["name", "schema_qualified_name"], [name, schema_qualified_name]
+        )
+        attributes = Function.Attributes.create(
+            name=name,
+            schema_qualified_name=schema_qualified_name,
+            schema_name=schema_name,
+            database_name=database_name,
+            database_qualified_name=database_qualified_name,
+            connection_qualified_name=connection_qualified_name,
+        )
+        return cls(attributes=attributes)
+
+    class Attributes(assets.Function.Attributes):
+        @classmethod
+        @init_guid
+        def create(
+            cls,
+            *,
+            name: str,
+            schema_qualified_name: str,
+            schema_name: Optional[str] = None,
+            database_name: Optional[str] = None,
+            database_qualified_name: Optional[str] = None,
+            connection_qualified_name: Optional[str] = None,
+        ) -> "Function.Attributes":
+            validate_required_fields(
+                ["name, schema_qualified_name"], [name, schema_qualified_name]
+            )
+            if connection_qualified_name:
+                connector_name = AtlanConnectorType.get_connector_name(
+                    connection_qualified_name
+                )
+            else:
+                connection_qn, connector_name = AtlanConnectorType.get_connector_name(
+                    schema_qualified_name, "schema_qualified_name", 5
+                )
+
+            fields = schema_qualified_name.split("/")
+            qualified_name = f"{schema_qualified_name}/{name}"
+            connection_qualified_name = connection_qualified_name or connection_qn
+            database_name = database_name or fields[3]
+            schema_name = schema_name or fields[4]
+            database_qualified_name = (
+                database_qualified_name
+                or f"{connection_qualified_name}/{database_name}"
+            )
+
+            return Function.Attributes(
+                name=name,
+                qualified_name=qualified_name,
+                database_name=database_name,
+                database_qualified_name=database_qualified_name,
+                schema_name=schema_name,
+                schema_qualified_name=schema_qualified_name,
+                connector_name=connector_name,
+                connection_qualified_name=connection_qualified_name,
+            )
+
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.Function:
         try:
@@ -275,8 +369,7 @@ class Function(assets.Function):
                 "function_schema" in obj and obj["function_schema"] is not None
             ), "Function schema cannot be None"
 
-            # TODO: Creator has not been implemented yet
-            function = assets.Function.create(
+            function = Function.creator(
                 name=obj["function_name"],
                 database_qualified_name=build_atlas_qualified_name(
                     obj["connection_qualified_name"], obj["function_catalog"]
@@ -286,11 +379,7 @@ class Function(assets.Function):
                     obj["function_catalog"],
                     obj["function_schema"],
                 ),
-                connection_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["function_catalog"],
-                    obj["function_schema"],
-                ),
+                connection_qualified_name=obj["connection_qualified_name"],
             )
             function.attributes.database_name = obj["function_catalog"]
             function.attributes.schema_name = obj["function_schema"]
