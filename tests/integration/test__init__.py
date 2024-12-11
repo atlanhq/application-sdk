@@ -6,7 +6,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.app.rest.fastapi import FastAPIApplication
-from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )

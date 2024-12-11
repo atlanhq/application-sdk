@@ -1,12 +1,17 @@
 import json
 from typing import Any, Dict
-
-import pytest
 from unittest.mock import AsyncMock, Mock
 
+import pytest
+
 from application_sdk.app.rest.fastapi import FastAPIApplication
-from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest, PreflightCheckResponse
-from application_sdk.workflows.controllers import WorkflowPreflightCheckControllerInterface
+from application_sdk.app.rest.fastapi.models.workflow import (
+    PreflightCheckRequest,
+    PreflightCheckResponse,
+)
+from application_sdk.workflows.controllers import (
+    WorkflowPreflightCheckControllerInterface,
+)
 
 
 class TestFastAPIApplication:
@@ -17,7 +22,9 @@ class TestFastAPIApplication:
         return controller
 
     @pytest.fixture
-    def app(self, mock_controller: WorkflowPreflightCheckControllerInterface) -> FastAPIApplication:
+    def app(
+        self, mock_controller: WorkflowPreflightCheckControllerInterface
+    ) -> FastAPIApplication:
         return FastAPIApplication(preflight_check_controller=mock_controller)
 
     @pytest.fixture
@@ -38,10 +45,10 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     async def test_preflight_check_success(
-        self, 
-        app: FastAPIApplication, 
+        self,
+        app: FastAPIApplication,
         mock_controller: WorkflowPreflightCheckControllerInterface,
-        sample_payload: Dict[str, Any]
+        sample_payload: Dict[str, Any],
     ) -> None:
         """Test successful preflight check response"""
         # Arrange
@@ -55,37 +62,39 @@ class TestFastAPIApplication:
             }
         }
         mock_controller.preflight_check.return_value = expected_data
-        
+
         # Create request object and call the function
         request = PreflightCheckRequest(**sample_payload)
         response = await app.preflight_check(request)
-        
+
         # Assert
         assert isinstance(request, PreflightCheckRequest)
         assert isinstance(response, PreflightCheckResponse)
         assert response.success is True
         assert response.data == expected_data
-        
+
         # Verify controller was called with correct arguments
         mock_controller.preflight_check.assert_called_once_with(sample_payload)
 
     @pytest.mark.asyncio
     async def test_preflight_check_failure(
-        self, 
-        app: FastAPIApplication, 
+        self,
+        app: FastAPIApplication,
         mock_controller: WorkflowPreflightCheckControllerInterface,
-        sample_payload: Dict[str, Any]
+        sample_payload: Dict[str, Any],
     ) -> None:
         """Test preflight check with failed controller response"""
         # Arrange
-        mock_controller.preflight_check.side_effect = Exception("Failed to fetch metadata")
-        
+        mock_controller.preflight_check.side_effect = Exception(
+            "Failed to fetch metadata"
+        )
+
         # Create request object
         request = PreflightCheckRequest(**sample_payload)
-        
+
         # Act & Assert
         with pytest.raises(Exception) as exc_info:
             await app.preflight_check(request)
-        
+
         assert str(exc_info.value) == "Failed to fetch metadata"
         mock_controller.preflight_check.assert_called_once_with(sample_payload)
