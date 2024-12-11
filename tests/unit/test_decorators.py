@@ -108,7 +108,7 @@ class TestDecorators:
         @activity_pd(
             batch_input=lambda self, arg: JsonInput(
                 path="/tmp/raw/",
-                batch=["schema/1.json"],
+                file_suffixes=["schema/1.json"],
             ),
             out1=lambda self, arg: JsonOutput(
                 output_path="/tmp/transformed/schema",

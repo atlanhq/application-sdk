@@ -12,18 +12,20 @@ logger = logging.get_logger(__name__)
 class JsonInput(Input):
     path: str
     chunk_size: Optional[int]
-    batch: List[str]
+    file_suffixes: List[str]
 
-    def __init__(self, path: str, batch: List[str], chunk_size: Optional[int] = 100000):
+    def __init__(
+        self, path: str, file_suffixes: List[str], chunk_size: Optional[int] = 100000
+    ):
         self.path = path
         self.chunk_size = chunk_size
-        self.batch = batch
+        self.file_suffixes = file_suffixes
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         try:
-            for chunk in self.batch:
+            for file_suffix in self.file_suffixes:
                 json_reader_obj = pd.read_json(
-                    os.path.join(self.path, chunk),
+                    os.path.join(self.path, file_suffix),
                     chunksize=self.chunk_size,
                     lines=True,
                 )
@@ -34,10 +36,10 @@ class JsonInput(Input):
     def get_dataframe(self) -> pd.DataFrame:
         try:
             dataframes = []
-            for chunk in self.batch:
+            for file_suffix in self.file_suffixes:
                 dataframes.append(
                     pd.read_json(
-                        os.path.join(self.path, chunk),
+                        os.path.join(self.path, file_suffix),
                         lines=True,
                     )
                 )
