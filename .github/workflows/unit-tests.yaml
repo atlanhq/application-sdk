@@ -63,26 +63,14 @@ jobs:
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --no-root --extras "workflows dashboard"
 
-      - name: Run Unit Tests with Coverage
+      - name: Run Unit and Integration Tests with Coverage
         run: |
-          poetry run coverage run --data-file=.coverage.unit -m pytest tests/unit --full-trace --hypothesis-show-statistics
-          poetry run coverage xml --data-file=.coverage.unit -o coverage.unit.xml
-          poetry run coverage report --data-file=.coverage.unit
+          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
+          poetry run coverage xml
+          poetry run coverage report
 
-      - name: Comment Unit Test Coverage Report on PR
+      - name: Comment Coverage Report on PR
         uses: orgoro/coverage@v3.2
         with:
-          coverageFile: coverage.unit.xml
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Run Integration Tests with Coverage
-        run: |
-          poetry run coverage run --data-file=.coverage.integration -m pytest tests/integration --full-trace --hypothesis-show-statistics
-          poetry run coverage xml --data-file=.coverage.integration -o coverage.integration.xml
-          poetry run coverage report --data-file=.coverage.integration
-
-      - name: Comment Integration Test Coverage Report on PR
-        uses: orgoro/coverage@v3.2
-        with:
-          coverageFile: coverage.integration.xml
+          coverageFile: coverage.xml
           token: ${{ secrets.GITHUB_TOKEN }}
