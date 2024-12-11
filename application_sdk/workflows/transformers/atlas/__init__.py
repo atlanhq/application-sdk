@@ -52,7 +52,7 @@ class AtlasTransformer(TransformerInterface):
 
         self.connection_qualified_name = kwargs.get(
             "connection_qualified_name",
-            f"default/{self.connector_name}/{self.current_epoch}",
+            f"{tenant_id}/{self.connector_name}/{self.current_epoch}",
         )
 
     def transform_metadata(
