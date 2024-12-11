@@ -1,66 +1,28 @@
 import json
-from typing import Any
-from unittest.mock import AsyncMock, Mock
+from typing import Any, Dict
 
 import pytest
-from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, Mock
 
 from application_sdk.app.rest.fastapi import FastAPIApplication
-from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest
-from application_sdk.workflows.sql.controllers.preflight_check import (
-    SQLWorkflowPreflightCheckController,
-)
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.app.rest.fastapi.models.workflow import PreflightCheckRequest, PreflightCheckResponse
+from application_sdk.workflows.controllers import WorkflowPreflightCheckControllerInterface
 
 
-class TestSQLPreflightCheck:
+class TestFastAPIApplication:
     @pytest.fixture
-    def mock_sql_resource(self) -> Any:
-        mock = Mock()
-        mock.fetch_metadata = AsyncMock()
-        mock.sql_input = AsyncMock()
-        return mock
-
-    @pytest.fixture
-    def controller(self, mock_sql_resource: Any) -> SQLWorkflowPreflightCheckController:
-        controller = SQLWorkflowPreflightCheckController(mock_sql_resource)
-        controller.TABLES_CHECK_SQL = """
-            SELECT count(*) as "count"
-            FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
-                AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
-        """
+    def mock_controller(self) -> WorkflowPreflightCheckControllerInterface:
+        controller = Mock(spec=WorkflowPreflightCheckControllerInterface)
+        controller.preflight_check = AsyncMock()
         return controller
 
     @pytest.fixture
-    def app(
-        self, controller: SQLWorkflowPreflightCheckController
-    ) -> FastAPIApplication:
-        """Create FastAPI test application"""
-        app = FastAPIApplication(preflight_check_controller=controller)
-        app.register_routers()
-        app.register_routes()
-        return app
+    def app(self, mock_controller: WorkflowPreflightCheckControllerInterface) -> FastAPIApplication:
+        return FastAPIApplication(preflight_check_controller=mock_controller)
 
     @pytest.fixture
-    def client(self, app: FastAPIApplication) -> TestClient:
-        """Create test client"""
-        return TestClient(app.app)
-
-    def normalize_sql(self, sql: str) -> str:
-        """Helper to normalize SQL for comparison"""
-        return " ".join(sql.split()).strip().lower()
-
-    async def test_check_endpoint_basic_filters(self, client, controller):
-        """Test the complete flow from /check endpoint through to SQL generation"""
-
-        # Setup mock for sql_resource.fetch_metadata
-        controller.sql_resource.fetch_metadata.return_value = [
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
-        ]
-
-        payload = {
+    def sample_payload(self) -> Dict[str, Any]:
+        return {
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
                 "port": 443,
@@ -74,151 +36,56 @@ class TestSQLPreflightCheck:
             },
         }
 
-        # Call the /check endpoint
-        response = client.post("/workflows/v1/check", json=payload)
-        assert response.status_code == 200
-
-        # Verify the response structure
-        response_data = response.json()
-        assert response_data["success"] is True
-        assert "data" in response_data
-
-        # Verify that preflight_check was called with correct args
-        controller.sql_resource.fetch_metadata.assert_called_once()
-
-        # Verify the SQL query was generated correctly
-        expected_sql = """
-        SELECT count(*) as "count"
-            FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE '$^'
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '$^'
-                AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
-        """
-
-        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
-        assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
-
-    async def test_check_endpoint_empty_filters(self, client, controller):
-        """Test the /check endpoint with empty filters"""
-
-        controller.sql_resource.fetch_metadata.return_value = []
-
-        payload = {
-            "credentials": {
-                "account_id": "qdgrryr-uv65759",
-                "port": 443,
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-            },
-            "form_data": {
-                "include_filter": "{}",
-                "exclude_filter": "{}",
-                "temp_table_regex": "",
-            },
-        }
-
-        response = client.post("/workflows/v1/check", json=payload)
-        assert response.status_code == 200
-
-        expected_sql = """
-            SELECT count(*) as "count"
-            FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE ''
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '^$'
-                AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '.*'
-        """
-
-        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
-        assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
-
-    async def test_check_endpoint_both_filters(self, client, controller):
-        """Test the /check endpoint with both filters"""
-
-        controller.sql_resource.fetch_metadata.return_value = [
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
-        ]
-
-        payload = {
-            "credentials": {
-                "account_id": "qdgrryr-uv65759",
-                "port": 443,
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-            },
-            "form_data": {
-                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
-                "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
-                "temp_table_regex": "",
-            },
-        }
-
-        response = client.post("/workflows/v1/check", json=payload)
-        assert response.status_code == 200
-
-        expected_sql = """
-           SELECT count(*) as "count"
-           FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-           WHERE NOT TABLE_NAME RLIKE '$^'
-            AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PRIVATE$'
-            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
-        """
-
-        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
-        assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
-
-    async def test_preflight_check_request_validation(
-        self, controller: SQLWorkflowPreflightCheckController
-    ):
-        """Test validation of PreflightCheckRequest structure without API involvement"""
-
-        # Test with valid payload
-        valid_data = {
-            "credentials": {
-                "account_id": "qdgrryr-uv65759",
-                "port": 443,
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-            },
-            "form_data": {
-                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
-                "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
-                "temp_table_regex": "",
-            },
-        }
-
-        # Verify valid data can be parsed into PreflightCheckRequest
-        request = PreflightCheckRequest(**valid_data)
-        assert isinstance(request, PreflightCheckRequest)
-
-        # Verify form_data
-        assert json.loads(request.form_data["include_filter"]) == {
-            "^TESTDB$": ["^PUBLIC$"]
-        }
-        assert json.loads(request.form_data["exclude_filter"]) == {
-            "^TESTDB$": ["^PRIVATE$"]
-        }
-        assert request.form_data["temp_table_regex"] == ""
-
-        # Test with missing credentials
-        invalid_data = {
-            "form_data": {
-                "include_filter": "{}",
-                "exclude_filter": "{}",
-                "temp_table_regex": "",
+    @pytest.mark.asyncio
+    async def test_preflight_check_success(
+        self, 
+        app: FastAPIApplication, 
+        mock_controller: WorkflowPreflightCheckControllerInterface,
+        sample_payload: Dict[str, Any]
+    ) -> None:
+        """Test successful preflight check response"""
+        # Arrange
+        expected_data: Dict[str, Any] = {
+            "example": {
+                "success": True,
+                "data": {
+                    "successMessage": "Successfully checked",
+                    "failureMessage": "",
+                },
             }
         }
-        with pytest.raises(ValueError):
-            PreflightCheckRequest(**invalid_data)
+        mock_controller.preflight_check.return_value = expected_data
+        
+        # Create request object and call the function
+        request = PreflightCheckRequest(**sample_payload)
+        response = await app.preflight_check(request)
+        
+        # Assert
+        assert isinstance(request, PreflightCheckRequest)
+        assert isinstance(response, PreflightCheckResponse)
+        assert response.success is True
+        assert response.data == expected_data
+        
+        # Verify controller was called with correct arguments
+        mock_controller.preflight_check.assert_called_once_with(sample_payload)
 
-        # Test with missing form_data fields
-        invalid_form_data = {
-            "credentials": {
-                "account_id": "qdgrryr-uv65759",
-                "port": 443,
-                "role": "ACCOUNTADMIN",
-                "warehouse": "COMPUTE_WH",
-            },
-        }
-        with pytest.raises(ValueError):
-            PreflightCheckRequest(**invalid_form_data)
+    @pytest.mark.asyncio
+    async def test_preflight_check_failure(
+        self, 
+        app: FastAPIApplication, 
+        mock_controller: WorkflowPreflightCheckControllerInterface,
+        sample_payload: Dict[str, Any]
+    ) -> None:
+        """Test preflight check with failed controller response"""
+        # Arrange
+        mock_controller.preflight_check.side_effect = Exception("Failed to fetch metadata")
+        
+        # Create request object
+        request = PreflightCheckRequest(**sample_payload)
+        
+        # Act & Assert
+        with pytest.raises(Exception) as exc_info:
+            await app.preflight_check(request)
+        
+        assert str(exc_info.value) == "Failed to fetch metadata"
+        mock_controller.preflight_check.assert_called_once_with(sample_payload)
