@@ -1,13 +1,19 @@
 import logging
+from datetime import datetime
 from typing import Any, Dict, Optional, Type
+
+from pyatlan.model.assets import Asset
 
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.transformers.atlas.sql import (
     Column,
     Database,
+    Function,
     Schema,
     Table,
+    TagAttachment,
 )
+from application_sdk.workflows.transformers.utils import process_text
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,26 +36,31 @@ class AtlasTransformer(TransformerInterface):
         >>>         # Custom logic here
     """
 
-    def __init__(self, connector_name: str, **kwargs: Any):
+    def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
+        self.tenant_id = tenant_id
         self.entity_class_definitions: Dict[str, Type[Any]] = {
             "DATABASE": Database,
             "SCHEMA": Schema,
             "TABLE": Table,
             "VIEW": Table,
             "COLUMN": Column,
+            "FUNCTION": Function,
+            "TAG_REF": TagAttachment,
         }
 
         self.connection_qualified_name = kwargs.get(
             "connection_qualified_name",
-            f"default/{self.connector_name}/{self.current_epoch}",
+            f"{tenant_id}/{self.connector_name}/{self.current_epoch}",
         )
 
     def transform_metadata(
         self,
         typename: str,
         data: Dict[str, Any],
+        workflow_id: str,
+        workflow_run_id: str,
         entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
@@ -58,12 +69,22 @@ class AtlasTransformer(TransformerInterface):
             entity_class_definitions or self.entity_class_definitions
         )
 
-        data.update({"connection_qualified_name": self.connection_qualified_name})
+        data.update(
+            {
+                "connection_qualified_name": self.connection_qualified_name,
+            }
+        )
 
         creator = self.entity_class_definitions.get(typename)
         if creator:
             try:
                 entity = creator.parse_obj(data)
+
+                # enrich the entity with workflow metadata
+                entity = self._enrich_entity_with_metadata(
+                    entity, workflow_id, workflow_run_id, data
+                )
+
                 return entity.dict(by_alias=True, exclude_none=True)
             except Exception as e:
                 logger.error(f"Error deserializing {typename} entity {data}: {e}")
@@ -71,3 +92,35 @@ class AtlasTransformer(TransformerInterface):
         else:
             logger.error(f"Unknown typename: {typename}")
             return None
+
+    def _enrich_entity_with_metadata(
+        self,
+        entity: Asset,
+        workflow_id: str,
+        workflow_run_id: str,
+        data: Dict[str, Any],
+    ) -> Any:
+        entity.tenant_id = self.tenant_id
+        entity.last_sync_workflow_name = workflow_id
+        entity.last_sync_run = workflow_run_id
+        entity.last_sync_run_at = datetime.now()
+
+        if remarks := data.get("remarks", None) or data.get("comment", None):
+            entity.description = process_text(remarks)
+
+        if source_created_by := data.get("source_owner", None):
+            entity.source_created_by = source_created_by
+
+        if created := data.get("created"):
+            entity.source_created_at = datetime.fromtimestamp(created / 1000)
+
+        if last_altered := data.get("last_altered", None):
+            entity.source_updated_at = datetime.fromtimestamp(last_altered / 1000)
+
+        if not entity.custom_attributes:
+            entity.custom_attributes = {}
+
+        if source_id := data.get("source_id", None):
+            entity.custom_attributes["source_id"] = source_id
+
+        return entity

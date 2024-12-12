@@ -112,18 +112,20 @@ class FastAPIApplication(AtlanAPIApplication):
         super().register_routes()
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
-        await self.auth_controller.test_auth(credential=body.model_dump())
+        await self.auth_controller.prepare(body.model_dump())
+        await self.auth_controller.test_auth()
         return TestAuthResponse(success=True, message="Authentication successful")
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
-        metadata = await self.metadata_controller.fetch_metadata(body.model_dump())
+        await self.metadata_controller.prepare(body.model_dump())
+        metadata = await self.metadata_controller.fetch_metadata()
         return FetchMetadataResponse(success=True, data=metadata)
 
     async def preflight_check(
         self, body: PreflightCheckRequest
     ) -> PreflightCheckResponse:
         preflight_check = await self.preflight_check_controller.preflight_check(
-            body.form_data
+            body.model_dump()
         )
         return PreflightCheckResponse(success=True, data=preflight_check)
 

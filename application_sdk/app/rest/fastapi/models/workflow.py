@@ -5,12 +5,10 @@ from typing import Any, Dict, List
 from pydantic import BaseModel, Field, RootModel
 
 
-class TestAuthRequest(BaseModel):
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+class TestAuthRequest(RootModel):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing database credentials"
+    )
 
 
 class TestAuthResponse(BaseModel):
@@ -18,12 +16,10 @@ class TestAuthResponse(BaseModel):
     message: str
 
 
-class FetchMetadataRequest(BaseModel):
-    host: str
-    port: int
-    user: str
-    password: str
-    database: str
+class FetchMetadataRequest(RootModel):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing database credentials"
+    )
 
 
 class FetchMetadataResponse(BaseModel):

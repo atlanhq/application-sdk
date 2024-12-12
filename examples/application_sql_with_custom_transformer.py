@@ -31,7 +31,7 @@ import logging
 import os
 import threading
 import time
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
@@ -111,18 +111,10 @@ class PostgresDatabase(Database):
 
 
 class CustomTransformer(AtlasTransformer):
-    def transform_metadata(
-        self,
-        typename: str,
-        data: Dict[str, Any],
-        entity_class_definitions: Dict[str, Type[Any]] | None = None,
-        **kwargs: Any,
-    ) -> Optional[Dict[str, Any]]:
-        # Note: This update the entity_class_definitions to use the PostgresDatabase method for Database entities
-        self.entity_class_definitions["Database"] = PostgresDatabase
-        return super().transform_metadata(
-            typename, data, self.entity_class_definitions, **kwargs
-        )
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.entity_class_definitions["DATABASE"] = PostgresDatabase
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
@@ -142,6 +134,7 @@ async def main():
         connector_name=APPLICATION_NAME,
         connector_type="sql",
         current_epoch="1234567890",
+        tenant_id="1234567890",
     )
 
     workflow: SQLWorkflow = (
