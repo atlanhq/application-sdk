@@ -329,6 +329,7 @@ class Function(assets.Function):
                 database_qualified_name
                 or f"{connection_qualified_name}/{database_name}"
             )
+            function_schema = Schema.ref_by_qualified_name(schema_qualified_name)
 
             return Function.Attributes(
                 name=name,
@@ -339,6 +340,7 @@ class Function(assets.Function):
                 schema_qualified_name=schema_qualified_name,
                 connector_name=connector_name,
                 connection_qualified_name=connection_qualified_name,
+                function_schema=function_schema,
             )
 
     @classmethod
@@ -385,15 +387,18 @@ class Function(assets.Function):
             )
             function.attributes.database_name = obj["function_catalog"]
             function.attributes.schema_name = obj["function_schema"]
-            function.attributes.function_type = obj.get("function_type", None)
-            function.attributes.function_return_type = obj.get(
-                "function_return_type", None
-            )
+            if "TABLE" in obj.get("data_type", None):
+                function.attributes.function_type = "Tabular"
+            else:
+                function.attributes.function_type = "Scalar"
+            function.attributes.function_return_type = obj.get("data_type", None)
             function.attributes.function_language = obj.get("function_language", None)
             function.attributes.function_definition = obj.get(
                 "function_definition", None
             )
-            function.attributes.function_arguments = obj.get("function_arguments", None)
+            function.attributes.function_arguments = obj.get(
+                "argument_signature", "()"
+            )[1:-1].split(",")
             function.attributes.function_is_secure = obj.get("is_secure", None) == "YES"
             function.attributes.function_is_external = (
                 obj.get("is_external", None) == "YES"
@@ -403,14 +408,6 @@ class Function(assets.Function):
             )
             function.attributes.function_is_memoizable = (
                 obj.get("is_memoizable", None) == "YES"
-            )
-
-            function.attributes.function_schema = Schema.ref_by_qualified_name(
-                qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["function_catalog"],
-                    obj["function_schema"],
-                )
             )
 
             return function
