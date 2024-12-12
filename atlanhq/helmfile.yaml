@@ -2,59 +2,79 @@
 environments:
   default:
     values:
-      - enableAtlan:
+      - installAtlanDeps:
           enabled: true
       - enableDaprShared:
           enabled: true
-      - enableUnifiedAtlan:
+      - singleNamespace:
           enabled: false
-      - namespace:
+      - releaseNamespaces:
           atlan: atlan-temporal
           daprShared: atlan-dapr-shared
           app: hello-world-app
 
   app:
     values:
-      - enableAtlan:
+      - installAtlanDeps:
           enabled: false
       - enableDaprShared:
           enabled: false
+      - singleNamespace:
+          enabled: false
+      - releaseNamespaces:
+          app: hello-world-app
+      # If singleNamespace is true
+      # - releaseNamespaces:
+      #     namespace: atlan-secure-agent
 
   unified:
     values:
-      - enableUnifiedAtlan:
+      - installAtlanDeps:
           enabled: true
-      - namespace:
-          atlan: atlan-secure-agent
-          daprShared: atlan-secure-agent
-          app: atlan-secure-agent
+      - enableDaprShared:
+          enabled: true
+      - singleNamespace: 
+          enabled: true
+      - releaseNamespaces: 
+          namespace: atlan-secure-agent
 ---
 releases:
   - name: atlan
     chart: "./charts/atlan"
-    namespace: '{{ .Environment.Values.namespace.atlan }}'
+    namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.atlan }}{{ end }}'
     createNamespace: true
     version: 0.1.0
     disableValidation: true
     missingFileHandler: Error
-    installed: {{ .Environment.Values.enableAtlan.enabled }}
+    installed: {{ .Environment.Values.installAtlanDeps.enabled }}
     wait: true
+    values:
+      - singleNamespace:
+          enabled: {{ .Environment.Values.singleNamespace.enabled }}
     hooks:
       - events: ["prepare"]
         command: "sh"
         args:
           - "-c"
           - |
-            if {{ .Environment.Values.enableAtlan.enabled }}; then
-              if {{ .Environment.Values.enableUnifiedAtlan.enabled }}; then
-                helmfile apply -f ./charts/atlan/helmfile.yaml -e unified
+            if {{ .Environment.Values.installAtlanDeps.enabled }}; then
+              if {{ .Environment.Values.enableDaprShared.enabled }}; then
+                if {{ .Environment.Values.singleNamespace.enabled }}; then
+                  helmfile apply -f ./charts/atlan/helmfile.yaml -e unified --state-values-set releaseNamespaces.namespace={{ .Environment.Values.releaseNamespaces.namespace }},enableDaprInjected.enabled=false
+                else
+                  helmfile apply -f ./charts/atlan/helmfile.yaml --state-values-set enableDaprInjected.enabled=false
+                fi
               else
-                helmfile apply -f ./charts/atlan/helmfile.yaml
+                if {{ .Environment.Values.singleNamespace.enabled }}; then
+                  helmfile apply -f ./charts/atlan/helmfile.yaml -e unified --state-values-set releaseNamespaces.namespace={{ .Environment.Values.releaseNamespaces.namespace }},enableDaprInjected.enabled=true
+                else
+                  helmfile apply -f ./charts/atlan/helmfile.yaml --state-values-set enableDaprInjected.enabled=true
+                fi
               fi
             fi
 
   - name: dapr-shared-chart
-    namespace: '{{ .Environment.Values.namespace.daprShared }}'
+    namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.daprShared }}{{ end }}'
     createNamespace: true
     chart: "./charts/dapr-shared-chart"
     version: 0.0.15
@@ -64,12 +84,15 @@ releases:
 
   - name: app
     chart: "./charts/app"
-    namespace: '{{ .Environment.Values.namespace.app }}'
+    namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.app }}{{ end }}'
     createNamespace: true
     version: 0.1.0
     disableValidation: true
     missingFileHandler: Error
     installed: true
+    values:
+      - singleNamespace:
+          enabled: {{ .Environment.Values.singleNamespace.enabled }}
     needs:
-      - '{{ .Environment.Values.namespace.atlan }}/atlan'
-      - '{{ .Environment.Values.namespace.daprShared }}/dapr-shared-chart'
+      - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/atlan{{ else }}{{ .Environment.Values.releaseNamespaces.atlan }}/atlan{{ end }}'
+      - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/dapr-shared-chart{{ else }}{{ .Environment.Values.releaseNamespaces.daprShared }}/dapr-shared-chart{{ end }}'

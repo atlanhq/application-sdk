@@ -1,4 +1,6 @@
 ---
+singleNamespace:
+  enabled: false
 temporal:
   enabled: true
   TemporalNamespace:
@@ -8,7 +10,6 @@ temporal:
   name: temporal-cluster
   namespace:
     name: atlan-temporal
-    create: true
   version: "1.23.0"
   numHistoryShards: 512
   persistence:

@@ -16,7 +16,9 @@ repositories:
 environments:
   default:
     values:
-      - namespaces:
+      - singleNamespace: 
+          enabled: false
+      - releaseNamespaces:
           dapr: atlan-dapr
           daprShared: atlan-dapr-shared
           cloudnativePg: atlan-cloudnative-pg
@@ -29,27 +31,26 @@ environments:
           enabled: false
       - enableDaprDashboard:
           enabled: false
+      - enableDaprInjected:
+          enabled: true
 
   unified:
     values:
-      - namespaces:
-          dapr: atlan-secure-agent
-          daprShared: atlan-secure-agent
-          cloudnativePg: atlan-secure-agent
-          postgresCluster: atlan-secure-agent
-          certManager: atlan-secure-agent
-          temporalOperator: atlan-secure-agent
-          minioOperator: atlan-secure-agent
-          minioTenant: atlan-secure-agent
+      - singleNamespace: 
+          enabled: true
+      - releaseNamespaces:
+          namespace: atlan-secure-agent
       - enableMinio:
           enabled: false
       - enableDaprDashboard:
           enabled: false
+      - enableDaprInjected:
+          enabled: true
 
 ---
 releases:
 - name: dapr
-  namespace: '{{ .Environment.Values.namespaces.dapr }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.dapr }}{{ end }}'
   createNamespace: true
   chart: dapr/dapr
   version: 1.14.4
@@ -57,9 +58,11 @@ releases:
   missingFileHandler: Error
   values:
     - values/dapr.yaml
+    - dapr_sidecar_injector:
+        enabled: {{ .Environment.Values.enableDaprInjected.enabled }}
 
 - name: dapr-dashboard
-  namespace: '{{ .Environment.Values.namespaces.dapr }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.dapr }}{{ end }}'
   createNamespace: true
   chart: dapr/dapr-dashboard
   version: 0.15.0
@@ -70,7 +73,7 @@ releases:
     - values/dapr_dashboard.yaml
 
 - name: cloudnative-pg
-  namespace: '{{ .Environment.Values.namespaces.cloudnativePg }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.cloudnativePg }}{{ end }}'
   createNamespace: true
   chart: cloudnative-pg/cloudnative-pg
   version: 0.22.1
@@ -80,7 +83,7 @@ releases:
     - values/cloudnative_pg.yaml
 
 - name: postgres-cluster
-  namespace: '{{ .Environment.Values.namespaces.postgresCluster }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.postgresCluster }}{{ end }}'
   createNamespace: true
   chart: cloudnative-pg/cluster
   version: 0.1.0
@@ -89,10 +92,10 @@ releases:
   values:
     - values/cloudnative_pg_cluster.yaml
   needs:
-    - '{{ .Environment.Values.namespaces.cloudnativePg }}/cloudnative-pg' # Ensure cloudnative-pg is deployed before postgres-cluster
+    - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/cloudnative-pg{{ else }}{{ .Environment.Values.releaseNamespaces.cloudnativePg }}/cloudnative-pg{{ end }}' # Ensure cloudnative-pg is deployed before postgres-cluster
 
 - name: cert-manager
-  namespace: '{{ .Environment.Values.namespaces.certManager }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.certManager }}{{ end }}'
   createNamespace: true
   chart: cert-manager/cert-manager
   version: 1.16.1
@@ -102,7 +105,7 @@ releases:
     - values/cert_manager.yaml
 
 - name: temporal-operator
-  namespace: '{{ .Environment.Values.namespaces.temporalOperator }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.temporalOperator }}{{ end }}'
   createNamespace: true
   chart: temporal-operator/temporal-operator
   version: 0.5.0
@@ -111,10 +114,10 @@ releases:
   values:
     - values/temporal_operator.yaml
   needs:
-    - '{{ .Environment.Values.namespaces.certManager }}/cert-manager' # Ensure cert-manager is deployed before temporal
+    - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/cert-manager{{ else }}{{ .Environment.Values.releaseNamespaces.certManager }}/cert-manager{{ end }}' # Ensure cert-manager is deployed before temporal
 
 - name: minio-operator
-  namespace: '{{ .Environment.Values.namespaces.minioOperator }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.minioOperator }}{{ end }}'
   createNamespace: true
   chart: minio/operator
   version: 6.0.4
@@ -125,7 +128,7 @@ releases:
     - values/minio_operator.yaml
 
 - name: minio-tenant
-  namespace: '{{ .Environment.Values.namespaces.minioTenant }}'
+  namespace: '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}{{ else }}{{ .Environment.Values.releaseNamespaces.minioTenant }}{{ end }}'
   createNamespace: true
   chart: minio/tenant
   version: 6.0.4
@@ -134,7 +137,7 @@ releases:
   values:
     - values/minio_tenant.yaml
   needs:
-    - '{{ .Environment.Values.namespaces.minioOperator }}/minio-operator' # Ensure minio-operator is deployed before tenant
+    - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/minio-operator{{ else }}{{ .Environment.Values.releaseNamespaces.minioOperator }}/minio-operator{{ end }}' # Ensure minio-operator is deployed before tenant
 
 # - name: atlan-app-components
 #   chart: "."
@@ -143,6 +146,6 @@ releases:
 #   values:
 #     - values.yaml
 #   needs:
-#     - '{{ .Environment.Values.namespaces.dapr }}/dapr' # Ensure dapr is deployed before atlan-app-components
-#     - '{{ .Environment.Values.namespaces.postgresCluster }}/postgres-cluster' # Ensure postgres-cluster is deployed before atlan-app-components
-#     - '{{ .Environment.Values.namespaces.temporalOperator }}/temporal-operator' # Ensure temporal-operator is deployed before atlan-app-components
+#     - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/dapr{{ else }}{{ .Environment.Values.releaseNamespaces.dapr }}/dapr{{ end }}' # Ensure dapr is deployed before atlan-app-components
+#     - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/postgres-cluster{{ else }}{{ .Environment.Values.releaseNamespaces.postgresCluster }}/postgres-cluster{{ end }}' # Ensure postgres-cluster is deployed before atlan-app-components
+#     - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/temporal-operator{{ else }}{{ .Environment.Values.releaseNamespaces.temporalOperator }}/temporal-operator{{ end }}' # Ensure temporal-operator is deployed before atlan-app-components

@@ -1,4 +1,6 @@
 ---
+singleNamespace:
+  enabled: false
 app:
   # General settings
   enabled: true
@@ -82,13 +84,13 @@ app:
     - name: ATLAN_TEMPORAL_HOST
       value: temporal-cluster-frontend.atlan-temporal.svc.cluster.local
     - name: ATLAN_TEMPORAL_PORT
-      value: "7233"
+      value: 7233
     - name: APP_HTTP_PORT
       value: "8000"
     - name: APP_HTTP_HOST
       value: "0.0.0.0"
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
-      value: http://0.0.0.0:5000/telemetry
+      value: http://0.0.0.0:8000/telemetry
     - name: OTEL_EXPORTER_OTLP_PROTOCOL
       value: "http/protobuf"
     - name: OTEL_PYTHON_LOGGING_AUTO_INSTRUMENTATION_ENABLED

@@ -107,4 +107,4 @@ dapr_scheduler:
     inMemoryStorage: false
 
 dapr_sidecar_injector:
-  enabled: false
+  enabled: true
