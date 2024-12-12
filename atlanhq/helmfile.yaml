@@ -33,7 +33,7 @@ environments:
           enabled: true
       - enableDaprShared:
           enabled: true
-      - singleNamespace: 
+      - singleNamespace:
           enabled: true
       - releaseNamespaces: 
           namespace: atlan-secure-agent
