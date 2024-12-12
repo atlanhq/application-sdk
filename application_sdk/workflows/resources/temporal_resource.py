@@ -13,6 +13,7 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.inputs.statestore import StateStore
 from application_sdk.logging import get_logger
 from application_sdk.workflows.resources.constants import TemporalConstants
 
@@ -91,11 +92,22 @@ class TemporalResource(ResourceInterface):
         self, workflow_args: Any, workflow_class: Any, workflow_id: str | None = None
     ):
         workflow_id = workflow_id or str(uuid.uuid4())
+
+        # remove credentials from workflow_args and add reference to credentials
+        workflow_args["credential_guid"] = StateStore.store_credentials(
+            workflow_args["credentials"]
+        )
+        del workflow_args["credentials"]
+
         workflow_args.update(
             {
                 "workflow_id": workflow_id,
                 "output_prefix": "/tmp/output",
             }
+        )
+
+        workflow_config_guid = StateStore.store_configuration(
+            workflow_args, workflow_id
         )
 
         workflow.logger.setLevel(logging.DEBUG)
@@ -104,7 +116,7 @@ class TemporalResource(ResourceInterface):
         try:
             handle = await self.client.start_workflow(
                 workflow_class,
-                workflow_args,
+                workflow_config_guid,
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
             )

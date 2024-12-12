@@ -38,5 +38,5 @@ class WorkflowInterface(ABC):
     def get_activities(self) -> List[Callable[..., Any]]:
         return []
 
-    async def run(self, workflow_args: Any):
+    async def run(self, workflow_config_guid: str):
         pass

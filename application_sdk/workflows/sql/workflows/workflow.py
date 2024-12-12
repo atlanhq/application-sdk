@@ -9,7 +9,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
-from application_sdk.inputs.secretstore import SecretStore
+from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
 from application_sdk.paas.readers.json import JSONChunkedObjectStoreReader
 from application_sdk.workflows.resources.temporal_resource import (
@@ -84,9 +84,6 @@ class SQLWorkflow(WorkflowInterface):
             self.write_type_metadata,
         ] + super().get_activities()
 
-    def store_credentials(self, credentials: Dict[str, Any]) -> str:
-        return SecretStore.store_credentials(credentials)
-
     async def start(
         self, workflow_args: Dict[str, Any], workflow_class: Any | None = None
     ) -> Dict[str, Any]:
@@ -101,11 +98,6 @@ class SQLWorkflow(WorkflowInterface):
 
         self.sql_resource.set_credentials(workflow_args["credentials"])
         await self.sql_resource.load()
-
-        workflow_args["credential_guid"] = self.store_credentials(
-            workflow_args["credentials"]
-        )
-        del workflow_args["credentials"]
 
         workflow_class = workflow_class or self.__class__
 
@@ -482,7 +474,7 @@ class SQLWorkflow(WorkflowInterface):
         )
 
     @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]):
+    async def run(self, workflow_config_guid: str):
         """
         Run the workflow.
 
@@ -491,7 +483,8 @@ class SQLWorkflow(WorkflowInterface):
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())
 
-        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
+        workflow_args = StateStore.extract_configuration(workflow_config_guid)
+        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
         self.sql_resource.set_credentials(credentials)
 
         if not self.temporal_resource:
