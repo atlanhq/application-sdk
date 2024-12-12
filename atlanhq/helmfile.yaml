@@ -35,7 +35,7 @@ environments:
           enabled: true
       - singleNamespace:
           enabled: true
-      - releaseNamespaces: 
+      - releaseNamespaces:
           namespace: atlan-secure-agent
 ---
 releases:
