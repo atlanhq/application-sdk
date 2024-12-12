@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, Optional, Union, overload
+from typing import Any, Dict, List, Optional, Union, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -296,6 +296,8 @@ class Function(assets.Function):
         return cls(attributes=attributes)
 
     class Attributes(assets.Function.Attributes):
+        function_arguments: List[str] = []
+
         @classmethod
         @init_guid
         def create(
@@ -396,9 +398,9 @@ class Function(assets.Function):
             function.attributes.function_definition = obj.get(
                 "function_definition", None
             )
-            function.attributes.function_arguments = obj.get(
-                "argument_signature", "()"
-            )[1:-1].split(",")
+            function.attributes.function_arguments = list(
+                obj.get("argument_signature", "()")[1:-1].split(",")
+            )
             function.attributes.function_is_secure = obj.get("is_secure", None) == "YES"
             function.attributes.function_is_external = (
                 obj.get("is_external", None) == "YES"
