@@ -1,4 +1,4 @@
-name: Unit Tests
+name: Tests
 
 on:
   push:
@@ -14,7 +14,7 @@ on:
       - develop
 
 jobs:
-  unit-tests:
+  tests:
     runs-on: ubuntu-latest
     concurrency:
       group: ${{ github.workflow }}-${{ github.ref }}
@@ -63,9 +63,9 @@ jobs:
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --no-root --extras "workflows dashboard"
 
-      - name: Run Tests with Coverage
+      - name: Run Unit and Integration Tests with Coverage
         run: |
-          poetry run coverage run -m pytest tests/unit --full-trace --hypothesis-show-statistics
+          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
           poetry run coverage xml
           poetry run coverage report
 
