@@ -42,12 +42,15 @@ async def test_load(mock_connect: AsyncMock, temporal_resource: TemporalResource
     assert temporal_resource.client == mock_client
 
 
+@patch("application_sdk.workflows.resources.temporal_resource.StateStore")
 @patch(
     "application_sdk.workflows.resources.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow(
-    mock_connect: AsyncMock, temporal_resource: TemporalResource
+    mock_connect: AsyncMock,
+    mock_state_store: MagicMock,
+    temporal_resource: TemporalResource,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -61,8 +64,13 @@ async def test_start_workflow(
     await temporal_resource.load()
     mock_client.start_workflow.return_value = mock_handle
 
+    # Mock the state store
+    mock_state_store = MagicMock()
+    mock_state_store.store_credentials.return_value = "test_credentials"
+
     # Sample workflow arguments
-    workflow_args = {"param1": "value1"}
+    credentials = {"username": "test_username", "password": "test_password"}
+    workflow_args = {"param1": "value1", "credentials": credentials}
     workflow_class = MagicMock()  # Mocking the workflow class
 
     # Run start_workflow and capture the result
@@ -75,12 +83,15 @@ async def test_start_workflow(
     assert result["run_id"] == "test_run_id"
 
 
+@patch("application_sdk.workflows.resources.temporal_resource.StateStore")
 @patch(
     "application_sdk.workflows.resources.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_with_workflow_id(
-    mock_connect: AsyncMock, temporal_resource: TemporalResource
+    mock_connect: AsyncMock,
+    mock_state_store: MagicMock,
+    temporal_resource: TemporalResource,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -96,8 +107,13 @@ async def test_start_workflow_with_workflow_id(
     await temporal_resource.load()
     mock_client.start_workflow.side_effect = start_workflow_side_effect
 
+    # Mock the state store
+    mock_state_store = MagicMock()
+    mock_state_store.store_credentials.return_value = "test_credentials"
+
     # Sample workflow arguments
-    workflow_args = {"param1": "value1"}
+    credentials = {"username": "test_username", "password": "test_password"}
+    workflow_args = {"param1": "value1", "credentials": credentials}
     workflow_class = MagicMock()  # Mocking the workflow class
 
     # Run start_workflow and capture the result
@@ -112,12 +128,15 @@ async def test_start_workflow_with_workflow_id(
     assert result["run_id"] == "test_run_id"
 
 
+@patch("application_sdk.workflows.resources.temporal_resource.StateStore")
 @patch(
     "application_sdk.workflows.resources.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_failure(
-    mock_connect: AsyncMock, temporal_resource: TemporalResource
+    mock_connect: AsyncMock,
+    mock_state_store: MagicMock,
+    temporal_resource: TemporalResource,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -127,8 +146,12 @@ async def test_start_workflow_failure(
     await temporal_resource.load()
     mock_client.start_workflow.side_effect = Exception("Simulated failure")
 
+    # Mock the state store
+    mock_state_store.store_credentials.return_value = "test_credentials"
+
     # Sample workflow arguments
-    workflow_args = {"param1": "value1"}
+    credentials = {"username": "test_username", "password": "test_password"}
+    workflow_args = {"param1": "value1", "credentials": credentials}
     workflow_class = MagicMock()  # Mocking the workflow class
 
     # Assertions
