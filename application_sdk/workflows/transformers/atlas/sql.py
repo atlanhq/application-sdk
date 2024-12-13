@@ -296,7 +296,7 @@ class Function(assets.Function):
         return cls(attributes=attributes)
 
     class Attributes(assets.Function.Attributes):
-        function_arguments: List[str] = []
+        function_arguments: List[str] | None = []
 
         @classmethod
         @init_guid
