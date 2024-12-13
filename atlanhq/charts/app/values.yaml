@@ -85,9 +85,9 @@ app:
       value: temporal-cluster-frontend.atlan-temporal.svc.cluster.local
     - name: ATLAN_TEMPORAL_PORT
       value: 7233
-    - name: APP_HTTP_PORT
+    - name: ATLAN_APP_HTTP_PORT
       value: "8000"
-    - name: APP_HTTP_HOST
+    - name: ATLAN_APP_HTTP_HOST
       value: "0.0.0.0"
     - name: OTEL_EXPORTER_OTLP_ENDPOINT
       value: http://0.0.0.0:8000/telemetry
