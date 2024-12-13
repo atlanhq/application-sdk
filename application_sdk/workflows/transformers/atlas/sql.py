@@ -387,8 +387,6 @@ class Function(assets.Function):
                 schema_name=obj["function_schema"],
                 database_name=obj["function_catalog"],
             )
-            function.attributes.database_name = obj["function_catalog"]
-            function.attributes.schema_name = obj["function_schema"]
             if "TABLE" in obj.get("data_type", None):
                 function.attributes.function_type = "Tabular"
             else:
