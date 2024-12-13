@@ -145,6 +145,8 @@ releases:
 #   disableValidation: true
 #   values:
 #     - values.yaml
+#     - singleNamespace:
+#         enabled: {{ .Environment.Values.singleNamespace.enabled }}
 #   needs:
 #     - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/dapr{{ else }}{{ .Environment.Values.releaseNamespaces.dapr }}/dapr{{ end }}' # Ensure dapr is deployed before atlan-app-components
 #     - '{{ if .Environment.Values.singleNamespace.enabled }}{{ .Environment.Values.releaseNamespaces.namespace }}/postgres-cluster{{ else }}{{ .Environment.Values.releaseNamespaces.postgresCluster }}/postgres-cluster{{ end }}' # Ensure postgres-cluster is deployed before atlan-app-components

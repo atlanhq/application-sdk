@@ -2,23 +2,31 @@
 environments:
   default:
     values:
-      - installAtlanDeps:
-          enabled: true
-      - enableDaprShared:
-          enabled: true
       - singleNamespace:
           enabled: false
       - releaseNamespaces:
           atlan: atlan-temporal
           daprShared: atlan-dapr-shared
           app: hello-world-app
+          namespace: "" # Ensure namespace key exists
+      - installAtlanDeps:
+          enabled: true
+      - enableDaprShared:
+          enabled: true
+
+  unified:
+    values:
+      - singleNamespace:
+          enabled: true
+      - releaseNamespaces:
+          namespace: atlan-secure-agent
+      - installAtlanDeps:
+          enabled: true
+      - enableDaprShared:
+          enabled: true
 
   app:
     values:
-      - installAtlanDeps:
-          enabled: false
-      - enableDaprShared:
-          enabled: false
       - singleNamespace:
           enabled: false
       - releaseNamespaces:
@@ -26,17 +34,10 @@ environments:
       # If singleNamespace is true
       # - releaseNamespaces:
       #     namespace: atlan-secure-agent
-
-  unified:
-    values:
       - installAtlanDeps:
-          enabled: true
+          enabled: false
       - enableDaprShared:
-          enabled: true
-      - singleNamespace:
-          enabled: true
-      - releaseNamespaces:
-          namespace: atlan-secure-agent
+          enabled: false
 ---
 releases:
   - name: atlan
