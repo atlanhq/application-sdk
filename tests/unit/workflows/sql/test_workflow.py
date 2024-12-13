@@ -100,12 +100,10 @@ async def test_transform_batch_without_transformer(sql_resource):
     workflow = SQLWorkflow()
     workflow.set_sql_resource(sql_resource)
 
-    mock_writer = AsyncMock()
     with pytest.raises(ValueError, match="Transformer is not set"):
         await workflow._transform_batch(
             [{"test": "data"}],
             "test",
-            mock_writer,
             workflow_id="test-workflow",
             workflow_run_id="test-run",
         )
