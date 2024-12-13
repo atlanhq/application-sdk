@@ -81,6 +81,7 @@ class SQLResource(ResourceInterface):
         schema_alias_key: str | None = None,
         database_result_key: str = "TABLE_CATALOG",
         schema_result_key: str = "TABLE_SCHEMA",
+        **kwargs,
     ):
         if database_alias_key is None:
             database_alias_key = self.default_database_alias_key
