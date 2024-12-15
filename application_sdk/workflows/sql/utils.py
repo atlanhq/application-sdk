@@ -3,13 +3,12 @@ from typing import Dict, List, Tuple
 
 
 def prepare_filters(
-    include_filter_str: str, exclude_filter_str: str, temp_table_regex_str: str
-) -> Tuple[str, str, str]:
+    include_filter_str: str, exclude_filter_str: str
+) -> Tuple[str, str]:
     """
     Prepare the filters for the SQL query.
 
     :param include_filter_str: The include filter string.
-    :param exclude_filter_str: The exclude filter string.
     :param temp_table_regex_str: The temporary table regex string.
     :return: The normalized include regex, the normalized exclude regex, and the exclude table.
     """
@@ -30,9 +29,7 @@ def prepare_filters(
         else "$^"
     )
 
-    exclude_table = temp_table_regex_str if temp_table_regex_str else "$^"
-
-    return normalized_include_regex, normalized_exclude_regex, exclude_table
+    return normalized_include_regex, normalized_exclude_regex
 
 
 def normalize_filters(filter_dict: Dict[str, List[str]], is_include: bool) -> List[str]:
