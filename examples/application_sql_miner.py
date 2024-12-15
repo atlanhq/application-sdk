@@ -136,7 +136,9 @@ class SnowflakeResource(SQLResource):
     default_schema_alias_key = "name"
 
 
-async def main():
+async def application_sql_miner():
+    print("Starting application_sql_miner")
+
     temporal_resource = TemporalResource(
         TemporalConfig(
             application_name=APPLICATION_NAME,
@@ -169,7 +171,7 @@ async def main():
     time.sleep(3)
     start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
 
-    await miner_workflow.start(
+    workflow_response = await miner_workflow.start(
         {
             "miner_args": {
                 "database_name_cleaned": "SNOWFLAKE",
@@ -204,9 +206,8 @@ async def main():
         }
     )
 
-    # wait for the workflow to finish
-    time.sleep(120)
+    return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(application_sql_miner())
