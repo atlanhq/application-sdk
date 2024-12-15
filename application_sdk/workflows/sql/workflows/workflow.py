@@ -525,7 +525,7 @@ class SQLWorkflow(WorkflowInterface):
         )
 
     @workflow.run
-    async def run(self, workflow_config_guid: str):
+    async def run(self, workflow_config: Dict[str, Any]):
         """
         Run the workflow.
 
@@ -534,6 +534,7 @@ class SQLWorkflow(WorkflowInterface):
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())
 
+        workflow_config_guid = workflow_config["workflow_config_guid"]
         workflow_args = StateStore.extract_configuration(workflow_config_guid)
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
         self.sql_resource.set_credentials(credentials)

@@ -40,7 +40,7 @@ class SampleWorkflow(WorkflowInterface):
             "run_id": str(uuid.uuid4()),
         }
 
-    async def run(self, workflow_config_guid: str) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> None:
         pass
 
 

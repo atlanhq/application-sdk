@@ -88,29 +88,30 @@ class StateStore:
         return cls._get_state(credential_guid)
 
     @classmethod
-    def store_configuration(cls, config: Dict[str, Any], config_guid: str) -> str:
+    def store_configuration(cls, workflow_id: str, config: Dict[str, Any]) -> str:
         """
         Store configuration in the state store.
 
         :param config: The configuration to store.
-        :param config_guid: The unique identifier for the configuration.
+        :param workflow_id: The unique identifier for the workflow.
         :return: The generated configuration GUID.
         :raises Exception: If there's an error with the Dapr client operations.
         """
-        config_guid = f"config_{config_guid}"
+        config_guid = f"config_{workflow_id}"
         cls._save_state(config_guid, config)
         return config_guid
 
     @classmethod
-    def extract_configuration(cls, config_guid: str) -> Dict[str, Any]:
+    def extract_configuration(cls, workflow_id: str) -> Dict[str, Any]:
         """
         Extract configuration from the state store using the config GUID.
 
-        :param config_guid: The unique identifier for the configuration.
+        :param workflow_id: The unique identifier for the workflow.
         :return: The configuration if found.
-        :raises ValueError: If the config_guid is invalid or configuration is not found.
+        :raises ValueError: If the workflow_id is invalid or configuration is not found.
         :raises Exception: If there's an error with the Dapr client operations.
         """
-        if not config_guid or not config_guid.startswith("config_"):
+        if not workflow_id or not workflow_id.startswith("config_"):
             raise ValueError("Invalid configuration GUID provided.")
-        return cls._get_state(config_guid)
+        config = cls._get_state(workflow_id)
+        return config

@@ -1,6 +1,6 @@
 import logging
 from abc import ABC
-from typing import Any, Callable, List
+from typing import Any, Callable, Dict, List
 
 from temporalio.client import WorkflowFailureError
 
@@ -38,5 +38,5 @@ class WorkflowInterface(ABC):
     def get_activities(self) -> List[Callable[..., Any]]:
         return []
 
-    async def run(self, workflow_config_guid: str):
+    async def run(self, workflow_config: Dict[str, Any]):
         pass

@@ -82,7 +82,7 @@ def test_extract_credentials_failure(mock_dapr_client):
 def test_store_configuration_success(mock_dapr_client):
     config = {"username": "test", "password": "password"}
     with patch("uuid.uuid4", return_value="test-uuid"):
-        result = StateStore.store_configuration(config, "test-uuid")
+        result = StateStore.store_configuration("test-uuid", config)
 
     assert result == "config_test-uuid"
     mock_dapr_client.save_state.assert_called_once_with(

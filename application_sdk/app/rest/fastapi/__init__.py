@@ -9,11 +9,12 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     FetchMetadataResponse,
     PreflightCheckRequest,
     PreflightCheckResponse,
-    StartWorkflowRequest,
-    StartWorkflowResponse,
     TestAuthRequest,
     TestAuthResponse,
+    WorkflowConfigResponse,
     WorkflowData,
+    WorkflowRequest,
+    WorkflowResponse,
 )
 from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
@@ -106,7 +107,21 @@ class FastAPIApplication(AtlanAPIApplication):
             "/start",
             self.start_workflow,
             methods=["POST"],
-            response_model=StartWorkflowResponse,
+            response_model=WorkflowResponse,
+        )
+
+        self.workflow_router.add_api_route(
+            "/config/{workflow_id}",
+            self.get_workflow_config,
+            methods=["GET"],
+            response_model=WorkflowResponse,
+        )
+
+        self.workflow_router.add_api_route(
+            "/config/{workflow_id}",
+            self.update_workflow_config,
+            methods=["POST"],
+            response_model=WorkflowResponse,
         )
 
         super().register_routes()
@@ -129,11 +144,38 @@ class FastAPIApplication(AtlanAPIApplication):
         )
         return PreflightCheckResponse(success=True, data=preflight_check)
 
-    async def start_workflow(self, body: StartWorkflowRequest) -> StartWorkflowResponse:
+    def get_workflow_config(self, workflow_id: str) -> WorkflowConfigResponse:
+        config = self.metadata_controller.get_workflow_config(workflow_id)
+        return WorkflowConfigResponse(
+            success=True,
+            message="Workflow configuration fetched successfully",
+            data=config,
+        )
+
+    async def update_workflow_config(
+        self, workflow_id: str, body: WorkflowRequest
+    ) -> WorkflowConfigResponse:
+        preflight_check = await self.preflight_check_controller.preflight_check(
+            body.model_dump()
+        )
+        if not preflight_check["success"]:
+            return WorkflowConfigResponse(
+                success=False, message=preflight_check["message"], data={}
+            )
+        config = self.metadata_controller.update_workflow_config(
+            workflow_id, body.model_dump()
+        )
+        return WorkflowConfigResponse(
+            success=True,
+            message="Workflow configuration updated successfully",
+            data=config,
+        )
+
+    async def start_workflow(self, body: WorkflowRequest) -> WorkflowResponse:
         workflow_data = await self.workflow.start(
             body.model_dump(), workflow_class=self.workflow.__class__
         )
-        return StartWorkflowResponse(
+        return WorkflowResponse(
             success=True,
             message="Workflow started successfully",
             data=WorkflowData(

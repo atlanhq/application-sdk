@@ -342,12 +342,13 @@ class SQLMinerWorkflow(WorkflowInterface):
         return parallel_markers
 
     @workflow.run
-    async def run(self, workflow_config_guid: str):
+    async def run(self, workflow_config: Dict[str, Any]):
         """
         Run the workflow.
 
         :param workflow_args: The workflow arguments.
         """
+        workflow_config_guid = workflow_config["workflow_config_guid"]
         workflow_args = StateStore.extract_configuration(workflow_config_guid)
 
         if not self.sql_resource:

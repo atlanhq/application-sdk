@@ -107,7 +107,7 @@ class TemporalResource(ResourceInterface):
         )
 
         workflow_config_guid = StateStore.store_configuration(
-            workflow_args, workflow_id
+            workflow_id, workflow_args
         )
 
         workflow.logger.setLevel(logging.DEBUG)
@@ -116,7 +116,9 @@ class TemporalResource(ResourceInterface):
         try:
             handle = await self.client.start_workflow(
                 workflow_class,
-                workflow_config_guid,
+                {
+                    "workflow_config_guid": workflow_config_guid,
+                },
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
