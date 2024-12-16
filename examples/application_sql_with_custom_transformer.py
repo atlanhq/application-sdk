@@ -62,7 +62,7 @@ class PostgreSQLResource(AsyncSQLResource):
 
 class SampleSQLWorkflow(SQLWorkflow):
     fetch_database_sql = """
-    SELECT datname FROM pg_database WHERE datname = current_database();
+    SELECT * FROM pg_database WHERE datname = current_database();
     """
 
     fetch_schema_sql = """

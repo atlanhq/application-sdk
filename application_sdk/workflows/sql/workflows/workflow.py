@@ -206,14 +206,7 @@ class SQLWorkflow(WorkflowInterface):
             # using "or" instead of default correct defaults are set in case of empty string
             include_filter = metadata.get("include_filter") or "{}"
             exclude_filter = metadata.get("exclude_filter") or "{}"
-            temp_table_regex = metadata.get("temp_table_regex") or "$^"
-
-            if include_filter == "{}" and exclude_filter == "{}":
-                return (
-                    query.replace("{normalized_exclude_regex}", "^$")
-                    .replace("{normalized_include_regex}", ".*")
-                    .replace("{exclude_table}", temp_table_regex)
-                )
+            temp_table_regex = metadata.get("temp_table_regex") or "^$"
 
             normalized_include_regex, normalized_exclude_regex = prepare_filters(
                 include_filter, exclude_filter

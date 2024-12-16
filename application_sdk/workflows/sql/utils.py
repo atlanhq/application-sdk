@@ -9,7 +9,7 @@ def prepare_filters(
     Prepare the filters for the SQL query.
 
     :param include_filter_str: The include filter string.
-    :param temp_table_regex_str: The temporary table regex string.
+    :param exclude_filter_str: The exclude filter string.
     :return: The normalized include regex, the normalized exclude regex, and the exclude table.
     """
     include_filter = json.loads(include_filter_str)
@@ -26,7 +26,7 @@ def prepare_filters(
     normalized_exclude_regex = (
         "|".join(normalized_exclude_filter_list)
         if normalized_exclude_filter_list
-        else "$^"
+        else "^$"
     )
 
     return normalized_include_regex, normalized_exclude_regex
