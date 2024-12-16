@@ -194,23 +194,14 @@ class SQLWorkflow(WorkflowInterface):
         """
         try:
             metadata = workflow_args.get("metadata", workflow_args.get("form_data", {}))
-            include_filter = metadata.get("include_filter", "{}")
-            exclude_filter = metadata.get("exclude_filter", "{}")
-            temp_table_regex = metadata.get("temp_table_regex", "")
 
-            if include_filter == "{}" and exclude_filter == "{}":
-                return (
-                    query.replace("{normalized_exclude_regex}", "^$")
-                    .replace("{normalized_include_regex}", ".*")
-                    .replace("{exclude_table}", "")
-                )
+            # using "or" instead of default correct defaults are set in case of empty string
+            include_filter = metadata.get("include_filter") or "{}"
+            exclude_filter = metadata.get("exclude_filter") or "{}"
+            temp_table_regex = metadata.get("temp_table_regex") or "^$"
 
-            normalized_include_regex, normalized_exclude_regex, exclude_table = (
-                prepare_filters(
-                    include_filter,
-                    exclude_filter,
-                    temp_table_regex,
-                )
+            normalized_include_regex, normalized_exclude_regex = prepare_filters(
+                include_filter, exclude_filter
             )
 
             exclude_empty_tables = workflow_args.get("metadata", {}).get(
@@ -223,7 +214,7 @@ class SQLWorkflow(WorkflowInterface):
             return query.format(
                 normalized_include_regex=normalized_include_regex,
                 normalized_exclude_regex=normalized_exclude_regex,
-                exclude_table=exclude_table,
+                exclude_table=temp_table_regex,
                 exclude_empty_tables=exclude_empty_tables,
                 exclude_views=exclude_views,
             )
@@ -448,6 +439,10 @@ class SQLWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
         transform_activities: List[Any] = []
+
+        if raw_stat is None or len(raw_stat) == 0:
+            # to handle the case where the fetch_fn returns None or []
+            return
 
         chunk_count = max(value.get("chunk_count", 0) for value in raw_stat)
         if chunk_count is None:
