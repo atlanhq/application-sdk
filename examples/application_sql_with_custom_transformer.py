@@ -36,6 +36,9 @@ from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
+from application_sdk.workflows.controllers import (
+    WorkflowPreflightCheckControllerInterface,
+)
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -118,6 +121,8 @@ class CustomTransformer(AtlasTransformer):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
         return super().build(workflow=workflow or SampleSQLWorkflow())
 
