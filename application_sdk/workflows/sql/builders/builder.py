@@ -22,6 +22,12 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     transformer: TransformerInterface
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
 
+    def set_preflight_check_controller(
+        self, preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    ) -> "WorkflowBuilderInterface":
+        self.preflight_check_controller = preflight_check_controller
+        return self
+
     def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflowBuilder":
         self.sql_resource = sql_resource
         return self
