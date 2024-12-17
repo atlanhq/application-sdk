@@ -89,8 +89,8 @@ class TestSQLPreflightCheck:
         expected_sql = """
         SELECT count(*) as "count"
             FROM ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE '$^'
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '$^'
+            WHERE NOT TABLE_NAME RLIKE '^$'
+                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '^$'
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
@@ -122,7 +122,7 @@ class TestSQLPreflightCheck:
         expected_sql = """
             SELECT count(*) as "count"
             FROM ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE ''
+            WHERE NOT TABLE_NAME RLIKE '^$'
                 AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '^$'
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '.*'
         """
@@ -158,7 +158,7 @@ class TestSQLPreflightCheck:
         expected_sql = """
            SELECT count(*) as "count"
            FROM ACCOUNT_USAGE.TABLES
-           WHERE NOT TABLE_NAME RLIKE '$^'
+           WHERE NOT TABLE_NAME RLIKE '^$'
             AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PRIVATE$'
             AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """

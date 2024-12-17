@@ -71,44 +71,9 @@ jobs:
         SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
       run: |
         cd examples
+        poetry run python run_examples.py
 
-        # Initialize workflow_status file
-        echo "## 📦 Example workflows test results" > workflow_status.md
-        echo "- This workflow runs all the examples in the \`examples\` directory." >> workflow_status.md
-        echo "---" >> workflow_status.md
-        echo "| Example File | Status | Duration |" >> workflow_status.md
-        echo "|--------------|--------|-----------|" >> workflow_status.md
-
-        # Process each Python file individually
-        for FILE in *.py; do
-          echo "Testing $FILE..."
-
-          # Capture start time
-          START_TIME=$(date +%s)
-
-          # Run the Python file and capture exit code
-          poetry run python "./$FILE"
-          EXIT_CODE=$?
-
-          # Calculate duration
-          END_TIME=$(date +%s)
-          DURATION=$((END_TIME - START_TIME))
-
-          # Format duration as MM:SS
-          DURATION_FORMAT=$(printf "%02d:%02d" $((DURATION / 60)) $((DURATION % 60)))
-
-          # Check exit code
-          if [ $EXIT_CODE -eq 0 ]; then
-            STATUS="COMPLETED 🟢"
-          else
-            STATUS="FAILED 🔴"
-          fi
-
-          # Add to workflow_status.md with duration
-          echo "| $FILE | $STATUS | $DURATION_FORMAT min |" >> workflow_status.md
-        done
-
-        echo "> This is an automatically generated file. Please do not edit directly." >> workflow_status.md
+        echo "Workflow status:"
         cat workflow_status.md
 
     - name: Comment test results on Pull Request
