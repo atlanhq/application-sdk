@@ -529,8 +529,8 @@ class SQLWorkflow(WorkflowInterface):
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())
 
-        workflow_config_guid = workflow_config["workflow_config_guid"]
-        workflow_args = StateStore.extract_configuration(workflow_config_guid)
+        workflow_id = workflow_config["workflow_id"]
+        workflow_args = StateStore.extract_configuration(workflow_id)
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
         self.sql_resource.set_credentials(credentials)
 
@@ -539,7 +539,6 @@ class SQLWorkflow(WorkflowInterface):
                 TemporalConfig(application_name=self.application_name)
             )
 
-        workflow_id = workflow_args["workflow_id"]
         workflow_run_id = workflow.info().run_id
         workflow_args["workflow_run_id"] = workflow_run_id
 

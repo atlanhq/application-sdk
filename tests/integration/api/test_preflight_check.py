@@ -51,7 +51,9 @@ class TestSQLPreflightCheck:
         """Helper to normalize SQL for comparison"""
         return " ".join(sql.split()).strip().lower()
 
-    async def test_check_endpoint_basic_filters(self, client, controller):
+    async def test_check_endpoint_basic_filters(
+        self, client: TestClient, controller: SQLWorkflowPreflightCheckController
+    ):
         """Test the complete flow from /check endpoint through to SQL generation"""
 
         # Setup mock for sql_resource.fetch_metadata

@@ -45,7 +45,7 @@ def test_extract_credentials_success(mock_dapr_client):
     mock_state.data = json.dumps(config)
     mock_dapr_client.get_state.return_value = mock_state
 
-    result = StateStore.extract_credentials("credential_test-uuid")
+    result = StateStore.extract_credentials("test-uuid")
 
     assert result == config
     mock_dapr_client.get_state.assert_called_once_with(
@@ -54,18 +54,13 @@ def test_extract_credentials_success(mock_dapr_client):
     mock_dapr_client.close.assert_called_once()
 
 
-def test_extract_credentials_invalid_guid():
-    with pytest.raises(ValueError):
-        StateStore.extract_credentials("invalid-guid")
-
-
 def test_extract_credentials_not_found(mock_dapr_client):
     mock_state = MagicMock()
     mock_state.data = None
     mock_dapr_client.get_state.return_value = mock_state
 
     with pytest.raises(ValueError):
-        StateStore.extract_credentials("credential_test-uuid")
+        StateStore.extract_credentials("test-uuid")
 
     mock_dapr_client.close.assert_called_once()
 
@@ -74,7 +69,7 @@ def test_extract_credentials_failure(mock_dapr_client):
     mock_dapr_client.get_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        StateStore.extract_credentials("credential_test-uuid")
+        StateStore.extract_credentials("test-uuid")
 
     mock_dapr_client.close.assert_called_once()
 
@@ -97,7 +92,7 @@ def test_extract_configuration_success(mock_dapr_client):
     mock_state.data = json.dumps(config)
     mock_dapr_client.get_state.return_value = mock_state
 
-    result = StateStore.extract_configuration("config_test-uuid")
+    result = StateStore.extract_configuration("test-uuid")
 
     assert result == config
     mock_dapr_client.get_state.assert_called_once_with(
@@ -106,18 +101,13 @@ def test_extract_configuration_success(mock_dapr_client):
     mock_dapr_client.close.assert_called_once()
 
 
-def test_extract_configuration_invalid_guid():
-    with pytest.raises(ValueError):
-        StateStore.extract_configuration("invalid-guid")
-
-
 def test_extract_configuration_not_found(mock_dapr_client):
     mock_state = MagicMock()
     mock_state.data = None
     mock_dapr_client.get_state.return_value = mock_state
 
     with pytest.raises(ValueError):
-        StateStore.extract_configuration("config_test-uuid")
+        StateStore.extract_configuration("test-uuid")
 
     mock_dapr_client.close.assert_called_once()
 
@@ -126,6 +116,6 @@ def test_extract_configuration_failure(mock_dapr_client):
     mock_dapr_client.get_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        StateStore.extract_configuration("config_test-uuid")
+        StateStore.extract_configuration("test-uuid")
 
     mock_dapr_client.close.assert_called_once()

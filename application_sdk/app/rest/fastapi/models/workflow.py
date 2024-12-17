@@ -81,6 +81,7 @@ class WorkflowRequest(RootModel):
     class Config:
         schema_extra = {
             "example": {
+                "miner_args": {},
                 "credentials": {
                     "host": "",
                     "port": 5432,

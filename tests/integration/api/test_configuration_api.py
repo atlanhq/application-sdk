@@ -68,7 +68,7 @@ class TestConfigurationAPI:
                 "connection": payload["connection"],
                 "metadata": payload["metadata"],
                 "credential_guid": "credential_test-uuid",
-                "workflow_config_guid": "config_1234",
+                "workflow_id": "1234",
             }
 
             response = client.post("/workflows/v1/config/1234", json=payload)
@@ -102,7 +102,7 @@ class TestConfigurationAPI:
         with patch.object(StateStore, "extract_configuration") as mock_extract_config:
             mock_extract_config.return_value = test_config
 
-            response = client.get("/workflows/v1/config/config_1234")
+            response = client.get("/workflows/v1/config/1234")
 
             assert response.status_code == 200
             response_data = response.json()
@@ -114,7 +114,7 @@ class TestConfigurationAPI:
             assert response_data["data"] == test_config
 
             # Verify StateStore interaction
-            mock_extract_config.assert_called_once_with("config_1234")
+            mock_extract_config.assert_called_once_with("1234")
 
     def test_get_configuration_not_found(self, client: TestClient):
         """Test configuration retrieval when not found"""
@@ -123,7 +123,7 @@ class TestConfigurationAPI:
                 "State not found for key: config>>"
             )
 
-            config_id = "config_nonexistent"
+            config_id = "nonexistent"
 
             # Test with a non-existent config ID
             with pytest.raises(ValueError):

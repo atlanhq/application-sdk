@@ -80,12 +80,12 @@ class StateStore:
         Note: this method will be moved to secretstore.py
 
         Usage:
-            >>> StateStore.extract_credentials("credential_1234567890")
+            >>> StateStore.extract_credentials("1234567890")
             {"username": "admin", "password": "password"}
         """
-        if not credential_guid or not credential_guid.startswith("credential_"):
+        if not credential_guid:
             raise ValueError("Invalid credential GUID provided.")
-        return cls._get_state(credential_guid)
+        return cls._get_state(f"credential_{credential_guid}")
 
     @classmethod
     def store_configuration(cls, workflow_id: str, config: Dict[str, Any]) -> str:
@@ -102,16 +102,16 @@ class StateStore:
         return config_guid
 
     @classmethod
-    def extract_configuration(cls, workflow_id: str) -> Dict[str, Any]:
+    def extract_configuration(cls, config_guid: str) -> Dict[str, Any]:
         """
         Extract configuration from the state store using the config GUID.
 
-        :param workflow_id: The unique identifier for the workflow.
+        :param config_guid: The unique identifier for the configuration.
         :return: The configuration if found.
-        :raises ValueError: If the workflow_id is invalid or configuration is not found.
+        :raises ValueError: If the config_guid is invalid or configuration is not found.
         :raises Exception: If there's an error with the Dapr client operations.
         """
-        if not workflow_id or not workflow_id.startswith("config_"):
+        if not config_guid:
             raise ValueError("Invalid configuration GUID provided.")
-        config = cls._get_state(workflow_id)
+        config = cls._get_state(f"config_{config_guid}")
         return config

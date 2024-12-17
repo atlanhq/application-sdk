@@ -53,8 +53,8 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
             )
             del config["credentials"]
 
-        workflow_config_guid = StateStore.store_configuration(workflow_id, config)
-        config["workflow_config_guid"] = workflow_config_guid
+        StateStore.store_configuration(workflow_id, config)
+        config["workflow_id"] = workflow_id
         return config
 
 

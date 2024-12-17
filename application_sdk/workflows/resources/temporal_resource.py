@@ -88,29 +88,33 @@ class TemporalResource(ResourceInterface):
             namespace=self.config.get_namespace(),
         )
 
-    async def start_workflow(
-        self, workflow_args: Any, workflow_class: Any, workflow_id: str | None = None
-    ):
-        workflow_id = workflow_id or str(uuid.uuid4())
+    async def start_workflow(self, workflow_args: Any, workflow_class: Any):
+        if "credentials" in workflow_args:
+            # remove credentials from workflow_args and add reference to credentials
+            workflow_args["credential_guid"] = StateStore.store_credentials(
+                workflow_args["credentials"]
+            )
+            del workflow_args["credentials"]
 
-        # remove credentials from workflow_args and add reference to credentials
-        workflow_args["credential_guid"] = StateStore.store_credentials(
-            workflow_args["credentials"]
-        )
-        del workflow_args["credentials"]
+        workflow_id = workflow_args.get("workflow_id")
+        if not workflow_id:
+            # if workflow_id is not provided, store the workflow_args in the state store
+            workflow_id = str(uuid.uuid4())
+            workflow_args.update(
+                {
+                    "application_name": self.config.application_name,
+                    "workflow_id": workflow_id,
+                    "output_prefix": "/tmp/output",
+                }
+            )
 
-        workflow_args.update(
-            {
-                "application_name": self.config.application_name,
-                "workflow_id": workflow_id,
-                "output_prefix": "/tmp/output",
-            }
-        )
+            workflow_config_guid = StateStore.store_configuration(
+                workflow_id, workflow_args
+            )
 
-        workflow_config_guid = StateStore.store_configuration(
-            workflow_id, workflow_args
-        )
+            logger.info(f"Created workflow config GUID: {workflow_config_guid}")
 
+        workflow.logger.setLevel(logging.DEBUG)
         workflow.logger.setLevel(logging.DEBUG)
         activity.logger.setLevel(logging.DEBUG)
 
@@ -118,7 +122,7 @@ class TemporalResource(ResourceInterface):
             handle = await self.client.start_workflow(
                 workflow_class,
                 {
-                    "workflow_config_guid": workflow_config_guid,
+                    "workflow_id": workflow_id,
                 },
                 id=workflow_id,
                 task_queue=self.worker_task_queue,

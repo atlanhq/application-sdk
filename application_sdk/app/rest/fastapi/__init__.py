@@ -153,7 +153,7 @@ class FastAPIApplication(AtlanAPIApplication):
             data=config,
         )
 
-    async def update_workflow_config(
+    def update_workflow_config(
         self, workflow_id: str, body: WorkflowConfigRequest
     ) -> WorkflowConfigResponse:
         # note: it's assumed that the preflight check is successful if the config is being updated

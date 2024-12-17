@@ -348,8 +348,8 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         :param workflow_args: The workflow arguments.
         """
-        workflow_config_guid = workflow_config["workflow_config_guid"]
-        workflow_args = StateStore.extract_configuration(workflow_config_guid)
+        workflow_guid = workflow_config["workflow_id"]
+        workflow_args = StateStore.extract_configuration(workflow_guid)
 
         if not self.sql_resource:
             credentials = StateStore.extract_credentials(
