@@ -1,8 +1,8 @@
 # Request/Response DTOs for workflows
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, RootModel
+from pydantic import BaseModel, Field, RootModel, model_validator
 
 
 class TestAuthRequest(RootModel):
@@ -127,6 +127,33 @@ class WorkflowResponse(BaseModel):
                 },
             }
         }
+
+
+class WorkflowConfigRequest(BaseModel):
+    credentials: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional JSON field containing database credentials"
+    )
+    credential_guid: Optional[str] = Field(
+        default=None, description="Optional GUID field containing database credentials"
+    )
+    connection: Dict[str, Any] = Field(
+        ..., description="Required JSON field containing connection configuration"
+    )
+    metadata: Dict[str, Any] = Field(
+        ..., description="Required JSON field containing metadata configuration"
+    )
+
+    @model_validator(mode="before")
+    def check_credentials(cls, values: Dict[str, Any]):
+        credentials = values.get("credentials")
+        credential_guid = values.get("credential_guid")
+        if not credentials and not credential_guid:
+            raise ValueError("Either credentials or credential_guid must be provided")
+        if credentials and credential_guid:
+            raise ValueError(
+                "Only one of credentials or credential_guid should be provided"
+            )
+        return values
 
 
 class WorkflowConfigResponse(BaseModel):

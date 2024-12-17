@@ -11,6 +11,7 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     PreflightCheckResponse,
     TestAuthRequest,
     TestAuthResponse,
+    WorkflowConfigRequest,
     WorkflowConfigResponse,
     WorkflowData,
     WorkflowRequest,
@@ -114,14 +115,14 @@ class FastAPIApplication(AtlanAPIApplication):
             "/config/{workflow_id}",
             self.get_workflow_config,
             methods=["GET"],
-            response_model=WorkflowResponse,
+            response_model=WorkflowConfigResponse,
         )
 
         self.workflow_router.add_api_route(
             "/config/{workflow_id}",
             self.update_workflow_config,
             methods=["POST"],
-            response_model=WorkflowResponse,
+            response_model=WorkflowConfigResponse,
         )
 
         super().register_routes()
@@ -153,15 +154,9 @@ class FastAPIApplication(AtlanAPIApplication):
         )
 
     async def update_workflow_config(
-        self, workflow_id: str, body: WorkflowRequest
+        self, workflow_id: str, body: WorkflowConfigRequest
     ) -> WorkflowConfigResponse:
-        preflight_check = await self.preflight_check_controller.preflight_check(
-            body.model_dump()
-        )
-        if not preflight_check["success"]:
-            return WorkflowConfigResponse(
-                success=False, message=preflight_check["message"], data={}
-            )
+        # note: it's assumed that the preflight check is successful if the config is being updated
         config = self.metadata_controller.update_workflow_config(
             workflow_id, body.model_dump()
         )

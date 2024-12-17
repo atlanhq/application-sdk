@@ -166,9 +166,10 @@ async def application_sql():
                 "use_jdbc_internal_methods": "true",
                 "authentication": "BASIC",
                 "extraction-method": "direct",
-                "exclude_views": True,
-                "exclude_empty_tables": False,
+                "exclude_views": "true",
+                "exclude_empty_tables": "false",
             },
+            # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
         }
     )
 

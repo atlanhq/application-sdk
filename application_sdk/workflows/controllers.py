@@ -45,7 +45,16 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     def update_workflow_config(
         self, workflow_id: str, config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        StateStore.store_configuration(workflow_id, config)
+        # check if the config has credentials
+        if "credentials" in config:
+            # remove credentials from config and add reference to credentials
+            config["credential_guid"] = StateStore.store_credentials(
+                config["credentials"]
+            )
+            del config["credentials"]
+
+        workflow_config_guid = StateStore.store_configuration(workflow_id, config)
+        config["workflow_config_guid"] = workflow_config_guid
         return config
 
 

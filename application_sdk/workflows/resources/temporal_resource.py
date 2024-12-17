@@ -101,6 +101,7 @@ class TemporalResource(ResourceInterface):
 
         workflow_args.update(
             {
+                "application_name": self.config.application_name,
                 "workflow_id": workflow_id,
                 "output_prefix": "/tmp/output",
             }
