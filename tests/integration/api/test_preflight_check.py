@@ -1,11 +1,7 @@
 import json
-from typing import Any
-from unittest.mock import AsyncMock, Mock
 
-import pytest
 from fastapi.testclient import TestClient
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
@@ -13,51 +9,19 @@ from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 
 class TestSQLPreflightCheck:
-    @pytest.fixture
-    def mock_sql_resource(self) -> Any:
-        mock = Mock()
-        mock.fetch_metadata = AsyncMock()
-        mock.sql_input = AsyncMock()
-        return mock
-
-    @pytest.fixture
-    def controller(self, mock_sql_resource: Any) -> SQLWorkflowPreflightCheckController:
-        controller = SQLWorkflowPreflightCheckController(mock_sql_resource)
-        controller.TABLES_CHECK_SQL = """
-            SELECT count(*) as "count"
-            FROM ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
-                AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
-        """
-        return controller
-
-    @pytest.fixture
-    def app(
-        self, controller: SQLWorkflowPreflightCheckController
-    ) -> FastAPIApplication:
-        """Create FastAPI test application"""
-        app = FastAPIApplication(preflight_check_controller=controller)
-        app.register_routers()
-        app.register_routes()
-        return app
-
-    @pytest.fixture
-    def client(self, app: FastAPIApplication) -> TestClient:
-        """Create test client"""
-        return TestClient(app.app)
-
     def normalize_sql(self, sql: str) -> str:
         """Helper to normalize SQL for comparison"""
         return " ".join(sql.split()).strip().lower()
 
     async def test_check_endpoint_basic_filters(
-        self, client: TestClient, controller: SQLWorkflowPreflightCheckController
+        self,
+        client: TestClient,
+        preflight_check_controller: SQLWorkflowPreflightCheckController,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
 
         # Setup mock for sql_resource.fetch_metadata
-        controller.sql_resource.fetch_metadata.return_value = [
+        preflight_check_controller.sql_resource.fetch_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
         ]
 
@@ -85,7 +49,7 @@ class TestSQLPreflightCheck:
         assert "data" in response_data
 
         # Verify that preflight_check was called with correct args
-        controller.sql_resource.fetch_metadata.assert_called_once()
+        preflight_check_controller.sql_resource.fetch_metadata.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -96,13 +60,19 @@ class TestSQLPreflightCheck:
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
+        prepared_sql = SQLWorkflow.prepare_query(
+            preflight_check_controller.TABLES_CHECK_SQL, payload
+        )
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
-    async def test_check_endpoint_empty_filters(self, client, controller):
+    async def test_check_endpoint_empty_filters(
+        self,
+        client: TestClient,
+        preflight_check_controller: SQLWorkflowPreflightCheckController,
+    ):
         """Test the /check endpoint with empty filters"""
 
-        controller.sql_resource.fetch_metadata.return_value = []
+        preflight_check_controller.sql_resource.fetch_metadata.return_value = []
 
         payload = {
             "credentials": {
@@ -129,13 +99,19 @@ class TestSQLPreflightCheck:
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '.*'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
+        prepared_sql = SQLWorkflow.prepare_query(
+            preflight_check_controller.TABLES_CHECK_SQL, payload
+        )
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
-    async def test_check_endpoint_both_filters(self, client, controller):
+    async def test_check_endpoint_both_filters(
+        self,
+        client: TestClient,
+        preflight_check_controller: SQLWorkflowPreflightCheckController,
+    ):
         """Test the /check endpoint with both filters"""
 
-        controller.sql_resource.fetch_metadata.return_value = [
+        preflight_check_controller.sql_resource.fetch_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
         ]
@@ -165,5 +141,7 @@ class TestSQLPreflightCheck:
             AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(controller.TABLES_CHECK_SQL, payload)
+        prepared_sql = SQLWorkflow.prepare_query(
+            preflight_check_controller.TABLES_CHECK_SQL, payload
+        )
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)

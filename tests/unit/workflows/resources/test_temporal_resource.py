@@ -113,12 +113,17 @@ async def test_start_workflow_with_workflow_id(
 
     # Sample workflow arguments
     credentials = {"username": "test_username", "password": "test_password"}
-    workflow_args = {"param1": "value1", "credentials": credentials}
+    workflow_args = {
+        "param1": "value1",
+        "credentials": credentials,
+        "workflow_id": "test_workflow_id",
+    }
     workflow_class = MagicMock()  # Mocking the workflow class
 
     # Run start_workflow and capture the result
     result = await temporal_resource.start_workflow(
-        workflow_args, workflow_class, workflow_id="test_workflow_id"
+        workflow_args,
+        workflow_class,
     )
 
     # Assertions

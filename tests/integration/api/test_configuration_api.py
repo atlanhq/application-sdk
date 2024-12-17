@@ -1,42 +1,13 @@
 from typing import Any, Dict
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.workflows.sql.controllers.metadata import (
-    SQLWorkflowMetadataController,
-)
 
 
 class TestConfigurationAPI:
-    @pytest.fixture
-    def mock_sql_resource(self) -> Any:
-        mock = Mock()
-        mock.fetch_metadata = AsyncMock()
-        mock.sql_input = AsyncMock()
-        return mock
-
-    @pytest.fixture
-    def controller(self, mock_sql_resource: Any) -> SQLWorkflowMetadataController:
-        controller = SQLWorkflowMetadataController(mock_sql_resource)
-        return controller
-
-    @pytest.fixture
-    def app(self, controller: SQLWorkflowMetadataController) -> FastAPIApplication:
-        """Create FastAPI test application"""
-        app = FastAPIApplication(metadata_controller=controller)
-        app.register_routers()
-        app.register_routes()
-        return app
-
-    @pytest.fixture
-    def client(self, app: FastAPIApplication) -> TestClient:
-        """Create test client"""
-        return TestClient(app.app)
-
     def test_post_configuration_success(self, client: TestClient):
         """Test successful configuration creation/update"""
         # Mock the StateStore methods
