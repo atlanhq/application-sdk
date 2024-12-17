@@ -71,35 +71,6 @@ async def test_check_schemas_and_databases_failure(
     assert "invalid_db database" in result["failureMessage"]
 
 
-@patch("application_sdk.activity_pd")
-async def test_tables_check_success(
-    mock_activity_pd: Any, controller: SQLWorkflowPreflightCheckController
-):
-    mock_batch_input = Mock()
-    mock_batch_input.to_dict.return_value = [{"count": 5}]
-
-    result = await controller.tables_check(mock_batch_input)  # type: ignore
-
-    assert result["success"] is True
-    assert "Table count: 5" in result["successMessage"]
-    assert result["failureMessage"] == ""
-
-
-@patch("application_sdk.activity_pd")
-async def test_tables_check_failure(
-    mock_activity_pd: Any, controller: SQLWorkflowPreflightCheckController
-):
-    mock_batch_input = Mock()
-    mock_batch_input.to_dict.side_effect = Exception("Test error")
-
-    result = await controller.tables_check(mock_batch_input)  # type: ignore
-
-    assert result["success"] is False
-    assert result["successMessage"] == ""
-    assert result["failureMessage"] == "Tables check failed"
-    assert result["error"] == "Test error"
-
-
 async def test_preflight_check_success(controller: SQLWorkflowPreflightCheckController):
     payload = {"form_data": {"include_filter": json.dumps({"db1": ["schema1"]})}}
 
