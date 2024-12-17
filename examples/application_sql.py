@@ -105,7 +105,9 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
         return super().build(workflow=workflow or SampleSQLWorkflow())
 
 
-async def main():
+async def application_sql():
+    print("Starting application_sql")
+
     temporal_resource = TemporalResource(
         TemporalConfig(
             application_name=APPLICATION_NAME,
@@ -145,7 +147,7 @@ async def main():
     # wait for the worker to start
     time.sleep(3)
 
-    await workflow.start(
+    workflow_response = await workflow.start(
         {
             "credentials": {
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
@@ -170,9 +172,8 @@ async def main():
         }
     )
 
-    # wait for the workflow to finish
-    time.sleep(120)
+    return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(application_sql())
