@@ -63,8 +63,8 @@ class StateStore:
             >>> StateStore.store_credentials({"username": "admin", "password": "password"})
             "credential_1234567890"
         """
-        credential_guid = f"credential_{str(uuid.uuid4())}"
-        cls._save_state(credential_guid, config)
+        credential_guid = str(uuid.uuid4())
+        cls._save_state(f"credential_{credential_guid}", config)
         return credential_guid
 
     @classmethod
@@ -97,9 +97,8 @@ class StateStore:
         :return: The generated configuration GUID.
         :raises Exception: If there's an error with the Dapr client operations.
         """
-        config_guid = f"config_{workflow_id}"
-        cls._save_state(config_guid, config)
-        return config_guid
+        cls._save_state(f"config_{workflow_id}", config)
+        return workflow_id
 
     @classmethod
     def extract_configuration(cls, config_guid: str) -> Dict[str, Any]:

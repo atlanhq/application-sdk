@@ -22,7 +22,7 @@ def test_store_credentials_success(mock_dapr_client):
     with patch("uuid.uuid4", return_value="test-uuid"):
         result = StateStore.store_credentials(config)
 
-    assert result == "credential_test-uuid"
+    assert result == "test-uuid"
     mock_dapr_client.save_state.assert_called_once_with(
         store_name="statestore", key="credential_test-uuid", value=json.dumps(config)
     )
@@ -79,7 +79,7 @@ def test_store_configuration_success(mock_dapr_client):
     with patch("uuid.uuid4", return_value="test-uuid"):
         result = StateStore.store_configuration("test-uuid", config)
 
-    assert result == "config_test-uuid"
+    assert result == "test-uuid"
     mock_dapr_client.save_state.assert_called_once_with(
         store_name="statestore", key="config_test-uuid", value=json.dumps(config)
     )
