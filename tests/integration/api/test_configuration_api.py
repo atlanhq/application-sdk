@@ -39,7 +39,7 @@ class TestConfigurationAPI:
                 "connection": payload["connection"],
                 "metadata": payload["metadata"],
                 "credential_guid": "credential_test-uuid",
-                "workflow_id": "1234",
+                "config_id": "1234",
             }
 
             response = client.post("/workflows/v1/config/1234", json=payload)

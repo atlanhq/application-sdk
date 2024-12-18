@@ -112,14 +112,14 @@ class FastAPIApplication(AtlanAPIApplication):
         )
 
         self.workflow_router.add_api_route(
-            "/config/{workflow_id}",
+            "/config/{config_id}",
             self.get_workflow_config,
             methods=["GET"],
             response_model=WorkflowConfigResponse,
         )
 
         self.workflow_router.add_api_route(
-            "/config/{workflow_id}",
+            "/config/{config_id}",
             self.update_workflow_config,
             methods=["POST"],
             response_model=WorkflowConfigResponse,
@@ -145,8 +145,8 @@ class FastAPIApplication(AtlanAPIApplication):
         )
         return PreflightCheckResponse(success=True, data=preflight_check)
 
-    def get_workflow_config(self, workflow_id: str) -> WorkflowConfigResponse:
-        config = self.metadata_controller.get_workflow_config(workflow_id)
+    def get_workflow_config(self, config_id: str) -> WorkflowConfigResponse:
+        config = self.metadata_controller.get_workflow_config(config_id)
         return WorkflowConfigResponse(
             success=True,
             message="Workflow configuration fetched successfully",
@@ -154,11 +154,11 @@ class FastAPIApplication(AtlanAPIApplication):
         )
 
     def update_workflow_config(
-        self, workflow_id: str, body: WorkflowConfigRequest
+        self, config_id: str, body: WorkflowConfigRequest
     ) -> WorkflowConfigResponse:
         # note: it's assumed that the preflight check is successful if the config is being updated
         config = self.metadata_controller.update_workflow_config(
-            workflow_id, body.model_dump()
+            config_id, body.model_dump()
         )
         return WorkflowConfigResponse(
             success=True,

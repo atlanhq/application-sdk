@@ -98,8 +98,9 @@ class TemporalResource(ResourceInterface):
 
         workflow_id = workflow_args.get("workflow_id")
         if not workflow_id:
-            # if workflow_id is not provided, store the workflow_args in the state store
+            # if workflow_id is not provided, create a new one
             workflow_id = str(uuid.uuid4())
+
             workflow_args.update(
                 {
                     "application_name": self.config.application_name,
@@ -108,13 +109,10 @@ class TemporalResource(ResourceInterface):
                 }
             )
 
-            workflow_config_guid = StateStore.store_configuration(
-                workflow_id, workflow_args
-            )
+            StateStore.store_configuration(workflow_id, workflow_args)
 
-            logger.info(f"Created workflow config GUID: {workflow_config_guid}")
+            logger.info(f"Created workflow config with ID: {workflow_id}")
 
-        workflow.logger.setLevel(logging.DEBUG)
         workflow.logger.setLevel(logging.DEBUG)
         activity.logger.setLevel(logging.DEBUG)
 

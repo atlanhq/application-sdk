@@ -39,11 +39,11 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     async def fetch_metadata(self) -> List[Dict[str, str]]:
         raise NotImplementedError
 
-    def get_workflow_config(self, workflow_id: str) -> Dict[str, Any]:
-        return StateStore.extract_configuration(workflow_id)
+    def get_workflow_config(self, config_id: str) -> Dict[str, Any]:
+        return StateStore.extract_configuration(config_id)
 
     def update_workflow_config(
-        self, workflow_id: str, config: Dict[str, Any]
+        self, config_id: str, config: Dict[str, Any]
     ) -> Dict[str, Any]:
         # check if the config has credentials
         if "credentials" in config:
@@ -53,8 +53,8 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
             )
             del config["credentials"]
 
-        StateStore.store_configuration(workflow_id, config)
-        config["workflow_id"] = workflow_id
+        StateStore.store_configuration(config_id, config)
+        config["config_id"] = config_id
         return config
 
 

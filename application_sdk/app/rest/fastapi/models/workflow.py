@@ -172,6 +172,7 @@ class WorkflowConfigResponse(BaseModel):
                 "success": True,
                 "message": "Workflow configuration fetched successfully",
                 "data": {
+                    "config_id": "4b805f36-48c5-4dd3-942f-650e06f75bbc",
                     "credentials": {
                         "host": "",
                         "port": 5432,
