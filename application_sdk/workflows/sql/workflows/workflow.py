@@ -712,3 +712,46 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             "typename": "column",
             "total_record_count": raw_output.total_record_count,
         }
+
+    @workflow.run
+    async def run(self, workflow_args: Dict[str, Any]):
+        """
+        Run the workflow.
+
+        :param workflow_args: The workflow arguments.
+        """
+        if not self.sql_resource:
+            self.sql_resource = SQLResource(SQLResourceConfig())
+
+        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
+        self.sql_resource.set_credentials(credentials)
+
+        if not self.temporal_resource:
+            self.temporal_resource = TemporalResource(
+                TemporalConfig(application_name=self.application_name)
+            )
+
+        workflow_id = workflow_args["workflow_id"]
+        workflow_run_id = workflow.info().run_id
+        workflow_args["workflow_run_id"] = workflow_run_id
+
+        workflow.logger.info(f"Starting extraction workflow for {workflow_id}")
+        retry_policy = RetryPolicy(
+            maximum_attempts=6,
+            backoff_coefficient=2,
+        )
+
+        output_prefix = workflow_args["output_prefix"]
+        output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
+        workflow_args["output_path"] = output_path
+
+        fetch_and_transforms = [
+            self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
+        ]
+
+        await asyncio.gather(*fetch_and_transforms)
+
+        workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
