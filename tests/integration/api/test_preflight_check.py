@@ -23,6 +23,7 @@ class TestSQLPreflightCheck:
     @pytest.fixture
     def controller(self, mock_sql_resource: Any) -> SQLWorkflowPreflightCheckController:
         controller = SQLWorkflowPreflightCheckController(mock_sql_resource)
+        controller.tables_check = AsyncMock()
         controller.TABLES_CHECK_SQL = """
             SELECT count(*) as "count"
             FROM ACCOUNT_USAGE.TABLES
@@ -58,6 +59,12 @@ class TestSQLPreflightCheck:
         controller.sql_resource.fetch_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
         ]
+
+        controller.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
 
         payload = {
             "credentials": {
@@ -102,6 +109,12 @@ class TestSQLPreflightCheck:
 
         controller.sql_resource.fetch_metadata.return_value = []
 
+        controller.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
+
         payload = {
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
@@ -137,6 +150,12 @@ class TestSQLPreflightCheck:
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
         ]
+
+        controller.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
 
         payload = {
             "credentials": {
