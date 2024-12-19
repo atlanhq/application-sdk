@@ -603,12 +603,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         # Read the databases from the raw/database path
         database_df = await JsonOutput.write_df(batch_input)
-        database_list = await database_df['database_name'].tolist()
+        database_list = await database_df["database_name"].tolist()
 
         # Loop through each database and fetch schemas
         for db_name in database_list:
             # Update workflow_args with the current database name for schema fetching
-            workflow_args['database_name'] = db_name
+            workflow_args["database_name"] = db_name
 
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
@@ -647,12 +647,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         # Read the databases from the raw/database path
         database_df = await JsonOutput.write_df(batch_input)
-        database_list = await database_df['database_name'].tolist()
+        database_list = await database_df["database_name"].tolist()
 
         # Loop through each database and fetch tables
         for db_name in database_list:
             # Update workflow_args with the current database name for table fetching
-            workflow_args['database_name'] = db_name
+            workflow_args["database_name"] = db_name
 
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
@@ -690,12 +690,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         # Read the databases from the raw/database path
         database_df = await JsonOutput.write_df(batch_input)
-        database_list = await database_df['database_name'].tolist()
+        database_list = await database_df["database_name"].tolist()
 
         # Loop through each database and fetch columns
         for db_name in database_list:
             # Update workflow_args with the current database name for column fetching
-            workflow_args['database_name'] = db_name
+            workflow_args["database_name"] = db_name
 
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
