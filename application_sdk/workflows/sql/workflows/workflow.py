@@ -576,3 +576,139 @@ class SQLWorkflow(WorkflowInterface):
         await asyncio.gather(*fetch_and_transforms)
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
+
+@workflow.defn
+class SQLDatabaseWorkflow(SQLWorkflow):
+    fetch_schema_sql = ""
+    fetch_table_sql = ""
+    fetch_column_sql = ""
+
+    @activity.defn
+    @auto_heartbeater
+    @activity_pd(
+        batch_input=lambda self, workflow_args: JsonInput(
+            path=f"{workflow_args['output_path']}/raw/",
+            file_suffixes=workflow_args["databases"],
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/schema",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_schemas(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
+    ):
+        """
+        Fetch and process schemas from each database fetched by fetch_databases.
+        """
+        # Read the databases from the raw/database path
+        database_df = await JsonOutput.write_df(batch_input)
+        database_list = await database_df['database_name'].tolist()
+
+        # Loop through each database and fetch schemas
+        for db_name in database_list:
+            # Update workflow_args with the current database name for schema fetching
+            workflow_args['database_name'] = db_name
+
+            # Prepare the query by replacing the placeholder with the database name
+            query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
+
+            # Fetch the schemas for this database
+            schema_input = await self.sql_resource.sql_input(
+                engine=self.sql_resource.engine,
+                query=query,
+            )
+            await raw_output.write_df(schema_input)
+
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "schema",
+            "total_record_count": raw_output.total_record_count,
+        }
+
+
+    @activity.defn
+    @auto_heartbeater
+    @activity_pd(
+        batch_input=lambda self, workflow_args: JsonInput(
+            path=f"{workflow_args['output_path']}/raw/",
+            file_suffixes=workflow_args["databases"],
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/table",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_tables(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
+    ):
+        """
+        Fetch and process tables from each database fetched by fetch_databases.
+        """
+        # Read the databases from the raw/database path
+        database_df = await JsonOutput.write_df(batch_input)
+        database_list = await database_df['database_name'].tolist()
+
+        # Loop through each database and fetch tables
+        for db_name in database_list:
+            # Update workflow_args with the current database name for table fetching
+            workflow_args['database_name'] = db_name
+
+            # Prepare the query by replacing the placeholder with the database name
+            query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
+
+            # Fetch the tables for this database
+            tables_input = await self.sql_resource.sql_input(
+                self.sql_resource.engine,
+                query=query,
+            )
+            await raw_output.write_df(tables_input)
+
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "table",
+            "total_record_count": raw_output.total_record_count,
+        }
+
+    @activity.defn
+    @auto_heartbeater
+    @activity_pd(
+        batch_input=lambda self, workflow_args: JsonInput(
+            path=f"{workflow_args['output_path']}/raw/",
+            file_suffixes=workflow_args["databases"],
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/column",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_columns(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
+    ):
+        """
+        Fetch and process columns from each database fetched by fetch_databases.
+        """
+        # Read the databases from the raw/database path
+        database_df = await JsonOutput.write_df(batch_input)
+        database_list = await database_df['database_name'].tolist()
+
+        # Loop through each database and fetch columns
+        for db_name in database_list:
+            # Update workflow_args with the current database name for column fetching
+            workflow_args['database_name'] = db_name
+
+            # Prepare the query by replacing the placeholder with the database name
+            query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
+
+            # Fetch the columns for this database
+            columns_input = await self.sql_resource.sql_input(
+                self.sql_resource.engine,
+                query=query,
+            )
+            await raw_output.write_df(columns_input)
+
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "column",
+            "total_record_count": raw_output.total_record_count,
+        }
