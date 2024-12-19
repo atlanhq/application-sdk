@@ -588,7 +588,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["databases"],
+            file_suffixes=workflow_args["database"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -632,7 +632,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["databases"],
+            file_suffixes=workflow_args["database"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -675,7 +675,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["databases"],
+            file_suffixes=workflow_args["database"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",
