@@ -589,7 +589,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["database"],
+            # Dynamically filter out metadata.json from the list of file suffixes
+            file_suffixes=[suffix for suffix in workflow_args.get("database", []) if suffix != "metadata.json"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -632,7 +633,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["database"],
+            # Dynamically filter out metadata.json from the list of file suffixes
+            file_suffixes=[suffix for suffix in workflow_args.get("database", []) if suffix != "metadata.json"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -675,7 +677,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["database"],
+            # Dynamically filter out metadata.json from the list of file suffixes
+            file_suffixes=[suffix for suffix in workflow_args.get("database", []) if suffix != "metadata.json"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",
