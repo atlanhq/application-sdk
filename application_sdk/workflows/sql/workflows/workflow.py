@@ -76,6 +76,7 @@ class SQLWorkflow(WorkflowInterface):
 
     def get_activities(self) -> List[Callable[..., Any]]:
         return [
+            self.set_workflow_activity_context,
             self.fetch_databases,
             self.fetch_schemas,
             self.fetch_tables,
@@ -96,26 +97,6 @@ class SQLWorkflow(WorkflowInterface):
         """
         if self.sql_resource is None:
             raise ValueError("SQL resource is not set")
-
-        # slack: currently being addressed - https://atlanhq.slack.com/archives/C07A8R56R2A/p1734506583743589
-        if "credentials" in workflow_args:
-            credentials = workflow_args["credentials"]
-        elif "credential_guid" in workflow_args:
-            credentials = StateStore.extract_credentials(
-                workflow_args["credential_guid"]
-            )
-        elif "workflow_id" in workflow_args:
-            workflow_config = StateStore.extract_configuration(
-                workflow_args["workflow_id"]
-            )
-            credentials = StateStore.extract_credentials(
-                workflow_config["credential_guid"]
-            )
-        else:
-            raise ValueError("Credentials are not set")
-
-        self.sql_resource.set_credentials(credentials)
-        await self.sql_resource.load()
 
         workflow_class = workflow_class or self.__class__
 
@@ -536,6 +517,23 @@ class SQLWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
+    @activity.defn
+    async def set_workflow_activity_context(self, workflow_id: str):
+        """
+        # TODO:
+        # @inishchith to add why we need this based on new understanding of how the workflow and activity is being run
+        """
+        workflow_args = StateStore.extract_configuration(workflow_id)
+        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
+
+        if not self.sql_resource:
+            self.sql_resource = SQLResource(SQLResourceConfig())
+            print("Setting default sql resource")
+
+        self.sql_resource.set_credentials(credentials)
+        await self.sql_resource.load()
+        return workflow_args
+
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):
         """
@@ -543,17 +541,14 @@ class SQLWorkflow(WorkflowInterface):
 
         :param workflow_config: The workflow configuration.
         """
-        if not self.sql_resource:
-            print("Setting default sql resource")
-            self.sql_resource = SQLResource(SQLResourceConfig())
-
         workflow_id = workflow_config["workflow_id"]
-        workflow_args = StateStore.extract_configuration(workflow_id)
-        print(workflow_args)
 
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
-        self.sql_resource.set_credentials(credentials)
-        # await self.sql_resource.load()
+        # dedicated activity to set the workflow activity context
+        workflow_args: Dict[str, Any] = await workflow.execute_activity(
+            self.set_workflow_activity_context,
+            workflow_id,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(

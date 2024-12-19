@@ -169,7 +169,7 @@ async def application_sql():
                 "exclude_views": "true",
                 "exclude_empty_tables": "false",
             },
-            # "workflow_id": "38838ebe-f0b5-44f8-beb2-87a873d19569",  # if you want to rerun an existing workflow
+            # "workflow_id": "27498f69-13ae-44ec-a2dc-13ff81c517de",  # if you want to rerun an existing workflow, just keep this field.
             # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
         }
     )
