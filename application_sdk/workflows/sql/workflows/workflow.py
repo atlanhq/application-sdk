@@ -745,8 +745,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
+        # Fetch databases first
+        await self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy)
         fetch_and_transforms = [
-            self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
             self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
             self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
             self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
