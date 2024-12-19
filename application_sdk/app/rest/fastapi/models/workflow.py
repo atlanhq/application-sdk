@@ -2,7 +2,7 @@
 
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, RootModel, model_validator
+from pydantic import BaseModel, Field, RootModel
 
 
 class TestAuthRequest(RootModel):
@@ -131,30 +131,17 @@ class WorkflowResponse(BaseModel):
 
 
 class WorkflowConfigRequest(BaseModel):
-    credentials: Optional[Dict[str, Any]] = Field(
-        default=None, description="Optional JSON field containing database credentials"
-    )
     credential_guid: Optional[str] = Field(
         default=None, description="Optional GUID field containing database credentials"
     )
-    connection: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing connection configuration"
+    connection: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional JSON field containing connection configuration",
     )
-    metadata: Dict[str, Any] = Field(
-        ..., description="Required JSON field containing metadata configuration"
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Optional JSON field containing metadata configuration",
     )
-
-    @model_validator(mode="before")
-    def check_credentials(cls, values: Dict[str, Any]):
-        credentials = values.get("credentials")
-        credential_guid = values.get("credential_guid")
-        if not credentials and not credential_guid:
-            raise ValueError("Either credentials or credential_guid must be provided")
-        if credentials and credential_guid:
-            raise ValueError(
-                "Only one of credentials or credential_guid should be provided"
-            )
-        return values
 
 
 class WorkflowConfigResponse(BaseModel):
@@ -172,14 +159,7 @@ class WorkflowConfigResponse(BaseModel):
                 "success": True,
                 "message": "Workflow configuration fetched successfully",
                 "data": {
-                    "config_id": "4b805f36-48c5-4dd3-942f-650e06f75bbc",
-                    "credentials": {
-                        "host": "",
-                        "port": 5432,
-                        "user": "username",
-                        "password": "password",
-                        "database": "databasename",
-                    },
+                    "credential_guid": "credential_test-uuid",
                     "connection": {"connection": "dev"},
                     "metadata": {
                         "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',

@@ -1,4 +1,3 @@
-from typing import Any, Dict
 from unittest.mock import patch
 
 import pytest
@@ -14,19 +13,25 @@ class TestConfigurationAPI:
         with patch.object(
             StateStore, "store_credentials"
         ) as mock_store_creds, patch.object(
+            StateStore, "extract_configuration"
+        ) as mock_extract_config, patch.object(
             StateStore, "store_configuration"
         ) as mock_store_config:
+            mock_extract_config.return_value = {
+                "credential_guid": "credential_test-abcd",
+                "connection": {"connection": "production"},
+                "metadata": {
+                    "exclude_filter": "{}",
+                    "include_filter": "{}",
+                    "temp_table_regex": "^temp_",
+                    "advanced_config_strategy": "default",
+                },
+            }
             mock_store_creds.return_value = "credential_test-uuid"
             mock_store_config.return_value = "config_1234"
 
             payload = {
-                "credentials": {
-                    "host": "localhost",
-                    "port": "5432",
-                    "user": "postgres",
-                    "password": "password",
-                    "database": "postgres",
-                },
+                "credential_guid": "credential_test-uuid",
                 "connection": {"connection": "dev"},
                 "metadata": {
                     "exclude_filter": "{}",
@@ -35,12 +40,7 @@ class TestConfigurationAPI:
                     "advanced_config_strategy": "default",
                 },
             }
-            expected_config = {
-                "connection": payload["connection"],
-                "metadata": payload["metadata"],
-                "credential_guid": "credential_test-uuid",
-                "config_id": "1234",
-            }
+            expected_config = payload.copy()
 
             response = client.post("/workflows/v1/config/1234", json=payload)
 
@@ -54,8 +54,51 @@ class TestConfigurationAPI:
             assert response_data["data"] == expected_config
 
             # Verify StateStore interactions
-            mock_store_creds.assert_called_once_with(payload["credentials"])
+            mock_extract_config.assert_called_once_with("1234")
             mock_store_config.assert_called_once()
+
+    def test_post_configuration_partial_update(self, client: TestClient):
+        """Test partial configuration update"""
+        existing_config = {
+            "connection": {"connection": "dev"},
+            "metadata": {
+                "exclude_filter": "{}",
+                "include_filter": "{}",
+                "temp_table_regex": "",
+            },
+            "credential_guid": "old-credential-uuid",
+        }
+
+        # Only updating the connection part
+        update_payload = {
+            "connection": {"connection": "prod"},
+        }
+
+        expected_config = existing_config.copy()
+        expected_config["connection"] = update_payload["connection"]
+
+        with patch.object(
+            StateStore, "extract_configuration"
+        ) as mock_extract_config, patch.object(
+            StateStore, "store_configuration"
+        ) as mock_store_config:
+            mock_extract_config.return_value = existing_config.copy()
+            mock_store_config.return_value = "1234"
+
+            response = client.post("/workflows/v1/config/1234", json=update_payload)
+
+            assert response.status_code == 200
+            response_data = response.json()
+            assert response_data["success"] is True
+            assert (
+                response_data["message"]
+                == "Workflow configuration updated successfully"
+            )
+            assert response_data["data"] == expected_config
+
+            # Verify StateStore interactions
+            mock_extract_config.assert_called_once()
+            mock_store_config.assert_called_once_with("1234", expected_config)
 
     def test_get_configuration_success(self, client: TestClient):
         """Test successful configuration retrieval"""
@@ -100,20 +143,23 @@ class TestConfigurationAPI:
             with pytest.raises(ValueError):
                 client.get(f"/workflows/v1/config/{config_id}")
 
-                # assert response.status_code == 500
-                # response_data = response.json()
-                # assert response_data == {
-                #     "error": "An internal error has occurred.",
-                #     "details": "State not found for key: config>>"
-                # }
-
-    def test_post_configuration_invalid_payload(self, client: TestClient):
-        """Test configuration creation with invalid payload"""
-        invalid_payload: Dict[str, Any] = {
-            # "credentials": {},  # Missing required fields
-            "connection": {},
-            "metadata": {},
+    def test_post_configuration_store_error(self, client: TestClient):
+        """Test configuration update when StateStore throws an error"""
+        payload = {
+            "connection": {"connection": "dev"},
+            "metadata": {
+                "exclude_filter": "{}",
+                "include_filter": "{}",
+                "temp_table_regex": "",
+            },
         }
 
-        response = client.post("/workflows/v1/config/1234", json=invalid_payload)
-        assert response.status_code == 422  # Validation error
+        with patch.object(StateStore, "extract_configuration") as mock_extract_config:
+            mock_extract_config.side_effect = ValueError(
+                "Failed to extract configuration"
+            )
+
+            with pytest.raises(ValueError) as exc_info:
+                client.post("/workflows/v1/config/1234", json=payload)
+
+            assert exc_info.value.args[0] == "Failed to extract configuration"

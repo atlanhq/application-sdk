@@ -45,17 +45,14 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
     def update_workflow_config(
         self, config_id: str, config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        # check if the config has credentials
-        if "credentials" in config:
-            # remove credentials from config and add reference to credentials
-            config["credential_guid"] = StateStore.store_credentials(
-                config["credentials"]
-            )
-            del config["credentials"]
+        extracted_config = StateStore.extract_configuration(config_id)
 
-        StateStore.store_configuration(config_id, config)
-        config["config_id"] = config_id
-        return config
+        for key in extracted_config.keys():
+            if key in config and config[key] is not None:
+                extracted_config[key] = config[key]
+
+        StateStore.store_configuration(config_id, extracted_config)
+        return extracted_config
 
 
 class WorkflowPreflightCheckControllerInterface(WorkflowControllerInterface, ABC):
