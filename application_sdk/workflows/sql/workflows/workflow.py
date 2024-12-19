@@ -577,6 +577,7 @@ class SQLWorkflow(WorkflowInterface):
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
 
+
 @workflow.defn
 class SQLDatabaseWorkflow(SQLWorkflow):
     fetch_schema_sql = ""
@@ -625,7 +626,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             "typename": "schema",
             "total_record_count": raw_output.total_record_count,
         }
-
 
     @activity.defn
     @auto_heartbeater
