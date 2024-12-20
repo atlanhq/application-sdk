@@ -584,12 +584,25 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     fetch_table_sql = ""
     fetch_column_sql = ""
 
+    @staticmethod
+    def get_valid_file_suffixes_from_filesystem(directory: str) -> List[str]:
+        # List all files in the directory
+        all_files = os.listdir(directory)
+
+        # Filter out 'metadata.json' and only include .json files
+        file_suffixes = [
+            file for file in all_files
+                if file.endswith('.json') and file != 'metadata.json'
+        ]
+
+        return file_suffixes
+
     @activity.defn
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=[suffix for suffix in workflow_args.get("database", []) if suffix != "metadata.json"]
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes_from_filesystem(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -602,23 +615,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         Fetch and process schemas from each database fetched by fetch_databases.
         """
-        # Log the batch input data
-        logger.info(f"Batch input data: {batch_input}")
-        
-        # Read the databases from the raw/database path
-        database_df = await JsonOutput.write_df(batch_input)
-        database_list = await database_df["database_name"].tolist()
-        
-        # Log the database list to ensure it's not empty
-        logger.info(f"Database list: {database_list}")
-
-        if not database_list:
-            logger.warning("No databases found in the input data. Exiting fetch_schemas.")
-            return {
-                "chunk_count": 0,
-                "typename": "schema",
-                "total_record_count": 0,
-            }
+        database_list = batch_input["database_name"].tolist()
 
         # Loop through each database and fetch schemas
         for db_name in database_list:
@@ -628,18 +625,14 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
 
-            # Log the query to verify the replacement
-            logger.info(f"Executing query for database {db_name}: {query}")
-
             # Fetch the schemas for this database
-            schema_input = await self.sql_resource.sql_input(
+            schema_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
-                query=query,
+                query=SQLWorkflow.prepare_query(
+                    query=query, workflow_args=workflow_args
+                ),
             )
-            
-            # Log the fetched schema input
-            logger.info(f"Fetched schema input: {schema_input}")
-
+            schema_input = pd.DataFrame(schema_input)
             await raw_output.write_df(schema_input)
 
         return {
@@ -653,8 +646,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            # Dynamically filter out metadata.json from the list of file suffixes
-            file_suffixes=[suffix for suffix in workflow_args.get("database", []) if suffix != "metadata.json"]
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes_from_filesystem(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -667,9 +659,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         Fetch and process tables from each database fetched by fetch_databases.
         """
-        # Read the databases from the raw/database path
-        database_df = await JsonOutput.write_df(batch_input)
-        database_list = await database_df["database_name"].tolist()
+        database_list = batch_input["database_name"].tolist()
 
         # Loop through each database and fetch tables
         for db_name in database_list:
@@ -680,10 +670,13 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
 
             # Fetch the tables for this database
-            tables_input = await self.sql_resource.sql_input(
-                self.sql_resource.engine,
-                query=query,
+            tables_input = self.sql_resource.sql_input(
+                engine=self.sql_resource.engine,
+                query=SQLWorkflow.prepare_query(
+                    query=query, workflow_args=workflow_args
+                ),
             )
+            tables_input = pd.DataFrame(tables_input)
             await raw_output.write_df(tables_input)
 
         return {
@@ -696,9 +689,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/",
-            # Dynamically filter out metadata.json from the list of file suffixes
-            file_suffixes=[suffix for suffix in workflow_args.get("database", []) if suffix != "metadata.json"]
+            path=f"{workflow_args['output_path']}/raw/database",
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes_from_filesystem(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",
@@ -711,9 +703,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         Fetch and process columns from each database fetched by fetch_databases.
         """
-        # Read the databases from the raw/database path
-        database_df = await JsonOutput.write_df(batch_input)
-        database_list = await database_df["database_name"].tolist()
+        database_list = batch_input["database_name"].tolist()
 
         # Loop through each database and fetch columns
         for db_name in database_list:
@@ -724,10 +714,13 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
 
             # Fetch the columns for this database
-            columns_input = await self.sql_resource.sql_input(
-                self.sql_resource.engine,
-                query=query,
+            columns_input = self.sql_resource.sql_input(
+                engine=self.sql_resource.engine,
+                query=SQLWorkflow.prepare_query(
+                    query=query, workflow_args=workflow_args
+                ),
             )
+            columns_input = pd.DataFrame(columns_input)
             await raw_output.write_df(columns_input)
 
         return {
