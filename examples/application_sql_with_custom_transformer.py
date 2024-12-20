@@ -147,13 +147,15 @@ async def application_sql_with_custom_transformer():
         tenant_id="1234567890",
     )
 
+    sql_resource = PostgreSQLResource(SQLResourceConfig())
+
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
-        .set_sql_resource(PostgreSQLResource(SQLResourceConfig()))
+        .set_sql_resource(sql_resource)
         .set_preflight_check_controller(
-            SQLWorkflowPreflightCheckController(PostgreSQLResource(SQLResourceConfig()))
+            SQLWorkflowPreflightCheckController(sql_resource)
         )
         .build()
     )
