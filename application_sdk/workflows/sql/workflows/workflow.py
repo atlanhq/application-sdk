@@ -591,8 +591,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
         # Filter out 'metadata.json' and only include .json files
         file_suffixes = [
-            file for file in all_files
-                if file.endswith('.json') and file != 'metadata.json'
+            file
+            for file in all_files
+            if file.endswith('.json') and file != 'metadata.json'
         ]
         workflow.logger.info(f"Valid file suffixes: {file_suffixes}")
         return file_suffixes
@@ -602,7 +603,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/database/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(
+                f"{workflow_args['output_path']}/raw/database"
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -637,7 +640,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             if isinstance(schema_input, SQLQueryInput):
                 schema_input_df = await schema_input.get_batched_dataframe()
             else:
-                workflow.logger.error(f"Unexpected format for schema_input: {type(schema_input)}")
+                workflow.logger.error(
+                    f"Unexpected format for schema_input: {type(schema_input)}"
+                )
                 return {
                     "chunk_count": 0,
                     "typename": "schema",
@@ -659,7 +664,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/database/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(
+                f"{workflow_args['output_path']}/raw/database"
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -694,7 +701,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             if isinstance(tables_input, SQLQueryInput):
                 tables_input_df = await tables_input.get_batched_dataframe()
             else:
-                workflow.logger.error(f"Unexpected format for tables_input: {type(tables_input)}")
+                workflow.logger.error(
+                    f"Unexpected format for tables_input: {type(tables_input)}"
+                )
                 return {
                     "chunk_count": 0,
                     "typename": "schema",
@@ -716,7 +725,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/database/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(
+                f"{workflow_args['output_path']}/raw/database"
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",
@@ -751,7 +762,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             if isinstance(columns_input, SQLQueryInput):
                 columns_input_df = await columns_input.get_batched_dataframe()
             else:
-                workflow.logger.error(f"Unexpected format for columns_input: {type(columns_input)}")
+                workflow.logger.error(
+                    f"Unexpected format for columns_input: {type(columns_input)}"
+                )
                 return {
                     "chunk_count": 0,
                     "typename": "schema",
@@ -801,7 +814,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         workflow_args["output_path"] = output_path
 
         # Fetch databases first
-        await self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy)
+        await self.fetch_and_transform(
+            self.fetch_databases, workflow_args, retry_policy
+        )
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
             self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
