@@ -585,7 +585,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     fetch_column_sql = ""
 
     @staticmethod
-    def get_valid_file_suffixes_from_filesystem(directory: str) -> List[str]:
+    def get_valid_file_suffixes(directory: str) -> List[str]:
         # List all files in the directory
         all_files = os.listdir(directory)
 
@@ -602,7 +602,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes_from_filesystem(f"{workflow_args['output_path']}/raw/database")
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -646,7 +646,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes_from_filesystem(f"{workflow_args['output_path']}/raw/database")
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -690,7 +690,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/database",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes_from_filesystem(f"{workflow_args['output_path']}/raw/database")
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",
