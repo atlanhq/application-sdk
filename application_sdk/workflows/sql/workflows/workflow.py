@@ -593,7 +593,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         file_suffixes = [
             file
             for file in all_files
-            if file.endswith('.json') and file != 'metadata.json'
+            if file.endswith(".json") and file != "metadata.json"
         ]
         workflow.logger.info(f"Valid file suffixes: {file_suffixes}")
         return file_suffixes
