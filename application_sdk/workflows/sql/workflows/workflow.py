@@ -594,14 +594,14 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             file for file in all_files
                 if file.endswith('.json') and file != 'metadata.json'
         ]
-
+        print(f"Valid file suffixes: {file_suffixes}")
         return file_suffixes
 
     @activity.defn
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/",
+            path=f"{workflow_args['output_path']}/raw/database/",
             file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -625,6 +625,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
 
+            workflow.logger.debug(f"Updated Query for database {db_name}: {query}")
+
             # Fetch the schemas for this database
             schema_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
@@ -632,8 +634,25 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     query=query, workflow_args=workflow_args
                 ),
             )
-            schema_input = pd.DataFrame(schema_input)
-            await raw_output.write_df(schema_input)
+            # Log the schema_input to check its structure
+            workflow.logger.info(f"Fetched schema input for database {db_name}: {schema_input}")
+
+            # Check if the result is of type SQLQueryInput
+            if isinstance(schema_input, SQLQueryInput):
+                schema_input_df = await SQLQueryInput.get_batched_dataframe(schema_input)
+            else:
+                workflow.logger.error(f"Unexpected format for schema_input: {type(schema_input)}")
+                return {
+                    "chunk_count": 0,
+                    "typename": "schema",
+                    "total_record_count": 0,
+                }
+
+            # Log the DataFrame to verify its contents
+            workflow.logger.info(f"Schema DataFrame for database {db_name}: {schema_input_df}")
+
+            # Write the DataFrame to the output
+            await raw_output.write_df(schema_input_df)
 
         return {
             "chunk_count": raw_output.chunk_count,
@@ -645,7 +664,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/",
+            path=f"{workflow_args['output_path']}/raw/database/",
             file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -669,6 +688,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
 
+            workflow.logger.debug(f"Updated Query for database {db_name}: {query}")
+
             # Fetch the tables for this database
             tables_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
@@ -676,8 +697,25 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     query=query, workflow_args=workflow_args
                 ),
             )
-            tables_input = pd.DataFrame(tables_input)
-            await raw_output.write_df(tables_input)
+            # Log the schema_input to check its structure
+            workflow.logger.info(f"Fetched tables input for database {db_name}: {tables_input}")
+
+            # Check if the result is of type SQLQueryInput
+            if isinstance(tables_input, SQLQueryInput):
+                tables_input_df = await SQLQueryInput.get_batched_dataframe(tables_input)
+            else:
+                workflow.logger.error(f"Unexpected format for tables_input: {type(tables_input)}")
+                return {
+                    "chunk_count": 0,
+                    "typename": "schema",
+                    "total_record_count": 0,
+                }
+
+            # Log the DataFrame to verify its contents
+            workflow.logger.info(f"Tables DataFrame for database {db_name}: {tables_input_df}")
+
+            # Write the DataFrame to the output
+            await raw_output.write_df(tables_input_df)
 
         return {
             "chunk_count": raw_output.chunk_count,
@@ -689,7 +727,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/database",
+            path=f"{workflow_args['output_path']}/raw/database/",
             file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(f"{workflow_args['output_path']}/raw/database")
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -713,6 +751,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
 
+            workflow.logger.debug(f"Updated Query for database {db_name}: {query}")
+
             # Fetch the columns for this database
             columns_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
@@ -720,8 +760,25 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     query=query, workflow_args=workflow_args
                 ),
             )
-            columns_input = pd.DataFrame(columns_input)
-            await raw_output.write_df(columns_input)
+            # Log the schema_input to check its structure
+            workflow.logger.info(f"Fetched columns input for database {db_name}: {columns_input}")
+
+            # Check if the result is of type SQLQueryInput
+            if isinstance(columns_input, SQLQueryInput):
+                columns_input_df = await SQLQueryInput.get_batched_dataframe(columns_input)
+            else:
+                workflow.logger.error(f"Unexpected format for columns_input: {type(columns_input)}")
+                return {
+                    "chunk_count": 0,
+                    "typename": "schema",
+                    "total_record_count": 0,
+                }
+
+            # Log the DataFrame to verify its contents
+            workflow.logger.info(f"Columns DataFrame for database {db_name}: {columns_input_df}")
+
+            # Write the DataFrame to the output
+            await raw_output.write_df(columns_input_df)
 
         return {
             "chunk_count": raw_output.chunk_count,
