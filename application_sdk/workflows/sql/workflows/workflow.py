@@ -617,6 +617,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
+        workflow.logger.debug(f"Database list: {database_list}")
+
         # Loop through each database and fetch schemas
         for db_name in database_list:
             # Update workflow_args with the current database name for schema fetching
@@ -639,7 +641,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
             # Check if the result is of type SQLQueryInput
             if isinstance(schema_input, SQLQueryInput):
-                schema_input_df = await SQLQueryInput.get_batched_dataframe(schema_input)
+                schema_input_df = await schema_input.get_batched_dataframe()
             else:
                 workflow.logger.error(f"Unexpected format for schema_input: {type(schema_input)}")
                 return {
@@ -702,7 +704,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
             # Check if the result is of type SQLQueryInput
             if isinstance(tables_input, SQLQueryInput):
-                tables_input_df = await SQLQueryInput.get_batched_dataframe(tables_input)
+                tables_input_df = await tables_input.get_batched_dataframe()
             else:
                 workflow.logger.error(f"Unexpected format for tables_input: {type(tables_input)}")
                 return {
@@ -765,7 +767,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
             # Check if the result is of type SQLQueryInput
             if isinstance(columns_input, SQLQueryInput):
-                columns_input_df = await SQLQueryInput.get_batched_dataframe(columns_input)
+                columns_input_df = await columns_input.get_batched_dataframe()
             else:
                 workflow.logger.error(f"Unexpected format for columns_input: {type(columns_input)}")
                 return {
