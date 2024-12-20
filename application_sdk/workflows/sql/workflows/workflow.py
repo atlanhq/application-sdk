@@ -594,7 +594,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             file for file in all_files
                 if file.endswith('.json') and file != 'metadata.json'
         ]
-        print(f"Valid file suffixes: {file_suffixes}")
+        workflow.logger.info(f"Valid file suffixes: {file_suffixes}")
         return file_suffixes
 
     @activity.defn
@@ -617,8 +617,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
-        workflow.logger.debug(f"Database list: {database_list}")
-
         # Loop through each database and fetch schemas
         for db_name in database_list:
             # Update workflow_args with the current database name for schema fetching
@@ -627,8 +625,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
 
-            workflow.logger.debug(f"Updated Query for database {db_name}: {query}")
-
             # Fetch the schemas for this database
             schema_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
@@ -636,8 +632,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     query=query, workflow_args=workflow_args
                 ),
             )
-            # Log the schema_input to check its structure
-            workflow.logger.info(f"Fetched schema input for database {db_name}: {schema_input}")
 
             # Check if the result is of type SQLQueryInput
             if isinstance(schema_input, SQLQueryInput):
@@ -650,11 +644,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     "total_record_count": 0,
                 }
 
-            # Log the DataFrame to verify its contents
-            workflow.logger.info(f"Schema DataFrame for database {db_name}: {schema_input_df}")
-
             # Write the DataFrame to the output
-            await raw_output.write_df(schema_input_df)
+            for schema_chunk in schema_input_df:
+                await raw_output.write_df(schema_chunk)
 
         return {
             "chunk_count": raw_output.chunk_count,
@@ -690,8 +682,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
 
-            workflow.logger.debug(f"Updated Query for database {db_name}: {query}")
-
             # Fetch the tables for this database
             tables_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
@@ -699,8 +689,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     query=query, workflow_args=workflow_args
                 ),
             )
-            # Log the schema_input to check its structure
-            workflow.logger.info(f"Fetched tables input for database {db_name}: {tables_input}")
 
             # Check if the result is of type SQLQueryInput
             if isinstance(tables_input, SQLQueryInput):
@@ -713,11 +701,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     "total_record_count": 0,
                 }
 
-            # Log the DataFrame to verify its contents
-            workflow.logger.info(f"Tables DataFrame for database {db_name}: {tables_input_df}")
-
             # Write the DataFrame to the output
-            await raw_output.write_df(tables_input_df)
+            for table_chunk in tables_input_df:
+                await raw_output.write_df(table_chunk)
 
         return {
             "chunk_count": raw_output.chunk_count,
@@ -753,8 +739,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Prepare the query by replacing the placeholder with the database name
             query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
 
-            workflow.logger.debug(f"Updated Query for database {db_name}: {query}")
-
             # Fetch the columns for this database
             columns_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
@@ -762,8 +746,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     query=query, workflow_args=workflow_args
                 ),
             )
-            # Log the schema_input to check its structure
-            workflow.logger.info(f"Fetched columns input for database {db_name}: {columns_input}")
 
             # Check if the result is of type SQLQueryInput
             if isinstance(columns_input, SQLQueryInput):
@@ -776,11 +758,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                     "total_record_count": 0,
                 }
 
-            # Log the DataFrame to verify its contents
-            workflow.logger.info(f"Columns DataFrame for database {db_name}: {columns_input_df}")
-
             # Write the DataFrame to the output
-            await raw_output.write_df(columns_input_df)
+            for column_chunk in columns_input_df:
+                await raw_output.write_df(column_chunk)
 
         return {
             "chunk_count": raw_output.chunk_count,
