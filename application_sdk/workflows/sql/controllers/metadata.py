@@ -99,10 +99,12 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
                 schema_query = self.FETCH_SCHEMAS_SQL.format(database_name=database)
                 async for batch in self.sql_resource.run_query(schema_query):
                     for row in batch:
-                        result.append({
-                            self.DATABASE_KEY: database,
-                            self.SCHEMA_KEY: row[self.SCHEMA_KEY]
-                        })
+                        result.append(
+                            {
+                                self.DATABASE_KEY: database,
+                                self.SCHEMA_KEY: row[self.SCHEMA_KEY],
+                            }
+                        )
 
         except Exception as e:
             logger.error(f"Failed to fetch metadata hierarchically: {str(e)}")

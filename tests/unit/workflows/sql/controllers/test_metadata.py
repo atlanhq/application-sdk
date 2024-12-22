@@ -1,13 +1,17 @@
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from application_sdk.workflows.sql.controllers.metadata import SQLWorkflowMetadataController
+import pytest
+
+from application_sdk.workflows.sql.controllers.metadata import (
+    SQLWorkflowMetadataController,
+)
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 
 class AsyncIteratorMock:
     """Helper class to mock async iterators"""
+
     def __init__(self, items):
         self.items = items.copy()  # Create a copy to avoid modifying original list
 
@@ -45,13 +49,15 @@ class TestSQLWorkflowMetadataController:
 
         # Assert
         assert result == expected_result
-        mock_sql_resource.fetch_metadata.assert_called_once_with({
-            "metadata_sql": "SELECT * FROM test",
-            "database_alias_key": None,
-            "schema_alias_key": None,
-            "database_result_key": "TABLE_CATALOG",
-            "schema_result_key": "TABLE_SCHEMA",
-        })
+        mock_sql_resource.fetch_metadata.assert_called_once_with(
+            {
+                "metadata_sql": "SELECT * FROM test",
+                "database_alias_key": None,
+                "schema_alias_key": None,
+                "database_result_key": "TABLE_CATALOG",
+                "schema_result_key": "TABLE_SCHEMA",
+            }
+        )
         mock_sql_resource.run_query.assert_not_called()
 
     @pytest.mark.asyncio
@@ -61,22 +67,26 @@ class TestSQLWorkflowMetadataController:
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.USE_HIERARCHICAL_FETCH = True
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        controller.FETCH_SCHEMAS_SQL = (
+            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        )
         controller.DATABASE_KEY = "database_name"
         controller.SCHEMA_KEY = "schema_name"
 
         # Mock database query results
         mock_sql_resource.run_query.side_effect = [
             AsyncIteratorMock([[{"database_name": "db1"}, {"database_name": "db2"}]]),
-            AsyncIteratorMock([[{"schema_name": "schema1"}, {"schema_name": "schema2"}]]),
-            AsyncIteratorMock([[{"schema_name": "schema3"}]])
+            AsyncIteratorMock(
+                [[{"schema_name": "schema1"}, {"schema_name": "schema2"}]]
+            ),
+            AsyncIteratorMock([[{"schema_name": "schema3"}]]),
         ]
 
         # Expected result
         expected_result = [
             {"database_name": "db1", "schema_name": "schema1"},
             {"database_name": "db1", "schema_name": "schema2"},
-            {"database_name": "db2", "schema_name": "schema3"}
+            {"database_name": "db2", "schema_name": "schema3"},
         ]
 
         # Execute
@@ -85,18 +95,28 @@ class TestSQLWorkflowMetadataController:
         # Assert
         assert result == expected_result
         assert mock_sql_resource.run_query.call_count == 3
-        mock_sql_resource.run_query.assert_any_call("SELECT database_name FROM databases")
-        mock_sql_resource.run_query.assert_any_call("SELECT schema_name FROM schemas WHERE database = 'db1'")
-        mock_sql_resource.run_query.assert_any_call("SELECT schema_name FROM schemas WHERE database = 'db2'")
+        mock_sql_resource.run_query.assert_any_call(
+            "SELECT database_name FROM databases"
+        )
+        mock_sql_resource.run_query.assert_any_call(
+            "SELECT schema_name FROM schemas WHERE database = 'db1'"
+        )
+        mock_sql_resource.run_query.assert_any_call(
+            "SELECT schema_name FROM schemas WHERE database = 'db2'"
+        )
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode_empty_databases(self, mock_sql_resource):
+    async def test_fetch_metadata_hierarchical_mode_empty_databases(
+        self, mock_sql_resource
+    ):
         """Test hierarchical fetching when no databases are found"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.USE_HIERARCHICAL_FETCH = True
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        controller.FETCH_SCHEMAS_SQL = (
+            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        )
 
         # Mock empty database result
         mock_sql_resource.run_query.return_value = AsyncIteratorMock([[]])
@@ -106,23 +126,29 @@ class TestSQLWorkflowMetadataController:
 
         # Assert
         assert result == []
-        mock_sql_resource.run_query.assert_called_once_with("SELECT database_name FROM databases")
+        mock_sql_resource.run_query.assert_called_once_with(
+            "SELECT database_name FROM databases"
+        )
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode_empty_schemas(self, mock_sql_resource):
+    async def test_fetch_metadata_hierarchical_mode_empty_schemas(
+        self, mock_sql_resource
+    ):
         """Test hierarchical fetching when databases exist but have no schemas"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.USE_HIERARCHICAL_FETCH = True
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        controller.FETCH_SCHEMAS_SQL = (
+            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        )
         controller.DATABASE_KEY = "database_name"
         controller.SCHEMA_KEY = "schema_name"
 
         # Mock results: one database but no schemas
         mock_sql_resource.run_query.side_effect = [
             AsyncIteratorMock([[{"database_name": "db1"}]]),  # Database exists
-            AsyncIteratorMock([[]])  # But no schemas
+            AsyncIteratorMock([[]]),  # But no schemas
         ]
 
         # Execute
@@ -131,17 +157,25 @@ class TestSQLWorkflowMetadataController:
         # Assert
         assert result == []
         assert mock_sql_resource.run_query.call_count == 2
-        mock_sql_resource.run_query.assert_any_call("SELECT database_name FROM databases")
-        mock_sql_resource.run_query.assert_any_call("SELECT schema_name FROM schemas WHERE database = 'db1'")
+        mock_sql_resource.run_query.assert_any_call(
+            "SELECT database_name FROM databases"
+        )
+        mock_sql_resource.run_query.assert_any_call(
+            "SELECT schema_name FROM schemas WHERE database = 'db1'"
+        )
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode_error_handling(self, mock_sql_resource):
+    async def test_fetch_metadata_hierarchical_mode_error_handling(
+        self, mock_sql_resource
+    ):
         """Test error handling in hierarchical fetching"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.USE_HIERARCHICAL_FETCH = True
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        controller.FETCH_SCHEMAS_SQL = (
+            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        )
 
         # Mock database query to raise an exception
         class ErrorAsyncIterator:
@@ -157,7 +191,9 @@ class TestSQLWorkflowMetadataController:
         with pytest.raises(Exception, match="Database query failed"):
             await controller.fetch_metadata()
 
-        mock_sql_resource.run_query.assert_called_once_with("SELECT database_name FROM databases")
+        mock_sql_resource.run_query.assert_called_once_with(
+            "SELECT database_name FROM databases"
+        )
 
     @pytest.mark.asyncio
     async def test_use_hierarchical_fetch_property(self, mock_sql_resource):
