@@ -2,20 +2,30 @@
 
 import json
 import logging
+from datetime import datetime
 
 from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.paas.models import ApplicationEvent, GenericEvent
+from application_sdk.paas.eventstore.models import (
+    ApplicationEvent,
+    GenericEvent,
+    WorkflowEndEvent,
+    WorkflowStartEvent,
+)
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
+# TODO: Singleton, and client as instance attribute
 class EventStore:
     EVENT_STORE_NAME = "eventstore"
     TOPIC_NAME = "events"
     APPLICATION_TOPIC_NAME = "application_events"
+
+    # TODO:
+    # client: DaprClient
 
     @classmethod
     def create_generic_event(cls, event: GenericEvent, topic_name: str = TOPIC_NAME):
@@ -30,8 +40,8 @@ class EventStore:
         """
         with DaprClient() as client:
             client.publish_event(
-                pubsub_name=cls.EVENT_STORE_NAME,
-                topic_name=topic_name,
+                pubsub_name="eventstore",
+                topic_name="workflow_start",
                 data=json.dumps(event.model_dump(mode="json")),
                 data_content_type="application/json",
             )
@@ -46,3 +56,13 @@ class EventStore:
         :param event: Event data.
         """
         cls.create_generic_event(event, topic_name=cls.APPLICATION_TOPIC_NAME)
+
+    @classmethod
+    def create_workflow_start_event(cls, event: WorkflowStartEvent, topic_name: str):
+        event.timestamp = datetime.now()
+        cls.create_generic_event(event, topic_name=topic_name)
+
+    @classmethod
+    def create_workflow_end_event(cls, event: WorkflowEndEvent, topic_name: str):
+        event.timestamp = datetime.now()
+        cls.create_generic_event(event, topic_name=topic_name)

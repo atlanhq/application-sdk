@@ -1,12 +1,20 @@
 import logging
 import uuid
 from abc import ABC
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import Worker
+from temporalio.worker import (
+    ActivityInboundInterceptor,
+    ExecuteActivityInput,
+    ExecuteWorkflowInput,
+    Interceptor,
+    Worker,
+    WorkflowInboundInterceptor,
+    WorkflowInterceptorClassInput,
+)
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -14,9 +22,52 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
+from application_sdk.paas.eventstore import ApplicationEvent, EventStore
+from application_sdk.paas.eventstore.models import WorkflowStartEvent
 from application_sdk.workflows.resources.constants import TemporalConstants
 
 logger = get_logger(__name__)
+
+
+class EventActivityInboundInterceptor(ActivityInboundInterceptor):
+    async def execute_activity(self, input: ExecuteActivityInput) -> Any:
+        print("INPUT1 - ", input)
+        pass
+
+
+class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
+    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        print("INPUT2 - ", input, workflow.info())
+        EventStore.create_workflow_start_event(
+            WorkflowStartEvent(
+                name=workflow.info().workflow_type,
+                application_name=TemporalConstants.APPLICATION_NAME.value,
+                attributes={},
+                workflow_id=workflow.info().workflow_id,
+                workflow_run_id=workflow.info().run_id,
+            ),
+            topic_name=f"workflow_start",
+        )
+        pass
+
+
+class EventInterceptor(Interceptor):
+    """Temporal Interceptor class which will report workflow & activity exceptions to Sentry"""
+
+    def intercept_activity(
+        self, next: ActivityInboundInterceptor
+    ) -> ActivityInboundInterceptor:
+        """Implementation of
+        :py:meth:`temporalio.worker.Interceptor.intercept_activity`.
+        """
+        return EventActivityInboundInterceptor(super().intercept_activity(next))
+
+    def workflow_interceptor_class(
+        self, input: WorkflowInterceptorClassInput
+    ) -> Optional[Type[WorkflowInboundInterceptor]]:
+        # EventStore.create_workflow_start_event(WorkflowStartEvent(workflow_name=workflow_info.type, workflow_id=input.workflow_id, workflow_run_id=input.run_id))
+
+        return EventWorkflowInboundInterceptor
 
 
 class ResourceInterface(ABC):
@@ -139,4 +190,5 @@ class TemporalResource(ResourceInterface):
                     *passthrough_modules
                 )
             ),
+            interceptors=[EventInterceptor()],
         )

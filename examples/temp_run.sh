@@ -1,0 +1,1 @@
+export PYTHONPATH=$(pwd); dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path ./components -- python3 examples/application_subscriber.py

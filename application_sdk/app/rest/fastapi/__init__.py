@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, FastAPI, status
 
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
@@ -19,6 +21,7 @@ from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
+from application_sdk.paas.eventstore import EventStore
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
@@ -39,8 +42,12 @@ class FastAPIApplication(AtlanAPIApplication):
     app: FastAPI
 
     workflow_router: APIRouter = APIRouter()
+    dapr_router: APIRouter = APIRouter()
+    events_router: APIRouter = APIRouter()
 
     workflow: WorkflowInterface | None = None
+
+    subscriptions = {}
 
     def __init__(
         self,
@@ -80,6 +87,8 @@ class FastAPIApplication(AtlanAPIApplication):
         self.app.include_router(get_traces_router())
 
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
+        self.app.include_router(self.dapr_router, prefix="/dapr")
+        self.app.include_router(self.events_router, prefix="/events/v1")
 
         super().register_routers()
 
@@ -109,7 +118,125 @@ class FastAPIApplication(AtlanAPIApplication):
             response_model=StartWorkflowResponse,
         )
 
+        self.dapr_router.add_api_route(
+            "/subscribe",
+            self.get_dapr_subscriptions,
+            methods=["GET"],
+            response_model="list",
+        )
+
+        self.events_router.add_api_route(
+            "/activity_start",
+            self.on_activity_start,
+            methods=["POST"],
+            response_model=dict,
+        )
+        self.events_router.add_api_route(
+            "/activity_end", self.on_activity_end, methods=["POST"], response_model=dict
+        )
+        self.events_router.add_api_route(
+            "/workflow_start",
+            self.on_workflow_start,
+            methods=["POST"],
+            response_model=dict,
+        )
+        self.events_router.add_api_route(
+            "/workflow_end", self.on_workflow_end, methods=["POST"], response_model=dict
+        )
+
         super().register_routes()
+
+    async def on_activity_start(self):
+        print("ACTIVITY START - ")
+        pass
+
+    async def on_activity_end(self):
+        print("ACTIVITY END - ")
+        pass
+
+    async def on_workflow_start(self):
+        print("WORKFLOW START - ")
+        pass
+
+    async def on_workflow_end(self):
+        print("WORKFLOW END - ")
+        pass
+
+    # Each app will publish to a topic of "topic-{app_name}"
+    def subscribe_to_activity_start(
+        self, app_name: str, activity_name: str | None = None
+    ):
+        condition: str | None = None
+        if activity_name:
+            condition = f'activity_name == "{activity_name}"'
+
+        self.subscribe(
+            topic=f"{app_name}/activity_start",
+            match_condition=condition,
+            route="activity_start",
+        )
+
+    def subscribe_to_activity_end(
+        self, app_name: str, activity_name: str | None = None
+    ):
+        condition: str | None = None
+        if activity_name:
+            condition = f'activity_name == "{activity_name}"'
+
+        self.subscribe(
+            topic=f"{app_name}/activity_end",
+            match_condition=condition,
+            route="activity_end",
+        )
+
+    def subscribe_to_workflow_start(
+        self, app_name: str, workflow_name: str | None = None
+    ):
+        condition: str | None = None
+        if workflow_name:
+            condition = f'workflow_name == "{workflow_name}"'
+
+        self.subscribe(
+            topic=f"workflow_start", match_condition=condition, route="workflow_start"
+        )
+
+    def subscribe_to_workflow_end(
+        self, app_name: str, workflow_name: str | None = None
+    ):
+        condition: str | None = None
+        if workflow_name:
+            condition = f'workflow_name == "{workflow_name}"'
+
+        self.subscribe(
+            topic=f"workflow_end", match_condition=condition, route="workflow_end"
+        )
+
+    def subscribe(self, topic: str, route: str, match_condition: str | None = None):
+        if topic not in self.subscriptions:
+            self.subscriptions[topic] = {
+                "pubsubname": "eventstore",
+                "topic": topic,
+                "routes": {"rules": []},
+            }
+
+        if match_condition:
+            self.subscriptions[topic]["routes"]["rules"].append(
+                {"match": match_condition, "path": f"events/v1/{route}"}
+            )
+        else:
+            self.subscriptions[topic]["routes"]["rules"].append(
+                {"path": f"events/v1/{route}"}
+            )
+            self.subscriptions[topic]["route"] = f"events/v1/{route}"
+
+    async def get_dapr_subscriptions(
+        self,
+    ):
+        print(
+            "Dapr pub/sub is subscribed to: "
+            + json.dumps([self.subscriptions[k] for k in self.subscriptions])
+        )
+        return [self.subscriptions[k] for k in self.subscriptions]
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         await self.auth_controller.prepare(body.model_dump())
