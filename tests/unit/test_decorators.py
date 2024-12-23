@@ -88,11 +88,11 @@ class TestPandasDecorators:
         """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
-            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
-            conn.execute(text("DELETE FROM numbers"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers2 (value INTEGER)"))
+            conn.execute(text("DELETE FROM numbers2"))
             conn.execute(
                 text(
-                    "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                    "INSERT INTO numbers2 (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
                 )
             )
             conn.commit()
@@ -101,7 +101,7 @@ class TestPandasDecorators:
 
         @activity_pd(
             batch_input=lambda self: SQLQueryInput(
-                engine, "SELECT * FROM numbers", chunk_size=3
+                engine, "SELECT * FROM numbers2", chunk_size=3
             )
         )
         async def func(self, batch_input: pd.DataFrame, **kwargs):
@@ -116,18 +116,18 @@ class TestPandasDecorators:
     async def test_query_write_basic(self, _):
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
-            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
-            conn.execute(text("DELETE FROM numbers"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers3 (value INTEGER)"))
+            conn.execute(text("DELETE FROM numbers3"))
             conn.execute(
                 text(
-                    "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                    "INSERT INTO numbers3 (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
                 )
             )
             conn.commit()
 
         @activity_pd(
             batch_input=lambda self, arg: SQLQueryInput(
-                engine, "SELECT * from numbers", chunk_size=3
+                engine, "SELECT * from numbers3", chunk_size=3
             ),
             out1=lambda self, arg: JsonOutput(
                 output_path="/tmp/tests/test_pandas_decorator/raw/table",
