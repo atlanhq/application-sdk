@@ -61,15 +61,6 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
                 self.check_schemas_and_databases(payload),
                 self.tables_check(payload),
             )
-
-            if (
-                not results["databaseSchemaCheck"]["success"]
-                or not results["tablesCheck"]["success"]
-            ):
-                raise ValueError(
-                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, tablesCheck: {results['tablesCheck']}"
-                )
-
             logger.info("Preflight check completed successfully")
         except Exception as e:
             logger.error("Error during preflight check", exc_info=True)
