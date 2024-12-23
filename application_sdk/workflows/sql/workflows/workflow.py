@@ -584,6 +584,10 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     fetch_table_sql = ""
     fetch_column_sql = ""
 
+    def __init__(self):
+        # Semaphore to limit concurrency for tasks in child class
+        self.semaphore = asyncio.Semaphore(5)  # Limit concurrency to 5 tasks
+
     @staticmethod
     def get_valid_file_suffixes(directory: str) -> List[str]:
         # List all files in the directory
@@ -597,6 +601,31 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         ]
         workflow.logger.info(f"Valid file suffixes: {file_suffixes}")
         return file_suffixes
+
+    async def _fetch_schema_for_db(self, db_name: str, workflow_args: Dict[str, Any]):
+        """
+        Fetch the schema for a single database and return the results as a DataFrame.
+        """
+        async with self.semaphore:
+            # Update the workflow_args with the current database name for schema fetching
+            workflow_args["database_name"] = db_name
+
+            # Prepare the query by replacing the placeholder with the database name
+            query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
+
+            # Fetch the schemas for this database
+            schema_input = self.sql_resource.sql_input(
+                engine=self.sql_resource.engine,
+                query=SQLWorkflow.prepare_query(query=query, workflow_args=workflow_args),
+            )
+
+            # Check if the result is of type SQLQueryInput
+            if isinstance(schema_input, SQLQueryInput):
+                schema_input_df = await schema_input.get_batched_dataframe()
+                return schema_input_df  # This could be a generator of DataFrames
+            else:
+                workflow.logger.error(f"Unexpected format for schema_input: {type(schema_input)}")
+                return []  # Return an empty list in case of error
 
     @activity.defn
     @auto_heartbeater
@@ -618,46 +647,64 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         Fetch and process schemas from each database fetched by fetch_databases.
         """
+
+        # Get the list of databases to process
         database_list = batch_input["database_name"].tolist()
 
-        # Loop through each database and fetch schemas
-        for db_name in database_list:
-            # Update workflow_args with the current database name for schema fetching
-            workflow_args["database_name"] = db_name
+        # Create a list of tasks to fetch schemas concurrently
+        execute_queries = [
+            self._fetch_schema_for_db(db_name, workflow_args)
+            for db_name in database_list
+        ]
 
-            # Prepare the query by replacing the placeholder with the database name
-            query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
-
-            # Fetch the schemas for this database
-            schema_input = self.sql_resource.sql_input(
-                engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(
-                    query=query, workflow_args=workflow_args
-                ),
-            )
-
-            # Check if the result is of type SQLQueryInput
-            if isinstance(schema_input, SQLQueryInput):
-                schema_input_df = await schema_input.get_batched_dataframe()
+        # Use asyncio.gather to execute all schema fetches concurrently
+        results = await asyncio.gather(*execute_queries)
+        # Flatten the list of DataFrames if any generator is returned
+        flat_results = []
+        for result in results:
+            # If result is a generator, convert it to a list of DataFrames
+            if isinstance(result, (pd.DataFrame, pd.Series)):
+                flat_results.append(result)
             else:
-                workflow.logger.error(
-                    f"Unexpected format for schema_input: {type(schema_input)}"
-                )
-                return {
-                    "chunk_count": 0,
-                    "typename": "schema",
-                    "total_record_count": 0,
-                }
+                # Assuming it's a generator, so convert it to a DataFrame
+                flat_results.extend(result)  # Unwrap the generator to list of DataFrames
 
-            # Write the DataFrame to the output
-            for schema_chunk in schema_input_df:
-                await raw_output.write_df(schema_chunk)
+        # Combine all the results (assuming each result is a dataframe)
+        combined_results = pd.concat(flat_results, ignore_index=True)
+
+        # Write the combined results to the output
+        await raw_output.write_df(combined_results)
 
         return {
             "chunk_count": raw_output.chunk_count,
             "typename": "schema",
             "total_record_count": raw_output.total_record_count,
         }
+
+    async def _fetch_tables_for_db(self, db_name: str, workflow_args: Dict[str, Any]):
+        """
+        Fetch the tables for a single database and return the results as a DataFrame.
+        """
+        async with self.semaphore:
+            # Update the workflow_args with the current database name for table fetching
+            workflow_args["database_name"] = db_name
+
+            # Prepare the query for fetching tables by replacing the placeholder with the database name
+            query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
+
+            # Fetch the tables for this database
+            tables_input = self.sql_resource.sql_input(
+                engine=self.sql_resource.engine,
+                query=SQLWorkflow.prepare_query(query=query, workflow_args=workflow_args),
+            )
+
+            # Check if the result is of type SQLQueryInput
+            if isinstance(tables_input, SQLQueryInput):
+                tables_input_df = await tables_input.get_batched_dataframe()
+                return tables_input_df  # This could be a generator of DataFrames
+            else:
+                workflow.logger.error(f"Unexpected format for tables_input: {type(tables_input)}")
+                return []  # Return an empty list in case of error
 
     @activity.defn
     @auto_heartbeater
@@ -681,44 +728,59 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
-        # Loop through each database and fetch tables
-        for db_name in database_list:
-            # Update workflow_args with the current database name for table fetching
-            workflow_args["database_name"] = db_name
+        # Create a list of tasks to fetch tables concurrently
+        execute_queries = [
+            self._fetch_tables_for_db(db_name, workflow_args)
+            for db_name in database_list
+        ]
 
-            # Prepare the query by replacing the placeholder with the database name
-            query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
+        # Use asyncio.gather to execute all table fetches concurrently
+        results = await asyncio.gather(*execute_queries)
 
-            # Fetch the tables for this database
-            tables_input = self.sql_resource.sql_input(
-                engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(
-                    query=query, workflow_args=workflow_args
-                ),
-            )
-
-            # Check if the result is of type SQLQueryInput
-            if isinstance(tables_input, SQLQueryInput):
-                tables_input_df = await tables_input.get_batched_dataframe()
+        # Flatten the list of DataFrames (if any generator is returned)
+        flat_results = []
+        for result in results:
+            if isinstance(result, (pd.DataFrame, pd.Series)):
+                flat_results.append(result)
             else:
-                workflow.logger.error(
-                    f"Unexpected format for tables_input: {type(tables_input)}"
-                )
-                return {
-                    "chunk_count": 0,
-                    "typename": "schema",
-                    "total_record_count": 0,
-                }
+                flat_results.extend(result)  # Unwrap the generator to list of DataFrames
 
-            # Write the DataFrame to the output
-            for table_chunk in tables_input_df:
-                await raw_output.write_df(table_chunk)
+        # Combine all the results into a single DataFrame
+        combined_results = pd.concat(flat_results, ignore_index=True)
+
+        # Write the combined results to the output
+        await raw_output.write_df(combined_results)
 
         return {
             "chunk_count": raw_output.chunk_count,
             "typename": "table",
             "total_record_count": raw_output.total_record_count,
         }
+
+    async def _fetch_columns_for_db(self, db_name: str, workflow_args: Dict[str, Any]):
+        """
+        Fetch the columns for a single database and return the results as a DataFrame.
+        """
+        async with self.semaphore:
+            # Update the workflow_args with the current database name for column fetching
+            workflow_args["database_name"] = db_name
+
+            # Prepare the query for fetching columns by replacing the placeholder with the database name
+            query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
+
+            # Fetch the columns for this database
+            columns_input = self.sql_resource.sql_input(
+                engine=self.sql_resource.engine,
+                query=SQLWorkflow.prepare_query(query=query, workflow_args=workflow_args),
+            )
+
+            # Check if the result is of type SQLQueryInput
+            if isinstance(columns_input, SQLQueryInput):
+                columns_input_df = await columns_input.get_batched_dataframe()
+                return columns_input_df  # This could be a generator of DataFrames
+            else:
+                workflow.logger.error(f"Unexpected format for columns_input: {type(columns_input)}")
+                return []  # Return an empty list in case of error
 
     @activity.defn
     @auto_heartbeater
@@ -742,38 +804,28 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
-        # Loop through each database and fetch columns
-        for db_name in database_list:
-            # Update workflow_args with the current database name for column fetching
-            workflow_args["database_name"] = db_name
+        # Create a list of tasks to fetch columns concurrently
+        execute_queries = [
+            self._fetch_columns_for_db(db_name, workflow_args)
+            for db_name in database_list
+        ]
 
-            # Prepare the query by replacing the placeholder with the database name
-            query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
+        # Use asyncio.gather to execute all column fetches concurrently
+        results = await asyncio.gather(*execute_queries)
 
-            # Fetch the columns for this database
-            columns_input = self.sql_resource.sql_input(
-                engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(
-                    query=query, workflow_args=workflow_args
-                ),
-            )
-
-            # Check if the result is of type SQLQueryInput
-            if isinstance(columns_input, SQLQueryInput):
-                columns_input_df = await columns_input.get_batched_dataframe()
+        # Flatten the list of DataFrames (if any generator is returned)
+        flat_results = []
+        for result in results:
+            if isinstance(result, (pd.DataFrame, pd.Series)):
+                flat_results.append(result)
             else:
-                workflow.logger.error(
-                    f"Unexpected format for columns_input: {type(columns_input)}"
-                )
-                return {
-                    "chunk_count": 0,
-                    "typename": "schema",
-                    "total_record_count": 0,
-                }
+                flat_results.extend(result)  # Unwrap the generator to list of DataFrames
 
-            # Write the DataFrame to the output
-            for column_chunk in columns_input_df:
-                await raw_output.write_df(column_chunk)
+        # Combine all the results into a single DataFrame
+        combined_results = pd.concat(flat_results, ignore_index=True)
+
+        # Write the combined results to the output
+        await raw_output.write_df(combined_results)
 
         return {
             "chunk_count": raw_output.chunk_count,
