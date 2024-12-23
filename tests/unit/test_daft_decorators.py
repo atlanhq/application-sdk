@@ -2,19 +2,14 @@ import os
 from concurrent.futures import Future
 from unittest.mock import patch
 
-import daft
+import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
 
-from application_sdk import activity_daft
+from application_sdk import activity_pd
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
-
-
-def add_1(df):
-    df = df.select(daft.col("value") + 1)
-    return df
 
 
 class MockSingleThreadExecutor:
@@ -35,7 +30,7 @@ class MockSingleThreadExecutor:
         return future
 
 
-class TestDaftDecorators:
+class TestPandasDecorators:
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
@@ -46,11 +41,11 @@ class TestDaftDecorators:
         """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @activity_daft(
+        @activity_pd(
             batch_input=lambda self: SQLQueryInput(engine, "SELECT 1 as value")
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
-            assert batch_input.count_rows() == 1
+        async def func(self, batch_input: pd.DataFrame, **kwargs):
+            assert len(batch_input) == 1
 
         await func(self)
 
@@ -73,13 +68,13 @@ class TestDaftDecorators:
             )
             conn.commit()
 
-        @activity_daft(
+        @activity_pd(
             batch_input=lambda self: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=None
             )
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
-            assert batch_input.count_rows() == 10
+        async def func(self, batch_input: pd.DataFrame, **kwargs):
+            assert len(batch_input) == 10
 
         await func(self)
 
@@ -104,13 +99,13 @@ class TestDaftDecorators:
 
         expected_row_count = [3, 3, 3, 1]
 
-        @activity_daft(
+        @activity_pd(
             batch_input=lambda self: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=3
             )
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
-            assert batch_input.count_rows() == expected_row_count.pop(0)
+        async def func(self, batch_input: pd.DataFrame, **kwargs):
+            assert len(batch_input) == expected_row_count.pop(0)
 
         await func(self)
 
@@ -130,22 +125,22 @@ class TestDaftDecorators:
             )
             conn.commit()
 
-        @activity_daft(
+        @activity_pd(
             batch_input=lambda self, arg: SQLQueryInput(
                 engine, "SELECT * from numbers", chunk_size=3
             ),
             out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/tests/test_daft_decorator/raw/table",
+                output_path="/tmp/tests/test_pandas_decorator/raw/table",
                 upload_file_prefix="raw",
             ),
             out2=lambda self, arg: JsonOutput(
-                output_path="/tmp/tests/test_daft_decorator/transformed/table",
+                output_path="/tmp/tests/test_pandas_decorator/transformed/table",
                 upload_file_prefix="transformed",
             ),
         )
         async def func(self, batch_input, out1, out2, **kwargs):
-            await out1.write_daft_df(batch_input)
-            await out2.write_daft_df(batch_input.transform(add_1))
+            await out1.write_df(batch_input)
+            await out2.write_df(batch_input.map(lambda x: x + 1))
             return batch_input
 
         arg = {
@@ -153,50 +148,50 @@ class TestDaftDecorators:
         }
         await func(self, arg)
         # Check generated raw files
-        with open("/tmp/tests/test_daft_decorator/raw/table/1.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/raw/table/1.json") as f:
             assert f.read().strip() == '{"value":0}\n{"value":1}\n{"value":2}'
-        with open("/tmp/tests/test_daft_decorator/raw/table/2.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/raw/table/2.json") as f:
             assert f.read().strip() == '{"value":3}\n{"value":4}\n{"value":5}'
-        with open("/tmp/tests/test_daft_decorator/raw/table/3.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/raw/table/3.json") as f:
             assert f.read().strip() == '{"value":6}\n{"value":7}\n{"value":8}'
-        with open("/tmp/tests/test_daft_decorator/raw/table/4.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/raw/table/4.json") as f:
             assert f.read().strip() == '{"value":9}'
 
         # Check the generated transformed files
-        with open("/tmp/tests/test_daft_decorator/transformed/table/1.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/transformed/table/1.json") as f:
             assert f.read().strip() == '{"value":1}\n{"value":2}\n{"value":3}'
-        with open("/tmp/tests/test_daft_decorator/transformed/table/2.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/transformed/table/2.json") as f:
             assert f.read().strip() == '{"value":4}\n{"value":5}\n{"value":6}'
-        with open("/tmp/tests/test_daft_decorator/transformed/table/3.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/transformed/table/3.json") as f:
             assert f.read().strip() == '{"value":7}\n{"value":8}\n{"value":9}'
-        with open("/tmp/tests/test_daft_decorator/transformed/table/4.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/transformed/table/4.json") as f:
             assert f.read().strip() == '{"value":10}'
 
     async def test_json_input(self):
         # Create a sample JSON file for input
-        input_file_path = "/tmp/tests/test_daft_decorator/raw/schema/1.json"
+        input_file_path = "/tmp/tests/test_pandas_decorator/raw/schema/1.json"
         os.makedirs(os.path.dirname(input_file_path), exist_ok=True)
         with open(input_file_path, "w") as f:
             f.write('{"value":1}\n{"value":2}\n')
 
-        @activity_daft(
+        @activity_pd(
             batch_input=lambda self, arg: JsonInput(
-                path="/tmp/tests/test_daft_decorator/raw/",
+                path="/tmp/tests/test_pandas_decorator/raw/",
                 file_suffixes=["schema/1.json"],
             ),
             out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/tests/test_daft_decorator/transformed/schema",
+                output_path="/tmp/tests/test_pandas_decorator/transformed/schema",
                 upload_file_prefix="transformed",
             ),
         )
         async def func(self, batch_input, out1, **kwargs):
-            await out1.write_daft_df(batch_input.transform(add_1))
+            await out1.write_df(batch_input.map(lambda x: x + 1))
             return batch_input
 
         arg = {}
         await func(self, arg)
         # Check files generated
-        with open("/tmp/tests/test_daft_decorator/raw/schema/1.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/raw/schema/1.json") as f:
             assert f.read().strip() == '{"value":1}\n{"value":2}'
-        with open("/tmp/tests/test_daft_decorator/transformed/schema/1.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/transformed/schema/1.json") as f:
             assert f.read().strip() == '{"value":2}\n{"value":3}'
