@@ -616,7 +616,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Fetch the schemas for this database
             schema_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(query=query, workflow_args=workflow_args),
+                query=SQLWorkflow.prepare_query(
+                    query=query, workflow_args=workflow_args
+                ),
             )
 
             # Check if the result is of type SQLQueryInput
@@ -624,7 +626,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 schema_input_df = await schema_input.get_batched_dataframe()
                 return schema_input_df  # This could be a generator of DataFrames
             else:
-                workflow.logger.error(f"Unexpected format for schema_input: {type(schema_input)}")
+                workflow.logger.error(
+                    f"Unexpected format for schema_input: {type(schema_input)}"
+                )
                 return []  # Return an empty list in case of error
 
     @activity.defn
@@ -667,7 +671,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 flat_results.append(result)
             else:
                 # Assuming it's a generator, so convert it to a DataFrame
-                flat_results.extend(result)  # Unwrap the generator to list of DataFrames
+                flat_results.extend(
+                    result
+                )  # Unwrap the generator to list of DataFrames
 
         # Combine all the results (assuming each result is a dataframe)
         combined_results = pd.concat(flat_results, ignore_index=True)
@@ -695,7 +701,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Fetch the tables for this database
             tables_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(query=query, workflow_args=workflow_args),
+                query=SQLWorkflow.prepare_query(
+                    query=query, workflow_args=workflow_args
+                ),
             )
 
             # Check if the result is of type SQLQueryInput
@@ -703,7 +711,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 tables_input_df = await tables_input.get_batched_dataframe()
                 return tables_input_df  # This could be a generator of DataFrames
             else:
-                workflow.logger.error(f"Unexpected format for tables_input: {type(tables_input)}")
+                workflow.logger.error(
+                    f"Unexpected format for tables_input: {type(tables_input)}"
+                )
                 return []  # Return an empty list in case of error
 
     @activity.defn
@@ -743,7 +753,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             if isinstance(result, (pd.DataFrame, pd.Series)):
                 flat_results.append(result)
             else:
-                flat_results.extend(result)  # Unwrap the generator to list of DataFrames
+                flat_results.extend(
+                    result
+                )  # Unwrap the generator to list of DataFrames
 
         # Combine all the results into a single DataFrame
         combined_results = pd.concat(flat_results, ignore_index=True)
@@ -771,7 +783,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Fetch the columns for this database
             columns_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(query=query, workflow_args=workflow_args),
+                query=SQLWorkflow.prepare_query(
+                    query=query, workflow_args=workflow_args
+                ),
             )
 
             # Check if the result is of type SQLQueryInput
@@ -779,7 +793,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 columns_input_df = await columns_input.get_batched_dataframe()
                 return columns_input_df  # This could be a generator of DataFrames
             else:
-                workflow.logger.error(f"Unexpected format for columns_input: {type(columns_input)}")
+                workflow.logger.error(
+                    f"Unexpected format for columns_input: {type(columns_input)}"
+                )
                 return []  # Return an empty list in case of error
 
     @activity.defn
@@ -819,7 +835,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             if isinstance(result, (pd.DataFrame, pd.Series)):
                 flat_results.append(result)
             else:
-                flat_results.extend(result)  # Unwrap the generator to list of DataFrames
+                flat_results.extend(
+                    result
+                )  # Unwrap the generator to list of DataFrames
 
         # Combine all the results into a single DataFrame
         combined_results = pd.concat(flat_results, ignore_index=True)
