@@ -209,13 +209,23 @@ class SQLWorkflow(WorkflowInterface):
                 "exclude_views", False
             )
 
-            return query.format(
-                normalized_include_regex=normalized_include_regex,
-                normalized_exclude_regex=normalized_exclude_regex,
-                exclude_table=temp_table_regex,
-                exclude_empty_tables=exclude_empty_tables,
-                exclude_views=exclude_views,
-            )
+            if workflow_args.get("database_name"):
+                return query.format(
+                    normalized_include_regex=normalized_include_regex,
+                    normalized_exclude_regex=normalized_exclude_regex,
+                    exclude_table=temp_table_regex,
+                    exclude_empty_tables=exclude_empty_tables,
+                    exclude_views=exclude_views,
+                    database_name=workflow_args["database_name"],
+                )
+            else:
+                return query.format(
+                    normalized_include_regex=normalized_include_regex,
+                    normalized_exclude_regex=normalized_exclude_regex,
+                    exclude_table=temp_table_regex,
+                    exclude_empty_tables=exclude_empty_tables,
+                    exclude_views=exclude_views,
+                )
         except Exception as e:
             logger.error(f"Error preparing query [{query}]:  {e}")
             return None
@@ -610,14 +620,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Update the workflow_args with the current database name for schema fetching
             workflow_args["database_name"] = db_name
 
-            # Prepare the query by replacing the placeholder with the database name
-            query = self.fetch_schema_sql.format(DATABASE_NAME=db_name)
-
             # Fetch the schemas for this database
             schema_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
                 query=SQLWorkflow.prepare_query(
-                    query=query, workflow_args=workflow_args
+                    query=self.fetch_schema_sql, workflow_args=workflow_args
                 ),
             )
 
@@ -695,14 +702,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Update the workflow_args with the current database name for table fetching
             workflow_args["database_name"] = db_name
 
-            # Prepare the query for fetching tables by replacing the placeholder with the database name
-            query = self.fetch_table_sql.format(DATABASE_NAME=db_name)
-
             # Fetch the tables for this database
             tables_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
                 query=SQLWorkflow.prepare_query(
-                    query=query, workflow_args=workflow_args
+                    query=self.fetch_table_sql, workflow_args=workflow_args
                 ),
             )
 
@@ -777,14 +781,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             # Update the workflow_args with the current database name for column fetching
             workflow_args["database_name"] = db_name
 
-            # Prepare the query for fetching columns by replacing the placeholder with the database name
-            query = self.fetch_column_sql.format(DATABASE_NAME=db_name)
-
             # Fetch the columns for this database
             columns_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
                 query=SQLWorkflow.prepare_query(
-                    query=query, workflow_args=workflow_args
+                    query=self.fetch_column_sql, workflow_args=workflow_args
                 ),
             )
 
