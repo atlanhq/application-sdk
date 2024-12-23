@@ -1,7 +1,7 @@
 # Request/Response DTOs for workflows
 
-from typing import Any, Dict, List, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -30,16 +30,16 @@ class FetchMetadataRequest(BaseModel):
             "examples": [
                 {
                     "type": None,  # Fetch both databases and schemas
-                    "database": None
+                    "database": None,
                 },
                 {
                     "type": "database",  # Fetch only databases
-                    "database": None
+                    "database": None,
                 },
                 {
                     "type": "schema",  # Fetch schemas for a specific database
-                    "database": "example_db"
-                }
+                    "database": "example_db",
+                },
             ]
         }
     }

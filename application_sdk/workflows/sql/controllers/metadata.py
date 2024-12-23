@@ -57,7 +57,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
         """
         Determine if hierarchical fetching should be used based on the presence of required SQL queries.
         """
-        return bool(self.FETCH_DATABASES_SQL and self.FETCH_SCHEMAS_SQL) or self.USE_HIERARCHICAL_FETCH
+        return (
+            bool(self.FETCH_DATABASES_SQL and self.FETCH_SCHEMAS_SQL)
+            or self.USE_HIERARCHICAL_FETCH
+        )
 
     async def prepare(self, request_data: Dict[str, Any]) -> None:
         """Prepare the SQL resource with credentials from the request."""
@@ -66,16 +69,23 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
         await self.sql_resource.set_credentials(request_data)
         await self.sql_resource.load()
 
-    async def fetch_metadata(self, metadata_type: Optional[MetadataType] = None, database: Optional[str] = None) -> List[Dict[str, str]]:
+    async def fetch_metadata(
+        self,
+        metadata_type: Optional[MetadataType] = None,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
         """
         Fetch metadata based on the requested type.
-        
+
         Args:
             metadata_type: Optional type of metadata to fetch (database or schema)
             database: Optional database name when fetching schemas
-            
+
         Returns:
             List of metadata dictionaries
+
+        Raises:
+            ValueError: If metadata_type is invalid or if database is required but not provided
         """
         if not self.sql_resource:
             raise ValueError("SQL Resource not defined")
@@ -96,10 +106,10 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
                 return await self.fetch_databases()
             elif metadata_type == MetadataType.SCHEMA:
                 if not database:
-                    raise ValueError("Database name is required when fetching schemas")
+                    raise ValueError("Database must be specified when fetching schemas")
                 return await self.fetch_schemas(database)
-            else:
-                return await self.sql_resource.fetch_metadata(args)
+            elif metadata_type is not None:
+                raise ValueError(f"Invalid metadata type: {metadata_type}")
         except Exception as e:
             logger.error(f"Failed to fetch metadata: {str(e)}")
             raise
@@ -124,8 +134,7 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
         schema_query = self.FETCH_SCHEMAS_SQL.format(database_name=database)
         async for batch in self.sql_resource.run_query(schema_query):
             for row in batch:
-                schemas.append({
-                    self.DATABASE_KEY: database,
-                    self.SCHEMA_KEY: row[self.SCHEMA_KEY]
-                })
+                schemas.append(
+                    {self.DATABASE_KEY: database, self.SCHEMA_KEY: row[self.SCHEMA_KEY]}
+                )
         return schemas
