@@ -1,6 +1,6 @@
 import asyncio
 import concurrent
-from typing import Iterator, Optional
+from typing import Iterator, Optional, Union
 
 import daft
 import pandas as pd
@@ -17,16 +17,20 @@ logger = logging.get_logger(__name__)
 
 class SQLQueryInput(Input):
     query: str
-    engine: Engine
+    engine: Union[Engine, str]
     chunk_size: Optional[int]
 
-    def __init__(self, engine: Engine, query: str, chunk_size: Optional[int] = 100000):
+    def __init__(
+        self, engine: Union[Engine, str], query: str, chunk_size: Optional[int] = 100000
+    ):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
 
     async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         try:
+            if isinstance(self.engine, str):
+                raise ValueError("Engine should be an SQLAlchemy engine object")
 
             def _execute_query():
                 with self.engine.connect() as conn:
@@ -44,6 +48,8 @@ class SQLQueryInput(Input):
 
     async def get_dataframe(self) -> pd.DataFrame:
         try:
+            if isinstance(self.engine, str):
+                raise ValueError("Engine should be an SQLAlchemy engine object")
 
             def _execute_query():
                 with self.engine.connect() as conn:
@@ -63,20 +69,11 @@ class SQLQueryInput(Input):
         """
         try:
             # Daft uses ConnectorX to read data from SQL by default for supported connectors
-            # Hence it requires the connection string to be passed
+            # If a connection string is passed, it will use ConnectorX to read data
             # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-            return daft.read_sql(
-                self.query, self.engine.url.render_as_string(hide_password=False)
-            )
-        except RuntimeError:
-            # If passing the url does not work try with the engine
-            try:
-                logger.info("Falling back to using engine to read data from SQL")
-                return daft.read_sql(self.query, lambda: self.engine.connect())
-            except Exception as e:
-                logger.error(
-                    f"Error reading data(daft) from SQL using engine: {str(e)}"
-                )
+            if isinstance(self.engine, str):
+                return daft.read_sql(self.query, self.engine)
+            return daft.read_sql(self.query, lambda: self.engine.connect())
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 
@@ -87,6 +84,9 @@ class SQLQueryInput(Input):
         This pandas data will then be converted to daft dataframe
         """
         try:
+            if isinstance(self.engine, str):
+                raise ValueError("Engine should be an SQLAlchemy engine object")
+
             batched_df = await self.get_batched_dataframe()
             for df in batched_df:
                 daft_df = daft.from_pandas(df)
@@ -97,10 +97,12 @@ class SQLQueryInput(Input):
 
 class AsyncSQLQueryInput(Input):
     query: str
-    engine: Engine
+    engine: Union[Engine, str]
     chunk_size: Optional[int]
 
-    def __init__(self, engine: Engine, query: str, chunk_size: Optional[int] = 100000):
+    def __init__(
+        self, engine: Union[Engine, str], query: str, chunk_size: Optional[int] = 100000
+    ):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
@@ -114,6 +116,9 @@ class AsyncSQLQueryInput(Input):
 
     async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         try:
+            if isinstance(self.engine, str):
+                raise ValueError("Engine should be an SQLAlchemy engine object")
+
             async with self.async_session() as session:
                 return await session.run_sync(self._read_sql_query)
         except Exception as e:
@@ -121,6 +126,9 @@ class AsyncSQLQueryInput(Input):
 
     async def get_dataframe(self) -> pd.DataFrame:
         try:
+            if isinstance(self.engine, str):
+                raise ValueError("Engine should be an SQLAlchemy engine object")
+
             async with self.async_session() as session:
                 return await session.run_sync(self._read_sql_query)
         except Exception as e:
@@ -132,20 +140,11 @@ class AsyncSQLQueryInput(Input):
         """
         try:
             # Daft uses ConnectorX to read data from SQL by default for supported connectors
-            # Hence it requires the connection string to be passed
+            # If a connection string is passed, it will use ConnectorX to read data
             # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-            return daft.read_sql(
-                self.query, self.engine.url.render_as_string(hide_password=False)
-            )
-        except RuntimeError:
-            # If passing the url does not work try with the engine
-            try:
-                logger.info("Falling back to using engine to read data from SQL")
-                return daft.read_sql(self.query, lambda: self.engine.connect())
-            except Exception as e:
-                logger.error(
-                    f"Error reading data from SQL(daft) using engine: {str(e)}"
-                )
+            if isinstance(self.engine, str):
+                return daft.read_sql(self.query, self.engine)
+            return daft.read_sql(self.query, lambda: self.engine.connect())
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 
@@ -156,6 +155,9 @@ class AsyncSQLQueryInput(Input):
         This pandas data will then be converted to daft dataframe
         """
         try:
+            if isinstance(self.engine, str):
+                raise ValueError("Engine should be an SQLAlchemy engine object")
+
             batched_df = await self.get_batched_dataframe()
             for df in batched_df:
                 daft_df = daft.from_pandas(df)
