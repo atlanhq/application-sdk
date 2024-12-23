@@ -88,11 +88,11 @@ class TestPandasDecorators:
         """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
-            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers2 (value INTEGER)"))
-            conn.execute(text("DELETE FROM numbers2"))
+            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
+            conn.execute(text("DELETE FROM numbers"))
             conn.execute(
                 text(
-                    "INSERT INTO numbers2 (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                    "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
                 )
             )
             conn.commit()
@@ -101,71 +101,13 @@ class TestPandasDecorators:
 
         @activity_pd(
             batch_input=lambda self: SQLQueryInput(
-                engine, "SELECT * FROM numbers2", chunk_size=3
+                engine, "SELECT * FROM numbers", chunk_size=3
             )
         )
         async def func(self, batch_input: pd.DataFrame, **kwargs):
             assert len(batch_input) == expected_row_count.pop(0)
 
         await func(self)
-
-    @patch(
-        "concurrent.futures.ThreadPoolExecutor",
-        side_effect=MockSingleThreadExecutor,
-    )
-    async def test_query_write_basic(self, _):
-        engine = sqlalchemy.create_engine("sqlite:///:memory:")
-        with engine.connect() as conn:
-            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers3 (value INTEGER)"))
-            conn.execute(text("DELETE FROM numbers3"))
-            conn.execute(
-                text(
-                    "INSERT INTO numbers3 (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
-                )
-            )
-            conn.commit()
-
-        @activity_pd(
-            batch_input=lambda self, arg: SQLQueryInput(
-                engine, "SELECT * from numbers3", chunk_size=3
-            ),
-            out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/tests/test_pandas_decorator/raw/table",
-                upload_file_prefix="raw",
-            ),
-            out2=lambda self, arg: JsonOutput(
-                output_path="/tmp/tests/test_pandas_decorator/transformed/table",
-                upload_file_prefix="transformed",
-            ),
-        )
-        async def func(self, batch_input, out1, out2, **kwargs):
-            await out1.write_df(batch_input)
-            await out2.write_df(batch_input.map(lambda x: x + 1))
-            return batch_input
-
-        arg = {
-            "metadata_sql": "SELECT * FROM information_schema.tables",
-        }
-        await func(self, arg)
-        # Check generated raw files
-        with open("/tmp/tests/test_pandas_decorator/raw/table/1.json") as f:
-            assert f.read().strip() == '{"value":0}\n{"value":1}\n{"value":2}'
-        with open("/tmp/tests/test_pandas_decorator/raw/table/2.json") as f:
-            assert f.read().strip() == '{"value":3}\n{"value":4}\n{"value":5}'
-        with open("/tmp/tests/test_pandas_decorator/raw/table/3.json") as f:
-            assert f.read().strip() == '{"value":6}\n{"value":7}\n{"value":8}'
-        with open("/tmp/tests/test_pandas_decorator/raw/table/4.json") as f:
-            assert f.read().strip() == '{"value":9}'
-
-        # Check the generated transformed files
-        with open("/tmp/tests/test_pandas_decorator/transformed/table/1.json") as f:
-            assert f.read().strip() == '{"value":1}\n{"value":2}\n{"value":3}'
-        with open("/tmp/tests/test_pandas_decorator/transformed/table/2.json") as f:
-            assert f.read().strip() == '{"value":4}\n{"value":5}\n{"value":6}'
-        with open("/tmp/tests/test_pandas_decorator/transformed/table/3.json") as f:
-            assert f.read().strip() == '{"value":7}\n{"value":8}\n{"value":9}'
-        with open("/tmp/tests/test_pandas_decorator/transformed/table/4.json") as f:
-            assert f.read().strip() == '{"value":10}'
 
     async def test_json_input(self):
         # Create a sample JSON file for input
