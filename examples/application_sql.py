@@ -33,17 +33,11 @@ import threading
 import time
 from urllib.parse import quote_plus
 
-from application_sdk.workflows.controllers import (
-    WorkflowPreflightCheckControllerInterface,
-)
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
-from application_sdk.workflows.sql.controllers.preflight_check import (
-    SQLWorkflowPreflightCheckController,
-)
 from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
@@ -107,8 +101,6 @@ class SampleSQLWorkflow(SQLWorkflow):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface
-
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
         return super().build(workflow=workflow or SampleSQLWorkflow())
 
@@ -131,16 +123,11 @@ async def application_sql():
         tenant_id=tenant_id,
     )
 
-    sql_resource = PostgreSQLResource(SQLResourceConfig())
-
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
-        .set_sql_resource(sql_resource)
-        .set_preflight_check_controller(
-            SQLWorkflowPreflightCheckController(sql_resource)
-        )
+        .set_sql_resource(PostgreSQLResource(SQLResourceConfig()))
         .build()
     )
 
