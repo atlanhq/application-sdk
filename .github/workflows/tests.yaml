@@ -65,7 +65,7 @@ jobs:
 
       - name: Run Unit and Integration Tests with Coverage
         run: |
-          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics -s
+          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
           poetry run coverage xml
           poetry run coverage report
 
