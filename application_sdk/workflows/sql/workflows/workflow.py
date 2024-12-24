@@ -10,7 +10,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
 from application_sdk.inputs.json import JsonInput
-from application_sdk.inputs.secretstore import SecretStore
+from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -76,6 +76,7 @@ class SQLWorkflow(WorkflowInterface):
 
     def get_activities(self) -> List[Callable[..., Any]]:
         return [
+            self.set_workflow_activity_context,
             self.fetch_databases,
             self.fetch_schemas,
             self.fetch_tables,
@@ -84,9 +85,6 @@ class SQLWorkflow(WorkflowInterface):
             self.write_type_metadata,
             self.write_raw_type_metadata,
         ] + super().get_activities()
-
-    def store_credentials(self, credentials: Dict[str, Any]) -> str:
-        return SecretStore.store_credentials(credentials)
 
     async def start(
         self, workflow_args: Dict[str, Any], workflow_class: Any | None = None
@@ -99,14 +97,6 @@ class SQLWorkflow(WorkflowInterface):
         """
         if self.sql_resource is None:
             raise ValueError("SQL resource is not set")
-
-        self.sql_resource.set_credentials(workflow_args["credentials"])
-        await self.sql_resource.load()
-
-        workflow_args["credential_guid"] = self.store_credentials(
-            workflow_args["credentials"]
-        )
-        del workflow_args["credentials"]
 
         workflow_class = workflow_class or self.__class__
 
@@ -527,25 +517,42 @@ class SQLWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-    @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]):
+    @activity.defn
+    async def set_workflow_activity_context(self, workflow_id: str):
         """
-        Run the workflow.
+        As we use a single worker thread, we need to set the workflow activity context
+        """
+        workflow_args = StateStore.extract_configuration(workflow_id)
+        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
-        :param workflow_args: The workflow arguments.
-        """
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())
 
-        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
         self.sql_resource.set_credentials(credentials)
+        await self.sql_resource.load()
+        return workflow_args
+
+    @workflow.run
+    async def run(self, workflow_config: Dict[str, Any]):
+        """
+        Run the workflow.
+
+        :param workflow_config: The workflow configuration.
+        """
+        workflow_id = workflow_config["workflow_id"]
+
+        # dedicated activity to set the workflow activity context
+        workflow_args: Dict[str, Any] = await workflow.execute_activity(
+            self.set_workflow_activity_context,
+            workflow_id,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
         if not self.temporal_resource:
             self.temporal_resource = TemporalResource(
                 TemporalConfig(application_name=self.application_name)
             )
 
-        workflow_id = workflow_args["workflow_id"]
         workflow_run_id = workflow.info().run_id
         workflow_args["workflow_run_id"] = workflow_run_id
 
