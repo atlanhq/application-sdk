@@ -71,6 +71,7 @@ class SQLQueryInput(Input):
             # Daft uses ConnectorX to read data from SQL by default for supported connectors
             # If a connection string is passed, it will use ConnectorX to read data
             # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
+            # Refer here for ConnectorX supported sources: https://sfu-db.github.io/connector-x/intro.html#sources
             if isinstance(self.engine, str):
                 return daft.read_sql(self.query, self.engine)
             return daft.read_sql(self.query, lambda: self.engine.connect())

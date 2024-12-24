@@ -36,6 +36,13 @@ class MockSingleThreadExecutor:
 
 
 class TestDaftDecorators:
+    @classmethod
+    def teardown_class(cls):
+        """
+        Clean up the test resources
+        """
+        os.remove("/tmp/test_connectorx.db")
+
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
@@ -111,6 +118,36 @@ class TestDaftDecorators:
         )
         async def func(self, batch_input: daft.DataFrame, **kwargs):
             assert batch_input.count_rows() == expected_row_count.pop(0)
+
+        await func(self)
+
+    @patch(
+        "concurrent.futures.ThreadPoolExecutor",
+        side_effect=MockSingleThreadExecutor,
+    )
+    async def test_query_batch_multiple_chunks_url(self, _):
+        """
+        Test to read the SQL data in multiple chunks using URL to enable ConnectorX processing
+        """
+        sqlite_db_url = "sqlite:////tmp/test_connectorx.db"
+        engine = sqlalchemy.create_engine(sqlite_db_url)
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
+            conn.execute(text("DELETE FROM numbers"))
+            conn.execute(
+                text(
+                    "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                )
+            )
+            conn.commit()
+
+        @activity_daft(
+            batch_input=lambda self: SQLQueryInput(
+                sqlite_db_url, "SELECT * FROM numbers", chunk_size=None
+            )
+        )
+        async def func(self, batch_input: daft.DataFrame, **kwargs):
+            assert batch_input.count_rows() == 10
 
         await func(self)
 
