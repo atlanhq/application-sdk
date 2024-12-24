@@ -31,7 +31,7 @@ class WorkflowInterface(ABC):
                 "form_data": workflow_args["metadata"],
             }
         )
-        if not result:
+        if not result or "error" in result:
             raise ValueError("Preflight check failed")
 
     async def start(self, workflow_args: Any, workflow_class: Any):

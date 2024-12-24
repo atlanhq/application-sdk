@@ -123,6 +123,23 @@ class CustomTransformer(AtlasTransformer):
         self.entity_class_definitions["DATABASE"] = PostgresDatabase
 
 
+class SampleSQLWorkflowPreflightCheckController(SQLWorkflowPreflightCheckController):
+    TABLES_CHECK_SQL = """
+    SELECT count(*)
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_NAME !~ '{exclude_table}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
+            AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
+    """
+
+    METADATA_SQL = """
+    SELECT schema_name, catalog_name
+        FROM INFORMATION_SCHEMA.SCHEMATA
+        WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
+    """
+
+
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
 
@@ -155,7 +172,7 @@ async def application_sql_with_custom_transformer():
         .set_temporal_resource(temporal_resource)
         .set_sql_resource(sql_resource)
         .set_preflight_check_controller(
-            SQLWorkflowPreflightCheckController(sql_resource)
+            SampleSQLWorkflowPreflightCheckController(sql_resource)
         )
         .build()
     )
