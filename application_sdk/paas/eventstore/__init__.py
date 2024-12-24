@@ -4,13 +4,15 @@ import json
 import logging
 from datetime import datetime
 
-from dapr.clients import DaprClient
+from dapr import clients
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.eventstore.models import (
-    ApplicationEvent,
-    GenericEvent,
+    ActivityEndEvent,
+    ActivityStartEvent,
+    CustomEvent,
+    Event,
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
@@ -28,7 +30,7 @@ class EventStore:
     # client: DaprClient
 
     @classmethod
-    def create_generic_event(cls, event: GenericEvent, topic_name: str = TOPIC_NAME):
+    def create_generic_event(cls, event: Event, topic_name: str = TOPIC_NAME):
         """
         Create a new generic event.
 
@@ -36,12 +38,12 @@ class EventStore:
         :param topic_name: Topic name to publish the event to.
 
         Usage:
-            >>> EventStore.create_generic_event(GenericEvent(event_type="test", data={"test": "test"}))
+            >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
-        with DaprClient() as client:
+        with clients.DaprClient() as client:
             client.publish_event(
                 pubsub_name="eventstore",
-                topic_name="workflow_start",
+                topic_name=topic_name,
                 data=json.dumps(event.model_dump(mode="json")),
                 data_content_type="application/json",
             )
@@ -49,20 +51,21 @@ class EventStore:
         activity.logger.info(f"Published event to {topic_name}")
 
     @classmethod
-    def create_application_event(cls, event: ApplicationEvent):
-        """
-        Create a new application event.
-
-        :param event: Event data.
-        """
-        cls.create_generic_event(event, topic_name=cls.APPLICATION_TOPIC_NAME)
-
-    @classmethod
     def create_workflow_start_event(cls, event: WorkflowStartEvent, topic_name: str):
-        event.timestamp = datetime.now()
         cls.create_generic_event(event, topic_name=topic_name)
 
     @classmethod
     def create_workflow_end_event(cls, event: WorkflowEndEvent, topic_name: str):
-        event.timestamp = datetime.now()
+        cls.create_generic_event(event, topic_name=topic_name)
+
+    @classmethod
+    def create_activity_start_event(cls, event: ActivityStartEvent, topic_name: str):
+        cls.create_generic_event(event, topic_name=topic_name)
+
+    @classmethod
+    def create_activity_end_event(cls, event: ActivityEndEvent, topic_name: str):
+        cls.create_generic_event(event, topic_name=topic_name)
+
+    @classmethod
+    def create_custom_event(cls, event: CustomEvent, topic_name: str):
         cls.create_generic_event(event, topic_name=topic_name)

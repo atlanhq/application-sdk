@@ -1,4 +1,5 @@
 import json
+from typing import Any
 
 from fastapi import APIRouter, FastAPI, status
 
@@ -129,24 +130,26 @@ class FastAPIApplication(AtlanAPIApplication):
             "/activity_start",
             self.on_activity_start,
             methods=["POST"],
-            response_model=dict,
         )
         self.events_router.add_api_route(
-            "/activity_end", self.on_activity_end, methods=["POST"], response_model=dict
+            "/activity_end", self.on_activity_end, methods=["POST"]
         )
         self.events_router.add_api_route(
             "/workflow_start",
             self.on_workflow_start,
             methods=["POST"],
-            response_model=dict,
         )
         self.events_router.add_api_route(
-            "/workflow_end", self.on_workflow_end, methods=["POST"], response_model=dict
+            "/workflow_end", self.on_workflow_end, methods=["POST"]
         )
 
         super().register_routes()
 
-    async def on_activity_start(self):
+    async def on_custom_event(self, event: dict[str, Any]):
+        print(f"EVENT: Custom event: {event}")
+        return
+
+    async def on_activity_start(self, event: dict[str, Any]):
         print("ACTIVITY START - ")
         pass
 
@@ -158,7 +161,7 @@ class FastAPIApplication(AtlanAPIApplication):
         print("WORKFLOW START - ")
         pass
 
-    async def on_workflow_end(self):
+    async def on_workflow_end(self, event):
         print("WORKFLOW END - ")
         pass
 

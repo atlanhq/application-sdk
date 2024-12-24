@@ -2,9 +2,12 @@ import logging
 from abc import ABC
 from typing import Any, Callable, List
 
+from temporalio import workflow
 from temporalio.client import WorkflowFailureError
 
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
+
+# from application_sdk.workflows.workflow import WorkflowBuilderInterface
 
 logger = logging.getLogger(__name__)
 
@@ -40,3 +43,30 @@ class WorkflowInterface(ABC):
 
     async def run(self, workflow_args: Any):
         pass
+
+
+# @workflow.defn
+# class SampleWorkflow(WorkflowInterface):
+
+#     # @activity.defn
+#     # async def activity_1(self, workflow_args: Any):
+#     #     print("Activity 1")
+#     #     pass
+
+#     # @activity.defn
+#     # async def activity_2(self, workflow_args: Any):
+#     #     print("Activity 2")
+#     #     pass
+
+#     @workflow.run
+#     async def run(self, workflow_args: Any):
+#         pass
+
+#     async def start(self, workflow_args: Any, workflow_class: Any):
+#         return await super().start(workflow_args, self.__class__)
+
+
+# class SampleWorkflowBuilder(WorkflowBuilderInterface):
+#     temporal_resource: TemporalResource
+#     def build(self, workflow: SampleWorkflow | None = None) -> SampleWorkflow:
+#         return SampleWorkflow().set_temporal_resource(self.temporal_resource)

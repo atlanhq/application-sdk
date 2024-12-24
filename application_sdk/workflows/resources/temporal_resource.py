@@ -22,8 +22,13 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
-from application_sdk.paas.eventstore import ApplicationEvent, EventStore
-from application_sdk.paas.eventstore.models import WorkflowStartEvent
+from application_sdk.paas.eventstore import EventStore
+from application_sdk.paas.eventstore.models import (
+    ActivityEndEvent,
+    ActivityStartEvent,
+    WorkflowEndEvent,
+    WorkflowStartEvent,
+)
 from application_sdk.workflows.resources.constants import TemporalConstants
 
 logger = get_logger(__name__)
@@ -31,16 +36,30 @@ logger = get_logger(__name__)
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        print("INPUT1 - ", input)
-        pass
+        EventStore.create_activity_start_event(
+            ActivityStartEvent(
+                activity_id=activity.info().activity_id,
+                activity_type=activity.info().activity_type,
+            ),
+            topic_name=f"activity_start",
+        )
+        output = await super().execute_activity(input)
+        EventStore.create_activity_end_event(
+            ActivityEndEvent(
+                activity_id=activity.info().activity_id,
+                activity_type=activity.info().activity_type,
+            ),
+            topic_name=f"activity_end",
+        )
+        return output
 
 
 class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        print("INPUT2 - ", input, workflow.info())
         EventStore.create_workflow_start_event(
             WorkflowStartEvent(
                 name=workflow.info().workflow_type,
+                workflow_name=workflow.info().workflow_type,
                 application_name=TemporalConstants.APPLICATION_NAME.value,
                 attributes={},
                 workflow_id=workflow.info().workflow_id,
@@ -48,7 +67,16 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             ),
             topic_name=f"workflow_start",
         )
-        pass
+        output = await super().execute_workflow(input)
+        EventStore.create_workflow_end_event(
+            WorkflowEndEvent(
+                workflow_name=workflow.info().workflow_type,
+                workflow_id=workflow.info().workflow_id,
+                workflow_run_id=workflow.info().run_id,
+            ),
+            topic_name=f"workflow_end",
+        )
+        return output
 
 
 class EventInterceptor(Interceptor):
@@ -65,8 +93,6 @@ class EventInterceptor(Interceptor):
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
-        # EventStore.create_workflow_start_event(WorkflowStartEvent(workflow_name=workflow_info.type, workflow_id=input.workflow_id, workflow_run_id=input.run_id))
-
         return EventWorkflowInboundInterceptor
 
 
@@ -179,6 +205,8 @@ class TemporalResource(ResourceInterface):
     ) -> Worker:
         if not self.client:
             raise ValueError("Client is not loaded")
+
+        print(f"PASSTHROUGH MODULES: {passthrough_modules}")
 
         return Worker(
             self.client,
