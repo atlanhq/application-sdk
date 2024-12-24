@@ -9,18 +9,18 @@ databases:
           - name: columns
 
 hierarchy:
-  # total assets = 5 * 20 * 100 * 100 = 1,000,000
+  # total assets = 5 * 20 * 10 * 10 = 10,000
   - name: databases
-    records: 5
+    records: 3
     children:
       - name: schemas
-        records: 20
+        records: 10
         children:
           - name: tables
-            records: 100
+            records: 10
             children:
               - name: columns
-                records: 100
+                records: 10
 
 schema:
   - name: databases

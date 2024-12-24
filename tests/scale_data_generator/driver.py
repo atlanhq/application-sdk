@@ -8,13 +8,22 @@ def main():
     parser = argparse.ArgumentParser(
         description="Generate scaled test data based on configuration"
     )
-    parser.add_argument("--config-path", help="Path to the YAML configuration file")
+    parser.add_argument(
+        "--config-path",
+        help="Path to the YAML configuration file",
+        default="tests/scale_data_generator/examples/config.yaml",
+    )
     parser.add_argument(
         "--output-format",
         choices=["csv", "json", "parquet"],
         help="Output format for generated data",
+        default="json",
     )
-    parser.add_argument("--output-dir", help="Directory to save generated files")
+    parser.add_argument(
+        "--output-dir",
+        help="Directory to save generated files",
+        default="tests/scale_data_generator/output",
+    )
 
     args = parser.parse_args()
 
