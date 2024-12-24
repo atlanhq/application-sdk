@@ -590,13 +590,16 @@ class SQLWorkflow(WorkflowInterface):
 
 @workflow.defn
 class SQLDatabaseWorkflow(SQLWorkflow):
+    fetch_database_sql = ""
     fetch_schema_sql = ""
     fetch_table_sql = ""
     fetch_column_sql = ""
 
-    def __init__(self):
-        # Semaphore to limit concurrency for tasks in child class
-        self.semaphore = asyncio.Semaphore(5)  # Limit concurrency to 5 tasks
+    semaphore_concurrency: int = 5
+
+    def set_semaphore_concurrency(self, semaphore_concurrency: int) -> "SQLDatabaseWorkflow":
+        self.semaphore_concurrency = semaphore_concurrency
+        return self
 
     @staticmethod
     def get_valid_file_suffixes(directory: str) -> List[str]:
@@ -609,36 +612,68 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             for file in all_files
             if file.endswith(".json") and file != "metadata.json"
         ]
-        workflow.logger.info(f"Valid file suffixes: {file_suffixes}")
         return file_suffixes
 
-    async def _fetch_schema_for_db(self, db_name: str, workflow_args: Dict[str, Any]):
+    async def _fetch_data_for_db(
+        self, db_name: str, workflow_args: Dict[str, Any], query: str, semaphore: asyncio.Semaphore
+    ):
         """
-        Fetch the schema for a single database and return the results as a DataFrame.
+        Fetch data (schema, table, or column) for a single database and return the results as a DataFrame.
+        Generalized function for schema, tables, and columns.
         """
-        async with self.semaphore:
-            # Update the workflow_args with the current database name for schema fetching
+        async with semaphore:
+            # Update the workflow_args with the current database name for fetching
             workflow_args["database_name"] = db_name
 
-            # Fetch the schemas for this database
-            schema_input = self.sql_resource.sql_input(
+            # Fetch the data for this database
+            data_input = self.sql_resource.sql_input(
                 engine=self.sql_resource.engine,
                 query=SQLWorkflow.prepare_query(
-                    query=self.fetch_schema_sql, workflow_args=workflow_args
+                    query=query, workflow_args=workflow_args
                 ),
             )
 
             # Check if the result is of type SQLQueryInput
-            if isinstance(schema_input, SQLQueryInput):
-                schema_input_df = await schema_input.get_batched_dataframe()
-                return schema_input_df  # This could be a generator of DataFrames
+            if isinstance(data_input, SQLQueryInput):
+                data_input_df = await data_input.get_batched_dataframe()
+                return data_input_df  # This could be a generator of DataFrames
             else:
                 workflow.logger.error(
-                    f"Unexpected format for schema_input: {type(schema_input)}"
+                    f"Unexpected format for data_input: {type(data_input)}"
                 )
                 return []  # Return an empty list in case of error
 
-    @activity.defn
+    @activity.defn(name="db_fetch_databases")
+    @auto_heartbeater
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_database_sql, workflow_args=workflow_args
+            ),
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/database",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_databases(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
+        """
+        Fetch and process databases from the database.
+
+        :param workflow_args: The workflow arguments.
+        :return: The fetched databases.
+        """
+        await raw_output.write_df(batch_input)
+        return {
+            "chunk_count": raw_output.chunk_count,
+            "typename": "database",
+            "total_record_count": raw_output.total_record_count,
+        }
+
+    @activity.defn(name="db_fetch_schemas")
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
@@ -662,9 +697,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         # Get the list of databases to process
         database_list = batch_input["database_name"].tolist()
 
+        # Create a semaphore for controlling concurrency for this activity
+        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
+
         # Create a list of tasks to fetch schemas concurrently
         execute_queries = [
-            self._fetch_schema_for_db(db_name, workflow_args)
+            self._fetch_data_for_db(db_name, workflow_args, self.fetch_schema_sql, semaphore)
             for db_name in database_list
         ]
 
@@ -694,33 +732,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             "total_record_count": raw_output.total_record_count,
         }
 
-    async def _fetch_tables_for_db(self, db_name: str, workflow_args: Dict[str, Any]):
-        """
-        Fetch the tables for a single database and return the results as a DataFrame.
-        """
-        async with self.semaphore:
-            # Update the workflow_args with the current database name for table fetching
-            workflow_args["database_name"] = db_name
-
-            # Fetch the tables for this database
-            tables_input = self.sql_resource.sql_input(
-                engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(
-                    query=self.fetch_table_sql, workflow_args=workflow_args
-                ),
-            )
-
-            # Check if the result is of type SQLQueryInput
-            if isinstance(tables_input, SQLQueryInput):
-                tables_input_df = await tables_input.get_batched_dataframe()
-                return tables_input_df  # This could be a generator of DataFrames
-            else:
-                workflow.logger.error(
-                    f"Unexpected format for tables_input: {type(tables_input)}"
-                )
-                return []  # Return an empty list in case of error
-
-    @activity.defn
+    @activity.defn(name="db_fetch_tables")
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
@@ -742,9 +754,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
+        # Create a semaphore for controlling concurrency for this activity
+        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
+
         # Create a list of tasks to fetch tables concurrently
         execute_queries = [
-            self._fetch_tables_for_db(db_name, workflow_args)
+            self._fetch_data_for_db(db_name, workflow_args, self.fetch_table_sql, semaphore)
             for db_name in database_list
         ]
 
@@ -773,33 +788,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             "total_record_count": raw_output.total_record_count,
         }
 
-    async def _fetch_columns_for_db(self, db_name: str, workflow_args: Dict[str, Any]):
-        """
-        Fetch the columns for a single database and return the results as a DataFrame.
-        """
-        async with self.semaphore:
-            # Update the workflow_args with the current database name for column fetching
-            workflow_args["database_name"] = db_name
-
-            # Fetch the columns for this database
-            columns_input = self.sql_resource.sql_input(
-                engine=self.sql_resource.engine,
-                query=SQLWorkflow.prepare_query(
-                    query=self.fetch_column_sql, workflow_args=workflow_args
-                ),
-            )
-
-            # Check if the result is of type SQLQueryInput
-            if isinstance(columns_input, SQLQueryInput):
-                columns_input_df = await columns_input.get_batched_dataframe()
-                return columns_input_df  # This could be a generator of DataFrames
-            else:
-                workflow.logger.error(
-                    f"Unexpected format for columns_input: {type(columns_input)}"
-                )
-                return []  # Return an empty list in case of error
-
-    @activity.defn
+    @activity.defn(name="db_fetch_columns")
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
@@ -821,9 +810,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
+        # Create a semaphore for controlling concurrency for this activity
+        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
+
         # Create a list of tasks to fetch columns concurrently
         execute_queries = [
-            self._fetch_columns_for_db(db_name, workflow_args)
+            self._fetch_data_for_db(db_name, workflow_args, self.fetch_column_sql, semaphore)
             for db_name in database_list
         ]
 
@@ -850,6 +842,60 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             "chunk_count": raw_output.chunk_count,
             "typename": "column",
             "total_record_count": raw_output.total_record_count,
+        }
+
+    @activity.defn(name="db_write_type_metadata")
+    @auto_heartbeater
+    @activity_pd(
+        metadata_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
+            upload_file_prefix=workflow_args["output_prefix"],
+            chunk_count=workflow_args["chunk_count"],
+            total_record_count=workflow_args["record_count"],
+        )
+    )
+    async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
+        await metadata_output.write_metadata()
+
+    @activity.defn(name="db_write_raw_type_metadata")
+    @auto_heartbeater
+    @activity_pd(
+        metadata_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/{workflow_args['typename']}",
+            upload_file_prefix=workflow_args["output_prefix"],
+            chunk_count=workflow_args["chunk_count"],
+            total_record_count=workflow_args["record_count"],
+        )
+    )
+    async def write_raw_type_metadata(
+        self, metadata_output, batch_input=None, **kwargs
+    ):
+        await metadata_output.write_metadata()
+
+    @activity.defn(name="db_transform_data")
+    @auto_heartbeater
+    @activity_pd(
+        batch_input=lambda self, workflow_args: JsonInput(
+            path=f"{workflow_args['output_path']}/raw/",
+            file_suffixes=workflow_args["batch"],
+        ),
+        transformed_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
+            upload_file_prefix=workflow_args["output_prefix"],
+            chunk_start=workflow_args["chunk_start"],
+        ),
+    )
+    async def transform_data(self, batch_input, transformed_output, **kwargs):
+        typename = kwargs.get("typename")
+        workflow_id = kwargs.get("workflow_id")
+        workflow_run_id = kwargs.get("workflow_run_id")
+        transformed_chunk = await self._transform_batch(
+            batch_input, typename, workflow_id, workflow_run_id
+        )
+        await transformed_output.write_df(transformed_chunk)
+        return {
+            "total_record_count": transformed_output.total_record_count,
+            "chunk_count": transformed_output.chunk_count,
         }
 
     @workflow.run

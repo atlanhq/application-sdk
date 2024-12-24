@@ -98,6 +98,7 @@ class WorkflowRequest(RootModel):
                     "use_source_schema_filtering": "false",
                     "use_jdbc_internal_methods": "true",
                     "authentication": "BASIC",
+                    "extraction_method": "account_usage",
                 },
             }
         }
