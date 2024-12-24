@@ -520,15 +520,13 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     async def set_workflow_activity_context(self, workflow_id: str):
         """
-        # TODO:
-        # @inishchith to add why we need this based on new understanding of how the workflow and activity is being run
+        As we use a single worker thread, we need to set the workflow activity context
         """
         workflow_args = StateStore.extract_configuration(workflow_id)
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())
-            print("Setting default sql resource")
 
         self.sql_resource.set_credentials(credentials)
         await self.sql_resource.load()
