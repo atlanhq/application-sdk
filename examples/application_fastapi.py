@@ -52,7 +52,7 @@ class SampleWorkflow(WorkflowInterface):
             "run_id": str(uuid.uuid4()),
         }
 
-    async def run(self, workflow_args: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> None:
         pass
 
 
@@ -65,5 +65,6 @@ if __name__ == "__main__":
     )
 
     # Uncomment this to start the app locally
-    # import asyncio
-    # asyncio.run(fast_api_app.start())
+    import asyncio
+
+    asyncio.run(fast_api_app.start())
