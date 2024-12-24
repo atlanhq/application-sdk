@@ -597,7 +597,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
     semaphore_concurrency: int = 5
 
-    def set_semaphore_concurrency(self, semaphore_concurrency: int) -> "SQLDatabaseWorkflow":
+    def set_semaphore_concurrency(
+        self, semaphore_concurrency: int
+    ) -> "SQLDatabaseWorkflow":
         self.semaphore_concurrency = semaphore_concurrency
         return self
 
@@ -615,7 +617,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         return file_suffixes
 
     async def _fetch_data_for_db(
-        self, db_name: str, workflow_args: Dict[str, Any], query: str, semaphore: asyncio.Semaphore
+        self,
+        db_name: str,
+        workflow_args: Dict[str, Any],
+        query: str,
+        semaphore: asyncio.Semaphore
     ):
         """
         Fetch data (schema, table, or column) for a single database and return the results as a DataFrame.
@@ -702,7 +708,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
         # Create a list of tasks to fetch schemas concurrently
         execute_queries = [
-            self._fetch_data_for_db(db_name, workflow_args, self.fetch_schema_sql, semaphore)
+            self._fetch_data_for_db(
+                db_name, workflow_args, self.fetch_schema_sql, semaphore
+            )
             for db_name in database_list
         ]
 
@@ -759,7 +767,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
         # Create a list of tasks to fetch tables concurrently
         execute_queries = [
-            self._fetch_data_for_db(db_name, workflow_args, self.fetch_table_sql, semaphore)
+            self._fetch_data_for_db(
+                db_name, workflow_args, self.fetch_table_sql, semaphore
+            )
             for db_name in database_list
         ]
 
@@ -815,7 +825,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
         # Create a list of tasks to fetch columns concurrently
         execute_queries = [
-            self._fetch_data_for_db(db_name, workflow_args, self.fetch_column_sql, semaphore)
+            self._fetch_data_for_db(
+                db_name, workflow_args, self.fetch_column_sql, semaphore
+            )
             for db_name in database_list
         ]
 
