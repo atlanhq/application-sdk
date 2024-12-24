@@ -621,7 +621,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         db_name: str,
         workflow_args: Dict[str, Any],
         query: str,
-        semaphore: asyncio.Semaphore
+        semaphore: asyncio.Semaphore,
     ):
         """
         Fetch data (schema, table, or column) for a single database and return the results as a DataFrame.
