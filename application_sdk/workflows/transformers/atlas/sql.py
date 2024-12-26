@@ -10,6 +10,7 @@ from application_sdk.workflows.transformers.utils import build_atlas_qualified_n
 
 logger = logging.getLogger(__name__)
 
+
 class Databases(assets.Database):
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.Database:
