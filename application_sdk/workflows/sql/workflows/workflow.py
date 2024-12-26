@@ -736,7 +736,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             else:
                 # If it's a generator, convert it to a list of DataFrames
                 for df in result:
-                    if not df.empty: # Check if the DataFrame is not empty
+                    if not df.empty:  # Check if the DataFrame is not empty
                         flat_results.append(df)
 
         if flat_results:
@@ -802,7 +802,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             else:
                 # If it's a generator, convert it to a list of DataFrames
                 for df in result:
-                    if not df.empty: # Check if the DataFrame is not empty
+                    if not df.empty:  # Check if the DataFrame is not empty
                         flat_results.append(df)
 
         if flat_results:
@@ -865,7 +865,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             else:
                 # If it's a generator, convert it to a list of DataFrames
                 for df in result:
-                    if not df.empty: # Check if the DataFrame is not empty
+                    if not df.empty:  # Check if the DataFrame is not empty
                         await raw_output.write_df(df)
 
         return {
@@ -919,7 +919,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             else:
                 # If it's a generator, convert it to a list of DataFrames
                 for df in result:
-                    if not df.empty: # Check if the DataFrame is not empty
+                    if not df.empty:  # Check if the DataFrame is not empty
                         flat_results.append(df)
 
         if flat_results:
@@ -1025,9 +1025,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         workflow_args["output_path"] = output_path
 
         # Get databases first
-        await self.fetch_and_transform(
-            self.get_databases, workflow_args, retry_policy
-        )
+        await self.fetch_and_transform(self.get_databases, workflow_args, retry_policy)
 
         # Fetch databases
         await self.fetch_and_transform(
