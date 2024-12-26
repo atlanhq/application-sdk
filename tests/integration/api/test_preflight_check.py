@@ -25,12 +25,6 @@ class TestSQLPreflightCheck:
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
         ]
 
-        preflight_check_controller.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
-
         payload = {
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
@@ -80,12 +74,6 @@ class TestSQLPreflightCheck:
 
         preflight_check_controller.sql_resource.fetch_metadata.return_value = []
 
-        preflight_check_controller.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
-
         payload = {
             "credentials": {
                 "account_id": "qdgrryr-uv65759",
@@ -127,12 +115,6 @@ class TestSQLPreflightCheck:
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
         ]
-
-        preflight_check_controller.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
 
         payload = {
             "credentials": {
