@@ -3,5 +3,5 @@ kind: Subscription
 metadata:
   name: my_subscription
 spec:
-  topic: workflow_start
+  topic: app_events
   pubsubname: eventstore

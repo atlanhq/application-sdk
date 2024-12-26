@@ -41,7 +41,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 activity_id=activity.info().activity_id,
                 activity_type=activity.info().activity_type,
             ),
-            topic_name=f"activity_start",
+            topic_name="app_events",
         )
         output = await super().execute_activity(input)
         EventStore.create_activity_end_event(
@@ -49,24 +49,13 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 activity_id=activity.info().activity_id,
                 activity_type=activity.info().activity_type,
             ),
-            topic_name=f"activity_end",
+            topic_name="app_events",
         )
         return output
 
 
 class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        EventStore.create_workflow_start_event(
-            WorkflowStartEvent(
-                name=workflow.info().workflow_type,
-                workflow_name=workflow.info().workflow_type,
-                application_name=TemporalConstants.APPLICATION_NAME.value,
-                attributes={},
-                workflow_id=workflow.info().workflow_id,
-                workflow_run_id=workflow.info().run_id,
-            ),
-            topic_name=f"workflow_start",
-        )
         output = await super().execute_workflow(input)
         EventStore.create_workflow_end_event(
             WorkflowEndEvent(
@@ -74,7 +63,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 workflow_id=workflow.info().workflow_id,
                 workflow_run_id=workflow.info().run_id,
             ),
-            topic_name=f"workflow_end",
+            topic_name="app_events",
         )
         return output
 
@@ -215,7 +204,15 @@ class TemporalResource(ResourceInterface):
             activities=activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                    *passthrough_modules
+                    "os",
+                    "pandas",
+                    "grpc",
+                    "dapr",
+                    "application_sdk",
+                    "grpcio",
+                    "json",
+                    "temporalio",
+                    "temporalio.common",
                 )
             ),
             interceptors=[EventInterceptor()],
