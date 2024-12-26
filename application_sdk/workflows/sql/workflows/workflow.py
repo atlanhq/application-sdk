@@ -597,7 +597,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     fetch_table_sql = ""
     fetch_column_sql = ""
 
-    semaphore_concurrency: int = 5
+    semaphore_concurrency: int = int(os.getenv("SEMAPHORE_CONCURRENCY", 5))
 
     def get_activities(self) -> List[Callable[..., Any]]:
         return [
@@ -609,6 +609,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     ) -> "SQLDatabaseWorkflow":
         self.semaphore_concurrency = semaphore_concurrency
         return self
+
+    # Create a semaphore for controlling concurrency for this activity
+    semaphore = asyncio.Semaphore(semaphore_concurrency)
 
     @staticmethod
     def get_valid_file_suffixes(directory: str) -> List[str]:
@@ -778,13 +781,10 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         # Get the list of databases to process
         database_list = batch_input["database_name"].tolist()
 
-        # Create a semaphore for controlling concurrency for this activity
-        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
-
         # Create a list of tasks to fetch schemas concurrently
         execute_queries = [
             self._fetch_data_for_db(
-                db_name, workflow_args, self.fetch_schema_sql, semaphore
+                db_name, workflow_args, self.fetch_schema_sql, self.semaphore
             )
             for db_name in database_list
         ]
@@ -842,13 +842,10 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
-        # Create a semaphore for controlling concurrency for this activity
-        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
-
         # Create a list of tasks to fetch tables concurrently
         execute_queries = [
             self._fetch_data_for_db(
-                db_name, workflow_args, self.fetch_table_sql, semaphore
+                db_name, workflow_args, self.fetch_table_sql, self.semaphore
             )
             for db_name in database_list
         ]
@@ -895,13 +892,10 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         database_list = batch_input["database_name"].tolist()
 
-        # Create a semaphore for controlling concurrency for this activity
-        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
-
         # Create a list of tasks to fetch columns concurrently
         execute_queries = [
             self._fetch_data_for_db(
-                db_name, workflow_args, self.fetch_column_sql, semaphore
+                db_name, workflow_args, self.fetch_column_sql, self.semaphore
             )
             for db_name in database_list
         ]
