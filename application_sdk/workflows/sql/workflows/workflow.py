@@ -10,6 +10,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
 from application_sdk.inputs.json import JsonInput
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
 from application_sdk.workflows.resources.temporal_resource import (
@@ -590,9 +591,7 @@ class SQLWorkflow(WorkflowInterface):
 
 @workflow.defn
 class SQLDatabaseWorkflow(SQLWorkflow):
-    get_database_sql = """
-        SHOW DATABASES;
-    """
+    get_databases_sql = ""
     fetch_database_sql = ""
     fetch_schema_sql = ""
     fetch_table_sql = ""
@@ -663,7 +662,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
             engine=self.sql_resource.engine,
             query=SQLWorkflow.prepare_query(
-                query=self.get_database_sql, workflow_args=workflow_args
+                query=self.get_databases_sql, workflow_args=workflow_args
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -672,7 +671,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         ),
     )
     async def get_databases(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
     ):
         """
         Fetch and process databases from the database.
@@ -992,6 +991,21 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             "chunk_count": transformed_output.chunk_count,
         }
 
+    @activity.defn(name="db_set_workflow_activity_context")
+    async def set_workflow_activity_context(self, workflow_id: str):
+        """
+        As we use a single worker thread, we need to set the workflow activity context
+        """
+        workflow_args = StateStore.extract_configuration(workflow_id)
+        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
+
+        if not self.sql_resource:
+            self.sql_resource = SQLResource(SQLResourceConfig())
+
+        self.sql_resource.set_credentials(credentials)
+        await self.sql_resource.load()
+        return workflow_args
+
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]):
         """
@@ -1002,7 +1016,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())
 
-        credentials = SecretStore.extract_credentials(workflow_args["credential_guid"])
+        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
         self.sql_resource.set_credentials(credentials)
 
         if not self.temporal_resource:
