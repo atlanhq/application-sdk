@@ -10,6 +10,26 @@ from application_sdk.workflows.transformers.utils import build_atlas_qualified_n
 
 logger = logging.getLogger(__name__)
 
+class Databases(assets.Database):
+    @classmethod
+    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Database:
+        try:
+            assert obj.get("name") is not None and isinstance(
+                obj.get("name"), str
+            ), "Database name cannot be None"
+            assert obj.get("connection_qualified_name") is not None and isinstance(
+                obj.get("connection_qualified_name"), str
+            ), "Connection qualified name cannot be None"
+
+            databases = assets.Database.creator(
+                name=obj["name"],
+                connection_qualified_name=obj["connection_qualified_name"],
+            )
+
+            return databases
+        except AssertionError as e:
+            raise ValueError(f"Error creating Database Entity: {str(e)}")
+
 
 class Database(assets.Database):
     @classmethod

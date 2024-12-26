@@ -7,6 +7,7 @@ from pyatlan.model.assets import Asset
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.transformers.atlas.sql import (
     Column,
+    Databases,
     Database,
     Function,
     Schema,
@@ -41,6 +42,7 @@ class AtlasTransformer(TransformerInterface):
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: Dict[str, Type[Any]] = {
+            "DATABASES": Databases,
             "DATABASE": Database,
             "SCHEMA": Schema,
             "TABLE": Table,

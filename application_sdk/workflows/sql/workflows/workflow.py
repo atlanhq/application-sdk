@@ -590,12 +590,20 @@ class SQLWorkflow(WorkflowInterface):
 
 @workflow.defn
 class SQLDatabaseWorkflow(SQLWorkflow):
+    get_database_sql = """
+        SHOW DATABASES;
+    """
     fetch_database_sql = ""
     fetch_schema_sql = ""
     fetch_table_sql = ""
     fetch_column_sql = ""
 
     semaphore_concurrency: int = 5
+
+    def get_activities(self) -> List[Callable[..., Any]]:
+        return [
+            self.get_databases,
+        ] + super().get_activities()
 
     def set_semaphore_concurrency(
         self, semaphore_concurrency: int
@@ -649,22 +657,22 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 )
                 return []  # Return an empty list in case of error
 
-    @activity.defn(name="db_fetch_databases")
+    @activity.defn(name="db_get_databases")
     @auto_heartbeater
     @activity_pd(
         batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
             engine=self.sql_resource.engine,
             query=SQLWorkflow.prepare_query(
-                query=self.fetch_database_sql, workflow_args=workflow_args
+                query=self.get_database_sql, workflow_args=workflow_args
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/database",
+            output_path=f"{workflow_args['output_path']}/raw/databases",
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_databases(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    async def get_databases(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
     ):
         """
         Fetch and process databases from the database.
@@ -675,9 +683,77 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         await raw_output.write_df(batch_input)
         return {
             "chunk_count": raw_output.chunk_count,
-            "typename": "database",
+            "typename": "databases",
             "total_record_count": raw_output.total_record_count,
         }
+
+    @activity.defn(name="db_fetch_databases")
+    @auto_heartbeater
+    @activity_pd(
+        batch_input=lambda self, workflow_args: JsonInput(
+            path=f"{workflow_args['output_path']}/raw/databases/",
+            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(
+                f"{workflow_args['output_path']}/raw/databases"
+            ),
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/database",
+            upload_file_prefix=workflow_args["output_prefix"],
+        ),
+    )
+    async def fetch_databases(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
+    ):
+        """
+        Fetch and process databases from the database.
+
+        :param workflow_args: The workflow arguments.
+        :return: The fetched databases.
+        """
+        # Get the list of databases to process
+        database_list = batch_input["name"].tolist()
+
+        # Create a semaphore for controlling concurrency for this activity
+        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
+
+        # Create a list of tasks to fetch schemas concurrently
+        execute_queries = [
+            self._fetch_data_for_db(
+                db_name, workflow_args, self.fetch_database_sql, semaphore
+            )
+            for db_name in database_list
+        ]
+
+        # Use asyncio.gather to execute all schema fetches concurrently
+        results = await asyncio.gather(*execute_queries)
+        # Flatten the list of DataFrames if any generator is returned
+        flat_results = []
+        for result in results:
+            # If the result is a generator, convert it to a list of DataFrames
+            if isinstance(result, (pd.DataFrame, pd.Series)):
+                if not result.empty:  # Check if the DataFrame is not empty
+                    flat_results.append(result)
+            else:
+                # If it's a generator, convert it to a list of DataFrames
+                for df in result:
+                    if not df.empty: # Check if the DataFrame is not empty
+                        flat_results.append(df)
+
+        if flat_results:
+            combined_results = pd.concat(flat_results, ignore_index=True)
+            await raw_output.write_df(combined_results)
+
+            return {
+                "chunk_count": raw_output.chunk_count,
+                "typename": "database",
+                "total_record_count": raw_output.total_record_count,
+            }
+        else:
+            return {
+                "chunk_count": 0,
+                "typename": "database",
+                "total_record_count": 0,
+            }
 
     @activity.defn(name="db_fetch_schemas")
     @auto_heartbeater
@@ -719,26 +795,31 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         # Flatten the list of DataFrames if any generator is returned
         flat_results = []
         for result in results:
-            # If result is a generator, convert it to a list of DataFrames
+            # If the result is a generator, convert it to a list of DataFrames
             if isinstance(result, (pd.DataFrame, pd.Series)):
-                flat_results.append(result)
+                if not result.empty:  # Check if the DataFrame is not empty
+                    flat_results.append(result)
             else:
-                # Assuming it's a generator, so convert it to a DataFrame
-                flat_results.extend(
-                    result
-                )  # Unwrap the generator to list of DataFrames
+                # If it's a generator, convert it to a list of DataFrames
+                for df in result:
+                    if not df.empty: # Check if the DataFrame is not empty
+                        flat_results.append(df)
 
-        # Combine all the results (assuming each result is a dataframe)
-        combined_results = pd.concat(flat_results, ignore_index=True)
+        if flat_results:
+            combined_results = pd.concat(flat_results, ignore_index=True)
+            await raw_output.write_df(combined_results)
 
-        # Write the combined results to the output
-        await raw_output.write_df(combined_results)
-
-        return {
-            "chunk_count": raw_output.chunk_count,
-            "typename": "schema",
-            "total_record_count": raw_output.total_record_count,
-        }
+            return {
+                "chunk_count": raw_output.chunk_count,
+                "typename": "schema",
+                "total_record_count": raw_output.total_record_count,
+            }
+        else:
+            return {
+                "chunk_count": 0,
+                "typename": "schema",
+                "total_record_count": 0,
+            }
 
     @activity.defn(name="db_fetch_tables")
     @auto_heartbeater
@@ -773,24 +854,19 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             for db_name in database_list
         ]
 
-        # Use asyncio.gather to execute all table fetches concurrently
+        # Use asyncio.gather to execute all tables fetches concurrently
         results = await asyncio.gather(*execute_queries)
-
-        # Flatten the list of DataFrames (if any generator is returned)
-        flat_results = []
+        # Flatten the list of DataFrames if any generator is returned
         for result in results:
+            # If the result is a generator, convert it to a list of DataFrames
             if isinstance(result, (pd.DataFrame, pd.Series)):
-                flat_results.append(result)
+                if not result.empty:  # Check if the DataFrame is not empty
+                    await raw_output.write_df(result)
             else:
-                flat_results.extend(
-                    result
-                )  # Unwrap the generator to list of DataFrames
-
-        # Combine all the results into a single DataFrame
-        combined_results = pd.concat(flat_results, ignore_index=True)
-
-        # Write the combined results to the output
-        await raw_output.write_df(combined_results)
+                # If it's a generator, convert it to a list of DataFrames
+                for df in result:
+                    if not df.empty: # Check if the DataFrame is not empty
+                        await raw_output.write_df(df)
 
         return {
             "chunk_count": raw_output.chunk_count,
@@ -833,28 +909,34 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
         # Use asyncio.gather to execute all column fetches concurrently
         results = await asyncio.gather(*execute_queries)
-
-        # Flatten the list of DataFrames (if any generator is returned)
+        # Flatten the list of DataFrames if any generator is returned
         flat_results = []
         for result in results:
+            # If the result is a generator, convert it to a list of DataFrames
             if isinstance(result, (pd.DataFrame, pd.Series)):
-                flat_results.append(result)
+                if not result.empty:  # Check if the DataFrame is not empty
+                    flat_results.append(result)
             else:
-                flat_results.extend(
-                    result
-                )  # Unwrap the generator to list of DataFrames
+                # If it's a generator, convert it to a list of DataFrames
+                for df in result:
+                    if not df.empty: # Check if the DataFrame is not empty
+                        flat_results.append(df)
 
-        # Combine all the results into a single DataFrame
-        combined_results = pd.concat(flat_results, ignore_index=True)
+        if flat_results:
+            combined_results = pd.concat(flat_results, ignore_index=True)
+            await raw_output.write_df(combined_results)
 
-        # Write the combined results to the output
-        await raw_output.write_df(combined_results)
-
-        return {
-            "chunk_count": raw_output.chunk_count,
-            "typename": "column",
-            "total_record_count": raw_output.total_record_count,
-        }
+            return {
+                "chunk_count": raw_output.chunk_count,
+                "typename": "column",
+                "total_record_count": raw_output.total_record_count,
+            }
+        else:
+            return {
+                "chunk_count": 0,
+                "typename": "column",
+                "total_record_count": 0,
+            }
 
     @activity.defn(name="db_write_type_metadata")
     @auto_heartbeater
@@ -942,7 +1024,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
-        # Fetch databases first
+        # Get databases first
+        await self.fetch_and_transform(
+            self.get_databases, workflow_args, retry_policy
+        )
+
+        # Fetch databases
         await self.fetch_and_transform(
             self.fetch_databases, workflow_args, retry_policy
         )
