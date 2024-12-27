@@ -1,3 +1,4 @@
+import os
 from concurrent.futures import Future
 from unittest.mock import patch
 
@@ -47,7 +48,8 @@ class TestDaftDecoratorsIceberg:
         Method to setup the test resources
         """
         cls.engine = sqlalchemy.create_engine("sqlite:///:memory:")
-        warehouse_path = "/tmp/warehouse"
+        warehouse_path = "/tmp/tests/warehouse"
+        os.makedirs(warehouse_path, exist_ok=True)
         cls.namespace = "default"
         cls.catalog = SqlCatalog(
             "default",
