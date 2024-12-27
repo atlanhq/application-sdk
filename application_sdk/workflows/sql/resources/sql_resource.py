@@ -34,6 +34,9 @@ class SQLResourceConfig:
     def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
         return self.sql_alchemy_connect_args
 
+    def set_sql_alchemy_connect_args(self, sql_alchemy_connect_args: Dict[str, Any]):
+        self.sql_alchemy_connect_args = sql_alchemy_connect_args
+
 
 class SQLResource(ResourceInterface):
     config: SQLResourceConfig

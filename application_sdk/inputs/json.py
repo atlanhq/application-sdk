@@ -1,6 +1,7 @@
 import os
-from typing import Any, Iterator, List, Optional
+from typing import Iterator, List, Optional
 
+import daft
 import pandas as pd
 
 from application_sdk import logging
@@ -22,6 +23,10 @@ class JsonInput(Input):
         self.file_suffixes = file_suffixes
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+        """
+        Method to read the data from the json files in the path
+        and return as a batched pandas dataframe
+        """
         try:
             for file_suffix in self.file_suffixes:
                 json_reader_obj = pd.read_json(
@@ -34,6 +39,10 @@ class JsonInput(Input):
             logger.error(f"Error reading batched data from JSON: {str(e)}")
 
     def get_dataframe(self) -> pd.DataFrame:
+        """
+        Method to read the data from the json files in the path
+        and return as a single combined pandas dataframe
+        """
         try:
             dataframes = []
             for file_suffix in self.file_suffixes:
@@ -47,5 +56,30 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading data from JSON: {str(e)}")
 
-    def get_key(self, key: str) -> Any:
-        raise AttributeError("JSON does not support get_key method")
+    def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+        """
+        Method to read the data from the json files in the path
+        and return as a batched daft dataframe
+        """
+        try:
+            for file_suffix in self.file_suffixes:
+                json_reader_obj = daft.read_json(
+                    path=os.path.join(self.path, file_suffix),
+                    _chunk_size=self.chunk_size,
+                )
+                yield json_reader_obj
+        except Exception as e:
+            logger.error(f"Error reading batched data from JSON: {str(e)}")
+
+    def get_daft_dataframe(self) -> daft.DataFrame:
+        """
+        Method to read the data from the json files in the path
+        and return as a single combined daft dataframe
+        """
+        try:
+            dataframes = []
+            for file_suffix in self.file_suffixes:
+                daft.read_json(path=os.path.join(self.path, file_suffix))
+            return pd.concat(dataframes, ignore_index=True)
+        except Exception as e:
+            logger.error(f"Error reading data from JSON using daft: {str(e)}")
