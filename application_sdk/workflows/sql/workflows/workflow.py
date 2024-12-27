@@ -599,16 +599,44 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
     semaphore_concurrency: int = int(os.getenv("SEMAPHORE_CONCURRENCY", 5))
 
-    def get_activities(self) -> List[Callable[..., Any]]:
-        return [
-            self.get_databases,
-        ] + super().get_activities()
+    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLDatabaseWorkflow":
+        self.sql_resource = sql_resource
+        return self
+
+    def set_transformer(self, transformer: TransformerInterface) -> "SQLDatabaseWorkflow":
+        self.transformer = transformer
+        return self
+
+    def set_application_name(self, application_name: str) -> "SQLDatabaseWorkflow":
+        self.application_name = application_name
+        return self
+
+    def set_batch_size(self, batch_size: int) -> "SQLDatabaseWorkflow":
+        self.batch_size = batch_size
+        return self
+
+    def set_max_transform_concurrency(
+        self, max_transform_concurrency: int
+    ) -> "SQLDatabaseWorkflow":
+        self.max_transform_concurrency = max_transform_concurrency
+        return self
+
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "SQLDatabaseWorkflow":
+        super().set_temporal_resource(temporal_resource)
+        return self
 
     def set_semaphore_concurrency(
         self, semaphore_concurrency: int
     ) -> "SQLDatabaseWorkflow":
         self.semaphore_concurrency = semaphore_concurrency
         return self
+
+    def get_activities(self) -> List[Callable[..., Any]]:
+        return [
+            self.get_databases,
+        ] + super().get_activities()
 
     # Create a semaphore for controlling concurrency for this activity
     semaphore = asyncio.Semaphore(semaphore_concurrency)
