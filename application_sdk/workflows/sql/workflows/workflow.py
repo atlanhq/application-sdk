@@ -603,7 +603,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         self.sql_resource = sql_resource
         return self
 
-    def set_transformer(self, transformer: TransformerInterface) -> "SQLDatabaseWorkflow":
+    def set_transformer(
+        self, transformer: TransformerInterface
+    ) -> "SQLDatabaseWorkflow":
         self.transformer = transformer
         return self
 
