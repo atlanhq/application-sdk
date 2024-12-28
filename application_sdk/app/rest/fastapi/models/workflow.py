@@ -45,6 +45,7 @@ class PreflightCheckRequest(BaseModel):
                     "user": "username",
                     "password": "password",
                     "database": "databasename",
+                    "auth_type": "basic",
                 },
                 "form_data": {
                     "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
@@ -88,6 +89,7 @@ class WorkflowRequest(RootModel):
                     "user": "username",
                     "password": "password",
                     "database": "databasename",
+                    "auth_type": "basic",
                 },
                 "connection": {"connection": "dev"},
                 "metadata": {
@@ -97,7 +99,6 @@ class WorkflowRequest(RootModel):
                     "advanced_config_strategy": "default",
                     "use_source_schema_filtering": "false",
                     "use_jdbc_internal_methods": "true",
-                    "authentication": "BASIC",
                 },
             }
         }
