@@ -63,6 +63,8 @@ class DataGenerator:
             return fake_method.address()
         elif field_type == "name":
             return fake_method.name()
+        elif field_type == "null":
+            return None
 
         return fake_method.word()
 
