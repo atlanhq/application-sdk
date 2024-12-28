@@ -169,7 +169,7 @@ class WorkflowConfigResponse(BaseModel):
                         "advanced_config_strategy": "default",
                         "use_source_schema_filtering": "false",
                         "use_jdbc_internal_methods": "true",
-                        "authentication": "BASIC",
+                        "auth_type": "basic",
                     },
                 },
             }
