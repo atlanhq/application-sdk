@@ -19,14 +19,10 @@ from application_sdk.paas.eventstore.models import (
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-# TODO: Singleton, and client as instance attribute
 class EventStore:
     EVENT_STORE_NAME = "eventstore"
     TOPIC_NAME = "app_events"
     APPLICATION_TOPIC_NAME = "application_events"
-
-    # TODO:
-    # client: DaprClient
 
     @classmethod
     def create_generic_event(cls, event: Event, topic_name: str = TOPIC_NAME):
