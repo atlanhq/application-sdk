@@ -3,13 +3,19 @@ from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
+WORKFLOW_END_EVENT = "workflow_end"
+WORKFLOW_START_EVENT = "workflow_start"
+ACTIVITY_START_EVENT = "activity_start"
+ACTIVITY_END_EVENT = "activity_end"
+CUSTOM_EVENT = "custom"
+
 
 class Event(BaseModel):
-    event_type: str = Field(default="generic", init=False)
+    event_type: str = Field(init=False)
 
 
 class ActivityStartEvent(Event):
-    event_type: str = Field(default="activity_start", init=False)
+    event_type: str = Field(default=ACTIVITY_START_EVENT, init=False)
 
     # Activity information (required)
     activity_type: str | None = Field(default=None, init=False)
@@ -17,7 +23,7 @@ class ActivityStartEvent(Event):
 
 
 class ActivityEndEvent(Event):
-    event_type: str = Field(default="activity_end", init=False)
+    event_type: str = Field(default=ACTIVITY_END_EVENT, init=False)
 
     # Activity information (required)
     activity_type: str | None = Field(default=None, init=False)
@@ -25,7 +31,7 @@ class ActivityEndEvent(Event):
 
 
 class WorkflowEndEvent(Event):
-    event_type: str = Field(default="workflow_end")
+    event_type: str = Field(default=WORKFLOW_END_EVENT, init=False)
 
     # Workflow information (required)
     workflow_name: str | None = Field(default=None)
@@ -36,7 +42,7 @@ class WorkflowEndEvent(Event):
 
 
 class WorkflowStartEvent(Event):
-    event_type: str = Field(default="workflow_start")
+    event_type: str = Field(default=WORKFLOW_START_EVENT, init=False)
 
     # Workflow information (required)
     workflow_name: str | None = Field(default=None)
@@ -45,7 +51,7 @@ class WorkflowStartEvent(Event):
 
 
 class CustomEvent(Event):
-    event_type: str = Field(default="custom")
+    event_type: str = Field(default=CUSTOM_EVENT, init=False)
     data: Dict[str, Any] = Field(default_factory=dict)
 
 

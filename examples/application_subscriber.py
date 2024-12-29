@@ -10,6 +10,7 @@ from temporalio import activity, workflow
 from application_sdk.app.rest.fastapi import FastAPIApplication
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
+    WORKFLOW_END_EVENT,
     CustomEvent,
     DaprEvent,
     WorkflowEndEvent,
@@ -132,29 +133,6 @@ class SampleWorkflowBuilder(WorkflowBuilderInterface):
         return SampleWorkflow().set_temporal_resource(self.temporal_resource)
 
 
-async def start_fast_api_app():
-    fast_api_app = FastAPIApplication(
-        auth_controller=WorkflowAuthController(),
-        metadata_controller=WorkflowMetadataController(),
-        preflight_check_controller=WorkflowPreflightCheckController(),
-        workflow=SQLWorkflow(),
-    )
-
-    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
-    def should_trigger_workflow(event: DaprEvent) -> bool:
-        if event.data.event_type == "workflow_end":
-            workflow_end_event: WorkflowEndEvent = event.data
-            print(f"Workflow end event: {workflow_end_event}")
-
-            return workflow_end_event.workflow_name == "dependent_workflow"
-
-        return False
-
-    fast_api_app.register_event_trigger(SampleWorkflow, should_trigger_workflow)
-
-    await fast_api_app.start()
-
-
 async def start_worker():
     temporal_resource = TemporalResource(
         TemporalConfig(
@@ -180,6 +158,38 @@ async def start_worker():
     )
     worker_thread.start()
     time.sleep(3)
+
+
+async def start_fast_api_app():
+    fast_api_app = FastAPIApplication(
+        auth_controller=WorkflowAuthController(),
+        metadata_controller=WorkflowMetadataController(),
+        preflight_check_controller=WorkflowPreflightCheckController(),
+        workflow=SQLWorkflow(),
+    )
+
+    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
+    def should_trigger_workflow(event: DaprEvent) -> bool:
+        if event.data.event_type == WORKFLOW_END_EVENT:
+            workflow_end_event: WorkflowEndEvent = event.data
+            print(f"Workflow end event: {workflow_end_event}")
+
+            if workflow_end_event.workflow_name != "dependent_workflow":
+                return False
+
+            # We can optionally check other attributes of the workflow as well,
+            # such as the output of the dependent workflow
+            # if workflow_end_event.workflow_output["counter"] > 5:
+            #     return False
+
+            return True
+
+        return False
+
+    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
+    fast_api_app.register_event_trigger(SampleWorkflow, should_trigger_workflow)
+
+    await fast_api_app.start()
 
 
 async def simulate_worklflow_end_event():
