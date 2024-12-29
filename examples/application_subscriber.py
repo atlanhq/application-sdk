@@ -73,25 +73,25 @@ class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface
 class SampleWorkflow(WorkflowInterface):
     @activity.defn
     async def activity_1(self):
-        print("Activity 1")
+        logger.info("Activity 1")
 
         EventStore.create_custom_event(
             event=CustomEvent(data={"custom_key": "custom_value"}),
-            topic_name="app_events",
+            topic_name=EventStore.TOPIC_NAME,
         )
 
         return
 
     @activity.defn
     async def activity_2(self):
-        print("Activity 2")
+        logger.info("Activity 2")
         return
 
     @workflow.run
     async def run(self, workflow_args: dict[str, Any]):
         event = DaprEvent(**workflow_args)
 
-        if event.data.event_type != "workflow_end":
+        if event.data.event_type != WORKFLOW_END_EVENT:
             return
 
         workflow_end_event: WorkflowEndEvent = event.data
@@ -169,7 +169,6 @@ async def start_fast_api_app():
     def should_trigger_workflow(event: DaprEvent) -> bool:
         if event.data.event_type == WORKFLOW_END_EVENT:
             workflow_end_event: WorkflowEndEvent = event.data
-            print(f"Workflow end event: {workflow_end_event}")
 
             if workflow_end_event.workflow_name != "dependent_workflow":
                 return False
@@ -200,7 +199,7 @@ async def simulate_worklflow_end_event():
             workflow_run_id="test",
             workflow_output={"counter": 0},
         ),
-        topic_name="app_events",
+        topic_name=EventStore.TOPIC_NAME,
     )
 
 

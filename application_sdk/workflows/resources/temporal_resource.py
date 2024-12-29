@@ -42,7 +42,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 activity_id=activity.info().activity_id,
                 activity_type=activity.info().activity_type,
             ),
-            topic_name="app_events",
+            topic_name=EventStore.TOPIC_NAME,
         )
         output = await super().execute_activity(input)
         EventStore.create_activity_end_event(
@@ -50,7 +50,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 activity_id=activity.info().activity_id,
                 activity_type=activity.info().activity_type,
             ),
-            topic_name="app_events",
+            topic_name=EventStore.TOPIC_NAME,
         )
         return output
 
@@ -64,7 +64,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     workflow_id=workflow.info().workflow_id,
                     workflow_run_id=workflow.info().run_id,
                 ),
-                topic_name="app_events",
+                topic_name=EventStore.TOPIC_NAME,
             )
         output = await super().execute_workflow(input)
         with workflow.unsafe.sandbox_unrestricted():
@@ -75,7 +75,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     workflow_run_id=workflow.info().run_id,
                     workflow_output=output,
                 ),
-                topic_name="app_events",
+                topic_name=EventStore.TOPIC_NAME,
             )
         return output
 

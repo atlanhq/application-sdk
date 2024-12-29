@@ -2,6 +2,7 @@ from typing import Any, Callable, List
 
 from fastapi import APIRouter, FastAPI, status
 
+from application_sdk import logging
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
 from application_sdk.app.rest.fastapi.middlewares.error_handler import (
     internal_server_error_handler,
@@ -31,6 +32,8 @@ from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.workflow import WorkflowInterface
+
+logger = logging.get_logger(__name__)
 
 
 class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
@@ -165,18 +168,19 @@ class FastAPIApplication(AtlanAPIApplication):
     ) -> List[dict[str, Any]]:
         return [
             {
-                "pubsubname": "eventstore",
+                "pubsubname": EventStore.EVENT_STORE_NAME,
                 "topic": EventStore.TOPIC_NAME,
                 "routes": {"rules": [{"path": "events/v1/event"}]},
             }
         ]
 
     async def on_event(self, event: dict[str, Any]):
-        print(f"Received event {event}")
-        print(f"Workflow triggers: {len(self.workflow_triggers)}")
+        logger.info(f"Received event {event}")
         for trigger in self.workflow_triggers:
             if trigger["should_trigger_workflow"](DaprEvent(**event)):
-                print(f"Triggering workflow {trigger['workflow']} with event {event}")
+                logger.info(
+                    f"Triggering workflow {trigger['workflow']} with event {event}"
+                )
 
                 await trigger["workflow"]().start(
                     workflow_args=event, workflow_class=trigger["workflow"].__class__

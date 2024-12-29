@@ -22,7 +22,6 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class EventStore:
     EVENT_STORE_NAME = "eventstore"
     TOPIC_NAME = "app_events"
-    APPLICATION_TOPIC_NAME = "application_events"
 
     @classmethod
     def create_generic_event(cls, event: Event, topic_name: str = TOPIC_NAME):
@@ -37,7 +36,7 @@ class EventStore:
         """
         with clients.DaprClient() as client:
             client.publish_event(
-                pubsub_name="eventstore",
+                pubsub_name=cls.EVENT_STORE_NAME,
                 topic_name=topic_name,
                 data=json.dumps(event.model_dump(mode="json")),
                 data_content_type="application/json",
