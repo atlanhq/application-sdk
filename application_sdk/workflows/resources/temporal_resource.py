@@ -73,7 +73,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     workflow_name=workflow.info().workflow_type,
                     workflow_id=workflow.info().workflow_id,
                     workflow_run_id=workflow.info().run_id,
-                    workflow_output=output,
+                    workflow_output=output or {},
                 ),
                 topic_name=EventStore.TOPIC_NAME,
             )
