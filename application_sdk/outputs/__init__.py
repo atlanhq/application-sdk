@@ -18,7 +18,7 @@ class Output(ABC):
     async def write_df(self, df: pd.DataFrame):
         pass
 
-    async def write_metadata(self):
+    async def write_metadata(self, file_suffix: str = None):
         """
         Method to write the metadata to a json file and push it to the object store
         """
@@ -29,8 +29,11 @@ class Output(ABC):
                 "chunk_count": [self.chunk_count],
             }
 
+            # If a suffix is provided, include it in the file name
+            suffix_part = f"_{file_suffix}" if file_suffix else ""
+
             # Write the metadata to a json file
-            output_file_name = f"{self.output_path}/metadata.json"
+            output_file_name = f"{self.output_path}/metadata{suffix_part}.json"
             df = pd.DataFrame(metadata)
             df.to_json(output_file_name, orient="records", lines=True)
 

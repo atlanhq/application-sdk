@@ -109,9 +109,10 @@ class JsonOutput(Output):
         self.current_buffer_size = 0
         os.makedirs(f"{output_path}", exist_ok=True)
 
-    async def write_df(self, df: pd.DataFrame):
+    async def write_df(self, df: pd.DataFrame, file_suffix: str = ""):
         """
-        Method to write the dataframe to a json file and push it to the object store
+        Method to write the dataframe to a json file and push it to the object store.
+        :param file_suffix: Optional suffix to be added to the file name.
         """
         if len(df) == 0:
             return
@@ -130,14 +131,14 @@ class JsonOutput(Output):
                 self.current_buffer_size += len(chunk)
 
                 if self.current_buffer_size >= partition:
-                    await self._flush_buffer()
+                    await self._flush_buffer(file_suffix)
 
-            await self._flush_buffer()
+            await self._flush_buffer(file_suffix)
 
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def _flush_buffer(self):
+    async def _flush_buffer(self, file_suffix: str = ""):
         if not self.buffer or not self.current_buffer_size:
             return
         combined_df = pd.concat(self.buffer)
@@ -146,10 +147,15 @@ class JsonOutput(Output):
         if not combined_df.empty:
             self.chunk_count += 1
             self.total_record_count += len(combined_df)
+
+            # If a suffix is provided, include it in the file name
+            suffix_part = f"_{file_suffix}" if file_suffix else ""
+
             if self.chunk_start is None:
-                output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
+                output_file_name = f"{self.output_path}/{str(self.chunk_count)}{suffix_part}.json"
             else:
-                output_file_name = f"{self.output_path}/{str(self.chunk_start+1)}-{str(self.chunk_count)}.json"
+                output_file_name = f"{self.output_path}/{str(self.chunk_start + 1)}-{str(self.chunk_count)}{suffix_part}.json"
+
             combined_df.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
