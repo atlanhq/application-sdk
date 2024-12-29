@@ -196,9 +196,7 @@ class TemporalResource(ResourceInterface):
         try:
             handle = await self.client.start_workflow(
                 workflow_class,
-                {
-                    "workflow_id": workflow_id,
-                },
+                workflow_args,
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),

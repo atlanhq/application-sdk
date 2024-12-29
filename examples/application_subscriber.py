@@ -72,7 +72,7 @@ class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface
 @workflow.defn
 class SampleWorkflow(WorkflowInterface):
     @activity.defn
-    async def activity_1(self, workflow_args: Any):
+    async def activity_1(self):
         print("Activity 1")
 
         EventStore.create_custom_event(
@@ -83,13 +83,12 @@ class SampleWorkflow(WorkflowInterface):
         return
 
     @activity.defn
-    async def activity_2(self, workflow_args: Any):
+    async def activity_2(self):
         print("Activity 2")
         return
 
     @workflow.run
-    async def run(self, workflow_args: Any):
-        # This workflow is triggered by an event
+    async def run(self, workflow_args: dict[str, Any]):
         event = DaprEvent(**workflow_args)
 
         if event.data.event_type != "workflow_end":
@@ -102,12 +101,10 @@ class SampleWorkflow(WorkflowInterface):
 
         await workflow.execute_activity(
             self.activity_1,
-            workflow_args,
             start_to_close_timeout=timedelta(seconds=10),
         )
         await workflow.execute_activity(
             self.activity_2,
-            workflow_args,
             start_to_close_timeout=timedelta(seconds=10),
         )
 
