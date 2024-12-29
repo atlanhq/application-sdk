@@ -33,22 +33,10 @@ class WorkflowWorker:
         if not self.temporal_resource:
             raise ValueError("Temporal resource is not set")
 
-        print(f"TEMP PASSTHROUGH MODULES: {self.passthrough_modules}")
-
         worker = self.temporal_resource.create_worker(
             activities=self.temporal_activities,
             workflow_classes=self.workflow_classes,
-            passthrough_modules=[
-                "os",
-                "pandas",
-                "grpc",
-                "dapr",
-                "application_sdk",
-                "grpcio",
-                "json",
-                "temporalio",
-                "temporalio.common",
-            ],
+            passthrough_modules=self.passthrough_modules,
         )
 
         logger.info(

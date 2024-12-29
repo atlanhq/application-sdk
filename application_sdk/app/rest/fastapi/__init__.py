@@ -50,8 +50,6 @@ class FastAPIApplication(AtlanAPIApplication):
 
     workflow: WorkflowInterface | None = None
 
-    subscriptions: dict[str, Any] = {}
-
     def __init__(
         self,
         auth_controller: WorkflowAuthControllerInterface | None = None,
@@ -74,7 +72,6 @@ class FastAPIApplication(AtlanAPIApplication):
 
         self.workflow = workflow
 
-        self.subscriptions: dict[str, Any] = {}
         self.workflow_triggers: List[dict[str, Any]] = []
 
         super().__init__(
