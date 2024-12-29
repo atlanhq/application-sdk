@@ -1,7 +1,7 @@
 import argparse
 
-from tests.scale_data_generator.config_loader import ConfigLoader
-from tests.scale_data_generator.data_generator import DataGenerator
+from application_sdk.scale_data_generator.config_loader import ConfigLoader
+from application_sdk.scale_data_generator.data_generator import DataGenerator
 
 
 def main():
