@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional, Type
 
 from pyatlan.model.assets import Asset
@@ -112,14 +112,10 @@ class AtlasTransformer(TransformerInterface):
             entity.source_created_by = source_created_by
 
         if created := data.get("created"):
-            entity.source_created_at = datetime.fromtimestamp(
-                created / 1000, tz=timezone.utc
-            )
+            entity.source_created_at = datetime.fromtimestamp(created / 1000)
 
         if last_altered := data.get("last_altered", None):
-            entity.source_updated_at = datetime.fromtimestamp(
-                last_altered / 1000, tz=timezone.utc
-            )
+            entity.source_updated_at = datetime.fromtimestamp(last_altered / 1000)
 
         if not entity.custom_attributes:
             entity.custom_attributes = {}
