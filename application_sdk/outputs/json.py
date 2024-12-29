@@ -109,7 +109,7 @@ class JsonOutput(Output):
         self.current_buffer_size = 0
         os.makedirs(f"{output_path}", exist_ok=True)
 
-    async def write_df(self, df: pd.DataFrame, file_suffix: str = ""):
+    async def write_df(self, df: pd.DataFrame, file_suffix: str = None):
         """
         Method to write the dataframe to a json file and push it to the object store.
         :param file_suffix: Optional suffix to be added to the file name.
@@ -138,7 +138,7 @@ class JsonOutput(Output):
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def _flush_buffer(self, file_suffix: str = ""):
+    async def _flush_buffer(self, file_suffix: str = None):
         if not self.buffer or not self.current_buffer_size:
             return
         combined_df = pd.concat(self.buffer)
@@ -152,7 +152,9 @@ class JsonOutput(Output):
             suffix_part = f"_{file_suffix}" if file_suffix else ""
 
             if self.chunk_start is None:
-                output_file_name = f"{self.output_path}/{str(self.chunk_count)}{suffix_part}.json"
+                output_file_name = (
+                    f"{self.output_path}/{str(self.chunk_count)}{suffix_part}.json"
+                )
             else:
                 output_file_name = f"{self.output_path}/{str(self.chunk_start + 1)}-{str(self.chunk_count)}{suffix_part}.json"
 

@@ -606,19 +606,27 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     def __init__(self):
         super().__init__()
 
-    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLDatabaseWorkflow":
+    def set_sql_resource(
+        self, sql_resource: SQLResource
+    ) -> "SQLDatabaseWorkflow":
         self.sql_resource = sql_resource
         return self
 
-    def set_transformer(self, transformer: TransformerInterface) -> "SQLDatabaseWorkflow":
+    def set_transformer(
+        self, transformer: TransformerInterface
+    ) -> "SQLDatabaseWorkflow":
         self.transformer = transformer
         return self
 
-    def set_application_name(self, application_name: str) -> "SQLDatabaseWorkflow":
+    def set_application_name(
+        self, application_name: str
+    ) -> "SQLDatabaseWorkflow":
         self.application_name = application_name
         return self
 
-    def set_batch_size(self, batch_size: int) -> "SQLDatabaseWorkflow":
+    def set_batch_size(
+        self, batch_size: int
+    ) -> "SQLDatabaseWorkflow":
         self.batch_size = batch_size
         return self
 
@@ -694,7 +702,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 )
                 return []  # Return an empty list in case of error
 
-    def get_transform_batches(self, chunk_count: int, typename: str, file_suffix: str = ""):
+    def get_transform_batches(
+        self, chunk_count: int, typename: str, file_suffix: str = None
+    ):
         # concurrency logic
         concurrency_level = min(
             self.max_transform_concurrency,
@@ -811,7 +821,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         if flat_results:
             combined_results = pd.concat(flat_results, ignore_index=True)
             await raw_output.write_df(combined_results)
-            SQLDatabaseWorkflow.databases_list = combined_results["database_name"].tolist()
+            SQLDatabaseWorkflow.databases_list = combined_results[
+                "database_name"
+            ].tolist()
             return {
                 "chunk_count": raw_output.chunk_count,
                 "typename": "database",
@@ -895,9 +907,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_tables(
-        self, raw_output: JsonOutput, **workflow_args
-    ):
+    async def fetch_tables(self, raw_output: JsonOutput, **workflow_args):
         """
         Fetch and process tables from each database fetched by fetch_databases.
         """
@@ -917,11 +927,13 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         for table_chunk in tables_input_df:
             await raw_output.write_df(table_chunk, file_suffix=database_name)
 
-        return [{
-            "chunk_count": raw_output.chunk_count,
-            "typename": "table",
-            "total_record_count": raw_output.total_record_count,
-        }]
+        return [
+            {
+                "chunk_count": raw_output.chunk_count,
+                "typename": "table",
+                "total_record_count": raw_output.total_record_count,
+            }
+        ]
 
     @activity.defn(name="db_fetch_columns")
     @auto_heartbeater
@@ -995,7 +1007,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         )
     )
     async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
-        if  kwargs.get("typename") == "table":
+        if kwargs.get("typename") == "table":
             file_suffix = kwargs.get("database_name")
             await metadata_output.write_metadata(file_suffix)
         else:
@@ -1014,7 +1026,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     async def write_raw_type_metadata(
         self, metadata_output, batch_input=None, **kwargs
     ):
-        if  kwargs.get("typename") == "table":
+        if kwargs.get("typename") == "table":
             file_suffix = kwargs.get("database_name")
             await metadata_output.write_metadata(file_suffix)
         else:
@@ -1072,7 +1084,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
-        database_name: str = "",
+        database_name: str = None,
     ) -> None:
         raw_stat = await workflow.execute_activity(
             fetch_fn,
@@ -1117,7 +1129,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         )
 
         if typename == "table":
-            batches, chunk_starts = self.get_transform_batches(chunk_count, typename, database_name)
+            batches, chunk_starts = self.get_transform_batches(
+                chunk_count, typename, database_name
+            )
         else:
             batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
@@ -1210,12 +1224,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         fetch_and_transforms_tables = [
             self.fetch_and_transform(
                 self.fetch_tables,
-                {
-                    **workflow_args,
-                    "database_name": database_name
-                },
+                {**workflow_args, "database_name": database_name},
                 retry_policy,
-                database_name
+                database_name,
             )
             for database_name in self.databases_list
         ]

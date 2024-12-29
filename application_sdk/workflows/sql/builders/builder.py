@@ -10,7 +10,7 @@ from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
 from application_sdk.workflows.sql.workflows.workflow import (
     SQLDatabaseWorkflow,
-    SQLWorkflow
+    SQLWorkflow,
 )
 from application_sdk.workflows.transformers import TransformerInterface
 
@@ -54,7 +54,9 @@ class SQLDatabaseWorkflowBuilder(WorkflowBuilderInterface, ABC):
     sql_resource: SQLResource
     transformer: TransformerInterface
 
-    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLDatabaseWorkflowBuilder":
+    def set_sql_resource(
+        self, sql_resource: SQLResource
+    ) -> "SQLDatabaseWorkflowBuilder":
         self.sql_resource = sql_resource
         return self
 
@@ -73,7 +75,9 @@ class SQLDatabaseWorkflowBuilder(WorkflowBuilderInterface, ABC):
         super().set_temporal_resource(temporal_resource)
         return self
 
-    def set_batch_size(self, batch_size: int) -> "SQLDatabaseWorkflowBuilder":
+    def set_batch_size(
+        self, batch_size: int
+    ) -> "SQLDatabaseWorkflowBuilder":
         self.batch_size = batch_size
         return self
 
