@@ -170,7 +170,7 @@ class FastAPIApplication(AtlanAPIApplication):
             {
                 "pubsubname": "eventstore",
                 "topic": EventStore.TOPIC_NAME,
-                "routes": {"rules": [{"path": f"events/v1/event"}]},
+                "routes": {"rules": [{"path": "events/v1/event"}]},
             }
         ]
 

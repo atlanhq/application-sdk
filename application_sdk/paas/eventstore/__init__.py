@@ -2,7 +2,6 @@
 
 import json
 import logging
-from datetime import datetime
 
 from dapr import clients
 from temporalio import activity
@@ -14,7 +13,7 @@ from application_sdk.paas.eventstore.models import (
     CustomEvent,
     Event,
     WorkflowEndEvent,
-    WorkflowStartEvent
+    WorkflowStartEvent,
 )
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))

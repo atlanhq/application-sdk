@@ -8,7 +8,11 @@ from temporalio.client import WorkflowFailureError
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.resources.temporal_resource import TemporalResource
+from application_sdk.workflows.resources.constants import TemporalConstants
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
+)
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)

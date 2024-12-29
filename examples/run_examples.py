@@ -14,10 +14,6 @@ from application_sdk.workflows.resources.temporal_resource import (
     TemporalResource,
 )
 from examples.application_sql import application_sql
-from examples.application_sql_miner import application_sql_miner
-from examples.application_sql_with_custom_transformer import (
-    application_sql_with_custom_transformer,
-)
 
 logger = logging.getLogger(__name__)
 

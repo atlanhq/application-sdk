@@ -1,6 +1,5 @@
 from datetime import datetime
-from typing import Any, Dict, Optional
-from uuid import uuid4
+from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
@@ -35,6 +34,7 @@ class WorkflowEndEvent(Event):
 
     workflow_output: Dict[str, Any] = Field(default_factory=dict)
 
+
 class WorkflowStartEvent(Event):
     event_type: str = Field(default="workflow_start")
 
@@ -43,18 +43,15 @@ class WorkflowStartEvent(Event):
     workflow_id: str | None = Field(default=None)
     workflow_run_id: str | None = Field(default=None)
 
+
 class CustomEvent(Event):
     event_type: str = Field(default="custom")
     data: Dict[str, Any] = Field(default_factory=dict)
 
+
 # TODO: Rename
 class DaprEvent(BaseModel):
-    data: (
-        WorkflowEndEvent
-        | ActivityEndEvent
-        | ActivityStartEvent
-        | CustomEvent
-    )
+    data: WorkflowEndEvent | ActivityEndEvent | ActivityStartEvent | CustomEvent
     datacontenttype: str = Field()
     id: str = Field()
     pubsubname: str = Field()
