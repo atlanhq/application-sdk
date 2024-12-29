@@ -75,9 +75,7 @@ class SQLDatabaseWorkflowBuilder(WorkflowBuilderInterface, ABC):
         super().set_temporal_resource(temporal_resource)
         return self
 
-    def set_batch_size(
-        self, batch_size: int
-    ) -> "SQLDatabaseWorkflowBuilder":
+    def set_batch_size(self, batch_size: int) -> "SQLDatabaseWorkflowBuilder":
         self.batch_size = batch_size
         return self
 

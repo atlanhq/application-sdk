@@ -606,9 +606,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     def __init__(self):
         super().__init__()
 
-    def set_sql_resource(
-        self, sql_resource: SQLResource
-    ) -> "SQLDatabaseWorkflow":
+    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLDatabaseWorkflow":
         self.sql_resource = sql_resource
         return self
 
@@ -618,15 +616,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         self.transformer = transformer
         return self
 
-    def set_application_name(
-        self, application_name: str
-    ) -> "SQLDatabaseWorkflow":
+    def set_application_name(self, application_name: str) -> "SQLDatabaseWorkflow":
         self.application_name = application_name
         return self
 
-    def set_batch_size(
-        self, batch_size: int
-    ) -> "SQLDatabaseWorkflow":
+    def set_batch_size(self, batch_size: int) -> "SQLDatabaseWorkflow":
         self.batch_size = batch_size
         return self
 
