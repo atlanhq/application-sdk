@@ -197,7 +197,7 @@ async def simulate_worklflow_end_event():
     )
 
 
-async def main():
+async def application_subscriber():
     # Start the worker
     await start_worker()
 
@@ -209,4 +209,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(application_subscriber())
