@@ -3,6 +3,7 @@ import os
 from typing import Any, Dict, List, Optional
 
 import aiofiles
+import daft
 import orjson
 import pandas as pd
 from temporalio import activity
@@ -136,6 +137,14 @@ class JsonOutput(Output):
 
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+
+    async def write_daft_df(self, df: daft.DataFrame):
+        """
+        Method to write the dataframe to a json file and push it to the object store
+        """
+        # Daft does not have a built in method to write the daft dataframe to json
+        # So we convert it to pandas dataframe and write it to json
+        await self.write_df(df.to_pandas())
 
     async def _flush_buffer(self):
         if not self.buffer or not self.current_buffer_size:

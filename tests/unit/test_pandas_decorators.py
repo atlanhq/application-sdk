@@ -30,12 +30,15 @@ class MockSingleThreadExecutor:
         return future
 
 
-class TestDecorators:
+class TestPandasDecorators:
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
     async def test_query_batch_basic(self, _):
+        """
+        Basic test to read the SQL data
+        """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @activity_pd(
@@ -50,19 +53,28 @@ class TestDecorators:
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
-    async def test_query_batch_multiple_chunks(self, _):
+    async def test_query_batch_single_chunk(self, _):
+        """
+        Test to read the SQL data in a single chunk
+        """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
             conn.execute(text("DELETE FROM numbers"))
-            conn.execute(text("INSERT INTO numbers (value) VALUES (0), (1), (2)"))
+            conn.execute(
+                text(
+                    "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                )
+            )
             conn.commit()
 
         @activity_pd(
-            batch_input=lambda self: SQLQueryInput(engine, "SELECT * FROM numbers")
+            batch_input=lambda self: SQLQueryInput(
+                engine, "SELECT * FROM numbers", chunk_size=None
+            )
         )
         async def func(self, batch_input: pd.DataFrame, **kwargs):
-            assert len(batch_input) == 3
+            assert len(batch_input) == 10
 
         await func(self)
 
@@ -70,59 +82,58 @@ class TestDecorators:
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
-    async def test_query_write_basic(self, _):
+    async def test_query_batch_multiple_chunks(self, _):
+        """
+        Test to read the SQL data in multiple chunks
+        """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
+            conn.execute(text("DELETE FROM numbers"))
+            conn.execute(
+                text(
+                    "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
+                )
+            )
+            conn.commit()
+
+        expected_row_count = [3, 3, 3, 1]
 
         @activity_pd(
-            batch_input=lambda self, arg: SQLQueryInput(engine, "SELECT 1 as value"),
-            out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/raw/table", upload_file_prefix="raw"
-            ),
-            out2=lambda self, arg: JsonOutput(
-                output_path="/tmp/transformed/table",
-                upload_file_prefix="transformed",
-            ),
+            batch_input=lambda self: SQLQueryInput(
+                engine, "SELECT * FROM numbers", chunk_size=3
+            )
         )
-        async def func(self, batch_input, out1, out2, **kwargs):
-            await out1.write_df(batch_input)
-            await out2.write_df(batch_input.map(lambda x: x + 1))
-            return batch_input
+        async def func(self, batch_input: pd.DataFrame, **kwargs):
+            assert len(batch_input) == expected_row_count.pop(0)
 
-        arg = {
-            "metadata_sql": "SELECT * FROM information_schema.tables",
-        }
-        await func(self, arg)
-        # Check files generated
-        with open("/tmp/raw/table/1.json") as f:
-            assert f.read().strip() == '{"value":1}'
-        with open("/tmp/transformed/table/1.json") as f:
-            assert f.read().strip() == '{"value":2}'
+        await func(self)
 
     async def test_json_input(self):
         # Create a sample JSON file for input
-        input_file_path = "/tmp/raw/schema/1.json"
+        input_file_path = "/tmp/tests/test_pandas_decorator/raw/schema/1.json"
         os.makedirs(os.path.dirname(input_file_path), exist_ok=True)
         with open(input_file_path, "w") as f:
             f.write('{"value":1}\n{"value":2}\n')
 
         @activity_pd(
             batch_input=lambda self, arg: JsonInput(
-                path="/tmp/raw/",
+                path="/tmp/tests/test_pandas_decorator/raw/",
                 file_suffixes=["schema/1.json"],
             ),
             out1=lambda self, arg: JsonOutput(
-                output_path="/tmp/transformed/schema",
+                output_path="/tmp/tests/test_pandas_decorator/transformed/schema",
                 upload_file_prefix="transformed",
             ),
         )
         async def func(self, batch_input, out1, **kwargs):
-            await out1.write_df(batch_input.applymap(lambda x: x + 1))
+            await out1.write_df(batch_input.map(lambda x: x + 1))
             return batch_input
 
         arg = {}
         await func(self, arg)
         # Check files generated
-        with open("/tmp/raw/schema/1.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/raw/schema/1.json") as f:
             assert f.read().strip() == '{"value":1}\n{"value":2}'
-        with open("/tmp/transformed/schema/1.json") as f:
+        with open("/tmp/tests/test_pandas_decorator/transformed/schema/1.json") as f:
             assert f.read().strip() == '{"value":2}\n{"value":3}'
