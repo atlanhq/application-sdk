@@ -98,8 +98,8 @@ async def main():
 
     examples = [
         application_sql,
-        application_sql_with_custom_transformer,
-        application_sql_miner,
+        # application_sql_with_custom_transformer,
+        # application_sql_miner,
     ]
 
     for example in examples:

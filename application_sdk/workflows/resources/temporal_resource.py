@@ -19,7 +19,6 @@ from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
 )
-
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.logging import get_logger
 from application_sdk.paas.eventstore import EventStore
@@ -56,15 +55,26 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
 
 class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        with workflow.unsafe.sandbox_unrestricted():
+            EventStore.create_workflow_start_event(
+                WorkflowStartEvent(
+                    workflow_name=workflow.info().workflow_type,
+                    workflow_id=workflow.info().workflow_id,
+                    workflow_run_id=workflow.info().run_id,
+                ),
+                topic_name="app_events",
+            )
         output = await super().execute_workflow(input)
-        EventStore.create_workflow_end_event(
-            WorkflowEndEvent(
-                workflow_name=workflow.info().workflow_type,
-                workflow_id=workflow.info().workflow_id,
-                workflow_run_id=workflow.info().run_id,
-            ),
-            topic_name="app_events",
-        )
+        with workflow.unsafe.sandbox_unrestricted():
+            EventStore.create_workflow_end_event(
+                WorkflowEndEvent(
+                    workflow_name=workflow.info().workflow_type,
+                    workflow_id=workflow.info().workflow_id,
+                    workflow_run_id=workflow.info().run_id,
+                    workflow_output=output
+                ),
+                topic_name="app_events",
+            )
         return output
 
 
@@ -195,8 +205,6 @@ class TemporalResource(ResourceInterface):
         if not self.client:
             raise ValueError("Client is not loaded")
 
-        print(f"PASSTHROUGH MODULES: {passthrough_modules}")
-
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -204,15 +212,7 @@ class TemporalResource(ResourceInterface):
             activities=activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
-                    "os",
-                    "pandas",
-                    "grpc",
-                    "dapr",
-                    "application_sdk",
-                    "grpcio",
-                    "json",
-                    "temporalio",
-                    "temporalio.common",
+                    *passthrough_modules
                 )
             ),
             interceptors=[EventInterceptor()],

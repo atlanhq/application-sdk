@@ -5,7 +5,8 @@ from typing import Any, Callable, List
 from temporalio import workflow
 from temporalio.client import WorkflowFailureError
 
-from application_sdk.workflows.resources.temporal_resource import TemporalResource
+from application_sdk.workflows.resources.temporal_resource import TemporalResource, TemporalConfig
+from application_sdk.workflows.resources.constants import TemporalConstants
 
 # from application_sdk.workflows.workflow import WorkflowBuilderInterface
 
@@ -18,12 +19,18 @@ class WorkflowInterface(ABC):
     def __init__(self):
         pass
 
-    async def start(self, workflow_args: Any, workflow_class: Any):
+    async def start(self, workflow_args: Any, workflow_class: Any | None = None):
         workflow_class = workflow_class or self.__class__
 
         try:
             if self.temporal_resource is None:
-                raise ValueError("Temporal resource is not set")
+                temporal_resource = TemporalResource(
+                    TemporalConfig(
+                        application_name=TemporalConstants.APPLICATION_NAME.value,
+                    )
+                )
+                await temporal_resource.load()
+                self.set_temporal_resource(temporal_resource)
 
             return await self.temporal_resource.start_workflow(
                 workflow_args=workflow_args, workflow_class=workflow_class

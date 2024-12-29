@@ -1,11 +1,14 @@
 import asyncio
+import logging
 import threading
+import os
 import time
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
 from temporalio import activity, workflow
 
+from application_sdk.paas.eventstore import EventStore
 from application_sdk.app.rest.fastapi import FastAPIApplication
 from application_sdk.workflows.builder import WorkflowBuilderInterface
 from application_sdk.workflows.controllers import (
@@ -21,6 +24,9 @@ from application_sdk.workflows.resources.temporal_resource import (
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.workers.worker import WorkflowWorker
 from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.paas.eventstore.models import DaprEvent, WorkflowEndEvent, CustomEvent
+
+logger = logging.getLogger(__name__)
 
 
 # Workflow
@@ -64,6 +70,14 @@ class SampleWorkflow(WorkflowInterface):
     @activity.defn
     async def activity_1(self, workflow_args: Any):
         print("Activity 1")
+
+        EventStore.create_custom_event(
+            event=CustomEvent(
+                data={"custom_key": "custom_value"}
+            ),
+            topic_name="app_events"
+        )
+
         return
 
     @activity.defn
@@ -73,6 +87,17 @@ class SampleWorkflow(WorkflowInterface):
 
     @workflow.run
     async def run(self, workflow_args: Any):
+        # This workflow is triggered by an event
+        event = DaprEvent(**workflow_args)
+
+        if event.data.event_type != "workflow_end":
+            return
+        
+        workflow_end_event: WorkflowEndEvent = event.data
+        counter = workflow_end_event.workflow_output["counter"]
+
+        counter += 1
+
         await workflow.execute_activity(
             self.activity_1,
             workflow_args,
@@ -84,7 +109,11 @@ class SampleWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=10),
         )
 
-    async def start(self, workflow_args: Any, workflow_class: Any):
+        return {
+            "counter": counter
+        }
+
+    async def start(self, workflow_args: Any, workflow_class: Any | None = None):
         return await super().start(workflow_args, self.__class__)
 
     def get_activities(self) -> List[Callable[..., Any]]:
@@ -94,46 +123,39 @@ class SampleWorkflow(WorkflowInterface):
 class SampleWorkflowBuilder(WorkflowBuilderInterface):
     temporal_resource: TemporalResource
 
+    def set_temporal_resource(
+        self, temporal_resource: TemporalResource
+    ) -> "SampleWorkflowBuilder":
+        self.temporal_resource = temporal_resource
+        return self
+
     def build(self, workflow: SampleWorkflow | None = None) -> WorkflowInterface:
         return SampleWorkflow().set_temporal_resource(self.temporal_resource)
 
 
-class SampleFastAPIApplication(FastAPIApplication):
-    def register_routes(self):
-        super().register_routes()
-
-        self.app.add_api_route(
-            "/setup_trigger",
-            self.setup_trigger,
-            methods=["POST"],
-        )
-
-    async def setup_trigger(self):
-        def should_trigger_workflow(workflow_input: Any) -> bool:
-            return True
-
-        return self.register_event_trigger(SampleWorkflow, should_trigger_workflow)
-
-
 async def start_fast_api_app():
-    fast_api_app = SampleFastAPIApplication(
+    fast_api_app = FastAPIApplication(
         auth_controller=WorkflowAuthController(),
         metadata_controller=WorkflowMetadataController(),
         preflight_check_controller=WorkflowPreflightCheckController(),
         workflow=SQLWorkflow(),
     )
 
-    def should_trigger_workflow(event: Any) -> bool:
-        return True
+    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
+    def should_trigger_workflow(event: DaprEvent) -> bool:
+        if event.data.event_type == "workflow_end":
+            workflow_end_event: WorkflowEndEvent = event.data
+            print(f"Workflow end event: {workflow_end_event}")
+
+            return workflow_end_event.workflow_name == "dependent_workflow"
+        
+        return False
 
     fast_api_app.register_event_trigger(SampleWorkflow, should_trigger_workflow)
 
     await fast_api_app.start()
 
-
-async def start_workflow():
-    await asyncio.sleep(5)
-
+async def start_worker():
     temporal_resource = TemporalResource(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
@@ -157,15 +179,32 @@ async def start_workflow():
         target=lambda: asyncio.run(worker.start()), daemon=True
     )
     worker_thread.start()
-
-    # wait for the worker to start
     time.sleep(3)
 
-    return await workflow.start({}, SampleWorkflow)
+async def simulate_worklflow_end_event():
+    await asyncio.sleep(5)
+    
+    # Simulates that a dependent workflow has ended
+    EventStore.create_workflow_end_event(
+        event = WorkflowEndEvent(
+            workflow_name="dependent_workflow",
+            workflow_id="test",
+            workflow_run_id="test",
+            workflow_output={"counter": 0}
+        ),
+        topic_name="app_events"
+    )
 
 
 async def main():
-    await asyncio.gather(start_workflow(), start_fast_api_app())
+    # Start the worker
+    await start_worker()
+
+    # Start the workflow and the fast api app
+    ## We start the FastAPI app first, so that it can listen for events
+    ## We regsiter an event trigger in the FastAPI app, so that it can trigger the SampleWorkflow 
+    ## When the dependent workflow ends, it will trigger the SampleWorkflow
+    await asyncio.gather(simulate_worklflow_end_event(), start_fast_api_app())
 
 
 if __name__ == "__main__":

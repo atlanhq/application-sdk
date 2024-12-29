@@ -28,7 +28,7 @@ from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.workflow import WorkflowInterface
-
+from application_sdk.paas.eventstore.models import DaprEvent
 
 class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
     lifespan = None
@@ -161,11 +161,10 @@ class FastAPIApplication(AtlanAPIApplication):
         print(f"Received event {event}")
         print(f"Workflow triggers: {len(self.workflow_triggers)}")
         for trigger in self.workflow_triggers:
-            if trigger["should_trigger_workflow"](event):
+            if trigger["should_trigger_workflow"](DaprEvent(**event)):
                 print(f"Triggering workflow {trigger['workflow']} with event {event}")
 
-                workflow = trigger["workflow"]()
-                await workflow.start(
+                await trigger["workflow"]().start(
                     workflow_args=event, workflow_class=trigger["workflow"].__class__
                 )
 

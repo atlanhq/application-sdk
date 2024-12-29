@@ -14,7 +14,7 @@ from application_sdk.paas.eventstore.models import (
     CustomEvent,
     Event,
     WorkflowEndEvent,
-    WorkflowStartEvent,
+    WorkflowStartEvent
 )
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
