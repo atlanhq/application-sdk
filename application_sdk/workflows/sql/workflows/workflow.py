@@ -1171,11 +1171,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 database_name,
             )
             for database_name in self.databases_list
-            for task in [
-                self.fetch_schemas,
-                self.fetch_tables,
-                self.fetch_columns
-            ]
+            for task in [self.fetch_schemas, self.fetch_tables, self.fetch_columns]
         ]
 
         await asyncio.gather(*fetch_and_transforms)
