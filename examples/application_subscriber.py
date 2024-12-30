@@ -183,7 +183,16 @@ async def start_fast_api_app():
         return False
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
-    fast_api_app.register_event_trigger(SampleWorkflow, should_trigger_workflow)
+    temporal_resource = TemporalResource(
+        TemporalConfig(
+            application_name=TemporalConstants.APPLICATION_NAME.value,
+        )
+    )
+    await temporal_resource.load()
+    sample_worflow = (
+        SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
+    )
+    fast_api_app.register_event_trigger(sample_worflow, should_trigger_workflow)
 
     await fast_api_app.start()
 

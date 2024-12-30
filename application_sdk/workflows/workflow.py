@@ -8,11 +8,7 @@ from temporalio.client import WorkflowFailureError
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.resources.constants import TemporalConstants
-from application_sdk.workflows.resources.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
+from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = logging.getLogger(__name__)
@@ -43,13 +39,7 @@ class WorkflowInterface(ABC):
 
         try:
             if self.temporal_resource is None:
-                temporal_resource = TemporalResource(
-                    TemporalConfig(
-                        application_name=TemporalConstants.APPLICATION_NAME.value,
-                    )
-                )
-                await temporal_resource.load()
-                self.set_temporal_resource(temporal_resource)
+                raise ValueError("Temporal resource is not set")
 
             return await self.temporal_resource.start_workflow(
                 workflow_args=workflow_args, workflow_class=workflow_class

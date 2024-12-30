@@ -155,13 +155,15 @@ class FastAPIApplication(AtlanAPIApplication):
 
     def register_event_trigger(
         self,
-        workflow: type[WorkflowInterface],
+        workflow: WorkflowInterface,
         should_trigger_workflow: Callable[[Any], bool],
     ) -> List[dict[str, Any]]:
         self.workflow_triggers.append(
             {"workflow": workflow, "should_trigger_workflow": should_trigger_workflow}
         )
-        return [trigger["workflow"].__name__ for trigger in self.workflow_triggers]
+        return [
+            trigger["workflow"].__class__.__name__ for trigger in self.workflow_triggers
+        ]
 
     async def get_dapr_subscriptions(
         self,
@@ -182,7 +184,7 @@ class FastAPIApplication(AtlanAPIApplication):
                     f"Triggering workflow {trigger['workflow']} with event {event}"
                 )
 
-                await trigger["workflow"]().start(
+                await trigger["workflow"].start(
                     workflow_args=event, workflow_class=trigger["workflow"].__class__
                 )
 
