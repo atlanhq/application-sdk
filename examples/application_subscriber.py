@@ -75,7 +75,7 @@ class SampleWorkflow(WorkflowInterface):
     async def activity_1(self):
         logger.info("Activity 1")
 
-        EventStore.create_custom_event(
+        EventStore.create_event(
             event=CustomEvent(data={"custom_key": "custom_value"}),
             topic_name=EventStore.TOPIC_NAME,
         )
@@ -201,7 +201,7 @@ async def simulate_worklflow_end_event():
     await asyncio.sleep(5)
 
     # Simulates that a dependent workflow has ended
-    EventStore.create_workflow_end_event(
+    EventStore.create_event(
         event=WorkflowEndEvent(
             workflow_name="dependent_workflow",
             workflow_id="test",

@@ -37,7 +37,7 @@ logger = get_logger(__name__)
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        EventStore.create_activity_start_event(
+        EventStore.create_event(
             ActivityStartEvent(
                 activity_id=activity.info().activity_id,
                 activity_type=activity.info().activity_type,
@@ -45,7 +45,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
             topic_name=EventStore.TOPIC_NAME,
         )
         output = await super().execute_activity(input)
-        EventStore.create_activity_end_event(
+        EventStore.create_event(
             ActivityEndEvent(
                 activity_id=activity.info().activity_id,
                 activity_type=activity.info().activity_type,
@@ -58,7 +58,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
 class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
         with workflow.unsafe.sandbox_unrestricted():
-            EventStore.create_workflow_start_event(
+            EventStore.create_event(
                 WorkflowStartEvent(
                     workflow_name=workflow.info().workflow_type,
                     workflow_id=workflow.info().workflow_id,
@@ -68,7 +68,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             )
         output = await super().execute_workflow(input)
         with workflow.unsafe.sandbox_unrestricted():
-            EventStore.create_workflow_end_event(
+            EventStore.create_event(
                 WorkflowEndEvent(
                     workflow_name=workflow.info().workflow_type,
                     workflow_id=workflow.info().workflow_id,

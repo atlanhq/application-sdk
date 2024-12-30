@@ -7,14 +7,7 @@ from dapr import clients
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.paas.eventstore.models import (
-    ActivityEndEvent,
-    ActivityStartEvent,
-    CustomEvent,
-    Event,
-    WorkflowEndEvent,
-    WorkflowStartEvent,
-)
+from application_sdk.paas.eventstore.models import Event
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -24,7 +17,7 @@ class EventStore:
     TOPIC_NAME = "app_events"
 
     @classmethod
-    def create_generic_event(cls, event: Event, topic_name: str = TOPIC_NAME):
+    def create_event(cls, event: Event, topic_name: str = TOPIC_NAME):
         """
         Create a new generic event.
 
@@ -43,23 +36,3 @@ class EventStore:
             )
 
         activity.logger.info(f"Published event to {topic_name}")
-
-    @classmethod
-    def create_workflow_start_event(cls, event: WorkflowStartEvent, topic_name: str):
-        cls.create_generic_event(event, topic_name=topic_name)
-
-    @classmethod
-    def create_workflow_end_event(cls, event: WorkflowEndEvent, topic_name: str):
-        cls.create_generic_event(event, topic_name=topic_name)
-
-    @classmethod
-    def create_activity_start_event(cls, event: ActivityStartEvent, topic_name: str):
-        cls.create_generic_event(event, topic_name=topic_name)
-
-    @classmethod
-    def create_activity_end_event(cls, event: ActivityEndEvent, topic_name: str):
-        cls.create_generic_event(event, topic_name=topic_name)
-
-    @classmethod
-    def create_custom_event(cls, event: CustomEvent, topic_name: str):
-        cls.create_generic_event(event, topic_name=topic_name)
