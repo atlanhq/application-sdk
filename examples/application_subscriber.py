@@ -110,7 +110,7 @@ class SampleWorkflow(WorkflowInterface):
 
         return {"counter": counter}
 
-    async def start(self, workflow_args: Any, workflow_class: Any | None = None):
+    async def start(self, workflow_args: Any, workflow_class: Any):
         return await super().start(workflow_args, self.__class__)
 
     def get_activities(self) -> List[Callable[..., Any]]:

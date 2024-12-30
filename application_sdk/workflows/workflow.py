@@ -34,7 +34,7 @@ class WorkflowInterface(ABC):
         if not result or "error" in result:
             raise ValueError("Preflight check failed")
 
-    async def start(self, workflow_args: Any, workflow_class: Any | None = None):
+    async def start(self, workflow_args: Any, workflow_class: Any):
         workflow_class = workflow_class or self.__class__
 
         try:
