@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
+from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.app.rest.fastapi.models.workflow import (
     PreflightCheckRequest,
     PreflightCheckResponse,
@@ -17,7 +17,7 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
-class SampleWorkflow(Mock):
+class SampleWorkflow(AsyncMock):
     pass
 
 
@@ -128,7 +128,12 @@ class TestFastAPIApplication:
             return False
 
         sample_workflow = sample_workflow_builder.build()
-        app.register_event_trigger(sample_workflow, should_trigger_workflow)
+        app.register_workflow(
+            sample_workflow,
+            triggers=[
+                EventWorkflowTrigger(should_trigger_workflow=should_trigger_workflow)
+            ],
+        )
 
         # Act
         event_data = {
