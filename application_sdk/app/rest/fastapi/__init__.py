@@ -1,6 +1,7 @@
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, FastAPI, status
+from pydantic import BaseModel
 
 from application_sdk import logging
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
@@ -44,6 +45,20 @@ class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
         super().__init__(*args, **kwargs)
 
 
+class WorkflowTrigger(BaseModel):
+    workflow: Optional[WorkflowInterface] = None
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class HttpWorkflowTrigger(WorkflowTrigger):
+    endpoint: str
+    methods: List[str]
+
+
+class EventWorkflowTrigger(WorkflowTrigger):
+    should_trigger_workflow: Callable[[Any], bool]
+
+
 class FastAPIApplication(AtlanAPIApplication):
     app: FastAPI
 
@@ -51,7 +66,8 @@ class FastAPIApplication(AtlanAPIApplication):
     dapr_router: APIRouter = APIRouter()
     events_router: APIRouter = APIRouter()
 
-    workflow: WorkflowInterface | None = None
+    workflows: List[WorkflowInterface] = []
+    event_triggers: List[EventWorkflowTrigger] = []
 
     def __init__(
         self,
@@ -59,7 +75,6 @@ class FastAPIApplication(AtlanAPIApplication):
         metadata_controller: WorkflowMetadataControllerInterface | None = None,
         preflight_check_controller: WorkflowPreflightCheckControllerInterface
         | None = None,
-        workflow: WorkflowInterface | None = None,
         config: FastAPIApplicationConfig = FastAPIApplicationConfig(),
         *args,
         **kwargs,
@@ -72,10 +87,6 @@ class FastAPIApplication(AtlanAPIApplication):
         self.auth_controller = auth_controller
         self.metadata_controller = metadata_controller
         self.preflight_check_controller = preflight_check_controller
-
-        self.workflow = workflow
-
-        self.workflow_triggers: List[dict[str, Any]] = []
 
         super().__init__(
             auth_controller,
@@ -98,6 +109,36 @@ class FastAPIApplication(AtlanAPIApplication):
 
         super().register_routers()
 
+    def register_workflow(
+        self, workflow: WorkflowInterface, triggers: List[WorkflowTrigger]
+    ):
+        for trigger in triggers:
+            trigger.workflow = workflow
+
+            if isinstance(trigger, HttpWorkflowTrigger):
+
+                async def start_workflow(body: WorkflowRequest):
+                    workflow_data = await workflow.start(
+                        body.model_dump(), workflow_class=workflow.__class__
+                    )
+                    return WorkflowResponse(
+                        success=True,
+                        message="Workflow started successfully",
+                        data=WorkflowData(
+                            workflow_id=workflow_data.get("workflow_id") or "",
+                            run_id=workflow_data.get("run_id") or "",
+                        ),
+                    )
+
+                self.workflow_router.add_api_route(
+                    trigger.endpoint,
+                    start_workflow,
+                    methods=trigger.methods,
+                    response_model=WorkflowResponse,
+                )
+            elif isinstance(trigger, EventWorkflowTrigger):
+                self.event_triggers.append(trigger)
+
     def register_routes(self):
         self.workflow_router.add_api_route(
             "/auth",
@@ -117,13 +158,6 @@ class FastAPIApplication(AtlanAPIApplication):
             methods=["POST"],
             response_model=PreflightCheckResponse,
         )
-        self.workflow_router.add_api_route(
-            "/start",
-            self.start_workflow,
-            methods=["POST"],
-            response_model=WorkflowResponse,
-        )
-
         self.workflow_router.add_api_route(
             "/config/{config_id}",
             self.get_workflow_config,
@@ -153,18 +187,6 @@ class FastAPIApplication(AtlanAPIApplication):
 
         super().register_routes()
 
-    def register_event_trigger(
-        self,
-        workflow: WorkflowInterface,
-        should_trigger_workflow: Callable[[Any], bool],
-    ) -> List[dict[str, Any]]:
-        self.workflow_triggers.append(
-            {"workflow": workflow, "should_trigger_workflow": should_trigger_workflow}
-        )
-        return [
-            trigger["workflow"].__class__.__name__ for trigger in self.workflow_triggers
-        ]
-
     async def get_dapr_subscriptions(
         self,
     ) -> List[dict[str, Any]]:
@@ -178,14 +200,14 @@ class FastAPIApplication(AtlanAPIApplication):
 
     async def on_event(self, event: dict[str, Any]):
         logger.info(f"Received event {event}")
-        for trigger in self.workflow_triggers:
-            if trigger["should_trigger_workflow"](DaprEvent(**event)):
+        for trigger in self.event_triggers:
+            if trigger.should_trigger_workflow(DaprEvent(**event)):
                 logger.info(
-                    f"Triggering workflow {trigger['workflow']} with event {event}"
+                    f"Triggering workflow {trigger.workflow} with event {event}"
                 )
 
-                await trigger["workflow"].start(
-                    workflow_args=event, workflow_class=trigger["workflow"].__class__
+                await trigger.workflow.start(
+                    workflow_args=event, workflow_class=trigger.workflow.__class__
                 )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
@@ -225,17 +247,4 @@ class FastAPIApplication(AtlanAPIApplication):
             success=True,
             message="Workflow configuration updated successfully",
             data=config,
-        )
-
-    async def start_workflow(self, body: WorkflowRequest) -> WorkflowResponse:
-        workflow_data = await self.workflow.start(
-            body.model_dump(), workflow_class=self.workflow.__class__
-        )
-        return WorkflowResponse(
-            success=True,
-            message="Workflow started successfully",
-            data=WorkflowData(
-                workflow_id=workflow_data["workflow_id"],
-                run_id=workflow_data["run_id"],
-            ),
         )

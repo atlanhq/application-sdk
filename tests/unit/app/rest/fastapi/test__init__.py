@@ -9,9 +9,21 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
+from application_sdk.paas.eventstore.models import DaprEvent, WorkflowEndEvent
+from application_sdk.workflows.builder import WorkflowBuilderInterface
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
+from application_sdk.workflows.workflow import WorkflowInterface
+
+
+class SampleWorkflow(Mock):
+    pass
+
+
+class SampleWorkflowBuilder(WorkflowBuilderInterface):
+    def build(self) -> WorkflowInterface:
+        return SampleWorkflow()
 
 
 class TestFastAPIApplication:
@@ -26,6 +38,14 @@ class TestFastAPIApplication:
         self, mock_controller: WorkflowPreflightCheckControllerInterface
     ) -> FastAPIApplication:
         return FastAPIApplication(preflight_check_controller=mock_controller)
+
+    @pytest.fixture
+    def sample_workflow(self) -> SampleWorkflow:
+        return SampleWorkflow()
+
+    @pytest.fixture
+    def sample_workflow_builder(self) -> SampleWorkflowBuilder:
+        return SampleWorkflowBuilder()
 
     @pytest.fixture
     def sample_payload(self) -> Dict[str, Any]:
@@ -98,3 +118,39 @@ class TestFastAPIApplication:
 
         assert str(exc_info.value) == "Failed to fetch metadata"
         mock_controller.preflight_check.assert_called_once_with(sample_payload)
+
+    async def test_event_trigger(
+        self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
+    ):
+        def should_trigger_workflow(event: DaprEvent):
+            if event.data.event_type == "workflow_end":
+                return True
+            return False
+
+        sample_workflow = sample_workflow_builder.build()
+        app.register_event_trigger(sample_workflow, should_trigger_workflow)
+
+        # Act
+        event_data = {
+            "data": WorkflowEndEvent(
+                workflow_id="test-workflow-123",
+                workflow_name="test_workflow",
+            ),
+            "datacontenttype": "application/json",
+            "id": "123e4567-e89b-12d3-a456-426614174000",
+            "pubsubname": "pubsub",
+            "source": "workflow-engine",
+            "specversion": "1.0",
+            "time": "2024-03-20T12:00:00Z",
+            "topic": "workflow-events",
+            "traceid": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "tracestate": "",
+            "type": "com.dapr.event.sent",
+        }
+
+        await app.on_event(event_data)
+
+        # Assert
+        print("sample_workflow")
+        # assert sample_workflow.start.assert_called_once()

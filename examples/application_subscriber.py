@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict, List
 
 from temporalio import activity, workflow
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
+from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
     WORKFLOW_END_EVENT,
@@ -26,7 +26,6 @@ from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.workers.worker import WorkflowWorker
 from application_sdk.workflows.workflow import WorkflowInterface
 
@@ -162,7 +161,6 @@ async def start_fast_api_app():
         auth_controller=WorkflowAuthController(),
         metadata_controller=WorkflowMetadataController(),
         preflight_check_controller=WorkflowPreflightCheckController(),
-        workflow=SQLWorkflow(),
     )
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
@@ -192,7 +190,14 @@ async def start_fast_api_app():
     sample_worflow = (
         SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
     )
-    fast_api_app.register_event_trigger(sample_worflow, should_trigger_workflow)
+    fast_api_app.register_workflow(
+        sample_worflow,
+        triggers=[
+            EventWorkflowTrigger(
+                should_trigger_workflow=should_trigger_workflow,
+            )
+        ],
+    )
 
     await fast_api_app.start()
 
