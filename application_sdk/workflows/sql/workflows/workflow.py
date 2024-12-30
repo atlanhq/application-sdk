@@ -833,65 +833,38 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity.defn(name="db_fetch_schemas")
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/database/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(
-                f"{workflow_args['output_path']}/raw/database"
-            ),
-        ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_schemas(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
-    ):
+    async def fetch_schemas(self, raw_output: JsonOutput, **workflow_args):
         """
         Fetch and process schemas from each database fetched by fetch_databases.
         """
+        # Get the current database name from the workflow_args for schema fetching
+        database_name = workflow_args["database_name"]
 
-        # Get the list of databases to process
-        database_list = batch_input["database_name"].tolist()
+        # Fetch the schemas for this database
+        schemas_input = self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_schema_sql, workflow_args=workflow_args
+            ),
+        )
+        schemas_input_df = await schemas_input.get_batched_dataframe()
 
-        # Create a list of tasks to fetch schemas concurrently
-        execute_queries = [
-            self._fetch_data_for_db(
-                db_name, workflow_args, self.fetch_schema_sql, self.semaphore
-            )
-            for db_name in database_list
-        ]
+        # Write the DataFrame to the output
+        for schema_chunk in schemas_input_df:
+            await raw_output.write_df(schema_chunk, file_suffix=database_name)
 
-        # Use asyncio.gather to execute all schema fetches concurrently
-        results = await asyncio.gather(*execute_queries)
-        # Flatten the list of DataFrames if any generator is returned
-        flat_results = []
-        for result in results:
-            # If the result is a generator, convert it to a list of DataFrames
-            if isinstance(result, (pd.DataFrame, pd.Series)):
-                if not result.empty:  # Check if the DataFrame is not empty
-                    flat_results.append(result)
-            else:
-                # If it's a generator, convert it to a list of DataFrames
-                for df in result:
-                    if not df.empty:  # Check if the DataFrame is not empty
-                        flat_results.append(df)
-
-        if flat_results:
-            combined_results = pd.concat(flat_results, ignore_index=True)
-            await raw_output.write_df(combined_results)
-
-            return {
+        return [
+            {
                 "chunk_count": raw_output.chunk_count,
                 "typename": "schema",
                 "total_record_count": raw_output.total_record_count,
             }
-        else:
-            return {
-                "chunk_count": 0,
-                "typename": "schema",
-                "total_record_count": 0,
-            }
+        ]
 
     @activity.defn(name="db_fetch_tables")
     @auto_heartbeater
@@ -905,7 +878,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         """
         Fetch and process tables from each database fetched by fetch_databases.
         """
-        # Update workflow_args with the current database name for table fetching
+        # Get the current database name from the workflow_args for table fetching
         database_name = workflow_args["database_name"]
 
         # Fetch the tables for this database
@@ -932,63 +905,38 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     @activity.defn(name="db_fetch_columns")
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/database/",
-            file_suffixes=SQLDatabaseWorkflow.get_valid_file_suffixes(
-                f"{workflow_args['output_path']}/raw/database"
-            ),
-        ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",
             upload_file_prefix=workflow_args["output_prefix"],
         ),
     )
-    async def fetch_columns(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **workflow_args
-    ):
+    async def fetch_columns(self, raw_output: JsonOutput, **workflow_args):
         """
         Fetch and process columns from each database fetched by fetch_databases.
         """
-        database_list = batch_input["database_name"].tolist()
+        # Get the current database name from the workflow_args for column fetching
+        database_name = workflow_args["database_name"]
 
-        # Create a list of tasks to fetch columns concurrently
-        execute_queries = [
-            self._fetch_data_for_db(
-                db_name, workflow_args, self.fetch_column_sql, self.semaphore
-            )
-            for db_name in database_list
-        ]
+        # Fetch the columns for this database
+        columns_input = self.sql_resource.sql_input(
+            engine=self.sql_resource.engine,
+            query=SQLWorkflow.prepare_query(
+                query=self.fetch_column_sql, workflow_args=workflow_args
+            ),
+        )
+        columns_input_df = await columns_input.get_batched_dataframe()
 
-        # Use asyncio.gather to execute all column fetches concurrently
-        results = await asyncio.gather(*execute_queries)
-        # Flatten the list of DataFrames if any generator is returned
-        flat_results = []
-        for result in results:
-            # If the result is a generator, convert it to a list of DataFrames
-            if isinstance(result, (pd.DataFrame, pd.Series)):
-                if not result.empty:  # Check if the DataFrame is not empty
-                    flat_results.append(result)
-            else:
-                # If it's a generator, convert it to a list of DataFrames
-                for df in result:
-                    if not df.empty:  # Check if the DataFrame is not empty
-                        flat_results.append(df)
+        # Write the DataFrame to the output
+        for column_chunk in columns_input_df:
+            await raw_output.write_df(column_chunk, file_suffix=database_name)
 
-        if flat_results:
-            combined_results = pd.concat(flat_results, ignore_index=True)
-            await raw_output.write_df(combined_results)
-
-            return {
+        return [
+            {
                 "chunk_count": raw_output.chunk_count,
                 "typename": "column",
                 "total_record_count": raw_output.total_record_count,
             }
-        else:
-            return {
-                "chunk_count": 0,
-                "typename": "column",
-                "total_record_count": 0,
-            }
+        ]
 
     @activity.defn(name="db_write_type_metadata")
     @auto_heartbeater
@@ -1001,11 +949,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         )
     )
     async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
-        if kwargs.get("typename") == "table":
+        if kwargs.get("typename") in ["databases", "database"]:
+            await metadata_output.write_metadata()
+        else:
             file_suffix = kwargs.get("database_name")
             await metadata_output.write_metadata(file_suffix)
-        else:
-            await metadata_output.write_metadata()
 
     @activity.defn(name="db_write_raw_type_metadata")
     @auto_heartbeater
@@ -1020,11 +968,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
     async def write_raw_type_metadata(
         self, metadata_output, batch_input=None, **kwargs
     ):
-        if kwargs.get("typename") == "table":
+        if kwargs.get("typename") in ["databases", "database"]:
+            await metadata_output.write_metadata()
+        else:
             file_suffix = kwargs.get("database_name")
             await metadata_output.write_metadata(file_suffix)
-        else:
-            await metadata_output.write_metadata()
 
     @activity.defn(name="db_transform_data")
     @auto_heartbeater
@@ -1047,11 +995,11 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             batch_input, typename, workflow_id, workflow_run_id
         )
 
-        if typename == "table":
+        if typename in ["databases", "database"]:
+            await transformed_output.write_df(transformed_chunk)
+        else:
             file_suffix = kwargs.get("database_name")
             await transformed_output.write_df(transformed_chunk, file_suffix)
-        else:
-            await transformed_output.write_df(transformed_chunk)
 
         return {
             "total_record_count": transformed_output.total_record_count,
@@ -1122,12 +1070,12 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        if typename == "table":
+        if typename in ["databases", "database"]:
+            batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
+        else:
             batches, chunk_starts = self.get_transform_batches(
                 chunk_count, typename, database_name
             )
-        else:
-            batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
         for i in range(len(batches)):
             transform_activities.append(
@@ -1215,21 +1163,19 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             self.fetch_databases, workflow_args, retry_policy
         )
 
-        fetch_and_transforms_tables = [
+        fetch_and_transforms = [
             self.fetch_and_transform(
-                self.fetch_tables,
+                task,
                 {**workflow_args, "database_name": database_name},
                 retry_policy,
                 database_name,
             )
             for database_name in self.databases_list
-        ]
-
-        await asyncio.gather(*fetch_and_transforms_tables)
-
-        fetch_and_transforms = [
-            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
+            for task in [
+                self.fetch_schemas,
+                self.fetch_tables,
+                self.fetch_columns
+            ]
         ]
 
         await asyncio.gather(*fetch_and_transforms)
