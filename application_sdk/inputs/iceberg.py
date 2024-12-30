@@ -12,6 +12,10 @@ logger = logging.get_logger(__name__)
 
 
 class IcebergInput(Input):
+    """
+    Iceberg Input class to read data from Iceberg tables using daft and pandas
+    """
+
     table: Table
     chunk_size: Optional[int]
 
@@ -53,6 +57,9 @@ class IcebergInput(Input):
             # divide the table into chunks and return them
             partitioned_df = iceberg_table_daft_df.into_partitions(partition_count)
             for partition in partitioned_df.iter_partitions():
+                # when a daft dataframe is partitioned, it is returned as a micro partition object
+                # and it does not provide a method to convert it to a daft dataframe
+                # hence converting it to a dictionary and then to a daft dataframe
                 yield daft.from_pydict(partition.to_pydict())
 
         except Exception as e:

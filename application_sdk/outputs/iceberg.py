@@ -12,6 +12,10 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class IcebergOutput(Output):
+    """
+    Iceberg Output class to write data to Iceberg tables using daft and pandas
+    """
+
     def __init__(
         self,
         iceberg_catalog: Catalog,
@@ -20,7 +24,6 @@ class IcebergOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
     ):
-        # self.output_path = output_path
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.iceberg_catalog = iceberg_catalog
