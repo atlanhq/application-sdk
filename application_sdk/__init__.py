@@ -4,9 +4,6 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
-import daft
-import pandas as pd
-
 from application_sdk import logging
 from application_sdk.inputs import Input
 
@@ -16,13 +13,13 @@ logger = logging.get_logger(__name__)
 executor = ThreadPoolExecutor()
 
 
-def is_empty_dataframe(df: Union[pd.DataFrame, daft.DataFrame]) -> bool:
+def is_empty_dataframe(df) -> bool:  # type: ignore
     """
     Helper method to check if the dataframe has any rows
     """
-    if isinstance(df, pd.DataFrame):
+    if str(df.__class__) == "<class 'pandas.core.frame.DataFrame'>":  # type: ignore
         return df.empty
-    if isinstance(df, daft.DataFrame):
+    if str(df.__class__) == "<class 'daft.dataframe.dataframe.DataFrame'>":  # type: ignore
         return df.count_rows() == 0
     return True
 
@@ -36,7 +33,7 @@ def is_lambda_function(obj: Any) -> bool:
 
 async def to_async(
     func: Callable, *args: Dict[str, Any], **kwargs: Dict[str, Any]
-) -> Iterator[Union[pd.DataFrame, daft.DataFrame]]:
+) -> Iterator[Union["pd.DataFrame", "daft.DataFrame"]]:  # noqa: F821
     """
     Wrapper method to convert a sync method to async
     Used to convert the input method that are sync to async and keep the logic consistent
@@ -50,7 +47,7 @@ async def to_async(
 
 async def _get_dataframe(
     input_obj: Input, get_dataframe_fn: Callable
-) -> Union[pd.DataFrame, daft.DataFrame]:
+) -> Union["pd.DataFrame", "daft.DataFrame"]:  # noqa: F821
     """
     Helper method to call the get_dataframe method of the input object
     """
@@ -83,7 +80,7 @@ async def prepare_fn_kwargs(
 async def process_batch(
     self,
     f: Callable,
-    df_batch: Union[pd.DataFrame, daft.DataFrame],
+    df_batch: Union["pd.DataFrame", "daft.DataFrame"],  # noqa: F821
     fn_kwargs: Dict[str, Any],
 ) -> Optional[Dict]:
     """

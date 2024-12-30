@@ -29,6 +29,10 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Build Docker image
+      - name: Build Docker Image
+        run: docker build -t application-sdk-image -f ./Dockerfile .
+
       - name: Set up Python 3.11
         id: setup-python
         uses: actions/setup-python@v1
@@ -61,7 +65,7 @@ jobs:
       #----------------------------------------------
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root --extras "workflows dashboard"
+        run: poetry install --no-interaction --no-root --extras "workflows dashboard decorator"
 
       - name: Run Unit and Integration Tests with Coverage
         run: |
