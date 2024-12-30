@@ -69,7 +69,8 @@ class TestDaftDecorators:
         """
         Test to read the SQL data in a single chunk
         """
-        engine = sqlalchemy.create_engine("sqlite:///:memory:")
+        sqlite_db_url = "sqlite:////tmp/test_query_batch_single_chunk.db"
+        engine = sqlalchemy.create_engine(sqlite_db_url)
         with engine.connect() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS numbers (value INTEGER)"))
             conn.execute(text("DELETE FROM numbers"))
