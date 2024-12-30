@@ -225,6 +225,7 @@ async def test_create_worker(
         workflows=workflow_classes,
         activities=activities,
         workflow_runner=ANY,
+        interceptors=ANY,
     )
 
     assert worker == mock_worker_class.return_value
