@@ -1,5 +1,6 @@
 # Request/Response DTOs for workflows
 
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, RootModel
@@ -16,10 +17,32 @@ class TestAuthResponse(BaseModel):
     message: str
 
 
-class FetchMetadataRequest(RootModel):
-    root: Dict[str, Any] = Field(
-        ..., description="Root JSON object containing database credentials"
-    )
+class MetadataType(str, Enum):
+    DATABASE = "database"
+    SCHEMA = "schema"
+
+
+class FetchMetadataRequest(BaseModel):
+    type: Optional[MetadataType] = None
+    database: Optional[str] = None
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "type": None,  # Fetch both databases and schemas
+                    "database": None,
+                },
+                {
+                    "type": "database",  # Fetch only databases
+                    "database": None,
+                },
+                {
+                    "type": "schema",  # Fetch schemas for a specific database
+                    "database": "example_db",
+                },
+            ]
+        }
+    }
 
 
 class FetchMetadataResponse(BaseModel):
