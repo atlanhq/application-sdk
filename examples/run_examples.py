@@ -18,7 +18,6 @@ from examples.application_sql_miner import application_sql_miner
 from examples.application_sql_with_custom_transformer import (
     application_sql_with_custom_transformer,
 )
-from examples.application_subscriber import application_subscriber
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +100,6 @@ async def main():
         application_sql,
         application_sql_with_custom_transformer,
         application_sql_miner,
-        application_subscriber,
     ]
 
     for example in examples:
