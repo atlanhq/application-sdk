@@ -119,7 +119,7 @@ class TestFastAPIApplication:
         assert str(exc_info.value) == "Failed to fetch metadata"
         mock_controller.preflight_check.assert_called_once_with(sample_payload)
 
-    async def test_event_trigger(
+    async def test_event_trigger_success(
         self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
     ):
         def should_trigger_workflow(event: AtlanEvent):
@@ -157,5 +157,50 @@ class TestFastAPIApplication:
         await app.on_event(event_data)
 
         # Assert
-        print("sample_workflow")
-        # assert sample_workflow.start.assert_called_once()
+        sample_workflow.start.assert_called()
+
+    async def test_event_trigger_conditions(
+        self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
+    ):
+        def trigger_workflow_on_start(event: AtlanEvent):
+            if event.data.event_type == "workflow_start":
+                return True
+            return False
+
+        def trigger_workflow_name(event: AtlanEvent):
+            if event.data.workflow_name == "wrong_workflow":
+                return True
+            return False
+
+        sample_workflow = sample_workflow_builder.build()
+        app.register_workflow(
+            sample_workflow,
+            triggers=[
+                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_on_start),
+                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_name),
+            ],
+        )
+
+        # Act
+        event_data = {
+            "data": WorkflowEndEvent(
+                workflow_id="test-workflow-123",
+                workflow_name="test_workflow",
+            ),
+            "datacontenttype": "application/json",
+            "id": "123e4567-e89b-12d3-a456-426614174000",
+            "pubsubname": "pubsub",
+            "source": "workflow-engine",
+            "specversion": "1.0",
+            "time": "2024-03-20T12:00:00Z",
+            "topic": "workflow-events",
+            "traceid": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "tracestate": "",
+            "type": "com.dapr.event.sent",
+        }
+
+        await app.on_event(event_data)
+
+        # Assert
+        sample_workflow.start.assert_not_called()
