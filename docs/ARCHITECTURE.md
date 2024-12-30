@@ -42,7 +42,7 @@ While Dapr is used to abstract the underlying infrastructure and provide a set o
     - `/workflow/v1/preflight` - To check if the workflow can be executed
     - `/workflow/v1/auth` - To authenticate the credentials for the workflow
     - `/workflow/v1/ui` - UI to setup the workflows
-- SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses AQLAlchemy for this purpose.
+- SQL Applications. SDK has abstracted out so that building SQL applications is as simple as writing a SQL query. It uses SQLAlchemy for this purpose.
   - Query Interface to run adhoc SQL queries on `POST /sql/v1/query`
 
 **Note**: The SDK is in active development and currently only supports FastAPI applications. Support for other frameworks will be added in the future.
