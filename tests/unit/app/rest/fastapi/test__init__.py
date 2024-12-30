@@ -9,7 +9,7 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
-from application_sdk.paas.eventstore.models import DaprEvent, WorkflowEndEvent
+from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
 from application_sdk.workflows.builder import WorkflowBuilderInterface
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -122,7 +122,7 @@ class TestFastAPIApplication:
     async def test_event_trigger(
         self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
     ):
-        def should_trigger_workflow(event: DaprEvent):
+        def should_trigger_workflow(event: AtlanEvent):
             if event.data.event_type == "workflow_end":
                 return True
             return False

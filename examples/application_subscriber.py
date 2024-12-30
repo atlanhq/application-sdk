@@ -11,8 +11,8 @@ from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplic
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
     WORKFLOW_END_EVENT,
+    AtlanEvent,
     CustomEvent,
-    DaprEvent,
     WorkflowEndEvent,
 )
 from application_sdk.workflows.builder import WorkflowBuilderInterface
@@ -88,7 +88,7 @@ class SampleWorkflow(WorkflowInterface):
 
     @workflow.run
     async def run(self, workflow_args: dict[str, Any]):
-        event = DaprEvent(**workflow_args)
+        event = AtlanEvent(**workflow_args)
 
         if event.data.event_type != WORKFLOW_END_EVENT:
             return
@@ -164,7 +164,7 @@ async def start_fast_api_app():
     )
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
-    def should_trigger_workflow(event: DaprEvent) -> bool:
+    def should_trigger_workflow(event: AtlanEvent) -> bool:
         if event.data.event_type == WORKFLOW_END_EVENT:
             workflow_end_event: WorkflowEndEvent = event.data
 

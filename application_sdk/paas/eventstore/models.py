@@ -56,7 +56,7 @@ class CustomEvent(Event):
 
 
 # TODO: Rename
-class DaprEvent(BaseModel):
+class AtlanEvent(BaseModel):
     data: WorkflowEndEvent | ActivityEndEvent | ActivityStartEvent | CustomEvent
     datacontenttype: str = Field()
     id: str = Field()

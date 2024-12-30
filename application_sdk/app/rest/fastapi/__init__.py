@@ -26,7 +26,7 @@ from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
 from application_sdk.paas.eventstore import EventStore
-from application_sdk.paas.eventstore.models import DaprEvent
+from application_sdk.paas.eventstore.models import AtlanEvent
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
@@ -201,7 +201,7 @@ class FastAPIApplication(AtlanAPIApplication):
     async def on_event(self, event: dict[str, Any]):
         logger.info(f"Received event {event}")
         for trigger in self.event_triggers:
-            if trigger.should_trigger_workflow(DaprEvent(**event)):
+            if trigger.should_trigger_workflow(AtlanEvent(**event)):
                 logger.info(
                     f"Triggering workflow {trigger.workflow} with event {event}"
                 )
