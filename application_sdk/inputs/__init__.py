@@ -1,7 +1,8 @@
 import abc
 from abc import abstractmethod
-from typing import Any, Iterator
+from typing import Iterator
 
+import daft
 import pandas as pd
 
 from application_sdk import logging
@@ -19,5 +20,9 @@ class Input(abc.ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_key(self, key: str) -> Any:
+    def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_daft_dataframe(self) -> daft.DataFrame:
         raise NotImplementedError
