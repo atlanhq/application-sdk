@@ -7,7 +7,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from application_sdk.scale_data_generator.config_loader import (
+from application_sdk.test_utils.scale_data_generator.config_loader import (
     ConfigLoader,
     OutputFormat,
 )

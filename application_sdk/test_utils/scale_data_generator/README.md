@@ -1,6 +1,6 @@
-# Scaled Data Generator
+# Scale Data Generator
 
-A powerful tool for generating scaled synthetic data for SQL Source testing. This tool allows you to generate realistic test data based on your database schema and configuration.
+A powerful tool for generating scale synthetic data for SQL Source testing. This tool allows you to generate realistic test data based on your database schema and configuration.
 
 ## Features
 

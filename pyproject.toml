@@ -46,7 +46,7 @@ dashboard = [
     "pygwalker",
     "dash-dangerously-set-inner-html"
 ]
-scaled_data_generator = [
+scale_data_generator = [
     "pyyaml",
     "pandas",
     "pyarrow",
