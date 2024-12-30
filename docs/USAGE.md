@@ -17,7 +17,7 @@ poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 Refer to the [Atlan Platform Application](../application_sdk/app/README.md) module to convert your application to an Atlan Platform application.
 
 ### Configuring the application
-Refer to the [Configuration](../application_sdk/docs/CONFIGURATION.md) section to configure the application.
+Refer to the [Configuration](../docs/CONFIGURATION.md) section to configure the application.
 
 
 ### Use the PaaS system
