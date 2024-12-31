@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import logging
 import os
 from datetime import timedelta
@@ -599,6 +600,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
     semaphore_concurrency: int = int(os.getenv("SEMAPHORE_CONCURRENCY", 5))
 
+    # Create a context variable to hold the semaphore
+    semaphore_context = contextvars.ContextVar("semaphore")
+
     # Database Global List
     databases_list: List[str] = []
 
@@ -646,9 +650,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         return [
             self.get_databases,
         ] + super().get_activities()
-
-    # Create a semaphore for controlling concurrency for this activity
-    semaphore = asyncio.Semaphore(semaphore_concurrency)
 
     @staticmethod
     def get_valid_file_suffixes(directory: str) -> List[str]:
@@ -786,8 +787,8 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         # Get the list of databases to process
         database_list = batch_input["name"].tolist()
 
-        # Create a semaphore for controlling concurrency for this activity
-        semaphore = asyncio.Semaphore(self.semaphore_concurrency)
+        # Create a semaphore if not present in the context
+        semaphore = self.semaphore_context.get(asyncio.Semaphore(self.semaphore_concurrency))
 
         # Create a list of tasks to fetch schemas concurrently
         execute_queries = [
@@ -994,7 +995,6 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         transformed_chunk = await self._transform_batch(
             batch_input, typename, workflow_id, workflow_run_id
         )
-
         if typename in ["databases", "database"]:
             await transformed_output.write_df(transformed_chunk)
         else:
@@ -1026,99 +1026,101 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
+        semaphore: asyncio.Semaphore,
         database_name: str = None,
     ) -> None:
-        raw_stat = await workflow.execute_activity(
-            fetch_fn,
-            workflow_args,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-        transform_activities: List[Any] = []
+        async with semaphore:
+            raw_stat = await workflow.execute_activity(
+                fetch_fn,
+                workflow_args,
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            )
+            transform_activities: List[Any] = []
 
-        if raw_stat is None or len(raw_stat) == 0:
-            # to handle the case where the fetch_fn returns None or []
-            return
+            if raw_stat is None or len(raw_stat) == 0:
+                # to handle the case where the fetch_fn returns None or []
+                return
 
-        chunk_count = max(value.get("chunk_count", 0) for value in raw_stat)
-        if chunk_count is None:
-            raise ValueError("Invalid chunk_count")
+            chunk_count = max(value.get("chunk_count", 0) for value in raw_stat)
+            if chunk_count is None:
+                raise ValueError("Invalid chunk_count")
 
-        raw_total_record_count = max(
-            value.get("total_record_count", 0) for value in raw_stat
-        )
-        if raw_total_record_count is None:
-            raise ValueError("Invalid raw_total_record_count")
+            raw_total_record_count = max(
+                value.get("total_record_count", 0) for value in raw_stat
+            )
+            if raw_total_record_count is None:
+                raise ValueError("Invalid raw_total_record_count")
 
-        if chunk_count == 0:
-            return
+            if chunk_count == 0:
+                return
 
-        typename = raw_stat[0].get("typename")
-        if typename is None:
-            raise ValueError("Invalid typename")
+            typename = raw_stat[0].get("typename")
+            if typename is None:
+                raise ValueError("Invalid typename")
 
-        # Write the raw metadata
-        await workflow.execute_activity(
-            self.write_raw_type_metadata,
-            {
-                "record_count": raw_total_record_count,
-                "chunk_count": chunk_count,
-                "typename": typename,
-                **workflow_args,
-            },
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-
-        if typename in ["databases", "database"]:
-            batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
-        else:
-            batches, chunk_starts = self.get_transform_batches(
-                chunk_count, typename, database_name
+            # Write the raw metadata
+            await workflow.execute_activity(
+                self.write_raw_type_metadata,
+                {
+                    "record_count": raw_total_record_count,
+                    "chunk_count": chunk_count,
+                    "typename": typename,
+                    **workflow_args,
+                },
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
             )
 
-        for i in range(len(batches)):
-            transform_activities.append(
-                workflow.execute_activity(
-                    self.transform_data,
-                    {
-                        "typename": typename,
-                        "batch": batches[i],
-                        "chunk_start": chunk_starts[i],
-                        **workflow_args,
-                    },
-                    retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(seconds=1000),
+            if typename in ["databases", "database"]:
+                batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
+            else:
+                batches, chunk_starts = self.get_transform_batches(
+                    chunk_count, typename, database_name
                 )
+
+            for i in range(len(batches)):
+                transform_activities.append(
+                    workflow.execute_activity(
+                        self.transform_data,
+                        {
+                            "typename": typename,
+                            "batch": batches[i],
+                            "chunk_start": chunk_starts[i],
+                            **workflow_args,
+                        },
+                        retry_policy=retry_policy,
+                        start_to_close_timeout=timedelta(seconds=1000),
+                    )
+                )
+
+            record_counts = await asyncio.gather(*transform_activities)
+
+            # Calculate the parameters necessary for writing metadata
+            total_record_count = sum(
+                max(
+                    record_output.get("total_record_count", 0)
+                    for record_output in record_count
+                )
+                for record_count in record_counts
+            )
+            chunk_count = sum(
+                max(record_output.get("chunk_count", 0) for record_output in record_count)
+                for record_count in record_counts
             )
 
-        record_counts = await asyncio.gather(*transform_activities)
-
-        # Calculate the parameters necessary for writing metadata
-        total_record_count = sum(
-            max(
-                record_output.get("total_record_count", 0)
-                for record_output in record_count
+            # Write the transformed metadata
+            await workflow.execute_activity(
+                self.write_type_metadata,
+                {
+                    "record_count": total_record_count,
+                    "chunk_count": chunk_count,
+                    "typename": typename,
+                    **workflow_args,
+                },
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
             )
-            for record_count in record_counts
-        )
-        chunk_count = sum(
-            max(record_output.get("chunk_count", 0) for record_output in record_count)
-            for record_count in record_counts
-        )
-
-        # Write the transformed metadata
-        await workflow.execute_activity(
-            self.write_type_metadata,
-            {
-                "record_count": total_record_count,
-                "chunk_count": chunk_count,
-                "typename": typename,
-                **workflow_args,
-            },
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):
@@ -1155,12 +1157,17 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
+        # Create a semaphore if not present in the context
+        semaphore = self.semaphore_context.get(asyncio.Semaphore(self.semaphore_concurrency))
+
         # Get databases first
-        await self.fetch_and_transform(self.get_databases, workflow_args, retry_policy)
+        await self.fetch_and_transform(
+            self.get_databases, workflow_args, retry_policy, semaphore
+        )
 
         # Fetch databases
         await self.fetch_and_transform(
-            self.fetch_databases, workflow_args, retry_policy
+            self.fetch_databases, workflow_args, retry_policy, semaphore
         )
 
         fetch_and_transforms = [
@@ -1168,6 +1175,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 task,
                 {**workflow_args, "database_name": database_name},
                 retry_policy,
+                semaphore,
                 database_name,
             )
             for database_name in self.databases_list
