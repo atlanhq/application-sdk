@@ -1,0 +1,7 @@
+{
+    "name": "Stale",
+    "creator": "Atlan",
+    "description": "Checks for stale issues and pull requests",
+    "iconName": "",
+    "categories": ["Automation", "SDLC"]
+}
