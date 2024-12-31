@@ -1,5 +1,5 @@
 {
-    "name": "Atlan precommit checks Analysis",
+    "name": "precommit-checks",
     "creator": "Atlan",
     "enterprise": true,
     "description": "Runs pre-commit checks on your codebase for formatting, security, and best practices.",
