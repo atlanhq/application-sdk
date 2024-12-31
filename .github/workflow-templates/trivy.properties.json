@@ -1,0 +1,7 @@
+{
+    "name": "Trivy Workflow",
+    "description": "Trivy workflow template.",
+    "iconName": "",
+    "categories": [],
+    "filePatterns": []
+}
