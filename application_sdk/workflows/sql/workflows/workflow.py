@@ -788,7 +788,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         database_list = batch_input["name"].tolist()
 
         # Create a semaphore if not present in the context
-        semaphore = self.semaphore_context.get(asyncio.Semaphore(self.semaphore_concurrency))
+        semaphore = self.semaphore_context.get(
+            asyncio.Semaphore(self.semaphore_concurrency)
+        )
 
         # Create a list of tasks to fetch schemas concurrently
         execute_queries = [
@@ -1073,7 +1075,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
             )
 
             if typename in ["databases", "database"]:
-                batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
+                batches, chunk_starts = self.get_transform_batches(
+                    chunk_count, typename
+                )
             else:
                 batches, chunk_starts = self.get_transform_batches(
                     chunk_count, typename, database_name
@@ -1105,7 +1109,10 @@ class SQLDatabaseWorkflow(SQLWorkflow):
                 for record_count in record_counts
             )
             chunk_count = sum(
-                max(record_output.get("chunk_count", 0) for record_output in record_count)
+                max(
+                    record_output.get("chunk_count", 0)
+                    for record_output in record_count
+                )
                 for record_count in record_counts
             )
 
@@ -1158,7 +1165,9 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         workflow_args["output_path"] = output_path
 
         # Create a semaphore if not present in the context
-        semaphore = self.semaphore_context.get(asyncio.Semaphore(self.semaphore_concurrency))
+        semaphore = self.semaphore_context.get(
+            asyncio.Semaphore(self.semaphore_concurrency)
+        )
 
         # Get databases first
         await self.fetch_and_transform(
