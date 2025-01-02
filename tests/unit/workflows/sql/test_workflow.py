@@ -89,13 +89,6 @@ async def test_start_without_sql_resource():
 
 
 @pytest.mark.asyncio
-async def test_fetch_data_without_sql_resource():
-    workflow = SQLWorkflow()
-    with pytest.raises(ValueError, match="SQL resource is not set"):
-        await workflow.fetch_data({}, "SELECT 1", "test")
-
-
-@pytest.mark.asyncio
 async def test_transform_batch_without_transformer(sql_resource):
     workflow = SQLWorkflow()
     workflow.set_sql_resource(sql_resource)

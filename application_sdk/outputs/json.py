@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import aiofiles
 import daft
@@ -16,7 +16,21 @@ from application_sdk.paas.writers import ChunkedObjectStoreWriterInterface
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
+def path_gen(chunk_start: int | None, chunk_count: int) -> str:
+    if chunk_start is None:
+        return f"{str(chunk_count)}.json"
+    else:
+        return f"{str(chunk_start+1)}-{str(chunk_count)}.json"
+
+
 class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
+    def __init__(
+        self, path_gen: Callable[[str, int | None, int], str], *args, **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+
+        self.path_gen = path_gen
+
     async def write(self, data: Dict[str, Any]) -> None:
         async with self.lock:
             if self.current_file is None or (
@@ -98,6 +112,7 @@ class JsonOutput(Output):
         chunk_size: int = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
+        path_gen: Callable[[int | None, int], str] = path_gen,
     ):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
@@ -108,6 +123,7 @@ class JsonOutput(Output):
         self.chunk_size = chunk_size
         self.buffer: List[pd.DataFrame] = []
         self.current_buffer_size = 0
+        self.path_gen = path_gen
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame):
@@ -155,10 +171,7 @@ class JsonOutput(Output):
         if not combined_df.empty:
             self.chunk_count += 1
             self.total_record_count += len(combined_df)
-            if self.chunk_start is None:
-                output_file_name = f"{self.output_path}/{str(self.chunk_count)}.json"
-            else:
-                output_file_name = f"{self.output_path}/{str(self.chunk_start+1)}-{str(self.chunk_count)}.json"
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
             combined_df.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
