@@ -11,7 +11,7 @@ def main():
     parser.add_argument(
         "--config-path",
         help="Path to the YAML configuration file",
-        default="tests/scale_data_generator/examples/config.yaml",
+        default="application_sdk/test_utils/scale_data_generator/examples/config.yaml",
     )
     parser.add_argument(
         "--output-format",
@@ -22,7 +22,7 @@ def main():
     parser.add_argument(
         "--output-dir",
         help="Directory to save generated files",
-        default="tests/scale_data_generator/output",
+        default="application_sdk/test_utils/scale_data_generator/output",
     )
 
     args = parser.parse_args()
@@ -36,7 +36,7 @@ def main():
         )
 
     except Exception as e:
-        print(f"Error: {str(e)}")
+        raise e
         exit(1)
 
 

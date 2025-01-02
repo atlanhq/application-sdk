@@ -1,10 +1,11 @@
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 import yaml
 
 
-class OutputFormat:
+class OutputFormat(Enum):
     CSV = "csv"
     JSON = "json"
     PARQUET = "parquet"
