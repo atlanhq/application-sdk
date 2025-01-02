@@ -583,36 +583,28 @@ test = ["pytest"]
 
 [[package]]
 name = "connectorx"
-version = "0.2.3"
-description = "Load data from databases to dataframes, the fastest way."
+version = "0.4.0"
+description = ""
 optional = false
-python-versions = ">=3.7.1,<4.0.0"
+python-versions = ">=3.10"
 files = [
-    {file = "connectorx-0.2.3-cp310-cp310-macosx_10_15_intel.whl", hash = "sha256:01b5604c6a0544174f6386067437cd24a4a9dbbbfa89677f30af6facb18a4d63"},
-    {file = "connectorx-0.2.3-cp310-cp310-manylinux2014_x86_64.whl", hash = "sha256:364de653503cf85067701d60cad8c3c58ae7d85e38e5b997129fe8c32a2bb861"},
-    {file = "connectorx-0.2.3-cp310-cp310-win_amd64.whl", hash = "sha256:adc4082e0b3898d7d286f3a89beae9dd0d94a4fc4d51c96ee8d3a0b889e2604e"},
-    {file = "connectorx-0.2.3-cp37-cp37m-macosx_10_15_intel.whl", hash = "sha256:35ce0834e4ca1c5987cadf55e325b98760a4498ac5e989419655eaa7e883bb9c"},
-    {file = "connectorx-0.2.3-cp37-cp37m-manylinux2014_x86_64.whl", hash = "sha256:abd40f3ec8eed304c5297a61748d5dada2117222ea739e1638bed758407475e7"},
-    {file = "connectorx-0.2.3-cp37-cp37m-win_amd64.whl", hash = "sha256:e09cef146bece3e35635140ccb3ee50b213f81508fff09c5cabca1599c9d03b7"},
-    {file = "connectorx-0.2.3-cp38-cp38-macosx_10_15_intel.whl", hash = "sha256:9147ef7c694cf8a15e83ef26398a0620f02091df7d748ae69aeddfda990e2dc4"},
-    {file = "connectorx-0.2.3-cp38-cp38-manylinux2014_x86_64.whl", hash = "sha256:52f547541f50ca90a1c82f1e19c786bf00e895c02b385c407c5d9e6cb2af02fc"},
-    {file = "connectorx-0.2.3-cp38-cp38-win_amd64.whl", hash = "sha256:41fcfd89510f62dca19ada689b15ed99e912893a5e0b628bbb65146778fde6d7"},
-    {file = "connectorx-0.2.3-cp39-cp39-macosx_10_15_intel.whl", hash = "sha256:944c04f06c250b17e8ec669d2764e7ea668d7bd5279137123244bc9db887bb04"},
-    {file = "connectorx-0.2.3-cp39-cp39-manylinux2014_x86_64.whl", hash = "sha256:302a072ad964cc5fc80bbb284b84f667f589bbf1dbc4753f10c9e88ba31278c6"},
-    {file = "connectorx-0.2.3-cp39-cp39-win_amd64.whl", hash = "sha256:8afc8d15c1496b8eebc11caacd341385b60d54d5357f907b3f32d8f7fb910718"},
-    {file = "connectorx-0.2.3.tar.gz", hash = "sha256:1ad844a952f65b299fea28ac359ad1d0e507ba61e6cf55ae1f1d22937a78fc42"},
+    {file = "connectorx-0.4.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:447bd065feb69b63e51a8a056b1de3ccb98a48108b52987dba1b67555f01a8d8"},
+    {file = "connectorx-0.4.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:342d233ca0008ec7cfef2ab91da566f15a1326ac2f51c87c6dd9f77dc9a6549e"},
+    {file = "connectorx-0.4.0-cp310-cp310-manylinux_2_28_x86_64.whl", hash = "sha256:72103766090f81ed7f8aeba9183d7eb2f24b65de9678d74a61c16f85f89e8b81"},
+    {file = "connectorx-0.4.0-cp310-none-win_amd64.whl", hash = "sha256:63a5a4961ed43e5f33eebaa9ee0ea0bb4e3f7d0f710d48e2b51ede3bd1e2af44"},
+    {file = "connectorx-0.4.0-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:fb3653c4ff1de8ada871c2ab883ed04dc2b7bb84704fcf08e6a23cf67deb931f"},
+    {file = "connectorx-0.4.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:224da692923f3e2f6ae5677dfd0f00ac0374e3989832ee4de029112b09da2281"},
+    {file = "connectorx-0.4.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:d9b6d1832c071201cacb810b06c7311cb605f99dead0ee47935d38086f1c9d4b"},
+    {file = "connectorx-0.4.0-cp311-none-win_amd64.whl", hash = "sha256:31b2c02f56360c6c4034d23c107772df98c8ab6102f71242bcb9a8a0fec06512"},
+    {file = "connectorx-0.4.0-cp312-cp312-macosx_10_12_x86_64.whl", hash = "sha256:5c6bb6cc468ff77b18b71ee44b5ea7e3c72de3a08a4740040fed3361a6086659"},
+    {file = "connectorx-0.4.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:42d9ae283541aca860f7082186ecb0525ff933b714e676dfe0e517e7943a9799"},
+    {file = "connectorx-0.4.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:c3ebe1e95e4c82d69804d0165be4d4f80ff4bb1beac04d6946aa73ed04819440"},
+    {file = "connectorx-0.4.0-cp312-none-win_amd64.whl", hash = "sha256:d4c156df650860002f61155e2eff23d9c822c2e9f14e16d04e21dd1033b09cdc"},
+    {file = "connectorx-0.4.0-cp313-cp313-macosx_10_12_x86_64.whl", hash = "sha256:b74266abb86c7d570579004d909d8b4ce5d18dab29e07c63015ea75ed0178adb"},
+    {file = "connectorx-0.4.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:dd80488823a174d0c73e4575b10f0c0eb86bc82cbd72e28fd2b611733308699d"},
+    {file = "connectorx-0.4.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:33a64fdd0b3efd32f54cce664f1022d448db5878e919e7a2f186f2af19eaa572"},
+    {file = "connectorx-0.4.0-cp313-none-win_amd64.whl", hash = "sha256:635727407b0a14ff30cd02519e631766b2df55c94da2d57c7599e5a9a4ce2f4f"},
 ]
-
-[package.dependencies]
-numpy = ">=1,<2"
-
-[package.extras]
-all = ["dask[dataframe] (>=2021,<2022)", "modin (>=0.10)", "pandas (>=1,<2)", "polars (>=0.8)", "pyarrow (>=4)"]
-dask = ["dask[dataframe] (>=2021,<2022)", "pandas (>=1,<2)"]
-modin = ["modin (>=0.10)", "pandas (>=1,<2)"]
-pandas = ["pandas (>=1,<2)"]
-polars = ["polars (>=0.8)", "pyarrow (>=4)"]
-pyarrow = ["pyarrow (>=4)"]
 
 [[package]]
 name = "coverage"
@@ -4623,4 +4615,4 @@ workflows = ["dapr", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "0dbe6dfc827450fb684e198a41f47019a22f353a8fee5dd0f8ca68a86d715cc1"
+content-hash = "bae37b2d085229bf56a9bfbf3681823c29d6a05786b1eebaa94741dd1fe797b8"
