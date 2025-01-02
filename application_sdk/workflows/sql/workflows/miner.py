@@ -301,7 +301,7 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         # Write the results to a metadata file
         output_path = os.path.join(workflow_args["output_path"], "raw", "query")
-        metadata_file_path = os.path.join(output_path, "query_metadata.json")
+        metadata_file_path = os.path.join(output_path, "metadata.json")
         os.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
