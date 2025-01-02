@@ -374,6 +374,13 @@ class SQLMinerWorkflow(WorkflowInterface):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
+        await workflow.execute_activity(
+            self.preflight_check,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
+
         results: List[Dict[str, Any]] = await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
             self.get_query_batches,
             workflow_args,

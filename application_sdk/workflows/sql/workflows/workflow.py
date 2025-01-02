@@ -83,7 +83,6 @@ class SQLWorkflow(WorkflowInterface):
             self.fetch_columns,
             self.transform_data,
             self.write_type_metadata,
-            self.preflight_check,
             self.write_raw_type_metadata,
         ] + super().get_activities()
 
