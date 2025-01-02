@@ -4,8 +4,6 @@ name: Atlan Application Trivy container scan
 
 on:
   workflow_call:
-  push:
-  pull_request:
 
 permissions:
   contents: read
