@@ -1,4 +1,4 @@
-name: Atlan Trivy workflow
+name: Atlan Trivy files scan
 
 on:
   push:

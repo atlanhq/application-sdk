@@ -1,7 +1,7 @@
 {
-    "name": "Trivy",
+    "name": "Atlan Trivy files scan",
     "creator": "Atlan",
-    "description": "Scan Docker container images for vulnerabilities in OS packages and language dependencies with Trivy from Aqua Security.",
+    "description": "Scan file system for vulnerabilities in OS packages and language dependencies with Trivy from Aqua Security.",
     "iconName": "trivy",
     "categories": ["Code Scanning", "filesystem"]
 }
