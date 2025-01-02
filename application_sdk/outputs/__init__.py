@@ -1,5 +1,6 @@
 from abc import ABC, abstractmethod
 
+import daft
 import pandas as pd
 
 from application_sdk import logging
@@ -16,6 +17,10 @@ class Output(ABC):
 
     @abstractmethod
     async def write_df(self, df: pd.DataFrame):
+        pass
+
+    @abstractmethod
+    async def write_daft_df(self, df: daft.DataFrame):
         pass
 
     async def write_metadata(self, file_suffix: str = None):
