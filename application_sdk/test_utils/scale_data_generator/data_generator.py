@@ -71,18 +71,19 @@ class DataGenerator:
         return type_mapping.get(field_type, lambda: None)()
 
     def _get_derived_value(
-        self, derived_field: str, parent_data: Dict[str, Any]
+        self, derived_field: Any, parent_data: Dict[str, Any]
     ) -> Any:
         """Get value from parent table for derived fields."""
-        table_name, field_name = derived_field.split(".")
-        if table_name not in parent_data:
-            raise ValueError(f"Parent table {table_name} not generated yet")
-
-        parent_record = parent_data.get(table_name)
-        if not parent_record or field_name not in parent_record:
-            raise ValueError(f"Derived field {field_name} not found in {table_name}")
-
-        return parent_record[field_name]
+        if isinstance(derived_field, list):
+            for field in derived_field:
+                derived_value = self._get_derived_value(field, parent_data)
+                if derived_value is not None:
+                    return derived_value
+        elif isinstance(derived_field, str):
+            table_name, field_name = derived_field.split(".")
+            return parent_data.get(table_name, {}).get(field_name)
+        else:
+            return None
 
     def generate_data(self, output_format: OutputFormat, output_dir: str) -> None:
         """Generate and write data for all tables in the hierarchy."""

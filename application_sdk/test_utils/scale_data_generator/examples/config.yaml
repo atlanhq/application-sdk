@@ -1,3 +1,4 @@
+# define the data hierarchy
 databases:
   - name: snowflake
     schemas:
@@ -6,22 +7,30 @@ databases:
           - name: databases
           - name: schemas
           - name: tables
+          - name: views
           - name: columns
 
+# define the hierarchy of the data
 hierarchy:
-  # total assets = 5 * 20 * 10 * 10 = 10,000
+  # total assets = 5 * 20 * (50[tables] * 100[columns] + 40[views] * 100[columns])  = 900,000
   - name: databases
-    records: 3
+    records: 5
     children:
       - name: schemas
-        records: 10
+        records: 20
         children:
           - name: tables
-            records: 10
+            records: 50
             children:
               - name: columns
-                records: 10
+                records: 100
+          - name: views
+            records: 40
+            children:
+              - name: columns
+                records: 100
 
+# define the schema for each table
 schema:
   - name: databases
     table_schema:
@@ -54,11 +63,28 @@ schema:
         type: enum
         values:
           - TABLE
-          - VIEW
-          - "MATERIALIZED VIEW"
           - "EXTERNAL TABLE"
       - name: table_schema
         derived: schemas.schema_name
+  - name: views
+    table_schema:
+      - name: table_id
+        type: integer
+      - name: table_name
+        type: string
+      - name: table_catalog
+        derived: databases.database_name
+      - name: table_type
+        type: enum
+        values:
+          - VIEW
+          - "MATERIALIZED VIEW"
+      - name: table_schema
+        derived: schemas.schema_name
+      - name: is_secure
+        type: boolean
+      - name: view_definition
+        type: string
   - name: columns
     table_schema:
       - name: column_id
@@ -79,4 +105,4 @@ schema:
       - name: column_schema
         derived: schemas.schema_name
       - name: column_table
-        derived: tables.table_name
+        derived: [tables.table_name, views.table_name]

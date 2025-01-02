@@ -164,3 +164,6 @@ cython_debug/
 .atlan
 
 workflow_status.md
+
+# Scale data generator
+output
