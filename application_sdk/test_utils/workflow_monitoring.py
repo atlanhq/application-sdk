@@ -78,6 +78,8 @@ async def monitor_workflow_execution_and_write_status(
 async def run_and_monitor_workflow(
     example_workflow_function,
     temporal_resource: TemporalResource,
+    polling_interval: int = 5,
+    timeout: Optional[int] = 120,
 ) -> tuple[str, float]:
     """
     Run and monitor a workflow example, returning its status and execution time.
@@ -99,8 +101,8 @@ async def run_and_monitor_workflow(
 
     status = await monitor_workflow_execution_and_write_status(
         workflow_handle,
-        polling_interval=5,
-        timeout=120,
+        polling_interval=polling_interval,
+        timeout=timeout,
     )
     end_time = time.time()
     time_taken = end_time - start_time
