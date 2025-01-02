@@ -6,6 +6,7 @@
 name: Trivy
 
 on:
+  workflow_call:
   push:
     branches:
       - main

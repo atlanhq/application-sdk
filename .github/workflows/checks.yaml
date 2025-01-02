@@ -1,5 +1,8 @@
+# Pre-commit-checks. This can be reused across all the applications.
+
 name: Pre-commit Checks
 on:
+  workflow_call:
   push:
   pull_request:
     types: [ opened, synchronize, labeled, reopened ]
