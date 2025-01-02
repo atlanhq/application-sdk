@@ -1,4 +1,4 @@
-name: "Atlan CodeQL Analysis"
+name: "Atlan Application CodeQL Analysis"
 
 on:
   pull_request:

@@ -1,5 +1,5 @@
 {
-    "name": "Atlan CodeQL Analysis",
+    "name": "Atlan Application CodeQL Analysis",
     "creator": "Atlan",
     "enterprise": true,
     "description": "Security analysis from GitHub for C, C++, C#, Go, Java, JavaScript, TypeScript, Python, Ruby, Kotlin and Swift developers.",

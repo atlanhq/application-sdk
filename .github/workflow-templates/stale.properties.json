@@ -1,5 +1,5 @@
 {
-    "name": "Stale",
+    "name": "Atlan Application to mark stale PRs and issues",
     "creator": "Atlan",
     "description": "Checks for stale issues and pull requests",
     "iconName": "",
