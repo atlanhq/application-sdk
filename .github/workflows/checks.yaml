@@ -1,4 +1,4 @@
-# Pre-commit-checks. This can be reused across all the applications. 
+# Pre-commit-checks. This can be reused across all the applications.
 
 name: Pre-commit Checks
 on:

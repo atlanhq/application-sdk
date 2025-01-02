@@ -1,3 +1,6 @@
+# This can be reused across all the applications.
+
+
 name: Tests
 
 on:

@@ -9,7 +9,7 @@
 # the `language` matrix defined below to confirm you have the correct set of
 # supported CodeQL languages.
 
-# Pre-commit-checks. This can be reused across all the applications. 
+# Pre-commit-checks. This can be reused across all the applications.
 
 name: "CodeQL"
 

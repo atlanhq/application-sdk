@@ -1,4 +1,4 @@
-# Trivy container scan. This can be reused across all the applications. 
+# Trivy container scan. This can be reused across all the applications.
 
 name: E2E Test for Application Examples
 on:
