@@ -1,5 +1,5 @@
 {
-    "name": "Atlan Trivy container scan",
+    "name": "Atlan Application Trivy container scan",
     "creator": "Atlan",
     "description": "Scan Docker container images for vulnerabilities in OS packages and language dependencies with Trivy from Aqua Security.",
     "iconName": "trivy",

@@ -1,4 +1,4 @@
-name: Atlan Trivy files scan
+name: Atlan Application Trivy files scan
 
 on:
   push:

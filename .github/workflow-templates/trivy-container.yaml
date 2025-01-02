@@ -3,7 +3,7 @@
 # separate terms of service, privacy policy, and support
 # documentation.
 
-name: Atlan Trivy container scan
+name: Atlan Application Trivy container scan
 
 on:
   push:
