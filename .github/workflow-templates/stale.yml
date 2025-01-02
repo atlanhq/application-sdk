@@ -26,3 +26,4 @@ jobs:
         stale-issue-label: 'Stale'
         stale-pr-label: 'Stale'
         days-before-stale: 60
+        debug-only: 'true'
