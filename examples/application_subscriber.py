@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 from datetime import timedelta
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, List
 
 from temporalio import activity, workflow
 
@@ -16,11 +16,6 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
 )
 from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
 from application_sdk.workflows.resources.constants import TemporalConstants
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -32,42 +27,7 @@ from application_sdk.workflows.workflow import WorkflowInterface
 logger = logging.getLogger(__name__)
 
 
-# Workflow
-class WorkflowAuthController(WorkflowAuthControllerInterface):
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
-        pass
-
-    async def test_auth(self) -> bool:
-        return True
-
-
-class WorkflowMetadataController(WorkflowMetadataControllerInterface):
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
-        pass
-
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
-        return [{"database": "test", "schema": "test"}]
-
-
-class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
-    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            "success": True,
-            "data": {
-                "databaseSchemaCheck": {
-                    "success": True,
-                    "successMessage": "Schemas and Databases check successful",
-                    "failureMessage": "",
-                },
-                "tablesCheck": {
-                    "success": True,
-                    "successMessage": "Tables check successful. Table count: 2",
-                    "failureMessage": "",
-                },
-            },
-        }
-
-
+# Workflow that will be triggered by an event
 @workflow.defn
 class SampleWorkflow(WorkflowInterface):
     @activity.defn
@@ -93,11 +53,6 @@ class SampleWorkflow(WorkflowInterface):
         if event.data.event_type != WORKFLOW_END_EVENT:
             return
 
-        workflow_end_event: WorkflowEndEvent = event.data
-        counter = workflow_end_event.workflow_output["counter"]
-
-        counter += 1
-
         await workflow.execute_activity(
             self.activity_1,
             start_to_close_timeout=timedelta(seconds=10),
@@ -106,8 +61,6 @@ class SampleWorkflow(WorkflowInterface):
             self.activity_2,
             start_to_close_timeout=timedelta(seconds=10),
         )
-
-        return {"counter": counter}
 
     async def start(self, workflow_args: Any, workflow_class: Any):
         return await super().start(workflow_args, self.__class__)
@@ -157,11 +110,7 @@ async def start_worker():
 
 
 async def start_fast_api_app():
-    fast_api_app = FastAPIApplication(
-        auth_controller=WorkflowAuthController(),
-        metadata_controller=WorkflowMetadataController(),
-        preflight_check_controller=WorkflowPreflightCheckController(),
-    )
+    fast_api_app = FastAPIApplication()
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     def should_trigger_workflow(event: AtlanEvent) -> bool:
@@ -211,7 +160,7 @@ async def simulate_worklflow_end_event():
             workflow_name="dependent_workflow",
             workflow_id="test",
             workflow_run_id="test",
-            workflow_output={"counter": 0},
+            workflow_output={"output_value": 0},
         ),
         topic_name=EventStore.TOPIC_NAME,
     )
