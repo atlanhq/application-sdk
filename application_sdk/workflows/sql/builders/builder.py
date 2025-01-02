@@ -58,6 +58,13 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
 class SQLDatabaseWorkflowBuilder(WorkflowBuilderInterface, ABC):
     sql_resource: SQLResource
     transformer: TransformerInterface
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+
+    def set_preflight_check_controller(
+        self, preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    ) -> "WorkflowBuilderInterface":
+        self.preflight_check_controller = preflight_check_controller
+        return self
 
     def set_sql_resource(
         self, sql_resource: SQLResource
@@ -99,6 +106,7 @@ class SQLDatabaseWorkflowBuilder(WorkflowBuilderInterface, ABC):
             .set_temporal_resource(self.temporal_resource)
             .set_batch_size(self.batch_size)
             .set_semaphore_concurrency(self.semaphore_concurrency)
+            .set_preflight_check_controller(self.preflight_check_controller)
         )
 
 

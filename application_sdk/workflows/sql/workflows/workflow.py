@@ -7,6 +7,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Optional
 
 import pandas as pd
 from temporalio import activity, workflow
+from temporalio.client import WorkflowFailureError
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
@@ -1031,6 +1032,31 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         await self.sql_resource.load()
         return workflow_args
 
+    @activity.defn(name="db_preflight_check")
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]):
+        result = await self.preflight_check_controller.preflight_check(
+            {
+                "form_data": workflow_args["metadata"],
+            }
+        )
+        if not result or "error" in result:
+            raise ValueError("Preflight check failed")
+
+    async def start(self, workflow_args: Any, workflow_class: Any):
+        workflow_class = workflow_class or self.__class__
+
+        try:
+            if self.temporal_resource is None:
+                raise ValueError("Temporal resource is not set")
+
+            return await self.temporal_resource.start_workflow(
+                workflow_args=workflow_args, workflow_class=workflow_class
+            )
+        except WorkflowFailureError as e:
+            logger.error(f"Workflow failure: {e}")
+            raise e
+
     async def fetch_and_transform(
         self,
         fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
@@ -1166,6 +1192,13 @@ class SQLDatabaseWorkflow(SQLWorkflow):
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
+        )
+
+        await workflow.execute_activity(
+            self.preflight_check,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
         )
 
         output_prefix = workflow_args["output_prefix"]
