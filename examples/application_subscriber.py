@@ -34,6 +34,7 @@ class SampleWorkflow(WorkflowInterface):
     async def activity_1(self):
         logger.info("Activity 1")
 
+        # Activities can also send custom events to the event store
         EventStore.create_event(
             event=CustomEvent(data={"custom_key": "custom_value"}),
             topic_name=EventStore.TOPIC_NAME,
@@ -48,10 +49,18 @@ class SampleWorkflow(WorkflowInterface):
 
     @workflow.run
     async def run(self, workflow_args: dict[str, Any]):
+        # When a workflow is triggered by an event, the event is passed in as a dictionary
         event = AtlanEvent(**workflow_args)
 
+        # We can check the event type to determine if the workflow was triggered by an event
         if event.data.event_type != WORKFLOW_END_EVENT:
             return
+
+        # We can also check the event data to get the workflow name and id
+        # workflow_end_event: WorkflowEndEvent = event.data
+        # workflow_name = workflow_end_event.workflow_name
+        # workflow_id = workflow_end_event.workflow_id
+        # workflow_output = workflow_end_event.workflow_output
 
         await workflow.execute_activity(
             self.activity_1,
@@ -129,7 +138,6 @@ async def start_fast_api_app():
 
         return False
 
-    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     temporal_resource = TemporalResource(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
@@ -139,6 +147,8 @@ async def start_fast_api_app():
     sample_worflow = (
         SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
     )
+
+    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     fast_api_app.register_workflow(
         sample_worflow,
         triggers=[
