@@ -6,8 +6,9 @@ from datetime import timedelta
 from typing import Any, Callable, List
 
 from temporalio import activity, workflow
-from application_sdk.inputs.statestore import StateStore
+
 from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
+from application_sdk.inputs.statestore import StateStore
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
     WORKFLOW_END_EVENT,
