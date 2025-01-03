@@ -6,7 +6,7 @@ from datetime import timedelta
 from typing import Any, Callable, List
 
 from temporalio import activity, workflow
-
+from application_sdk.inputs.statestore import StateStore
 from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
@@ -31,8 +31,19 @@ logger = logging.getLogger(__name__)
 @workflow.defn
 class SampleWorkflow(WorkflowInterface):
     @activity.defn
+    async def set_workflow_activity_context(self, workflow_id: str) -> dict[str, Any]:
+        """
+        As we use a single worker thread, we need to set the workflow activity context
+        """
+        workflow_args = StateStore.extract_configuration(workflow_id)
+
+        return workflow_args
+
+    @activity.defn
     async def activity_1(self):
         logger.info("Activity 1")
+
+        await asyncio.sleep(5)
 
         # Activities can also send custom events to the event store
         EventStore.create_event(
@@ -45,10 +56,22 @@ class SampleWorkflow(WorkflowInterface):
     @activity.defn
     async def activity_2(self):
         logger.info("Activity 2")
+
+        await asyncio.sleep(5)
+
         return
 
     @workflow.run
-    async def run(self, workflow_args: dict[str, Any]):
+    async def run(self, workflow_config: dict[str, Any]):
+        workflow_id = workflow_config["workflow_id"]
+
+        # dedicated activity to set the workflow activity context
+        workflow_args: dict[str, Any] = await workflow.execute_activity(
+            self.set_workflow_activity_context,
+            workflow_id,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
+
         # When a workflow is triggered by an event, the event is passed in as a dictionary
         event = AtlanEvent(**workflow_args)
 
@@ -75,7 +98,7 @@ class SampleWorkflow(WorkflowInterface):
         return await super().start(workflow_args, self.__class__)
 
     def get_activities(self) -> List[Callable[..., Any]]:
-        return [self.activity_1, self.activity_2]
+        return [self.activity_1, self.activity_2, self.set_workflow_activity_context]
 
 
 class SampleWorkflowBuilder(WorkflowBuilderInterface):
