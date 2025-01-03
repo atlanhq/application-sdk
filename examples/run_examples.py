@@ -81,7 +81,8 @@ async def monitor_workflow_execution_and_write_status(
         logger.error(f"Error monitoring workflow: {str(e)}")
         status = "FAILED 🔴"
 
-    return status
+    print(status)
+    return "FAILED 🔴"
 
 
 async def main():
