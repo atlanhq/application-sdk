@@ -121,7 +121,6 @@ async def main():
         )
         if status == "FAILED 🔴":
             failed_examples.append(example.__name__)
-            continue
 
         end_time = time.time()
         time_taken = end_time - start_time
