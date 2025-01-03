@@ -197,7 +197,7 @@ jobs:
               parser = argparse.ArgumentParser()
               parser.add_argument("--output-file", type=str, default="scale_test_metrics.md")
               args = parser.parse_args()
-              command = "/app/.venv/bin/python -m pytest --log-cli-level=INFO tests/scale/test_workflow.py"
+              command = "/app/.venv/bin/python -m pytest --log-cli-level=INFO tests/scale/workflow.py"
               main(command, args.output_file)
           EOF
 
