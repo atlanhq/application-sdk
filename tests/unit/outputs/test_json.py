@@ -48,6 +48,12 @@ async def test_write_df_multiple_chunks(mock_push, json_output):
     df = pd.DataFrame({"col1": range(10), "col2": range(10)})
     await json_output.write_df(df)
 
+    # Check if the files are created on the path json_output.output_path
+    assert os.path.exists(f"{json_output.output_path}/1.json")
+    assert os.path.exists(f"{json_output.output_path}/2.json")
+    assert os.path.exists(f"{json_output.output_path}/3.json")
+    assert os.path.exists(f"{json_output.output_path}/4.json")
+
     assert json_output.chunk_count == 4  # 10 rows with chunk_size 3 = 4 chunks
     assert json_output.total_record_count == 10
     assert mock_push.call_count == 4
