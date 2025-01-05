@@ -6,6 +6,7 @@ import os
 from typing import Any, Dict, List, Set, Tuple
 
 import pandas as pd
+
 from application_sdk import activity_pd
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -198,6 +199,7 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
         DATABASE_KEY (str): The key to fetch the database name.
         SCHEMA_KEY (str): The key to fetch the schema name.
     """
+
     semaphore_concurrency: int = int(os.getenv("SEMAPHORE_CONCURRENCY", 5))
 
     # Create a context variable to hold the semaphore
@@ -295,7 +297,9 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
 
             if not database_list:
                 # Fallback: Retrieve all available databases if none provided
-                logger.info("No database list provided. Fetching all databases and filtering.")
+                logger.info(
+                    "No database list provided. Fetching all databases and filtering."
+                )
                 filtered_databases = await self.fetch_all_filtered_databases(payload)
                 database_list = filtered_databases["database_name"].tolist()
 
@@ -313,7 +317,9 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
                 )
                 for db_name in database_list
             ]
-            preflight_schemas_and_databases_results = await asyncio.gather(*preflight_schemas_and_databases, return_exceptions=True)
+            preflight_schemas_and_databases_results = await asyncio.gather(
+                *preflight_schemas_and_databases, return_exceptions=True
+            )
             results["databaseSchemaCheck"] = preflight_schemas_and_databases_results
 
             # Run tables check for each database concurrently
@@ -325,14 +331,18 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
                 )
                 for db_name in database_list
             ]
-            preflight_tables_check_results = await asyncio.gather(*preflight_tables_check, return_exceptions=True)
+            preflight_tables_check_results = await asyncio.gather(
+                *preflight_tables_check, return_exceptions=True
+            )
             results["tablesCheck"] = preflight_tables_check_results
 
             # Check if any of the results were unsuccessful
             database_schema_check_success = all(
                 check["success"] for check in preflight_schemas_and_databases_results
             )
-            tables_check_success = all(check["success"] for check in preflight_tables_check_results)
+            tables_check_success = all(
+                check["success"] for check in preflight_tables_check_results
+            )
 
             if not database_schema_check_success or not tables_check_success:
                 raise ValueError(
@@ -349,7 +359,7 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
     def validate_filters(
         include_filter: Dict[str, List[str]],
         allowed_databases: Set[str],
-        allowed_schemas: Set[str]
+        allowed_schemas: Set[str],
     ) -> Tuple[bool, str]:
         """
         Validate the include_filter for a specific database and schema.
@@ -390,7 +400,9 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
         async with semaphor:
             logger.info(f"Starting schema and database check for {database_name}")
             try:
-                schemas_results: List[Dict[str, str]] = await self.db_fetch_metadata(database_name)
+                schemas_results: List[Dict[str, str]] = await self.db_fetch_metadata(
+                    database_name
+                )
 
                 include_filter = json.loads(
                     payload.get("form_data", {}).get("include_filter", "{}")
@@ -413,7 +425,10 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
                     else "",
                 }
             except Exception as e:
-                logger.error(f"Error during schema and database check for {database_name}", exc_info=True)
+                logger.error(
+                    f"Error during schema and database check for {database_name}",
+                    exc_info=True,
+                )
                 return {
                     "database_name": database_name,
                     "success": False,

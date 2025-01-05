@@ -1,9 +1,10 @@
 import asyncio
 import contextvars
-import os
-import logging
 import itertools
+import logging
+import os
 from typing import Any, Dict, List
+
 import pandas as pd
 
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
@@ -88,6 +89,7 @@ class SQLDatabaseWorkflowMetadataController(SQLWorkflowMetadataController):
         >>>     def __init__(self, create_engine_fn: Callable[[Dict[str, Any]], Engine]):
         >>>         super().__init__(create_engine_fn)
     """
+
     semaphore_concurrency: int = int(os.getenv("SEMAPHORE_CONCURRENCY", 5))
 
     # Create a context variable to hold the semaphore

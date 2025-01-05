@@ -768,9 +768,7 @@ class SQLDatabaseWorkflow(SQLWorkflow):
 
         combined_results = pd.concat(database_results, ignore_index=True)
         await raw_output.write_df(combined_results)
-        SQLDatabaseWorkflow.databases_list = combined_results[
-            "database_name"
-        ].tolist()
+        SQLDatabaseWorkflow.databases_list = combined_results["database_name"].tolist()
         return {
             "chunk_count": raw_output.chunk_count,
             "typename": "database",
