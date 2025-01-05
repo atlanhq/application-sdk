@@ -133,8 +133,17 @@ class FastAPIApplication(AtlanAPIApplication):
         return TestAuthResponse(success=True, message="Authentication successful")
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
+        """
+        Fetch metadata based on the requested type.
+        Args:
+            body: Request body containing optional type and database parameters
+        Returns:
+            FetchMetadataResponse containing the requested metadata
+        """
         await self.metadata_controller.prepare(body.model_dump())
-        metadata = await self.metadata_controller.fetch_metadata()
+        metadata = await self.metadata_controller.fetch_metadata(
+                metadata_type=body.type, database=body.database
+        )
         return FetchMetadataResponse(success=True, data=metadata)
 
     async def preflight_check(
