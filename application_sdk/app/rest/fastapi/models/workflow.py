@@ -21,6 +21,13 @@ class FetchMetadataRequest(RootModel):
         ..., description="Root JSON object containing database credentials"
     )
 
+    class Config:
+        schema_extra = {
+            "example": {
+                "extraction_method": "",
+            }
+        }
+
 
 class FetchMetadataResponse(BaseModel):
     success: bool
@@ -50,6 +57,7 @@ class PreflightCheckRequest(BaseModel):
                     "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
                     "exclude_filter": "{}",
                     "temp_table_regex": "",
+                    "extraction_method": "",
                 },
             }
         }
@@ -98,7 +106,7 @@ class WorkflowRequest(RootModel):
                     "use_source_schema_filtering": "false",
                     "use_jdbc_internal_methods": "true",
                     "authentication": "BASIC",
-                    "extraction_method": "account_usage",
+                    "extraction_method": "",
                 },
             }
         }

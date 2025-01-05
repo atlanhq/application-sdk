@@ -34,8 +34,12 @@ class Output(ABC):
                 "chunk_count": [self.chunk_count],
             }
 
-            # If a suffix is provided, include it in the file name
-            suffix_part = f"_{file_suffix}" if file_suffix else ""
+            # If a suffix is provided, format it by replacing slashes with underscores
+            if file_suffix:
+                # Replace slashes with underscores to avoid issues
+                suffix_part = f"_{file_suffix.replace('/', '_')}"
+            else:
+                suffix_part = ""
 
             # Write the metadata to a json file
             output_file_name = f"{self.output_path}/metadata{suffix_part}.json"

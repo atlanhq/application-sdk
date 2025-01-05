@@ -157,8 +157,12 @@ class JsonOutput(Output):
             self.chunk_count += 1
             self.total_record_count += len(combined_df)
 
-            # If a suffix is provided, include it in the file name
-            suffix_part = f"_{file_suffix}" if file_suffix else ""
+            # If a suffix is provided, format it by replacing slashes with underscores
+            if file_suffix:
+                # Replace slashes with underscores to avoid issues
+                suffix_part = f"_{file_suffix.replace('/', '_')}"
+            else:
+                suffix_part = ""
 
             if self.chunk_start is None:
                 output_file_name = (
