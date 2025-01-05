@@ -31,6 +31,7 @@ def main():
         config_loader = ConfigLoader(args.config_path)
         generator = DataGenerator(config_loader)
         generator.generate_data(args.output_format, args.output_dir)
+        generator.generate_duckdb_tables(args.output_dir)
         print(
             f"Data generated successfully in {args.output_format} format at {args.output_dir}"
         )

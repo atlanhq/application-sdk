@@ -30,7 +30,7 @@ class ConfigLoader:
 
     def _validate_config(self) -> None:
         """Validate the configuration structure."""
-        required_sections = ["databases", "hierarchy", "schema"]
+        required_sections = ["database", "hierarchy", "schema"]
         for section in required_sections:
             if section not in self.config:
                 raise ValueError(f"Missing required section: {section}")
@@ -67,6 +67,6 @@ class ConfigLoader:
         """Get the hierarchy configuration."""
         return self.config["hierarchy"][0]
 
-    def get_databases_config(self) -> Dict[str, Any]:
-        """Get the databases configuration."""
-        return self.config["databases"][0]
+    def get_database(self) -> Dict[str, Any]:
+        """Get the database configuration."""
+        return self.config["database"][0]

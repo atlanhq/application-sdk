@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
+import duckdb
 import faker
 
 from application_sdk.test_utils.scale_data_generator.config_loader import (
@@ -136,3 +137,31 @@ class DataGenerator:
                 for child in hierarchy["children"]:
                     self._generate_hierarchical_data(child, parent_data)
                 parent_data.pop(table_name)
+
+    def generate_duckdb_tables(self, output_dir: str) -> None:
+        """Generate DuckDB tables from the generated data."""
+
+        # the duckDB filename should be the database name:
+        database_config = self.config_loader.get_database()
+
+        database_name = database_config["name"]
+        duckdb_filename = f"{database_name}.db"
+        duckdb_path = Path(output_dir) / duckdb_filename
+
+        connection = duckdb.connect(duckdb_path)
+
+        schema_config = database_config["schema"][0]
+        schema_name = schema_config["name"]
+
+        connection.sql(f"CREATE SCHEMA IF NOT EXISTS {database_name}.{schema_name}")
+
+        for schema in schema_config["tables"]:
+            table_name = schema["name"]
+
+            connection.sql(f"""
+                CREATE VIEW IF NOT EXISTS {database_name}.{schema_name}.{table_name}
+                AS
+                SELECT * FROM read_json("{output_dir}/{table_name}.json", auto_detect=true)
+                """)
+
+        connection.close()

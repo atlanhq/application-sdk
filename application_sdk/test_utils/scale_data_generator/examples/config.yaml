@@ -1,7 +1,7 @@
 # define the data hierarchy
-databases:
+database:
   - name: snowflake
-    schemas:
+    schema:
       - name: account_usage
         tables:
           - name: databases
