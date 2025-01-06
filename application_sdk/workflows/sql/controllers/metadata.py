@@ -85,7 +85,7 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
                 "database_result_key": self.DATABASE_KEY,
                 "schema_result_key": self.SCHEMA_KEY,
             }
-            result =  await self.sql_resource.fetch_metadata(args)
+            result = await self.sql_resource.fetch_metadata(args)
             return result
 
         else:
@@ -94,7 +94,9 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
                     return await self.fetch_databases()
                 elif metadata_type == MetadataType.SCHEMA:
                     if not database:
-                        raise ValueError("Database must be specified when fetching schemas")
+                        raise ValueError(
+                            "Database must be specified when fetching schemas"
+                        )
                     return await self.fetch_schemas(database)
                 else:
                     raise ValueError(f"Invalid metadata type: {metadata_type}")

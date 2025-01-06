@@ -1,7 +1,7 @@
 # Request/Response DTOs for workflows
 
-from typing import Any, Dict, List, Optional
 from enum import Enum
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -16,10 +16,12 @@ class TestAuthResponse(BaseModel):
     success: bool
     message: str
 
+
 class MetadataType(str, Enum):
     DATABASE = "database"
     SCHEMA = "schema"
     ALL = "all"
+
 
 class FetchMetadataRequest(BaseModel):
     # Metadata fields
@@ -47,7 +49,6 @@ class FetchMetadataRequest(BaseModel):
                     "type": None,  # Fetch both databases and schemas
                     "database": None,
                     "hierarchical": False,
-                    
                     # Credential example
                     "account_id": "example-account",
                     "port": "443",
@@ -55,14 +56,13 @@ class FetchMetadataRequest(BaseModel):
                     "user": "example_user",
                     "password": "example_password",
                     "role": "ACCOUNTADMIN",
-                    "warehouse": "COMPUTE_WH"
+                    "warehouse": "COMPUTE_WH",
                 },
                 {
                     # Database fetch example
                     "type": "database",
                     "database": None,
                     "hierarchical": True,
-                    
                     # Credential example with keypair
                     "account_id": "example-account",
                     "port": "443",
@@ -71,14 +71,13 @@ class FetchMetadataRequest(BaseModel):
                     "private_key": "-----BEGIN PRIVATE KEY-----\n...",
                     "private_key_password": "key_password",
                     "role": "ACCOUNTADMIN",
-                    "warehouse": "COMPUTE_WH"
+                    "warehouse": "COMPUTE_WH",
                 },
                 {
                     # Schema fetch example
                     "type": "schema",
                     "database": "example_db",
                     "hierarchical": True,
-                    
                     # Credential example with Okta
                     "account_id": "example-account",
                     "port": "443",
@@ -87,8 +86,8 @@ class FetchMetadataRequest(BaseModel):
                     "password": "example_password",
                     "authenticator": "okta_url",
                     "role": "ACCOUNTADMIN",
-                    "warehouse": "COMPUTE_WH"
-                }
+                    "warehouse": "COMPUTE_WH",
+                },
             ]
         }
     }
