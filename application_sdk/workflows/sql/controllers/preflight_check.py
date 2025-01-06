@@ -146,11 +146,11 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
             db = filtered_db.strip("^$")
             if db not in allowed_databases:
                 return False, f"{db} database"
-            
+
             # Handle wildcard case
             if filtered_schemas == "*":
                 continue
-                
+
             # Handle list case
             if isinstance(filtered_schemas, list):
                 for schema in filtered_schemas:
