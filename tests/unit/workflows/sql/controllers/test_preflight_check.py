@@ -71,8 +71,72 @@ async def test_check_schemas_and_databases_failure(
     assert "invalid_db database" in result["failureMessage"]
 
 
+async def test_check_schemas_and_databases_with_wildcard_success(
+    controller: SQLWorkflowPreflightCheckController,
+):
+    # Test with wildcard for all schemas in db1
+    payload = {"form_data": {"include_filter": json.dumps({"^db1$": "*"})}}
+
+    result = await controller.check_schemas_and_databases(payload)
+
+    assert result["success"] is True
+    assert result["successMessage"] == "Schemas and Databases check successful"
+    assert result["failureMessage"] == ""
+
+
+async def test_check_schemas_and_databases_with_wildcard_invalid_db(
+    controller: SQLWorkflowPreflightCheckController,
+):
+    # Test with wildcard but invalid database
+    payload = {"form_data": {"include_filter": json.dumps({"^invalid_db$": "*"})}}
+
+    result = await controller.check_schemas_and_databases(payload)
+
+    assert result["success"] is False
+    assert "invalid_db database" in result["failureMessage"]
+
+
+async def test_check_schemas_and_databases_mixed_format(
+    controller: SQLWorkflowPreflightCheckController,
+):
+    # Test with mix of wildcard and specific schema selections
+    payload = {
+        "form_data": {
+            "include_filter": json.dumps({
+                "^db1$": "*",  # All schemas in db1
+                "^db2$": ["schema1"],  # Specific schema in db2
+            })
+        }
+    }
+
+    result = await controller.check_schemas_and_databases(payload)
+
+    assert result["success"] is True
+    assert result["successMessage"] == "Schemas and Databases check successful"
+    assert result["failureMessage"] == ""
+
+
 async def test_preflight_check_success(controller: SQLWorkflowPreflightCheckController):
     payload = {"form_data": {"include_filter": json.dumps({"db1": ["schema1"]})}}
+
+    with patch.object(controller, "tables_check") as mock_tables_check:
+        mock_tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful",
+            "failureMessage": "",
+        }
+
+        result = await controller.preflight_check(payload)
+
+        assert "error" not in result
+        assert result["databaseSchemaCheck"]["success"] is True
+        assert result["tablesCheck"]["success"] is True
+
+
+async def test_preflight_check_with_wildcard_success(
+    controller: SQLWorkflowPreflightCheckController,
+):
+    payload = {"form_data": {"include_filter": json.dumps({"^db1$": "*"})}}
 
     with patch.object(controller, "tables_check") as mock_tables_check:
         mock_tables_check.return_value = {
