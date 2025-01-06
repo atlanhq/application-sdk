@@ -7,8 +7,10 @@ from typing import Any, Dict, List
 
 import pandas as pd
 
+from application_sdk import activity_pd
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = logging.getLogger(__name__)
 
@@ -95,27 +97,19 @@ class SQLDatabaseWorkflowMetadataController(SQLWorkflowMetadataController):
     # Create a context variable to hold the semaphore
     semaphore_context = contextvars.ContextVar("semaphore")
 
-    async def get_full_databases(self):
-        get_databases_query = """
-            SHOW DATABASES;
-        """
-        get_databases_input = self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
-            query=get_databases_query,
-        )
+    get_databases_query = """
+        SHOW DATABASES;
+    """
 
-        get_databases_result = await get_databases_input.get_batched_dataframe()
-
-        full_database_list = []
-
-        for batch in get_databases_result:
-            if isinstance(batch, pd.DataFrame):
-                full_database_list.append(batch)
-            else:
-                for df in batch:
-                    full_database_list.append(df)
-
-        return pd.concat(full_database_list, ignore_index=True)
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            self.sql_resource.engine,
+            query=self.get_databases_query,
+            chunk_size=None,
+        ),
+    )
+    async def get_all_databases(self, batch_input: pd.DataFrame, **kwargs):
+        return batch_input
 
     async def fetch_db_metadata(self, database_name: str, semaphore: asyncio.Semaphore):
         async with semaphore:
@@ -133,7 +127,7 @@ class SQLDatabaseWorkflowMetadataController(SQLWorkflowMetadataController):
             return await self.sql_resource.fetch_metadata(args)
 
     async def fetch_metadata(self) -> List[Dict[str, str]]:
-        databases = await self.get_full_databases()
+        databases = await self.get_all_databases({})
         full_database_list = databases["name"].tolist()
 
         # Create a semaphore if not present in the context

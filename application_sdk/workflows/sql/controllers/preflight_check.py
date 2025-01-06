@@ -11,6 +11,9 @@ from application_sdk import activity_pd
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
+from application_sdk.workflows.sql.controllers.metadata import (
+    SQLDatabaseWorkflowMetadataController,
+)
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
@@ -205,28 +208,6 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
     # Create a context variable to hold the semaphore
     semaphore_context = contextvars.ContextVar("semaphore")
 
-    async def get_full_databases(self):
-        get_databases_query = """
-            SHOW DATABASES;
-        """
-        get_databases_input = self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
-            query=get_databases_query,
-        )
-
-        get_databases_result = await get_databases_input.get_batched_dataframe()
-
-        full_database_list = []
-
-        for batch in get_databases_result:
-            if isinstance(batch, pd.DataFrame):
-                full_database_list.append(batch)
-            else:
-                for df in batch:
-                    full_database_list.append(df)
-
-        return pd.concat(full_database_list, ignore_index=True)
-
     async def filter_databases_list(
         self,
         db_name: str,
@@ -254,7 +235,8 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
             return await filter_databases_input.get_dataframe()
 
     async def fetch_all_filtered_databases(self, payload: Dict[str, Any]) -> List[str]:
-        databases = await self.get_full_databases()
+        metadata_controller = SQLDatabaseWorkflowMetadataController(self.sql_resource)
+        databases = await metadata_controller.get_all_databases({})
         full_database_list = databases["name"].tolist()
         database_filter_query = """
             SELECT D.CATALOG_NAME AS DATABASE_NAME
