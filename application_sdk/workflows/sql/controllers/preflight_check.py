@@ -138,7 +138,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
 
     @staticmethod
     def validate_filters(
-        include_filter: Dict[str, List[str]],
+        include_filter: Dict[str, List[str] | str],
         allowed_databases: Set[str],
         allowed_schemas: Set[str],
     ) -> Tuple[bool, str]:
@@ -146,10 +146,17 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
             db = filtered_db.strip("^$")
             if db not in allowed_databases:
                 return False, f"{db} database"
-            for schema in filtered_schemas:
-                sch = schema.strip("^$")
-                if f"{db}.{sch}" not in allowed_schemas:
-                    return False, f"{db}.{sch} schema"
+            
+            # Handle wildcard case
+            if filtered_schemas == "*":
+                continue
+                
+            # Handle list case
+            if isinstance(filtered_schemas, list):
+                for schema in filtered_schemas:
+                    sch = schema.strip("^$")
+                    if f"{db}.{sch}" not in allowed_schemas:
+                        return False, f"{db}.{sch} schema"
         return True, ""
 
     @activity_pd(
