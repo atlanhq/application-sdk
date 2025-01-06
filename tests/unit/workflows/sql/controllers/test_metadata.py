@@ -1,5 +1,5 @@
+from typing import Dict, Generic, List, TypeVar
 from unittest.mock import AsyncMock, MagicMock
-from typing import Dict, List, TypeVar, Generic
 
 import pytest
 
@@ -9,7 +9,8 @@ from application_sdk.workflows.sql.controllers.metadata import (
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 class AsyncIteratorMock(Generic[T]):
     """Helper class to mock async iterators"""
@@ -17,7 +18,7 @@ class AsyncIteratorMock(Generic[T]):
     def __init__(self, items: List[T]) -> None:
         self.items = items.copy()  # Create a copy to avoid modifying original list
 
-    def __aiter__(self) -> 'AsyncIteratorMock[T]':
+    def __aiter__(self) -> "AsyncIteratorMock[T]":
         return self
 
     async def __anext__(self) -> T:
@@ -42,7 +43,9 @@ class TestSQLWorkflowMetadataController:
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.METADATA_SQL = "SELECT * FROM test"
-        expected_result: List[Dict[str, str]] = [{"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}]
+        expected_result: List[Dict[str, str]] = [
+            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        ]
         mock_sql_resource.fetch_metadata.return_value = expected_result
 
         # Execute
@@ -62,7 +65,9 @@ class TestSQLWorkflowMetadataController:
         mock_sql_resource.run_query.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode(self, mock_sql_resource: MagicMock) -> None:
+    async def test_fetch_metadata_hierarchical_mode(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
         """Test fetch_metadata when hierarchical fetching is enabled"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
@@ -136,7 +141,9 @@ class TestSQLWorkflowMetadataController:
         )
 
     @pytest.mark.asyncio
-    async def test_fetch_schemas_for_database(self, mock_sql_resource: MagicMock) -> None:
+    async def test_fetch_schemas_for_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
         """Test fetching schemas for a specific database"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
@@ -170,7 +177,9 @@ class TestSQLWorkflowMetadataController:
         )
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_invalid_type(self, mock_sql_resource: MagicMock) -> None:
+    async def test_fetch_metadata_invalid_type(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
         """Test fetch_metadata with invalid metadata type"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
@@ -180,7 +189,9 @@ class TestSQLWorkflowMetadataController:
             await controller.fetch_metadata()
 
     @pytest.mark.asyncio
-    async def test_fetch_schemas_without_database(self, mock_sql_resource: MagicMock) -> None:
+    async def test_fetch_schemas_without_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
         """Test fetching schemas without specifying a database"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
@@ -282,25 +293,3 @@ class TestSQLWorkflowMetadataController:
         mock_sql_resource.run_query.assert_called_once_with(
             "SELECT database_name FROM databases"
         )
-
-    @pytest.mark.asyncio
-    async def test_use_hierarchical_fetch_property(self, mock_sql_resource: MagicMock) -> None:
-        """Test the use_hierarchical_fetch property behavior"""
-        # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
-
-        # Test when both queries are empty
-        controller.FETCH_DATABASES_SQL = ""
-        controller.FETCH_SCHEMAS_SQL = ""
-
-        # Test when only database query is set
-        controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = ""
-
-        # Test when only schema query is set
-        controller.FETCH_DATABASES_SQL = ""
-        controller.FETCH_SCHEMAS_SQL = "SELECT schema_name FROM schemas"
-
-        # Test when both queries are set
-        controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = "SELECT schema_name FROM schemas"
