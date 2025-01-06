@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 import aiofiles
 import daft
@@ -88,6 +88,20 @@ class JSONChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         self.current_record_count = 0
 
 
+def path_gen(chunk_start: int | None, chunk_count: int, file_suffix: str = None) -> str:
+    # If a suffix is provided, format it by replacing slashes with underscores
+    if file_suffix:
+        # Replace slashes with underscores if database name contains any slashes
+        suffix_part = f"_{file_suffix.replace('/', '_')}"
+    else:
+        suffix_part = ""
+
+    if chunk_start is None:
+        return f"{str(chunk_count)}{suffix_part}.json"
+    else:
+        return f"{str(chunk_start+1)}-{str(chunk_count)}{suffix_part}.json"
+
+
 class JsonOutput(Output):
     def __init__(
         self,
@@ -98,6 +112,7 @@ class JsonOutput(Output):
         chunk_size: int = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
+        path_gen: Callable[[int | None, int], str] = path_gen,
     ):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
@@ -108,6 +123,7 @@ class JsonOutput(Output):
         self.chunk_size = chunk_size
         self.buffer: List[pd.DataFrame] = []
         self.current_buffer_size = 0
+        self.path_gen = path_gen
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame, file_suffix: str = None):
@@ -156,21 +172,7 @@ class JsonOutput(Output):
         if not combined_df.empty:
             self.chunk_count += 1
             self.total_record_count += len(combined_df)
-
-            # If a suffix is provided, format it by replacing slashes with underscores
-            if file_suffix:
-                # Replace slashes with underscores to avoid issues
-                suffix_part = f"_{file_suffix.replace('/', '_')}"
-            else:
-                suffix_part = ""
-
-            if self.chunk_start is None:
-                output_file_name = (
-                    f"{self.output_path}/{str(self.chunk_count)}{suffix_part}.json"
-                )
-            else:
-                output_file_name = f"{self.output_path}/{str(self.chunk_start + 1)}-{str(self.chunk_count)}{suffix_part}.json"
-
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, file_suffix)}"
             combined_df.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store

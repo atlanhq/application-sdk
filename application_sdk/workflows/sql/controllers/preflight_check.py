@@ -420,9 +420,9 @@ class SQLDatabaseWorkflowPreflightCheckController(SQLWorkflowPreflightCheckContr
                 }
 
     async def db_tables_check(
-        self, payload: Dict[str, Any], database_name: str, semaphor: asyncio.Semaphore
+        self, payload: Dict[str, Any], database_name: str, semaphore: asyncio.Semaphore
     ) -> Dict[str, Any]:
-        async with semaphor:
+        async with semaphore:
             logger.info(f"Starting tables check for {database_name}")
             try:
                 payload["database_name"] = database_name
