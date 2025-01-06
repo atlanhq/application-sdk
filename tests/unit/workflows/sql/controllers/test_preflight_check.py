@@ -102,10 +102,12 @@ async def test_check_schemas_and_databases_mixed_format(
     # Test with mix of wildcard and specific schema selections
     payload = {
         "form_data": {
-            "include_filter": json.dumps({
-                "^db1$": "*",  # All schemas in db1
-                "^db2$": ["schema1"],  # Specific schema in db2
-            })
+            "include_filter": json.dumps(
+                {
+                    "^db1$": "*",  # All schemas in db1
+                    "^db2$": ["schema1"],  # Specific schema in db2
+                }
+            )
         }
     }
 
