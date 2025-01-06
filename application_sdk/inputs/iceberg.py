@@ -1,4 +1,3 @@
-import math
 from typing import Iterator, Optional
 
 import daft
@@ -23,17 +22,6 @@ class IcebergInput(Input):
         self.table = table
         self.chunk_size = chunk_size
 
-    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
-        """
-        Method to read the data from the iceberg table
-        and return as a batched pandas dataframe
-        """
-        try:
-            for daft_df in self.get_batched_daft_dataframe():
-                yield daft_df.to_pandas()
-        except Exception as e:
-            logger.error(f"Error reading batched data from Iceberg table: {str(e)}")
-
     def get_dataframe(self) -> pd.DataFrame:
         """
         Method to read the data from the iceberg table
@@ -45,28 +33,12 @@ class IcebergInput(Input):
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table: {str(e)}")
 
-    def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
-        """
-        Method to read the data from the iceberg table
-        and return as a batched daft dataframe
-        """
-        try:
-            iceberg_table_daft_df = daft.read_iceberg(self.table)
-            partition_count: int = math.ceil(
-                iceberg_table_daft_df.count_rows() / self.chunk_size
-            )
-            # divide the table into chunks and return them
-            partitioned_df = iceberg_table_daft_df.into_partitions(partition_count)
-            for partition in partitioned_df.iter_partitions():
-                # when a daft dataframe is partitioned, it is returned as a micro partition object
-                # and it does not provide a method to convert it to a daft dataframe
-                # hence converting it to a dictionary and then to a daft dataframe
-                yield daft.from_pydict(partition.to_pydict())
-
-        except Exception as e:
-            logger.error(
-                f"Error reading batched data from Iceberg table using daft: {str(e)}"
-            )
+    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+        # We are not implementing this method as we have to parition the daft dataframe
+        # using dataframe.into_partitions() method. This method does all the paritions in memory
+        # and using that can cause out of memory issues.
+        # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
+        raise NotImplementedError
 
     def get_daft_dataframe(self) -> daft.DataFrame:
         """
@@ -77,3 +49,10 @@ class IcebergInput(Input):
             return daft.read_iceberg(self.table)
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
+
+    def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+        # We are not implementing this method as we have to parition the daft dataframe
+        # using dataframe.into_partitions() method. This method does all the paritions in memory
+        # and using that can cause out of memory issues.
+        # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
+        raise NotImplementedError

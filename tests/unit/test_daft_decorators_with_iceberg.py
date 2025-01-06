@@ -69,7 +69,6 @@ class TestDaftDecoratorsIceberg:
         cls.catalog.drop_table("default.test_table_two")
         cls.catalog.drop_table("default.test_table_three")
         cls.catalog.drop_table("default.test_table_four")
-        cls.catalog.drop_table("default.test_table_five")
         cls.catalog.drop_namespace("default")
 
     def _create_test_resources(self, query: str):
@@ -197,33 +196,5 @@ class TestDaftDecoratorsIceberg:
         await func(self)
 
         table = self.catalog.load_table("default.test_table_four")
-        data_scan = table.scan().to_arrow()
-        assert len(data_scan) == 10
-
-    async def test_iceberg_chunked_input_and_output(self):
-        """
-        Test to read the data (chunked) from the iceberg table(INPUT), transform it
-        and write it back to another iceberg table (OUTPUT)
-        """
-        table_two = self.catalog.load_table("default.test_table_two")
-
-        @activity_daft(
-            batch_input=lambda self: IcebergInput(
-                table=table_two,
-                chunk_size=3,
-            ),
-            output=lambda self: IcebergOutput(
-                iceberg_catalog=self.catalog,
-                iceberg_namespace=self.namespace,
-                iceberg_table="test_table_five",
-            ),
-        )
-        async def func(self, batch_input, output, **kwargs):
-            await output.write_daft_df(batch_input.transform(add_1))
-            return batch_input
-
-        await func(self)
-
-        table = self.catalog.load_table("default.test_table_five")
         data_scan = table.scan().to_arrow()
         assert len(data_scan) == 10
