@@ -16,8 +16,8 @@ class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
         self, msg: Any, kwargs: MutableMapping[str, Any]
     ) -> Tuple[Any, MutableMapping[str, Any]]:
         extra = {}
-        extra["thread_id"] = threading.get_ident()
-        extra["process_id"] = os.getpid()
+        extra["thread_id"] = str(threading.get_ident())
+        extra["process_id"] = str(os.getpid())
 
         # Fetch workflow information if within the workflow context
         try:
