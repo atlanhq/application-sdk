@@ -18,8 +18,9 @@ from examples.application_sql_miner import application_sql_miner
 from examples.application_sql_with_custom_transformer import (
     application_sql_with_custom_transformer,
 )
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 async def monitor_workflow_execution_and_write_status(

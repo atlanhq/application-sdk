@@ -7,8 +7,9 @@ from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.utils import init_guid, validate_required_fields
 
 from application_sdk.workflows.transformers.utils import build_atlas_qualified_name
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class Database(assets.Database):

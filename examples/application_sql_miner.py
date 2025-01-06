@@ -37,10 +37,11 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
 from application_sdk.workflows.workers.worker import WorkflowWorker
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 APPLICATION_NAME = "snowflake"
-
-logger = logging.getLogger(__name__)
 
 
 FETCH_QUERIES_SQL = """

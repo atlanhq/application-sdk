@@ -11,9 +11,8 @@ from application_sdk.workflows.transformers.phoenix.sql import (
     SchemaEntity,
     TableEntity,
 )
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class PhoenixTransformer(TransformerInterface):

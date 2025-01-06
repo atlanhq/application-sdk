@@ -9,8 +9,9 @@ from application_sdk.workflows.controllers import (
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):

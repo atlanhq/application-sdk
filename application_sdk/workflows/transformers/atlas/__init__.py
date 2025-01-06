@@ -14,9 +14,9 @@ from application_sdk.workflows.transformers.atlas.sql import (
     TagAttachment,
 )
 from application_sdk.workflows.transformers.utils import process_text
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class AtlasTransformer(TransformerInterface):

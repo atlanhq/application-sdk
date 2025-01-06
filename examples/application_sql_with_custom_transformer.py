@@ -52,12 +52,12 @@ from application_sdk.workflows.sql.resources.sql_resource import SQLResourceConf
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
-
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 APPLICATION_NAME = "postgres"
 DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class PostgreSQLResource(AsyncSQLResource):

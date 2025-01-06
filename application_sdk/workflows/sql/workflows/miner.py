@@ -24,8 +24,9 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class MinerArgs(BaseModel):

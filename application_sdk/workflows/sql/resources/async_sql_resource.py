@@ -9,8 +9,8 @@ from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
-
-logger = logging.getLogger(__name__)
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class AsyncSQLResource(SQLResource):

@@ -6,8 +6,9 @@ import pandas as pd
 from application_sdk import activity_pd
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowAuthController(WorkflowAuthControllerInterface):

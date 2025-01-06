@@ -10,8 +10,9 @@ from application_sdk.workflows.controllers import (
 )
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.utils.activity import auto_heartbeater
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowInterface(ABC):
