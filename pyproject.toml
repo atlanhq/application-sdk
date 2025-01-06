@@ -42,7 +42,9 @@ dashboard = [
     "dash-ag-grid",
     "dash-bootstrap-components",
     "pygwalker",
-    "dash-dangerously-set-inner-html",
+    "dash-dangerously-set-inner-html"
+]
+iceberg = [
     "pyiceberg"
 ]
 

@@ -96,7 +96,7 @@ class TestDaftDecoratorsIceberg:
             output=lambda self: IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
-                iceberg_table_name="test_table",
+                iceberg_table="test_table",
             ),
         )
         async def func(self, batch_input: daft.DataFrame, output, **kwargs):
@@ -127,7 +127,7 @@ class TestDaftDecoratorsIceberg:
             output=lambda self: IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
-                iceberg_table_name="test_table_two",
+                iceberg_table="test_table_two",
             ),
         )
         async def func(self, batch_input: daft.DataFrame, output, **kwargs):
@@ -159,7 +159,7 @@ class TestDaftDecoratorsIceberg:
             output=lambda self: IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
-                iceberg_table_name="test_table_three",
+                iceberg_table="test_table_three",
             ),
         )
         async def func(self, batch_input: daft.DataFrame, output, **kwargs):
@@ -187,7 +187,7 @@ class TestDaftDecoratorsIceberg:
             output=lambda self: IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
-                iceberg_table_name="test_table_four",
+                iceberg_table="test_table_four",
             ),
         )
         async def func(self, batch_input, output, **kwargs):
@@ -215,7 +215,7 @@ class TestDaftDecoratorsIceberg:
             output=lambda self: IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
-                iceberg_table_name="test_table_five",
+                iceberg_table="test_table_five",
             ),
         )
         async def func(self, batch_input, output, **kwargs):

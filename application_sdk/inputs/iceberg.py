@@ -25,28 +25,29 @@ class IcebergInput(Input):
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """
-        Method to read the data from the json files in the path
+        Method to read the data from the iceberg table
         and return as a batched pandas dataframe
         """
         try:
-            yield from self.get_batched_daft_dataframe()
+            for daft_df in self.get_batched_daft_dataframe():
+                yield daft_df.to_pandas()
         except Exception as e:
-            logger.error(f"Error reading batched data from JSON: {str(e)}")
+            logger.error(f"Error reading batched data from Iceberg table: {str(e)}")
 
     def get_dataframe(self) -> pd.DataFrame:
         """
-        Method to read the data from the json files in the path
+        Method to read the data from the iceberg table
         and return as a single combined pandas dataframe
         """
         try:
             daft_dataframe = self.get_daft_dataframe()
             return daft_dataframe.to_pandas()
         except Exception as e:
-            logger.error(f"Error reading data from JSON: {str(e)}")
+            logger.error(f"Error reading data from Iceberg table: {str(e)}")
 
     def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
         """
-        Method to read the data from the json files in the path
+        Method to read the data from the iceberg table
         and return as a batched daft dataframe
         """
         try:
@@ -63,14 +64,16 @@ class IcebergInput(Input):
                 yield daft.from_pydict(partition.to_pydict())
 
         except Exception as e:
-            logger.error(f"Error reading batched data from JSON: {str(e)}")
+            logger.error(
+                f"Error reading batched data from Iceberg table using daft: {str(e)}"
+            )
 
     def get_daft_dataframe(self) -> daft.DataFrame:
         """
-        Method to read the data from the json files in the path
+        Method to read the data from the iceberg table
         and return as a single combined daft dataframe
         """
         try:
             return daft.read_iceberg(self.table)
         except Exception as e:
-            logger.error(f"Error reading data from JSON using daft: {str(e)}")
+            logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
