@@ -210,4 +210,4 @@ async def application_sql():
 
 if __name__ == "__main__":
     asyncio.run(application_sql())
-    asyncio.sleep(1000000)
+    time.sleep(1000000)
