@@ -11,6 +11,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
@@ -24,7 +25,6 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

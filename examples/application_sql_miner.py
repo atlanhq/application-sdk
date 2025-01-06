@@ -23,6 +23,7 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -37,7 +38,6 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 )
 from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
 from application_sdk.workflows.workers.worker import WorkflowWorker
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

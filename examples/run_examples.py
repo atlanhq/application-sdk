@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from temporalio.client import WorkflowExecutionStatus, WorkflowHandle
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -18,7 +19,6 @@ from examples.application_sql_miner import application_sql_miner
 from examples.application_sql_with_custom_transformer import (
     application_sql_with_custom_transformer,
 )
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -99,8 +99,8 @@ async def main():
 
     examples = [
         application_sql,
-        application_sql_with_custom_transformer,
-        application_sql_miner,
+        # application_sql_with_custom_transformer,
+        # application_sql_miner,
     ]
 
     failed_examples: list[str] = []

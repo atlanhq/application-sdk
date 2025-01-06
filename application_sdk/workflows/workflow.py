@@ -5,12 +5,12 @@ from typing import Any, Callable, Dict, List
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.utils.activity import auto_heartbeater
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
