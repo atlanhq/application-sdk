@@ -1,9 +1,9 @@
+import logging
 from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, FastAPI, status
 from pydantic import BaseModel
 
-from application_sdk import logging
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
 from application_sdk.app.rest.fastapi.middlewares.error_handler import (
     internal_server_error_handler,
@@ -25,6 +25,7 @@ from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import AtlanEvent
 from application_sdk.workflows.controllers import (
@@ -34,7 +35,7 @@ from application_sdk.workflows.controllers import (
 )
 from application_sdk.workflows.workflow import WorkflowInterface
 
-logger = logging.get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
@@ -136,6 +137,7 @@ class FastAPIApplication(AtlanAPIApplication):
                     methods=trigger.methods,
                     response_model=WorkflowResponse,
                 )
+                self.app.include_router(self.workflow_router, prefix="/workflows/v1")
             elif isinstance(trigger, EventWorkflowTrigger):
                 self.event_triggers.append(trigger)
 

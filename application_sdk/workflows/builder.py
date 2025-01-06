@@ -1,6 +1,7 @@
+import logging
 from abc import ABC, abstractmethod
 
-from application_sdk.logging import get_logger
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
@@ -9,7 +10,7 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.workflow import WorkflowInterface
 
-logger = get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowBuilderInterface(ABC):
