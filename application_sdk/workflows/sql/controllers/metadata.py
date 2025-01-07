@@ -10,7 +10,6 @@ import pandas as pd
 from application_sdk import activity_pd
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = logging.getLogger(__name__)
 
