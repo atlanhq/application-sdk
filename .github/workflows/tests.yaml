@@ -65,7 +65,7 @@ jobs:
       #----------------------------------------------
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root --extras "workflows dashboard iceberg"
+        run: poetry install --no-interaction --no-root --extras "iceberg workflows dashboard"
 
       - name: Run Unit and Integration Tests with Coverage
         run: |
