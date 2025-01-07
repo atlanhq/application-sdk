@@ -324,14 +324,14 @@ class SQLMinerWorkflow(WorkflowInterface):
             raise ValueError("Preflight check failed")
 
     @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]):
+    async def run(self, workflow_args: Dict[str, Any]):
         """
         Run the workflow.
 
         :param workflow_args: The workflow arguments.
         """
-        workflow_guid = workflow_config["workflow_id"]
-        workflow_args = StateStore.extract_configuration(workflow_guid)
+        # workflow_guid = workflow_config["workflow_id"]
+        # workflow_args = StateStore.extract_configuration(workflow_guid)
 
         if not self.sql_resource:
             credentials = StateStore.extract_credentials(
