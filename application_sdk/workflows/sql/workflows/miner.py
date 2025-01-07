@@ -418,4 +418,72 @@ class SQLMinerWorkflow(WorkflowInterface):
         """
         Run the workflow with timestamp management handled by the decorator.
         """
-        return await super().run(workflow_config)
+        workflow_guid = workflow_config["workflow_id"]
+        workflow_args = StateStore.extract_configuration(workflow_guid)
+
+        if not self.sql_resource:
+            credentials = StateStore.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+            self.sql_resource = SQLResource(SQLResourceConfig(credentials=credentials))
+
+        if not self.temporal_resource:
+            self.temporal_resource = TemporalResource(
+                TemporalConfig(application_name=self.application_name)
+            )
+
+        workflow_id = workflow_args["workflow_id"]
+        workflow.logger.info(f"Starting miner workflow for {workflow_id}")
+        retry_policy = RetryPolicy(
+            maximum_attempts=6,
+            backoff_coefficient=2,
+        )
+
+        workflow_run_id = workflow.info().run_id
+        output_prefix = workflow_args["output_prefix"]
+        output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
+        workflow_args["output_path"] = output_path
+
+        await workflow.execute_activity(
+            self.preflight_check,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
+
+        results: List[Dict[str, Any]] = await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+            self.get_query_batches,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
+
+        miner_activities: List[Coroutine[Any, Any, str]] = []
+
+        # Extract Queries
+        for result in results:
+            activity_args = workflow_args.copy()
+            activity_args["sql_query"] = result["sql"]
+            activity_args["start_marker"] = result["start"]
+            activity_args["end_marker"] = result["end"]
+
+            miner_activities.append(
+                workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+                    self.fetch_queries,
+                    activity_args,
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=timedelta(seconds=1000),
+                )
+            )
+
+        # Collect all end timestamps from parallel activities
+        last_timestamps = await asyncio.gather(*miner_activities)
+        
+        # Find the most recent timestamp
+        latest_timestamp = max(last_timestamps, key=int)
+        
+        # Store the latest processed timestamp
+        StateStore.save_state(workflow_guid, {"latest_processed_timestamp": latest_timestamp})
+
+        workflow.logger.info(f"Miner workflow completed for {workflow_id}")
+        workflow.logger.info(f"Latest processed timestamp: {latest_timestamp}")
