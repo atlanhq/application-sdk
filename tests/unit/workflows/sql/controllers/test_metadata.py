@@ -235,11 +235,11 @@ class TestSQLWorkflowMetadataController:
 
         # Assert
         assert result == []
+        # Verify run_query was called with FETCH_DATABASES_SQL
         mock_sql_resource.run_query.assert_called_once_with(
-            "SELECT database_name FROM databases"
+            controller.FETCH_DATABASES_SQL
         )
         assert mock_sql_resource.run_query.call_count == 1
-        # Verify fetch_metadata was not called
         mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
@@ -249,6 +249,7 @@ class TestSQLWorkflowMetadataController:
         """Test fetching empty schemas using MetadataType.SCHEMA"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        test_database = "test_db"
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
         )
@@ -260,16 +261,17 @@ class TestSQLWorkflowMetadataController:
 
         # Execute with MetadataType.SCHEMA
         result = await controller.fetch_metadata(
-            metadata_type=MetadataType.SCHEMA, database="test_db"
+            metadata_type=MetadataType.SCHEMA, database=test_database
         )
 
         # Assert
         assert result == []
-        mock_sql_resource.run_query.assert_called_once_with(
-            "SELECT schema_name FROM schemas WHERE database = 'test_db'"
+        # Verify run_query was called with FETCH_SCHEMAS_SQL formatted with database
+        expected_query = controller.FETCH_SCHEMAS_SQL.format(
+            database_name=test_database
         )
+        mock_sql_resource.run_query.assert_called_once_with(expected_query)
         assert mock_sql_resource.run_query.call_count == 1
-        # Verify fetch_metadata was not called
         mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
@@ -296,11 +298,11 @@ class TestSQLWorkflowMetadataController:
             await controller.fetch_metadata(metadata_type=MetadataType.DATABASE)
         assert str(exc_info.value) == "Database query failed"
 
+        # Verify run_query was called with FETCH_DATABASES_SQL
         mock_sql_resource.run_query.assert_called_once_with(
-            "SELECT database_name FROM databases"
+            controller.FETCH_DATABASES_SQL
         )
         assert mock_sql_resource.run_query.call_count == 1
-        # Verify fetch_metadata was not called
         mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
@@ -393,8 +395,9 @@ class TestSQLWorkflowMetadataController:
 
         # Assert
         assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
+        # Verify run_query was called with FETCH_DATABASES_SQL
         mock_sql_resource.run_query.assert_called_once_with(
-            "SELECT database_name FROM databases"
+            controller.FETCH_DATABASES_SQL
         )
         assert mock_sql_resource.run_query.call_count == 1
         mock_sql_resource.fetch_metadata.assert_not_called()
@@ -421,8 +424,9 @@ class TestSQLWorkflowMetadataController:
 
         # Assert
         assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
+        # Verify run_query was called with FETCH_DATABASES_SQL (ignoring database parameter)
         mock_sql_resource.run_query.assert_called_once_with(
-            "SELECT database_name FROM databases"
+            controller.FETCH_DATABASES_SQL
         )
         assert mock_sql_resource.run_query.call_count == 1
         mock_sql_resource.fetch_metadata.assert_not_called()
@@ -455,6 +459,7 @@ class TestSQLWorkflowMetadataController:
         """Test fetching schemas with MetadataType.SCHEMA and database"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        test_database = "test_db"
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
         )
@@ -468,17 +473,19 @@ class TestSQLWorkflowMetadataController:
 
         # Execute with MetadataType.SCHEMA and database
         result = await controller.fetch_metadata(
-            metadata_type=MetadataType.SCHEMA, database="test_db"
+            metadata_type=MetadataType.SCHEMA, database=test_database
         )
 
         # Assert
         assert result == [
-            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema2"},
+            {"TABLE_CATALOG": test_database, "TABLE_SCHEMA": "schema1"},
+            {"TABLE_CATALOG": test_database, "TABLE_SCHEMA": "schema2"},
         ]
-        mock_sql_resource.run_query.assert_called_once_with(
-            "SELECT schema_name FROM schemas WHERE database = 'test_db'"
+        # Verify run_query was called with FETCH_SCHEMAS_SQL formatted with database
+        expected_query = controller.FETCH_SCHEMAS_SQL.format(
+            database_name=test_database
         )
+        mock_sql_resource.run_query.assert_called_once_with(expected_query)
         assert mock_sql_resource.run_query.call_count == 1
         mock_sql_resource.fetch_metadata.assert_not_called()
 
