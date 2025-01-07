@@ -145,7 +145,7 @@ class DataGenerator:
         database_config = self.config_loader.get_database()
 
         database_name = database_config["name"]
-        duckdb_filename = f"{database_name}.db"
+        duckdb_filename = f"{database_name}.duckdb"
         duckdb_path = Path(output_dir) / duckdb_filename
 
         connection = duckdb.connect(duckdb_path)

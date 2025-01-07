@@ -1,10 +1,46 @@
 import argparse
+import logging
+import os
+import shutil
+import time
+from dataclasses import dataclass
 
 from application_sdk.test_utils.scale_data_generator.config_loader import ConfigLoader
 from application_sdk.test_utils.scale_data_generator.data_generator import DataGenerator
 
+logger = logging.getLogger(__name__)
 
-def main():
+
+@dataclass
+class DriverArgs:
+    config_path: str
+    output_format: str
+    output_dir: str
+
+
+def driver(args: DriverArgs):
+    # cleanup output directory
+    if os.path.exists(args.output_dir):
+        shutil.rmtree(args.output_dir)
+
+    try:
+        start_time = time.time()
+        config_loader = ConfigLoader(args.config_path)
+        generator = DataGenerator(config_loader)
+        generator.generate_data(args.output_format, args.output_dir)
+        generator.generate_duckdb_tables(args.output_dir)
+        end_time = time.time()
+        logger.info(
+            f"Data generated successfully in {args.output_format} format at {args.output_dir}. "
+            f"Time taken: {end_time - start_time} seconds"
+        )
+
+    except Exception as e:
+        logger.error(f"Error generating data: {e}")
+        raise e
+
+
+if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Generate scaled test data based on configuration"
     )
@@ -26,20 +62,4 @@ def main():
     )
 
     args = parser.parse_args()
-
-    try:
-        config_loader = ConfigLoader(args.config_path)
-        generator = DataGenerator(config_loader)
-        generator.generate_data(args.output_format, args.output_dir)
-        generator.generate_duckdb_tables(args.output_dir)
-        print(
-            f"Data generated successfully in {args.output_format} format at {args.output_dir}"
-        )
-
-    except Exception as e:
-        raise e
-        exit(1)
-
-
-if __name__ == "__main__":
-    main()
+    driver(DriverArgs(**vars(args)))
