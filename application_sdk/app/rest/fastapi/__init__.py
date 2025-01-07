@@ -136,6 +136,7 @@ class FastAPIApplication(AtlanAPIApplication):
                     methods=trigger.methods,
                     response_model=WorkflowResponse,
                 )
+                self.app.include_router(self.workflow_router, prefix="/workflows/v1")
             elif isinstance(trigger, EventWorkflowTrigger):
                 self.event_triggers.append(trigger)
 
