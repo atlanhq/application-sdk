@@ -391,3 +391,7 @@ class SQLMinerWorkflow(WorkflowInterface):
         await asyncio.gather(*miner_activities)
 
         workflow.logger.info(f"Miner workflow completed for {workflow_id}")
+
+
+
+
