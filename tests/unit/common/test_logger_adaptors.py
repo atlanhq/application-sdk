@@ -62,8 +62,15 @@ def test_process_without_context(logger_adapter: AtlanLoggerAdapter):
         with mock.patch("temporalio.activity.info", return_value=None):
             msg, kwargs = logger_adapter.process("Test message", {})
 
-            # Ensure no extra information is added
+            # Ensure process id and thread id are added
             assert "extra" in kwargs
+            assert "process_id" in kwargs["extra"]
+            assert "thread_id" in kwargs["extra"]
+
+            del kwargs["extra"]["process_id"]
+            del kwargs["extra"]["thread_id"]
+
+            # Ensure no extra information is added
             assert kwargs["extra"] == {}
             assert msg == "Test message"
 
