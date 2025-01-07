@@ -997,6 +997,22 @@ files = [
 ]
 
 [[package]]
+name = "duckdb-engine"
+version = "0.14.0"
+description = "SQLAlchemy driver for duckdb"
+optional = true
+python-versions = "<4,>=3.8"
+files = [
+    {file = "duckdb_engine-0.14.0-py3-none-any.whl", hash = "sha256:583b52cbcd5071119a3171e50d81797ff8096eb5a4313ec636b6a173e547dc53"},
+    {file = "duckdb_engine-0.14.0.tar.gz", hash = "sha256:7fc49646274fa195e15f02b62270a694b04c810004e10c5a805f9c2076f0c933"},
+]
+
+[package.dependencies]
+duckdb = ">=0.5.0"
+packaging = ">=21"
+sqlalchemy = ">=1.3.22"
+
+[[package]]
 name = "email-validator"
 version = "2.2.0"
 description = "A robust email address syntax and deliverability validation library."
@@ -1630,13 +1646,13 @@ zstd = ["zstandard (>=0.18.0)"]
 
 [[package]]
 name = "hypothesis"
-version = "6.123.2"
+version = "6.123.5"
 description = "A library for property-based testing"
 optional = false
 python-versions = ">=3.9"
 files = [
-    {file = "hypothesis-6.123.2-py3-none-any.whl", hash = "sha256:0a8bf07753f1436f1b8697a13ea955f3fef3ef7b477c2972869b1d142bcdb30e"},
-    {file = "hypothesis-6.123.2.tar.gz", hash = "sha256:02c25552783764146b191c69eef69d8375827b58a75074055705ab8fdbc95fc5"},
+    {file = "hypothesis-6.123.5-py3-none-any.whl", hash = "sha256:ba34af1ac797db362794178e29097057e7533d4738fec361dcb2dafa669e49c4"},
+    {file = "hypothesis-6.123.5.tar.gz", hash = "sha256:03af036f433ca5d1f8e4556cf913e8a4982d21035e116ac6b92c11f767795c0e"},
 ]
 
 [package.dependencies]
@@ -1644,10 +1660,10 @@ attrs = ">=22.2.0"
 sortedcontainers = ">=2.1.0,<3.0.0"
 
 [package.extras]
-all = ["black (>=19.10b0)", "click (>=7.0)", "crosshair-tool (>=0.0.78)", "django (>=4.2)", "dpcontracts (>=0.4)", "hypothesis-crosshair (>=0.0.18)", "lark (>=0.10.1)", "libcst (>=0.3.16)", "numpy (>=1.19.3)", "pandas (>=1.1)", "pytest (>=4.6)", "python-dateutil (>=1.4)", "pytz (>=2014.1)", "redis (>=3.0.0)", "rich (>=9.0.0)", "tzdata (>=2024.2)"]
+all = ["black (>=19.10b0)", "click (>=7.0)", "crosshair-tool (>=0.0.81)", "django (>=4.2)", "dpcontracts (>=0.4)", "hypothesis-crosshair (>=0.0.18)", "lark (>=0.10.1)", "libcst (>=0.3.16)", "numpy (>=1.19.3)", "pandas (>=1.1)", "pytest (>=4.6)", "python-dateutil (>=1.4)", "pytz (>=2014.1)", "redis (>=3.0.0)", "rich (>=9.0.0)", "tzdata (>=2024.2)"]
 cli = ["black (>=19.10b0)", "click (>=7.0)", "rich (>=9.0.0)"]
 codemods = ["libcst (>=0.3.16)"]
-crosshair = ["crosshair-tool (>=0.0.78)", "hypothesis-crosshair (>=0.0.18)"]
+crosshair = ["crosshair-tool (>=0.0.81)", "hypothesis-crosshair (>=0.0.18)"]
 dateutil = ["python-dateutil (>=1.4)"]
 django = ["django (>=4.2)"]
 dpcontracts = ["dpcontracts (>=0.4)"]
@@ -3274,13 +3290,13 @@ typing-extensions = ">=4.6.0,<4.7.0 || >4.7.0"
 
 [[package]]
 name = "pygments"
-version = "2.19.0"
+version = "2.19.1"
 description = "Pygments is a syntax highlighting package written in Python."
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pygments-2.19.0-py3-none-any.whl", hash = "sha256:4755e6e64d22161d5b61432c0600c923c5927214e7c956e31c23923c89251a9b"},
-    {file = "pygments-2.19.0.tar.gz", hash = "sha256:afc4146269910d4bdfabcd27c24923137a74d562a23a320a41a55ad303e19783"},
+    {file = "pygments-2.19.1-py3-none-any.whl", hash = "sha256:9ea1544ad55cecf4b8242fab6dd35a93bbce657034b0611ee383099054ab6d8c"},
+    {file = "pygments-2.19.1.tar.gz", hash = "sha256:61c16d2a8576dc0649d9f39e089b5f02bcd27fba10d8fb4dcc28173f7a45151f"},
 ]
 
 [package.extras]
@@ -4609,10 +4625,10 @@ type = ["pytest-mypy"]
 
 [extras]
 dashboard = ["dash", "dash-ag-grid", "dash-bootstrap-components", "dash-dangerously-set-inner-html", "pandas", "pygwalker"]
-scale-data-generator = ["duckdb", "faker", "numpy", "pandas", "pyarrow", "pyyaml"]
+scale-data-generator = ["duckdb", "duckdb-engine", "faker", "numpy", "pandas", "pyarrow", "pyyaml"]
 workflows = ["dapr", "temporalio"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "6fd981c61cb569e957dde7b79fd586c4d1e746b48d232fecfeaaefbe63fec997"
+content-hash = "b69771ca0ae125d856ac8246caf1bc2f42217a7d06a69b240cc8814a65fa1937"
