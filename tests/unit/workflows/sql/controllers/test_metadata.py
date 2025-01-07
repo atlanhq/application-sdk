@@ -1,5 +1,5 @@
 from typing import Dict, Generic, List, TypeVar
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
@@ -39,36 +39,43 @@ def mock_sql_resource() -> MagicMock:
 class TestSQLWorkflowMetadataController:
     @pytest.mark.asyncio
     async def test_fetch_metadata_flat_mode(self, mock_sql_resource: MagicMock) -> None:
-        """Test fetch_metadata when hierarchical fetching is disabled"""
+        """Test fetch_metadata when hierarchical fetching is disabled (MetadataType.ALL)"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.METADATA_SQL = "SELECT * FROM test"
+        controller.DATABASE_ALIAS_KEY = "db_alias"
+        controller.SCHEMA_ALIAS_KEY = "schema_alias"
+        controller.DATABASE_KEY = "TABLE_CATALOG"
+        controller.SCHEMA_KEY = "TABLE_SCHEMA"
+
         expected_result: List[Dict[str, str]] = [
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
         ]
         mock_sql_resource.fetch_metadata.return_value = expected_result
 
-        # Execute
+        # Execute with MetadataType.ALL
         result = await controller.fetch_metadata(metadata_type=MetadataType.ALL)
 
         # Assert
         assert result == expected_result
+        # Verify fetch_metadata was called with correct arguments
         mock_sql_resource.fetch_metadata.assert_called_once_with(
             {
                 "metadata_sql": "SELECT * FROM test",
-                "database_alias_key": None,
-                "schema_alias_key": None,
+                "database_alias_key": "db_alias",
+                "schema_alias_key": "schema_alias",
                 "database_result_key": "TABLE_CATALOG",
                 "schema_result_key": "TABLE_SCHEMA",
             }
         )
+        # Verify run_query was not called
         mock_sql_resource.run_query.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fetch_metadata_hierarchical_mode(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test fetch_metadata when hierarchical fetching is enabled"""
+        """Test fetch_metadata when hierarchical fetching is enabled (direct method calls)"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
@@ -87,11 +94,11 @@ class TestSQLWorkflowMetadataController:
             AsyncIteratorMock([[{"TABLE_SCHEMA": "schema3"}]]),
         ]
 
-        # First fetch databases
+        # First fetch databases directly
         databases = await controller.fetch_databases()
         assert databases == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
 
-        # Then fetch schemas for each database
+        # Then fetch schemas for each database directly
         schemas_db1 = await controller.fetch_schemas("db1")
         assert schemas_db1 == [
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
@@ -104,20 +111,21 @@ class TestSQLWorkflowMetadataController:
         ]
 
         # Assert the calls were made correctly
+        expected_calls = [
+            call("SELECT database_name FROM databases"),
+            call("SELECT schema_name FROM schemas WHERE database = 'db1'"),
+            call("SELECT schema_name FROM schemas WHERE database = 'db2'"),
+        ]
         assert mock_sql_resource.run_query.call_count == 3
-        mock_sql_resource.run_query.assert_any_call(
-            "SELECT database_name FROM databases"
-        )
-        mock_sql_resource.run_query.assert_any_call(
-            "SELECT schema_name FROM schemas WHERE database = 'db1'"
-        )
-        mock_sql_resource.run_query.assert_any_call(
-            "SELECT schema_name FROM schemas WHERE database = 'db2'"
-        )
+        mock_sql_resource.run_query.assert_has_calls(expected_calls, any_order=False)
+        # Verify fetch_metadata was not called
+        mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fetch_databases_only(self, mock_sql_resource: MagicMock) -> None:
-        """Test fetching only databases"""
+    async def test_fetch_metadata_database_type(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetching only databases using MetadataType.DATABASE"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
@@ -128,23 +136,23 @@ class TestSQLWorkflowMetadataController:
             [[{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]]
         )
 
-        # Expected result
-        expected_result = [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
-
-        # Execute
+        # Execute with MetadataType.DATABASE
         result = await controller.fetch_metadata(metadata_type=MetadataType.DATABASE)
 
         # Assert
-        assert result == expected_result
+        assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
         mock_sql_resource.run_query.assert_called_once_with(
             "SELECT database_name FROM databases"
         )
+        assert mock_sql_resource.run_query.call_count == 1
+        # Verify fetch_metadata was not called
+        mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fetch_schemas_for_database(
+    async def test_fetch_metadata_schema_type(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test fetching schemas for a specific database"""
+        """Test fetching schemas using MetadataType.SCHEMA"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.FETCH_SCHEMAS_SQL = (
@@ -159,123 +167,121 @@ class TestSQLWorkflowMetadataController:
         )
 
         test_database = "test_db"
-        # Expected result
-        expected_result = [
-            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema2"},
-        ]
-
-        # Execute
+        # Execute with MetadataType.SCHEMA
         result = await controller.fetch_metadata(
             metadata_type=MetadataType.SCHEMA, database=test_database
         )
 
         # Assert
-        assert result == expected_result
+        assert result == [
+            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema1"},
+            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema2"},
+        ]
         mock_sql_resource.run_query.assert_called_once_with(
             "SELECT schema_name FROM schemas WHERE database = 'test_db'"
         )
+        assert mock_sql_resource.run_query.call_count == 1
+        # Verify fetch_metadata was not called
+        mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_fetch_metadata_invalid_type(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test fetch_metadata with invalid metadata type"""
+        """Test fetch_metadata with invalid/None metadata type"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
 
-        # Execute and Assert
+        # Execute and Assert with None type
         with pytest.raises(ValueError, match="Invalid metadata type: None"):
             await controller.fetch_metadata()
 
+        # Verify neither method was called
+        mock_sql_resource.run_query.assert_not_called()
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
     @pytest.mark.asyncio
-    async def test_fetch_schemas_without_database(
+    async def test_fetch_metadata_schema_without_database(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test fetching schemas without specifying a database"""
+        """Test fetching schemas without database using MetadataType.SCHEMA"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
 
-        # Execute and Assert
+        # Execute and Assert with MetadataType.SCHEMA but no database
         with pytest.raises(
             ValueError, match="Database must be specified when fetching schemas"
         ):
             await controller.fetch_metadata(metadata_type=MetadataType.SCHEMA)
 
+        # Verify neither method was called
+        mock_sql_resource.run_query.assert_not_called()
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode_empty_databases(
+    async def test_fetch_metadata_empty_databases(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test hierarchical fetching when no databases are found"""
+        """Test fetching empty databases using MetadataType.DATABASE"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = (
-            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
-        )
 
         # Mock empty database result
         mock_sql_resource.run_query.return_value = AsyncIteratorMock([[]])
 
-        # Execute
-        databases = await controller.fetch_databases()
+        # Execute with MetadataType.DATABASE
+        result = await controller.fetch_metadata(metadata_type=MetadataType.DATABASE)
 
         # Assert
-        assert databases == []
+        assert result == []
         mock_sql_resource.run_query.assert_called_once_with(
             "SELECT database_name FROM databases"
         )
+        assert mock_sql_resource.run_query.call_count == 1
+        # Verify fetch_metadata was not called
+        mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode_empty_schemas(
+    async def test_fetch_metadata_empty_schemas(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test hierarchical fetching when databases exist but have no schemas"""
+        """Test fetching empty schemas using MetadataType.SCHEMA"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
-        controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
         )
         controller.DATABASE_KEY = "TABLE_CATALOG"
         controller.SCHEMA_KEY = "TABLE_SCHEMA"
 
-        # Mock results: one database but no schemas
-        mock_sql_resource.run_query.side_effect = [
-            AsyncIteratorMock([[{"TABLE_CATALOG": "db1"}]]),  # Database exists
-            AsyncIteratorMock([[]]),  # But no schemas
-        ]
+        # Mock empty schema result
+        mock_sql_resource.run_query.return_value = AsyncIteratorMock([[]])
 
-        # First fetch databases
-        databases = await controller.fetch_databases()
-        assert databases == [{"TABLE_CATALOG": "db1"}]
-
-        # Then fetch schemas (should be empty)
-        schemas = await controller.fetch_schemas("db1")
-        assert schemas == []
-
-        # Assert the calls were made correctly
-        assert mock_sql_resource.run_query.call_count == 2
-        mock_sql_resource.run_query.assert_any_call(
-            "SELECT database_name FROM databases"
+        # Execute with MetadataType.SCHEMA
+        result = await controller.fetch_metadata(
+            metadata_type=MetadataType.SCHEMA, database="test_db"
         )
-        mock_sql_resource.run_query.assert_any_call(
-            "SELECT schema_name FROM schemas WHERE database = 'db1'"
+
+        # Assert
+        assert result == []
+        mock_sql_resource.run_query.assert_called_once_with(
+            "SELECT schema_name FROM schemas WHERE database = 'test_db'"
         )
+        assert mock_sql_resource.run_query.call_count == 1
+        # Verify fetch_metadata was not called
+        mock_sql_resource.fetch_metadata.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_fetch_metadata_hierarchical_mode_error_handling(
+    async def test_fetch_metadata_error_handling(
         self, mock_sql_resource: MagicMock
     ) -> None:
-        """Test error handling in hierarchical fetching"""
+        """Test error handling in metadata fetching"""
         # Setup
         controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
-        controller.FETCH_SCHEMAS_SQL = (
-            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
-        )
 
-        # Mock database query to raise an exception
+        # Mock query to raise an exception
         class ErrorAsyncIterator:
             def __aiter__(self):
                 return self
@@ -285,11 +291,225 @@ class TestSQLWorkflowMetadataController:
 
         mock_sql_resource.run_query.return_value = ErrorAsyncIterator()
 
-        # Execute and Assert
+        # Execute and Assert with MetadataType.DATABASE
         with pytest.raises(Exception) as exc_info:
-            await controller.fetch_databases()
+            await controller.fetch_metadata(metadata_type=MetadataType.DATABASE)
         assert str(exc_info.value) == "Database query failed"
 
         mock_sql_resource.run_query.assert_called_once_with(
             "SELECT database_name FROM databases"
         )
+        assert mock_sql_resource.run_query.call_count == 1
+        # Verify fetch_metadata was not called
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_flat_mode_without_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetch_metadata with MetadataType.ALL and no database"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller.METADATA_SQL = "SELECT * FROM test"
+        controller.DATABASE_ALIAS_KEY = "db_alias"
+        controller.SCHEMA_ALIAS_KEY = "schema_alias"
+        controller.DATABASE_KEY = "TABLE_CATALOG"
+        controller.SCHEMA_KEY = "TABLE_SCHEMA"
+
+        expected_result: List[Dict[str, str]] = [
+            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        ]
+        mock_sql_resource.fetch_metadata.return_value = expected_result
+
+        # Execute with MetadataType.ALL and no database
+        result = await controller.fetch_metadata(metadata_type=MetadataType.ALL)
+
+        # Assert
+        assert result == expected_result
+        mock_sql_resource.fetch_metadata.assert_called_once_with(
+            {
+                "metadata_sql": "SELECT * FROM test",
+                "database_alias_key": "db_alias",
+                "schema_alias_key": "schema_alias",
+                "database_result_key": "TABLE_CATALOG",
+                "schema_result_key": "TABLE_SCHEMA",
+            }
+        )
+        mock_sql_resource.run_query.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_flat_mode_with_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetch_metadata with MetadataType.ALL and database (should ignore database)"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller.METADATA_SQL = "SELECT * FROM test"
+        controller.DATABASE_ALIAS_KEY = "db_alias"
+        controller.SCHEMA_ALIAS_KEY = "schema_alias"
+        controller.DATABASE_KEY = "TABLE_CATALOG"
+        controller.SCHEMA_KEY = "TABLE_SCHEMA"
+
+        expected_result: List[Dict[str, str]] = [
+            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
+        ]
+        mock_sql_resource.fetch_metadata.return_value = expected_result
+
+        # Execute with MetadataType.ALL and database (should ignore database)
+        result = await controller.fetch_metadata(
+            metadata_type=MetadataType.ALL, database="test_db"
+        )
+
+        # Assert
+        assert result == expected_result
+        mock_sql_resource.fetch_metadata.assert_called_once_with(
+            {
+                "metadata_sql": "SELECT * FROM test",
+                "database_alias_key": "db_alias",
+                "schema_alias_key": "schema_alias",
+                "database_result_key": "TABLE_CATALOG",
+                "schema_result_key": "TABLE_SCHEMA",
+            }
+        )
+        mock_sql_resource.run_query.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_database_type_without_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetching databases with MetadataType.DATABASE and no database"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
+        controller.DATABASE_KEY = "TABLE_CATALOG"
+
+        # Mock database query results
+        mock_sql_resource.run_query.return_value = AsyncIteratorMock(
+            [[{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]]
+        )
+
+        # Execute with MetadataType.DATABASE and no database
+        result = await controller.fetch_metadata(metadata_type=MetadataType.DATABASE)
+
+        # Assert
+        assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
+        mock_sql_resource.run_query.assert_called_once_with(
+            "SELECT database_name FROM databases"
+        )
+        assert mock_sql_resource.run_query.call_count == 1
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_database_type_with_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetching databases with MetadataType.DATABASE and database (should ignore database)"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
+        controller.DATABASE_KEY = "TABLE_CATALOG"
+
+        # Mock database query results
+        mock_sql_resource.run_query.return_value = AsyncIteratorMock(
+            [[{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]]
+        )
+
+        # Execute with MetadataType.DATABASE and database (should ignore database)
+        result = await controller.fetch_metadata(
+            metadata_type=MetadataType.DATABASE, database="test_db"
+        )
+
+        # Assert
+        assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
+        mock_sql_resource.run_query.assert_called_once_with(
+            "SELECT database_name FROM databases"
+        )
+        assert mock_sql_resource.run_query.call_count == 1
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_schema_type_without_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetching schemas with MetadataType.SCHEMA and no database (should error)"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller.FETCH_SCHEMAS_SQL = (
+            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        )
+
+        # Execute and Assert with MetadataType.SCHEMA but no database
+        with pytest.raises(
+            ValueError, match="Database must be specified when fetching schemas"
+        ):
+            await controller.fetch_metadata(metadata_type=MetadataType.SCHEMA)
+
+        # Verify neither method was called
+        mock_sql_resource.run_query.assert_not_called()
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_schema_type_with_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetching schemas with MetadataType.SCHEMA and database"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller.FETCH_SCHEMAS_SQL = (
+            "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
+        )
+        controller.DATABASE_KEY = "TABLE_CATALOG"
+        controller.SCHEMA_KEY = "TABLE_SCHEMA"
+
+        # Mock schema query results
+        mock_sql_resource.run_query.return_value = AsyncIteratorMock(
+            [[{"TABLE_SCHEMA": "schema1"}, {"TABLE_SCHEMA": "schema2"}]]
+        )
+
+        # Execute with MetadataType.SCHEMA and database
+        result = await controller.fetch_metadata(
+            metadata_type=MetadataType.SCHEMA, database="test_db"
+        )
+
+        # Assert
+        assert result == [
+            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema1"},
+            {"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "schema2"},
+        ]
+        mock_sql_resource.run_query.assert_called_once_with(
+            "SELECT schema_name FROM schemas WHERE database = 'test_db'"
+        )
+        assert mock_sql_resource.run_query.call_count == 1
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_none_type_without_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetch_metadata with None type and no database (should error)"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+
+        # Execute and Assert with None type and no database
+        with pytest.raises(ValueError, match="Invalid metadata type: None"):
+            await controller.fetch_metadata()
+
+        # Verify neither method was called
+        mock_sql_resource.run_query.assert_not_called()
+        mock_sql_resource.fetch_metadata.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_fetch_metadata_none_type_with_database(
+        self, mock_sql_resource: MagicMock
+    ) -> None:
+        """Test fetch_metadata with None type and database (should error)"""
+        # Setup
+        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+
+        # Execute and Assert with None type and database
+        with pytest.raises(ValueError, match="Invalid metadata type: None"):
+            await controller.fetch_metadata(database="test_db")
+
+        # Verify neither method was called
+        mock_sql_resource.run_query.assert_not_called()
+        mock_sql_resource.fetch_metadata.assert_not_called()
