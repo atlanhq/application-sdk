@@ -190,7 +190,7 @@ async def application_sql_miner():
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(hours=2)).timestamp())
 
     workflow_response = await miner_workflow.start(
         {
