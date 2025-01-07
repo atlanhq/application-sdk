@@ -80,7 +80,7 @@ jobs:
         cat workflow_status.md
 
     - name: Comment test results on Pull Request
-      if: ${{ github.event_name == 'pull_request' }}
+      if: ${{ !cancelled() && github.event_name == 'pull_request' }}
       uses: mshick/add-pr-comment@v2
       with:
         message-id: 'workflow_status'

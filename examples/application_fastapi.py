@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Any, Dict, List
 
@@ -56,15 +57,15 @@ class SampleWorkflow(WorkflowInterface):
         pass
 
 
-if __name__ == "__main__":
+async def application_fastapi():
     fast_api_app = FastAPIApplication(
         auth_controller=WorkflowAuthController(),
         metadata_controller=WorkflowMetadataController(),
         preflight_check_controller=WorkflowPreflightCheckController(),
-        workflow=SampleWorkflow(),
     )
 
-    # Uncomment this to start the app locally
-    import asyncio
+    await fast_api_app.start()
 
-    asyncio.run(fast_api_app.start())
+
+if __name__ == "__main__":
+    asyncio.run(application_fastapi())
