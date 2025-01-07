@@ -119,14 +119,14 @@ async def process_batches(
                 result = await process_batch(
                     self=self, df_batch=df_batch, f=f, fn_kwargs=fn_kwargs
                 )
-                if not is_empty_dataframe(result):
+                if result:
                     rets.append(result)
         else:
             for df_batch in df_batches:
                 result = await process_batch(
                     self=self, df_batch=df_batch, f=f, fn_kwargs=fn_kwargs
                 )
-                if not is_empty_dataframe(result):
+                if result:
                     rets.append(result)
 
         return rets

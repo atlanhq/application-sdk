@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from typing import Any, Dict, List
 
@@ -64,13 +65,15 @@ class MyCustomFastAPIApplication(FastAPIApplication):
         return {"message": "Hello, World!"}
 
 
-if __name__ == "__main__":
+async def application_custom_fastapi():
     fast_api_app = MyCustomFastAPIApplication(
         auth_controller=WorkflowAuthController(),
         metadata_controller=WorkflowMetadataController(),
         preflight_check_controller=WorkflowPreflightCheckController(),
-        workflow=SampleWorkflow(),
     )
 
-    # Uncomment to run the application locally
-    # asyncio.run(fast_api_app.start())
+    await fast_api_app.start()
+
+
+if __name__ == "__main__":
+    asyncio.run(application_custom_fastapi())

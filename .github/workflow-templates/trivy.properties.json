@@ -1,0 +1,7 @@
+{
+    "name": "Atlan Application Trivy files scan",
+    "creator": "Atlan",
+    "description": "Scan file system for vulnerabilities in OS packages and language dependencies with Trivy from Aqua Security.",
+    "iconName": "trivy",
+    "categories": ["Code Scanning", "filesystem"]
+}

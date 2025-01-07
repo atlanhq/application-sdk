@@ -8,10 +8,13 @@
 # We have attempted to detect the languages in your repository. Please check
 # the `language` matrix defined below to confirm you have the correct set of
 # supported CodeQL languages.
-#
+
+# Pre-commit-checks. This can be reused across all the applications.
+
 name: "CodeQL"
 
 on:
+  workflow_call:
   pull_request:
     branches:
       - main
