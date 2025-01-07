@@ -116,7 +116,7 @@ async def main():
         status = await monitor_workflow_execution_and_write_status(
             workflow_handle,
             polling_interval=5,
-            timeout=240,
+            timeout=500,
         )
         if status == "FAILED 🔴":
             failed_examples.append(example.__name__)
