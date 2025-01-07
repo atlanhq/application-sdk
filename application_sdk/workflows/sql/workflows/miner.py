@@ -4,16 +4,15 @@ import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Coroutine, Dict, List
+from functools import wraps
 
-import pandas as pd
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk import activity_pd
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.outputs.json import JsonOutput
+from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -26,6 +25,62 @@ from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = logging.getLogger(__name__)
+
+
+def miner_decorator(sql_query: str):
+    """
+    Decorator that manages timestamp-based SQL query execution for the miner workflow.
+    
+    Args:
+        sql_query: The base SQL query to be executed
+        
+    The decorator:
+    1. Checks for last processed timestamp in StateStore
+    2. If exists, uses it as start time; else uses default 2 weeks
+    3. Sets up the query with appropriate time range
+    4. Executes the normal miner workflow
+    """
+    def decorator(func):
+        @wraps(func)
+        async def wrapper(self, workflow_config: Dict[str, Any], *args, **kwargs):
+            workflow_guid = workflow_config["workflow_id"]
+            
+            # Try to get last processed timestamp from StateStore
+            stored_state = StateStore.get_state(workflow_guid)
+            last_processed_timestamp = None
+            if stored_state and "latest_processed_timestamp" in stored_state:
+                last_processed_timestamp = stored_state["latest_processed_timestamp"]
+            
+            # Get workflow args
+            workflow_args = StateStore.extract_configuration(workflow_guid)
+            
+            # Set up miner args with appropriate time range
+            if "miner_args" not in workflow_args:
+                workflow_args["miner_args"] = {}
+            
+            miner_args = workflow_args["miner_args"]
+            
+            # If we have a last processed timestamp, use it; otherwise use default (2 weeks ago)
+            if last_processed_timestamp:
+                miner_args["current_marker"] = last_processed_timestamp
+            else:
+                miner_args["current_marker"] = int((datetime.now() - timedelta(days=14)).timestamp() * 1000)
+            
+            # Set the SQL query
+            miner_args["sql_query"] = sql_query
+            
+            # Update workflow args
+            workflow_args["miner_args"] = miner_args
+            
+            # Store updated configuration
+            StateStore.save_configuration(workflow_guid, workflow_args)
+            
+            # Execute the original run method
+            result = await func(self, workflow_config, *args, **kwargs)
+            
+            return result
+        return wrapper
+    return decorator
 
 
 class MinerArgs(BaseModel):
@@ -99,29 +154,61 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         return await super().start(workflow_args, workflow_class)
 
+    async def fetch_data(
+        self, workflow_args: Dict[str, Any], query: str, typename: str
+    ) -> int:
+        """
+        Fetch data from the database.
+
+        :param workflow_args: The workflow arguments.
+        :param query: The query to run.
+        :param typename: The type of data to fetch.
+        :return: The fetched data.
+        :raises Exception: If the data cannot be fetched.
+        """
+        if self.sql_resource is None:
+            raise ValueError("SQL resource is not set")
+
+        output_path = workflow_args["output_path"]
+        start_marker = workflow_args["start_marker"]
+        end_marker = workflow_args["end_marker"]
+
+        raw_files_prefix = os.path.join(
+            output_path, "raw", f"{typename}_{start_marker}_{end_marker}"
+        )
+        raw_files_output_prefix = workflow_args["output_prefix"]
+
+        try:
+            async with (
+                JSONChunkedObjectStoreWriter(
+                    raw_files_prefix,
+                    raw_files_output_prefix,
+                    chunk_size=-1,  # -1 means no chunking
+                ) as raw_writer,
+            ):
+                async for batch in self.sql_resource.run_query(query, self.batch_size):
+                    # Write raw data
+                    await raw_writer.write_list(batch)
+
+                return await raw_writer.close()
+
+        except Exception as e:
+            logger.error(f"Error fetching queries: {e}")
+            raise e
+
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine, query=workflow_args["sql_query"]
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/query",
-            upload_file_prefix=workflow_args["output_prefix"],
-            path_gen=lambda chunk_start,
-            chunk_count: f"{workflow_args['start_marker']}_{workflow_args['end_marker']}.json",
-        ),
-    )
-    async def fetch_queries(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
-    ):
+    async def fetch_queries(self, workflow_args: Dict[str, Any]):
         """
         Fetch and process queries from the database.
 
         :param workflow_args: The workflow arguments.
-        :return: The fetched queries.
+        :return: The end marker timestamp for this chunk.
         """
-        await raw_output.write_df(batch_input)
+        assert "sql_query" in workflow_args, "sql_query is required"
+
+        await self.fetch_data(workflow_args, workflow_args["sql_query"], "queries")
+        return workflow_args["end_marker"]
 
     async def parallelize_query(
         self,
@@ -300,8 +387,8 @@ class SQLMinerWorkflow(WorkflowInterface):
         logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
 
         # Write the results to a metadata file
-        output_path = os.path.join(workflow_args["output_path"], "raw", "query")
-        metadata_file_path = os.path.join(output_path, "metadata.json")
+        output_path = os.path.join(workflow_args["output_path"], "raw")
+        metadata_file_path = os.path.join(output_path, "queries_metadata.json")
         os.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
@@ -312,82 +399,10 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         return parallel_markers
 
-    @activity.defn(name="miner_preflight_check")
-    @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]):
-        result = await self.preflight_check_controller.preflight_check(
-            {
-                "form_data": workflow_args["metadata"],
-            }
-        )
-        if not result or "error" in result:
-            raise ValueError("Preflight check failed")
-
     @workflow.run
+    @miner_decorator(sql_query=fetch_queries_sql)
     async def run(self, workflow_config: Dict[str, Any]):
         """
-        Run the workflow.
-
-        :param workflow_args: The workflow arguments.
+        Run the workflow with timestamp management handled by the decorator.
         """
-        workflow_guid = workflow_config["workflow_id"]
-        workflow_args = StateStore.extract_configuration(workflow_guid)
-
-        if not self.sql_resource:
-            credentials = StateStore.extract_credentials(
-                workflow_args["credential_guid"]
-            )
-            self.sql_resource = SQLResource(SQLResourceConfig(credentials=credentials))
-
-        if not self.temporal_resource:
-            self.temporal_resource = TemporalResource(
-                TemporalConfig(application_name=self.application_name)
-            )
-
-        workflow_id = workflow_args["workflow_id"]
-        workflow.logger.info(f"Starting miner workflow for {workflow_id}")
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
-        )
-
-        workflow_run_id = workflow.info().run_id
-        output_prefix = workflow_args["output_prefix"]
-        output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
-        workflow_args["output_path"] = output_path
-
-        await workflow.execute_activity(
-            self.preflight_check,
-            workflow_args,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-
-        results: List[Dict[str, Any]] = await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-            self.get_query_batches,
-            workflow_args,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-
-        miner_activities: List[Coroutine[Any, Any, None]] = []
-
-        # Extract Queries
-        for result in results:
-            activity_args = workflow_args.copy()
-            activity_args["sql_query"] = result["sql"]
-            activity_args["start_marker"] = result["start"]
-            activity_args["end_marker"] = result["end"]
-
-            miner_activities.append(
-                workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                    self.fetch_queries,
-                    activity_args,
-                    retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(seconds=1000),
-                )
-            )
-
-        await asyncio.gather(*miner_activities)
-
-        workflow.logger.info(f"Miner workflow completed for {workflow_id}")
+        return await super().run(workflow_config)
