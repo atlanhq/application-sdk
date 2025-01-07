@@ -28,6 +28,9 @@ from application_sdk.workflows.resources.temporal_resource import (
     TemporalResource,
 )
 from application_sdk.workflows.sql.builders.builder import SQLMinerBuilder
+from application_sdk.workflows.sql.controllers.preflight_check import (
+    SQLWorkflowPreflightCheckController,
+)
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
@@ -136,6 +139,20 @@ class SnowflakeResource(SQLResource):
     default_schema_alias_key = "name"
 
 
+class SampleSnowflakeWorkflowPreflightCheckController(
+    SQLWorkflowPreflightCheckController
+):
+    TABLES_CHECK_SQL = """
+        SELECT count(*) as "count"
+        FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+        WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
+            AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}';
+    """
+
+    METADATA_SQL = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
+
+
 async def application_sql_miner():
     print("Starting application_sql_miner")
 
@@ -152,6 +169,9 @@ async def application_sql_miner():
         SampleSQLMinerWorkflowBuilder()
         .set_temporal_resource(temporal_resource)
         .set_sql_resource(sql_resource)
+        .set_preflight_check_controller(
+            SampleSnowflakeWorkflowPreflightCheckController(sql_resource)
+        )
         .build()
     )
 

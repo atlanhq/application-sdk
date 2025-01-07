@@ -1,7 +1,6 @@
 import asyncio
 import contextvars
 import logging
-import os
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 
@@ -12,7 +11,7 @@ from temporalio.common import RetryPolicy
 from application_sdk import activity_pd
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.outputs.json import JSONChunkedObjectStoreWriter, JsonOutput
+from application_sdk.outputs.json import JsonOutput
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -84,7 +83,6 @@ class SQLWorkflow(WorkflowInterface):
             self.fetch_columns,
             self.transform_data,
             self.write_type_metadata,
-            self.preflight_check,
             self.write_raw_type_metadata,
         ] + super().get_activities()
 
@@ -103,43 +101,6 @@ class SQLWorkflow(WorkflowInterface):
         workflow_class = workflow_class or self.__class__
 
         return await super().start(workflow_args, workflow_class)
-
-    async def fetch_data(
-        self, workflow_args: Dict[str, Any], query: str, typename: str
-    ) -> int:
-        """
-        Fetch data from the database.
-
-        :param workflow_args: The workflow arguments.
-        :param query: The query to run.
-        :param typename: The type of data to fetch.
-        :return: The fetched data.
-        :raises Exception: If the data cannot be fetched.
-        """
-        if self.sql_resource is None:
-            raise ValueError("SQL resource is not set")
-
-        output_path = workflow_args["output_path"]
-
-        raw_files_prefix = os.path.join(output_path, "raw", f"{typename}")
-        raw_files_output_prefix = workflow_args["output_prefix"]
-
-        try:
-            async with (
-                JSONChunkedObjectStoreWriter(
-                    raw_files_prefix, raw_files_output_prefix
-                ) as raw_writer,
-            ):
-                async for batch in self.sql_resource.run_query(query, self.batch_size):
-                    # Write raw data
-                    await raw_writer.write_list(batch)
-
-                write_data = await raw_writer.write_metadata()
-                return write_data["chunk_count"]
-
-        except Exception as e:
-            logger.error(f"Error fetching databases: {e}")
-            raise e
 
     async def _transform_batch(
         self,
