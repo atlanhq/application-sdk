@@ -312,6 +312,17 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         return parallel_markers
 
+    @activity.defn(name="miner_preflight_check")
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]):
+        result = await self.preflight_check_controller.preflight_check(
+            {
+                "form_data": workflow_args["metadata"],
+            }
+        )
+        if not result or "error" in result:
+            raise ValueError("Preflight check failed")
+
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):
         """
