@@ -67,6 +67,8 @@ class WorkflowBuilderInterface(ABC):
 class MinerBuilderInterface(ABC):
     temporal_resource: TemporalResource
 
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+
     async def load_resources(self):
         await self.temporal_resource.load()
 
@@ -78,4 +80,10 @@ class MinerBuilderInterface(ABC):
         self, temporal_resource: TemporalResource
     ) -> "MinerBuilderInterface":
         self.temporal_resource = temporal_resource
+        return self
+
+    def set_preflight_check_controller(
+        self, preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    ) -> "MinerBuilderInterface":
+        self.preflight_check_controller = preflight_check_controller
         return self

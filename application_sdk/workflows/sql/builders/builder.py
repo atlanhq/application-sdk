@@ -76,6 +76,8 @@ class SQLMinerBuilder(MinerBuilderInterface, ABC):
     def build(self, miner: SQLMinerWorkflow | None = None) -> SQLMinerWorkflow:
         miner = miner or SQLMinerWorkflow()
 
-        return miner.set_sql_resource(self.sql_resource).set_temporal_resource(
-            self.temporal_resource
+        return (
+            miner.set_sql_resource(self.sql_resource)
+            .set_temporal_resource(self.temporal_resource)
+            .set_preflight_check_controller(self.preflight_check_controller)
         )

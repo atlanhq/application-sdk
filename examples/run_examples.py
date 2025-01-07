@@ -34,6 +34,8 @@ async def main():
         application_sql_miner,
     ]
 
+    failed_examples: list[str] = []
+
     for example in examples:
         status, time_taken = await run_and_monitor_workflow(example, temporal_resource)
         time_taken_formatted = f"{time_taken:.2f} seconds"
@@ -45,6 +47,9 @@ async def main():
         f.write(
             "> This is an automatically generated file. Please do not edit directly.\n"
         )
+
+    if failed_examples:
+        raise Exception(f"Workflows {', '.join(failed_examples)} failed")
 
 
 if __name__ == "__main__":
