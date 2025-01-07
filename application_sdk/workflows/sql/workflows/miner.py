@@ -198,7 +198,20 @@ class SQLMinerWorkflow(WorkflowInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_queries(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine, query=workflow_args["sql_query"]
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/query",
+            upload_file_prefix=workflow_args["output_prefix"],
+            path_gen=lambda chunk_start,
+            chunk_count: f"{workflow_args['start_marker']}_{workflow_args['end_marker']}.json",
+        ),
+    )
+    async def fetch_queries(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
         """
         Fetch and process queries from the database.
 
