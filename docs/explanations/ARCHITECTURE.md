@@ -7,11 +7,6 @@ The SDK uses 2 tools to power all its features and provide a PaaS interface on t
 While Dapr is used to abstract the underlying infrastructure and provide a set of building blocks for the application, Temporal is used to schedule and execute the workflow.
 
 
-## Table of Contents
-1. [Hello world on these tools](#hello-world-on-these-tools)
-2. [SDK Structure](#sdk-structure)
-
-
 ## Hello world on these tools
 1. [Dapr](https://github.com/dapr/quickstarts/blob/master/tutorials/hello-world/README.md)
 2. [Temporal](https://learn.temporal.io/getting_started/python/hello_world_in_python/)
@@ -59,4 +54,3 @@ The SDK is divided into the following modules:
       - [`transformers`](../application_sdk/workflows/transformers/README.md) - This module contains the transformers that are used to transform the data in the workflow.
 2. **Examples**: This module contains examples of how to use the SDK to build applications on the Atlan Platform.
 3. **Components**: This module contains the components that are used by the SDK to interact with the Atlan Platform APIs and services.
-
