@@ -1,12 +1,13 @@
+import logging
 from abc import ABC, abstractmethod
 
 import daft
 import pandas as pd
 
-from application_sdk import logging
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 
-logger = logging.get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class Output(ABC):

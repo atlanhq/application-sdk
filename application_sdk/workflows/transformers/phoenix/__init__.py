@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Dict, Optional, Type
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.transformers.phoenix.sql import (
     BaseObjectEntity,
@@ -12,8 +13,7 @@ from application_sdk.workflows.transformers.phoenix.sql import (
     TableEntity,
 )
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class PhoenixTransformer(TransformerInterface):

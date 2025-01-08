@@ -3,9 +3,10 @@ from typing import Any, List
 
 from temporalio.types import CallableType
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowWorker:

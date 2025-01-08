@@ -1,6 +1,7 @@
 import logging
 from abc import ABC
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.builder import (
     MinerBuilderInterface,
     WorkflowBuilderInterface,
@@ -17,7 +18,7 @@ from application_sdk.workflows.sql.workflows.workflow import (
 )
 from application_sdk.workflows.transformers import TransformerInterface
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
