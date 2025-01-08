@@ -37,7 +37,7 @@ class JsonOutput(Output):
         chunk_size: int = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
-        path_gen: Callable[[int | None, int], str] = path_gen,
+        path_gen: Callable[[Optional[int], int, Optional[str]], str] = path_gen,
     ):
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
