@@ -1,5 +1,5 @@
-name: Workflow Setup Check
-description: A reusable action for setting up the environment
+name: Workflow Status Check
+description: A reusable action for checking the status of a workflow
 inputs:
 runs:
   using: "composite"

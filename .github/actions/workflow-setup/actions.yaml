@@ -1,5 +1,5 @@
-name: workflow Setup
-description: A reusable action for setting up the environment
+name: Workflow Setup
+description: A reusable action for setting up workflow test environment
 inputs:
 runs:
   using: "composite"
