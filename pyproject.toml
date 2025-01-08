@@ -44,8 +44,7 @@ dashboard = [
     "pygwalker",
     "dash-dangerously-set-inner-html"
 ]
-decorator = [
-    "pandas",
+daft = [
     "getdaft"
 ]
 iceberg = [
