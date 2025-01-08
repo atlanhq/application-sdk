@@ -4,13 +4,14 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.sql_query import AsyncSQLQueryInput
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class AsyncSQLResource(SQLResource):

@@ -6,9 +6,10 @@ from typing import Any, List
 
 import orjson
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class ChunkedObjectStoreReaderInterface(ABC):

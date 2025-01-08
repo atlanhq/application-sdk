@@ -1,5 +1,6 @@
 import asyncio
 import concurrent
+import logging
 from typing import Iterator, Optional, Union
 
 import daft
@@ -9,10 +10,10 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 
-from application_sdk import logging
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
 
-logger = logging.get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLQueryInput(Input):

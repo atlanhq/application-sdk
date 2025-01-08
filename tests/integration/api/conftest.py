@@ -32,6 +32,7 @@ def preflight_check_controller(
     mock_sql_resource: Any,
 ) -> SQLWorkflowPreflightCheckController:
     controller = SQLWorkflowPreflightCheckController(mock_sql_resource)
+    controller.tables_check = AsyncMock()
     controller.TABLES_CHECK_SQL = """
         SELECT count(*) as "count"
         FROM ACCOUNT_USAGE.TABLES
