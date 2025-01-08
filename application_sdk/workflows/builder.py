@@ -1,6 +1,7 @@
+import logging
 from abc import ABC, abstractmethod
 
-from application_sdk.logging import get_logger
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
@@ -9,7 +10,7 @@ from application_sdk.workflows.controllers import (
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.workflow import WorkflowInterface
 
-logger = get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowBuilderInterface(ABC):
@@ -67,6 +68,8 @@ class WorkflowBuilderInterface(ABC):
 class MinerBuilderInterface(ABC):
     temporal_resource: TemporalResource
 
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+
     async def load_resources(self):
         await self.temporal_resource.load()
 
@@ -78,4 +81,10 @@ class MinerBuilderInterface(ABC):
         self, temporal_resource: TemporalResource
     ) -> "MinerBuilderInterface":
         self.temporal_resource = temporal_resource
+        return self
+
+    def set_preflight_check_controller(
+        self, preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    ) -> "MinerBuilderInterface":
+        self.preflight_check_controller = preflight_check_controller
         return self

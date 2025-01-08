@@ -1,6 +1,10 @@
+# This can be reused across all the applications.
+
+
 name: Tests
 
 on:
+  workflow_call:
   push:
     branches:
       - main
@@ -65,7 +69,7 @@ jobs:
       #----------------------------------------------
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root --extras "workflows dashboard decorator"
+        run: poetry install --no-interaction --no-root --extras "workflows dashboard iceberg decorator"
 
       - name: Run Unit and Integration Tests with Coverage
         run: |

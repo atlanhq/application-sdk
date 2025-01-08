@@ -33,11 +33,18 @@ import threading
 import time
 from urllib.parse import quote_plus
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.workflows.controllers import (
+    WorkflowPreflightCheckControllerInterface,
+)
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
+from application_sdk.workflows.sql.controllers.preflight_check import (
+    SQLWorkflowPreflightCheckController,
+)
 from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
@@ -49,7 +56,7 @@ from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class PostgreSQLResource(AsyncSQLResource):
@@ -101,8 +108,27 @@ class SampleSQLWorkflow(SQLWorkflow):
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
+    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+
     def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
         return super().build(workflow=workflow or SampleSQLWorkflow())
+
+
+class SampleSQLWorkflowPreflightCheckController(SQLWorkflowPreflightCheckController):
+    TABLES_CHECK_SQL = """
+    SELECT count(*)
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE TABLE_NAME !~ '{exclude_table}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
+            AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
+    """
+
+    METADATA_SQL = """
+    SELECT schema_name, catalog_name
+        FROM INFORMATION_SCHEMA.SCHEMATA
+        WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
+    """
 
 
 async def application_sql():
@@ -123,11 +149,16 @@ async def application_sql():
         tenant_id=tenant_id,
     )
 
+    sql_resource = PostgreSQLResource(SQLResourceConfig())
+
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
         .set_temporal_resource(temporal_resource)
-        .set_sql_resource(PostgreSQLResource(SQLResourceConfig()))
+        .set_sql_resource(sql_resource)
+        .set_preflight_check_controller(
+            SampleSQLWorkflowPreflightCheckController(sql_resource)
+        )
         .build()
     )
 
@@ -179,3 +210,4 @@ async def application_sql():
 
 if __name__ == "__main__":
     asyncio.run(application_sql())
+    time.sleep(1000000)

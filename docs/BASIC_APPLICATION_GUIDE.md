@@ -14,9 +14,9 @@ import logging
 import uvicorn
 from application_sdk.app.rest import FastAPIApplicationBuilder
 from fastapi import FastAPI
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 app = FastAPI(title="My App")

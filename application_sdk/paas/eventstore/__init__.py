@@ -3,22 +3,21 @@
 import json
 import logging
 
-from dapr.clients import DaprClient
+from dapr import clients
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.paas.models import ApplicationEvent, GenericEvent
+from application_sdk.paas.eventstore.models import Event
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class EventStore:
     EVENT_STORE_NAME = "eventstore"
-    TOPIC_NAME = "events"
-    APPLICATION_TOPIC_NAME = "application_events"
+    TOPIC_NAME = "app_events"
 
     @classmethod
-    def create_generic_event(cls, event: GenericEvent, topic_name: str = TOPIC_NAME):
+    def create_event(cls, event: Event, topic_name: str = TOPIC_NAME):
         """
         Create a new generic event.
 
@@ -26,9 +25,9 @@ class EventStore:
         :param topic_name: Topic name to publish the event to.
 
         Usage:
-            >>> EventStore.create_generic_event(GenericEvent(event_type="test", data={"test": "test"}))
+            >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
-        with DaprClient() as client:
+        with clients.DaprClient() as client:
             client.publish_event(
                 pubsub_name=cls.EVENT_STORE_NAME,
                 topic_name=topic_name,
@@ -37,12 +36,3 @@ class EventStore:
             )
 
         activity.logger.info(f"Published event to {topic_name}")
-
-    @classmethod
-    def create_application_event(cls, event: ApplicationEvent):
-        """
-        Create a new application event.
-
-        :param event: Event data.
-        """
-        cls.create_generic_event(event, topic_name=cls.APPLICATION_TOPIC_NAME)

@@ -4,13 +4,14 @@ import logging
 from typing import Any, Dict, List, Set, Tuple
 
 from application_sdk import activity_pd
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
@@ -61,6 +62,15 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
                 self.check_schemas_and_databases(payload),
                 self.tables_check(payload),
             )
+
+            if (
+                not results["databaseSchemaCheck"]["success"]
+                or not results["tablesCheck"]["success"]
+            ):
+                raise ValueError(
+                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, tablesCheck: {results['tablesCheck']}"
+                )
+
             logger.info("Preflight check completed successfully")
         except Exception as e:
             logger.error("Error during preflight check", exc_info=True)

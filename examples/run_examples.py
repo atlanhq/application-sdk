@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 from temporalio.client import WorkflowExecutionStatus, WorkflowHandle
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -19,7 +20,7 @@ from examples.application_sql_with_custom_transformer import (
     application_sql_with_custom_transformer,
 )
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 async def monitor_workflow_execution_and_write_status(
@@ -102,6 +103,8 @@ async def main():
         application_sql_miner,
     ]
 
+    failed_examples: list[str] = []
+
     for example in examples:
         start_time = time.time()
         workflow_response = await example()
@@ -116,6 +119,9 @@ async def main():
             polling_interval=5,
             timeout=120,
         )
+        if status == "FAILED 🔴":
+            failed_examples.append(example.__name__)
+
         end_time = time.time()
         time_taken = end_time - start_time
         time_taken_formatted = f"{time_taken:.2f} seconds"
@@ -127,6 +133,9 @@ async def main():
         f.write(
             "> This is an automatically generated file. Please do not edit directly.\n"
         )
+
+    if failed_examples:
+        raise Exception(f"Workflows {', '.join(failed_examples)} failed")
 
 
 if __name__ == "__main__":

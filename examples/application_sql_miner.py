@@ -23,11 +23,15 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
 from application_sdk.workflows.sql.builders.builder import SQLMinerBuilder
+from application_sdk.workflows.sql.controllers.preflight_check import (
+    SQLWorkflowPreflightCheckController,
+)
 from application_sdk.workflows.sql.resources.sql_resource import (
     SQLResource,
     SQLResourceConfig,
@@ -35,9 +39,9 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
 from application_sdk.workflows.workers.worker import WorkflowWorker
 
-APPLICATION_NAME = "snowflake"
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
-logger = logging.getLogger(__name__)
+APPLICATION_NAME = "snowflake"
 
 
 FETCH_QUERIES_SQL = """
@@ -136,6 +140,20 @@ class SnowflakeResource(SQLResource):
     default_schema_alias_key = "name"
 
 
+class SampleSnowflakeWorkflowPreflightCheckController(
+    SQLWorkflowPreflightCheckController
+):
+    TABLES_CHECK_SQL = """
+        SELECT count(*) as "count"
+        FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+        WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
+            AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}';
+    """
+
+    METADATA_SQL = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
+
+
 async def application_sql_miner():
     print("Starting application_sql_miner")
 
@@ -152,6 +170,9 @@ async def application_sql_miner():
         SampleSQLMinerWorkflowBuilder()
         .set_temporal_resource(temporal_resource)
         .set_sql_resource(sql_resource)
+        .set_preflight_check_controller(
+            SampleSnowflakeWorkflowPreflightCheckController(sql_resource)
+        )
         .build()
     )
 
@@ -169,7 +190,7 @@ async def application_sql_miner():
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(hours=2)).timestamp())
 
     workflow_response = await miner_workflow.start(
         {
