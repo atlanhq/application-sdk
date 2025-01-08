@@ -9,7 +9,9 @@ import uuid
 import psutil
 from fastapi import APIRouter
 
-logger = logging.getLogger(__name__)
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 router = APIRouter(
     prefix="/system",

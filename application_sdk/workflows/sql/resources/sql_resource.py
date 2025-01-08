@@ -7,10 +7,11 @@ from sqlalchemy import create_engine, text
 from temporalio import activity
 
 from application_sdk import activity_pd
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLResourceConfig:

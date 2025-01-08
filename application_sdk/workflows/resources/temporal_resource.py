@@ -22,7 +22,6 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.logging import get_logger
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
     ActivityEndEvent,
@@ -32,7 +31,7 @@ from application_sdk.paas.eventstore.models import (
 )
 from application_sdk.workflows.resources.constants import TemporalConstants
 
-logger = get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):

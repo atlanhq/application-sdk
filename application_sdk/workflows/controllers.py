@@ -1,10 +1,11 @@
+import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.logging import get_logger
 
-logger = get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 # Controller base class

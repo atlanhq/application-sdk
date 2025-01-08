@@ -4,6 +4,7 @@ from typing import Any, Dict, Optional, Type
 
 from pyatlan.model.assets import Asset
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.transformers.atlas.sql import (
     Column,
@@ -15,8 +16,7 @@ from application_sdk.workflows.transformers.atlas.sql import (
 )
 from application_sdk.workflows.transformers.utils import process_text
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class AtlasTransformer(TransformerInterface):
