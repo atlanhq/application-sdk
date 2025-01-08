@@ -5,13 +5,16 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Coroutine, Dict, List
 
+import pandas as pd
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
+from application_sdk import activity_pd
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.outputs.json import JSONChunkedObjectStoreWriter
+from application_sdk.outputs.json import JsonOutput
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -23,7 +26,7 @@ from application_sdk.workflows.sql.resources.sql_resource import (
 from application_sdk.workflows.utils.activity import auto_heartbeater
 from application_sdk.workflows.workflow import WorkflowInterface
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class MinerArgs(BaseModel):
@@ -97,60 +100,29 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         return await super().start(workflow_args, workflow_class)
 
-    async def fetch_data(
-        self, workflow_args: Dict[str, Any], query: str, typename: str
-    ) -> int:
-        """
-        Fetch data from the database.
-
-        :param workflow_args: The workflow arguments.
-        :param query: The query to run.
-        :param typename: The type of data to fetch.
-        :return: The fetched data.
-        :raises Exception: If the data cannot be fetched.
-        """
-        if self.sql_resource is None:
-            raise ValueError("SQL resource is not set")
-
-        output_path = workflow_args["output_path"]
-        start_marker = workflow_args["start_marker"]
-        end_marker = workflow_args["end_marker"]
-
-        raw_files_prefix = os.path.join(
-            output_path, "raw", f"{typename}_{start_marker}_{end_marker}"
-        )
-        raw_files_output_prefix = workflow_args["output_prefix"]
-
-        try:
-            async with (
-                JSONChunkedObjectStoreWriter(
-                    raw_files_prefix,
-                    raw_files_output_prefix,
-                    chunk_size=-1,  # -1 means no chunking
-                ) as raw_writer,
-            ):
-                async for batch in self.sql_resource.run_query(query, self.batch_size):
-                    # Write raw data
-                    await raw_writer.write_list(batch)
-
-                return await raw_writer.close()
-
-        except Exception as e:
-            logger.error(f"Error fetching queries: {e}")
-            raise e
-
     @activity.defn
     @auto_heartbeater
-    async def fetch_queries(self, workflow_args: Dict[str, Any]):
+    @activity_pd(
+        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
+            engine=self.sql_resource.engine, query=workflow_args["sql_query"]
+        ),
+        raw_output=lambda self, workflow_args: JsonOutput(
+            output_path=f"{workflow_args['output_path']}/raw/query",
+            upload_file_prefix=workflow_args["output_prefix"],
+            path_gen=lambda chunk_start,
+            chunk_count: f"{workflow_args['start_marker']}_{workflow_args['end_marker']}.json",
+        ),
+    )
+    async def fetch_queries(
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
         """
         Fetch and process queries from the database.
 
         :param workflow_args: The workflow arguments.
         :return: The fetched queries.
         """
-        assert "sql_query" in workflow_args, "sql_query is required"
-
-        await self.fetch_data(workflow_args, workflow_args["sql_query"], "queries")
+        await raw_output.write_df(batch_input)
 
     async def parallelize_query(
         self,
@@ -329,8 +301,8 @@ class SQLMinerWorkflow(WorkflowInterface):
         logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
 
         # Write the results to a metadata file
-        output_path = os.path.join(workflow_args["output_path"], "raw")
-        metadata_file_path = os.path.join(output_path, "queries_metadata.json")
+        output_path = os.path.join(workflow_args["output_path"], "raw", "query")
+        metadata_file_path = os.path.join(output_path, "metadata.json")
         os.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
@@ -340,6 +312,17 @@ class SQLMinerWorkflow(WorkflowInterface):
         )
 
         return parallel_markers
+
+    @activity.defn(name="miner_preflight_check")
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]):
+        result = await self.preflight_check_controller.preflight_check(
+            {
+                "form_data": workflow_args["metadata"],
+            }
+        )
+        if not result or "error" in result:
+            raise ValueError("Preflight check failed")
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):

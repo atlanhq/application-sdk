@@ -1,12 +1,20 @@
 import logging
 import uuid
 from abc import ABC
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import Worker
+from temporalio.worker import (
+    ActivityInboundInterceptor,
+    ExecuteActivityInput,
+    ExecuteWorkflowInput,
+    Interceptor,
+    Worker,
+    WorkflowInboundInterceptor,
+    WorkflowInterceptorClassInput,
+)
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -14,10 +22,78 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.logging import get_logger
+from application_sdk.paas.eventstore import EventStore
+from application_sdk.paas.eventstore.models import (
+    ActivityEndEvent,
+    ActivityStartEvent,
+    WorkflowEndEvent,
+    WorkflowStartEvent,
+)
 from application_sdk.workflows.resources.constants import TemporalConstants
 
-logger = get_logger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+class EventActivityInboundInterceptor(ActivityInboundInterceptor):
+    async def execute_activity(self, input: ExecuteActivityInput) -> Any:
+        EventStore.create_event(
+            ActivityStartEvent(
+                activity_id=activity.info().activity_id,
+                activity_type=activity.info().activity_type,
+            ),
+            topic_name=EventStore.TOPIC_NAME,
+        )
+        output = await super().execute_activity(input)
+        EventStore.create_event(
+            ActivityEndEvent(
+                activity_id=activity.info().activity_id,
+                activity_type=activity.info().activity_type,
+            ),
+            topic_name=EventStore.TOPIC_NAME,
+        )
+        return output
+
+
+class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
+    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        with workflow.unsafe.sandbox_unrestricted():
+            EventStore.create_event(
+                WorkflowStartEvent(
+                    workflow_name=workflow.info().workflow_type,
+                    workflow_id=workflow.info().workflow_id,
+                    workflow_run_id=workflow.info().run_id,
+                ),
+                topic_name=EventStore.TOPIC_NAME,
+            )
+        output = await super().execute_workflow(input)
+        with workflow.unsafe.sandbox_unrestricted():
+            EventStore.create_event(
+                WorkflowEndEvent(
+                    workflow_name=workflow.info().workflow_type,
+                    workflow_id=workflow.info().workflow_id,
+                    workflow_run_id=workflow.info().run_id,
+                    workflow_output=output or {},
+                ),
+                topic_name=EventStore.TOPIC_NAME,
+            )
+        return output
+
+
+class EventInterceptor(Interceptor):
+    """Temporal Interceptor class which will report workflow & activity exceptions to Sentry"""
+
+    def intercept_activity(
+        self, next: ActivityInboundInterceptor
+    ) -> ActivityInboundInterceptor:
+        """Implementation of
+        :py:meth:`temporalio.worker.Interceptor.intercept_activity`.
+        """
+        return EventActivityInboundInterceptor(super().intercept_activity(next))
+
+    def workflow_interceptor_class(
+        self, input: WorkflowInterceptorClassInput
+    ) -> Optional[Type[WorkflowInboundInterceptor]]:
+        return EventWorkflowInboundInterceptor
 
 
 class ResourceInterface(ABC):
@@ -157,4 +233,5 @@ class TemporalResource(ResourceInterface):
                     *passthrough_modules
                 )
             ),
+            interceptors=[EventInterceptor()],
         )
