@@ -1,18 +1,8 @@
-# Steps
+# Getting Started
 
-> [!TIP]
-> We use specific tools in this guide to streamline the process, you can use any tooling of your choice. for example: In this guide we use `poetry` to manage your python project.
-
-
-# Table of Contents
-0. [Skip the line](#0-skip-the-line)
-1. [Setup the python project](#1-setup-the-python-project)
-2. [Setup the project strucure](#2-setup-the-project-strucure)
-3. [Setup the application runtime.](#3-setup-the-application-runtime)
-4. [Setup the workflow application.](#4-setup-the-workflow-application)
-5. [Setup the Makefile](#5-setup-the-makefile)
-6. [Run the application.](#6-run-the-application)
-
+```{tip}
+We use specific tools in this guide to streamline the process, you can use any tooling of your choice. for example: In this guide we use `poetry` to manage your python project.
+```
 
 ## 0. Skip the line
 
@@ -62,8 +52,9 @@ poetry add application-sdk@<version>
 
 Once you have initialized the project, you’ll need to set up a folder structure to organize your code, and configuration files. Below is an example structure for an application:
 
-> [!TIP]
-> This is an opinionated structure. The `application-sdk` doesn't require any particular type of structure to use, feel free to define your own structure.
+```{tip}
+This is an opinionated structure. The `application-sdk` doesn't require any particular type of structure to use, feel free to define your own structure.
+```
 
 ```
 .
