@@ -16,7 +16,7 @@ hierarchy:
   - name: databases
     records: 5
     children:
-      - name: schemas
+      - name: schemata
         records: 20
         children:
           - name: tables
@@ -38,7 +38,7 @@ schema:
         type: integer
       - name: database_name
         type: string
-  - name: schemas
+  - name: schemata
     table_schema:
       - name: schema_id
         type: integer
@@ -65,7 +65,7 @@ schema:
           - TABLE
           - "EXTERNAL TABLE"
       - name: table_schema
-        derived: schemas.schema_name
+        derived: schemata.schema_name
   - name: views
     table_schema:
       - name: table_id
@@ -80,7 +80,7 @@ schema:
           - VIEW
           - "MATERIALIZED VIEW"
       - name: table_schema
-        derived: schemas.schema_name
+        derived: schemata.schema_name
       - name: is_secure
         type: boolean
       - name: view_definition
@@ -103,6 +103,6 @@ schema:
       - name: column_catalog
         derived: databases.database_name
       - name: column_schema
-        derived: schemas.schema_name
+        derived: schemata.schema_name
       - name: column_table
         derived: [tables.table_name, views.table_name]

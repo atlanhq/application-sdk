@@ -12,3 +12,4 @@
 ### Examples
 
 - [Snowflake Application](https://github.com/atlanhq/phoenix-snowflake-app/tree/main/tests/scale)
+- [Github Action](https://github.com/atlanhq/phoenix-snowflake-app/tree/main/.github/workflows/scale-tests.yaml)
