@@ -1,6 +1,10 @@
 name: Workflow Setup Check
 description: A reusable action for setting up the environment
 inputs:
+  database-name:  # id of input
+    description: 'Who to greet'
+    required: true
+    default: 'World'
 runs:
   using: "composite"
   steps:
@@ -42,10 +46,10 @@ runs:
         esac
 
         # Create metrics file if it doesn't exist
-        echo "## 📦 Snowflake App Test Metrics" > metrics.md
-        echo "| Database | Status | Duration |" >> metrics.md
-        echo "|--------------|--------|-----------|" >> metrics.md
-        echo "| PHOENIX_TESTING (PHOENIX_TEST) | $DISPLAY_STATUS | $DURATION |" >> metrics.md
+        echo "## 📦 Application Test " > metrics.md
+        echo "| Status | Duration |" >> metrics.md
+        echo "|--------|-----------|" >> metrics.md
+        echo "|  $DISPLAY_STATUS | $DURATION |" >> metrics.md
 
         exit $EXIT_CODE
 
