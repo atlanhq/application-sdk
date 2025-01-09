@@ -24,8 +24,8 @@ jobs:
     - uses: actions/checkout@v3
 
     # workflow setup
-    - name: Install Dapr CLI
-      uses: ./.github/actions/workflow-setup 
+    - name: Workflow setup
+      uses: ../.github/actions/workflow-setup
 
     # Make API call and capture workflow/run IDs for each example
     - name: Start the workflows
@@ -46,4 +46,4 @@ jobs:
      # workflow status validation
 
     - name: Validate workflow status
-      uses: ./.github/actions/workflow-status
+      uses: ../.github/actions/workflow-status
