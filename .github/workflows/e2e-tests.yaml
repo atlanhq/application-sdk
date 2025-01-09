@@ -27,7 +27,7 @@ jobs:
     - name: Workflow setup
       uses: ./.github/actions/workflow-setup
       with:
-        token: ${{ secrets.ORG_PAT_GITHUB }}
+        ORG_PAT_GITHUB: ${{ secrets.ORG_PAT_GITHUB }}
 
     # Make API call and capture workflow/run IDs for each example
     - name: Start the workflows

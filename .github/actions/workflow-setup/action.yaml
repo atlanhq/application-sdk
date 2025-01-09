@@ -56,7 +56,7 @@ runs:
       env:
         ORG_PAT_GITHUB: ${{ inputs.ORG_PAT_GITHUB }}
       run: |
-        git config --global url."https://${{ORG_PAT_GITHUB}}@github.com/".insteadOf "git@github.com:"
+        git config --global url."https://\"${ORG_PAT_GITHUB}\"@github.com/".insteadOf "git@github.com:"
         # Configure poetry to use project-specific virtualenv
         poetry config virtualenvs.in-project true
 
