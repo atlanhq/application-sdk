@@ -26,8 +26,11 @@ on:
 jobs:
   test:
     if: ((github.event.action == 'labeled' && github.event.label.name == 'scale-test') || contains(github.event.pull_request.labels.*.name, 'scale-test'))
-    runs-on: "ubuntu-24.04"
-    timeout-minutes: 20
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
