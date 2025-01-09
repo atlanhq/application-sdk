@@ -1,0 +1,64 @@
+name: Workflow Status Check
+description: A reusable action for checking the status of a workflow
+inputs:
+runs:
+  using: "composite"
+  steps:
+     # Check Temporal workflows status
+    - name: Check workflow status
+      run: |
+        sleep 420  # Give the workflow time to complete
+
+        export PATH="$HOME/.temporalio/bin:$PATH"
+
+        # Get workflow details and extract status and duration
+        WORKFLOW_DETAILS=$(temporal workflow describe \
+          --workflow-id=${{ steps.workflow_info.outputs.workflow_id }} \
+          --run-id=${{ steps.workflow_info.outputs.run_id }} \
+          --output=json)
+
+        echo $WORKFLOW_DETAILS
+        STATUS=$(echo $WORKFLOW_DETAILS | jq -r '.workflowExecutionInfo.status')
+        DURATION=$(echo $WORKFLOW_DETAILS | jq -r '.workflowExecutionInfo.executionDuration | rtrimstr("s") | tonumber | (. * 100 | round | . / 100) | tostring + "s"')
+
+        # Convert status to a more readable format with emojis
+        case $STATUS in
+          "WORKFLOW_EXECUTION_STATUS_COMPLETED")
+            DISPLAY_STATUS="🟢 Completed"
+            EXIT_CODE=0
+            ;;
+          "WORKFLOW_EXECUTION_STATUS_FAILED")
+            DISPLAY_STATUS="🔴 Failed"
+            EXIT_CODE=1
+            ;;
+          "WORKFLOW_EXECUTION_STATUS_RUNNING")
+            DISPLAY_STATUS="🟠 Running"
+            EXIT_CODE=1
+            ;;
+          *)
+            DISPLAY_STATUS="❓ ${STATUS}"
+            EXIT_CODE=1
+            ;;
+        esac
+
+        # Create metrics file if it doesn't exist
+        echo "## 📦 Application Test " > metrics.md
+        echo "| Status | Duration |" >> metrics.md
+        echo "|--------|-----------|" >> metrics.md
+        echo "|  $DISPLAY_STATUS | $DURATION |" >> metrics.md
+
+        exit $EXIT_CODE
+
+    - name: Comment workflow status on Pull Request
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: 'workflow_status'
+        message-path: metrics.md
+
+    # Stop all services
+    - name: Stop all services
+      continue-on-error: true
+      run: |
+        make stop-all
+        sleep 10  # Give services time to stop
