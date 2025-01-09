@@ -1,11 +1,11 @@
 name: Workflow Status Check
 description: A reusable action for checking the status of a workflow
-inputs:
 runs:
   using: "composite"
   steps:
      # Check Temporal workflows status
     - name: Check workflow status
+      shell: bash
       run: |
         sleep 420  # Give the workflow time to complete
 
@@ -58,6 +58,7 @@ runs:
 
     # Stop all services
     - name: Stop all services
+      shell: bash
       continue-on-error: true
       run: |
         make stop-all
