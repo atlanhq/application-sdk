@@ -11,12 +11,6 @@ start-temporal-dev:
 start-dapr:
 	dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path ../components
 
-start-deps:
-	@echo "Starting all services in detached mode..."
-	make start-dapr &
-	make start-temporal-dev &
-	@echo "Services started. Proceeding..."
-
 start-all:
 	@echo "Starting all services in detached mode..."
 	make start-dapr &
