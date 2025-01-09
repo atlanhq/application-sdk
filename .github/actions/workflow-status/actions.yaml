@@ -1,10 +1,6 @@
 name: Workflow Status Check
 description: A reusable action for checking the status of a workflow
 inputs:
-  database-name:  # id of input
-    description: 'Who to greet'
-    required: true
-    default: 'World'
 runs:
   using: "composite"
   steps:
