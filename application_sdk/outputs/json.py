@@ -90,8 +90,10 @@ class JsonOutput(Output):
             self.chunk_count += 1
             self.total_record_count += len(combined_df)
             output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-            combined_df.to_json(output_file_name, orient="records", lines=True)
-
+            json_content = combined_df.to_json(orient="records", lines=True, force_ascii=False).replace('\\/', '/')
+            with open(output_file_name, 'w') as f:
+                f.write(json_content)
+            
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(
                 self.upload_file_prefix, output_file_name
