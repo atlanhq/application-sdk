@@ -163,4 +163,8 @@ cython_debug/
 .vscode
 .atlan
 
+workflow_status.md
+
+# Scale data generator
+output
 docs/reference/*.rst
