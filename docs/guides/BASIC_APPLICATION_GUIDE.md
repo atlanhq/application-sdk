@@ -2,10 +2,6 @@
 
 The SDK currently only supports FastAPI framework but in the future we will be adding support for other frameworks as well.
 
-## Table of contents
-- [Simple Integration](#simple-integration)
-- [OTel Integration](#otel-integration)
-
 
 ## Simple Integration
 Simplest way to integrate the Application builder to your micro-service is by adding the following lines in your application
