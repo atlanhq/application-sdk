@@ -5,12 +5,6 @@ sphinx_docs:
 
 
 # Sets up the Dapr and Temporal services in detached mode, required for tests and development
-start-deps:
-	@echo "Starting all services in detached mode..."
-	make start-dapr &
-	make start-temporal-dev &
-	@echo "Services started. Proceeding..."
-
 start-all:
 	@echo "Starting all services in detached mode..."
 	make start-dapr &

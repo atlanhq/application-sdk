@@ -68,7 +68,7 @@ runs:
     - name: Start Platform Services
       shell: bash
       run: |
-        make start-deps
+        make start-all
         sleep 10  # Give services time to start up
 
     # Start the application
