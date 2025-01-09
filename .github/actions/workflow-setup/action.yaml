@@ -1,5 +1,9 @@
 name: Workflow Setup
 description: A reusable action for setting up workflow test environment
+inputs:
+  ORG_PAT_GITHUB: 
+     description: "github pat token"
+     required: true
 runs:
   using: "composite"
   steps:
@@ -49,8 +53,10 @@ runs:
 
     - name: Install Dependencies
       shell: bash
+      env:
+        ORG_PAT_GITHUB: ${{ inputs.ORG_PAT_GITHUB }}
       run: |
-        git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
+        git config --global url."https://${{ORG_PAT_GITHUB}}@github.com/".insteadOf "git@github.com:"
         # Configure poetry to use project-specific virtualenv
         poetry config virtualenvs.in-project true
 
