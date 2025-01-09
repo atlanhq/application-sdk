@@ -32,7 +32,9 @@ def prepare_filters(
     return normalized_include_regex, normalized_exclude_regex
 
 
-def normalize_filters(filter_dict: Dict[str, List[str]], is_include: bool) -> List[str]:
+def normalize_filters(
+    filter_dict: Dict[str, List[str] | str], is_include: bool
+) -> List[str]:
     """
     Normalize the filters for the SQL query.
 
@@ -43,13 +45,25 @@ def normalize_filters(filter_dict: Dict[str, List[str]], is_include: bool) -> Li
     Usage:
         >>> normalize_filters({"db1": ["schema1", "schema2"], "db2": ["schema3"]}, True)
         ["db1.schema1", "db1.schema2", "db2.schema3"]
+        >>> normalize_filters({"db1": "*"}, True)
+        ["db1\\.*"]
     """
     normalized_filter_list: List[str] = []
     for filtered_db, filtered_schemas in filter_dict.items():
         db = filtered_db.strip("^$")
+
+        # Handle wildcard case
+        if filtered_schemas == "*":
+            normalized_filter_list.append(f"{db}\\.*")
+            continue
+
+        # Handle empty list case
         if not filtered_schemas:
             normalized_filter_list.append(f"{db}\\.*")
-        else:
+            continue
+
+        # Handle list case
+        if isinstance(filtered_schemas, list):
             for schema in filtered_schemas:
                 sch = schema.lstrip(
                     "^"

@@ -4,12 +4,12 @@ This guide will walk you through the process of creating an SQL application usin
 
 When we say "SQL application," we mean an application that interacts with an SQL database, extracts metadata from the database, (optionally) processes the metadata to provide capabilities (like lineage, popularity metrics, etc.) and stores the metadata in a specified format in the configured object store. The use case can be extended by adding more steps to the workflow, such as data validation, transformation, and more.
 
-> [!TIP]
->
-> In simple terms, a workflow is a series of steps or tasks that are executed in a specific order to achieve a goal. In the context of an SQL application, these steps could include connecting to the database, extracting metadata, running validation checks, and processing data.
->
-> Activities are the individual tasks that make up the workflow. Each activity performs a specific job, such as querying a database for schema details or validating table data. These activities are linked together to form the complete workflow.
->
+
+```{tip}
+In simple terms, a workflow is a series of steps or tasks that are executed in a specific order to achieve a goal. In the context of an SQL application, these steps could include connecting to the database, extracting metadata, running validation checks, and processing data.
+
+Activities are the individual tasks that make up the workflow. Each activity performs a specific job, such as querying a database for schema details or validating table data. These activities are linked together to form the complete workflow.
+```
 
 At a high level, creating an SQL application involves the following steps:
 
@@ -23,20 +23,12 @@ Before you begin, make sure you have:
 
 - Installed the Atlan Platform SDK
 - Set up your development environment with Python 3.11 or above. You can check your Python version by running the following command in your terminal:
-
-   ```python --version```
-
-   Ensure that the output shows Python 3.11 or above.
+    - `python --version`
+    - Ensure that the output shows Python 3.11 or above.
 - Familiarity with the basics of SQL and database concepts
 
-# Table of Contents
-1. [Overview of SQL Workflows](#overview-of-sql-workflows)
-2. [Understanding `application-sdk` Structure](#understanding-the-application-sdk-structure)
-2. [Configuration](#configuration)
-3. [Setting up the Workflow Worker](#setting-up-the-workflow-worker)
-4. [Building the Workflow](#building-the-workflow)
-
 ## Overview of SQL Workflows
+
 An SQL workflow defines a series of steps that interact with a database. Let's explore the main steps:
 
 - **Authentication**: Verifying database credentials to ensure proper access.
@@ -45,6 +37,7 @@ An SQL workflow defines a series of steps that interact with a database. Let's e
 - **Execution logic**: Defining the tasks that the workflow will carry out once started, such as processing data or running custom queries.
 
 ## Understanding the Application SDK Structure
+
 The Atlan Platform SDK offers a set of base interfaces and abstract classes that provide default behavior for common tasks such as authentication, metadata extraction, and preflight checks. You can either use these default implementations or extend them to create custom workflows tailored to your specific use case.
 
 Here’s an overview of the core components:
@@ -60,6 +53,7 @@ Here’s an overview of the core components:
 These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let’s start with setting up the necessary configurations for interacting with the database.
 
 ## Configuration
+
 To interact with the database, we need to configure
 - Authentication
 - Metadata extraction
@@ -69,9 +63,11 @@ To interact with the database, we need to configure
 
 The `SQLWorkflowAuthInterface` class is used to authenticate the SQL workflow. The default implementation of `SQLWorkflowAuthInterface` runs a simple SQL query(defined by `TEST_AUTHENTICATION_SQL`) on the source database.
 
-> [!TIP]
-> You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
-> If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
+```{tip}
+You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
+
+If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
+```
 
 When overriding this class, you can either provide your own implementation of `TEST_AUTHENTICATION_SQL` SQL query and use the default implementation of testing authentication, where it creates a connection to the source database, and checks if the query completes successfully.
 
@@ -111,6 +107,7 @@ class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
 ```
 
 You can also optionally override the default implementation of `fetch_metadata` function,
+
 ```python
 from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
 class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
@@ -224,6 +221,6 @@ class MyWorkflowBuilder(SQLWorkflowBuilder):
 
 Once you've created your WorkflowBuilder class, you can start using it in your project,
 
-```
+```python
 my_workflow_builder = MyWorkflowBuilder()
 ```
