@@ -336,7 +336,7 @@ class SQLWorkflow(WorkflowInterface):
     @activity_pd(
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["batch"],
+            file_names=workflow_args["batch"],
         ),
         transformed_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",

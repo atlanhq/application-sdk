@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import Iterator, List, Optional
@@ -7,6 +8,7 @@ import pandas as pd
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
+from application_sdk.inputs.objectstore import ObjectStore
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -14,14 +16,27 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class JsonInput(Input):
     path: str
     chunk_size: Optional[int]
-    file_suffixes: List[str]
+    file_names: List[str]
 
     def __init__(
-        self, path: str, file_suffixes: List[str], chunk_size: Optional[int] = 100000
+        self,
+        path: str,
+        file_names: List[str],
+        download_file_prefix: str,
+        chunk_size: Optional[int] = 100000,
     ):
         self.path = path
         self.chunk_size = chunk_size
-        self.file_suffixes = file_suffixes
+        self.file_names = file_names
+        self.download_file_prefix = download_file_prefix
+
+    async def download_files(self):
+        for file_name in self.file_names:
+            if not os.path.exists(os.path.join(self.path, file_name)):
+                await ObjectStore.download_file_from_object_store(
+                    os.path.join(self.download_file_prefix, file_name),
+                    os.path.join(self.path, file_name),
+                )
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """
@@ -29,9 +44,11 @@ class JsonInput(Input):
         and return as a batched pandas dataframe
         """
         try:
-            for file_suffix in self.file_suffixes:
+            asyncio.run(self.download_files())
+
+            for file_name in self.file_names:
                 json_reader_obj = pd.read_json(
-                    os.path.join(self.path, file_suffix),
+                    os.path.join(self.path, file_name),
                     chunksize=self.chunk_size,
                     lines=True,
                 )
@@ -46,10 +63,11 @@ class JsonInput(Input):
         """
         try:
             dataframes = []
-            for file_suffix in self.file_suffixes:
+            asyncio.run(self.download_files())
+            for file_name in self.file_names:
                 dataframes.append(
                     pd.read_json(
-                        os.path.join(self.path, file_suffix),
+                        os.path.join(self.path, file_name),
                         lines=True,
                     )
                 )
@@ -63,9 +81,10 @@ class JsonInput(Input):
         and return as a batched daft dataframe
         """
         try:
-            for file_suffix in self.file_suffixes:
+            asyncio.run(self.download_files())
+            for file_name in self.file_names:
                 json_reader_obj = daft.read_json(
-                    path=os.path.join(self.path, file_suffix),
+                    path=os.path.join(self.path, file_name),
                     _chunk_size=self.chunk_size,
                 )
                 yield json_reader_obj
@@ -79,8 +98,11 @@ class JsonInput(Input):
         """
         try:
             dataframes = []
-            for file_suffix in self.file_suffixes:
-                daft.read_json(path=os.path.join(self.path, file_suffix))
+            asyncio.run(self.download_files())
+            for file_name in self.file_names:
+                dataframes.append(
+                    daft.read_json(path=os.path.join(self.path, file_name))
+                )
             return pd.concat(dataframes, ignore_index=True)
         except Exception as e:
             logger.error(f"Error reading data from JSON using daft: {str(e)}")

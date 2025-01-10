@@ -161,7 +161,7 @@ class TestDaftDecorators:
         @activity_daft(
             batch_input=lambda self, arg: JsonInput(
                 path="/tmp/tests/test_daft_decorator/raw/",
-                file_suffixes=["schema/1.json"],
+                file_names=["schema/1.json"],
             ),
             out1=lambda self, arg: JsonOutput(
                 output_path="/tmp/tests/test_daft_decorator/transformed/schema",
