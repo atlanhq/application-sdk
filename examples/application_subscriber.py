@@ -9,7 +9,7 @@ from temporalio import activity, workflow
 
 from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
     WORKFLOW_END_EVENT,
@@ -37,7 +37,7 @@ class SampleWorkflow(WorkflowInterface):
         """
         As we use a single worker thread, we need to set the workflow activity context
         """
-        workflow_args = StateStore.extract_configuration(workflow_id)
+        workflow_args = StateStoreInput.extract_configuration(workflow_id)
 
         return workflow_args
 

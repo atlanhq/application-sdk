@@ -30,7 +30,9 @@ async def test_write_df_empty(json_output):
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.inputs.objectstore.ObjectStore.push_file_to_object_store")
+@patch(
+    "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
+)
 async def test_write_df_single_chunk(mock_push, json_output):
     df = pd.DataFrame({"col1": range(10), "col2": range(10)})
     await json_output.write_df(df)
@@ -42,7 +44,9 @@ async def test_write_df_single_chunk(mock_push, json_output):
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.inputs.objectstore.ObjectStore.push_file_to_object_store")
+@patch(
+    "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
+)
 async def test_write_df_multiple_chunks(mock_push, json_output):
     json_output.chunk_size = 3
     df = pd.DataFrame({"col1": range(10), "col2": range(10)})

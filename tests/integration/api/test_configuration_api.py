@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 
 
 class TestConfigurationAPI:
@@ -11,11 +11,11 @@ class TestConfigurationAPI:
         """Test successful configuration creation/update"""
         # Mock the StateStore methods
         with patch.object(
-            StateStore, "store_credentials"
+            StateStoreInput, "store_credentials"
         ) as mock_store_creds, patch.object(
-            StateStore, "extract_configuration"
+            StateStoreInput, "extract_configuration"
         ) as mock_extract_config, patch.object(
-            StateStore, "store_configuration"
+            StateStoreInput, "store_configuration"
         ) as mock_store_config:
             mock_extract_config.return_value = {
                 "credential_guid": "credential_test-abcd",
@@ -78,9 +78,9 @@ class TestConfigurationAPI:
         expected_config["connection"] = update_payload["connection"]
 
         with patch.object(
-            StateStore, "extract_configuration"
+            StateStoreInput, "extract_configuration"
         ) as mock_extract_config, patch.object(
-            StateStore, "store_configuration"
+            StateStoreInput, "store_configuration"
         ) as mock_store_config:
             mock_extract_config.return_value = existing_config.copy()
             mock_store_config.return_value = "1234"
@@ -113,7 +113,9 @@ class TestConfigurationAPI:
         }
 
         # Mock the StateStore extract_configuration method
-        with patch.object(StateStore, "extract_configuration") as mock_extract_config:
+        with patch.object(
+            StateStoreInput, "extract_configuration"
+        ) as mock_extract_config:
             mock_extract_config.return_value = test_config
 
             response = client.get("/workflows/v1/config/1234")
@@ -132,7 +134,9 @@ class TestConfigurationAPI:
 
     def test_get_configuration_not_found(self, client: TestClient):
         """Test configuration retrieval when not found"""
-        with patch.object(StateStore, "extract_configuration") as mock_extract_config:
+        with patch.object(
+            StateStoreInput, "extract_configuration"
+        ) as mock_extract_config:
             mock_extract_config.side_effect = ValueError(
                 "State not found for key: config>>"
             )
@@ -154,7 +158,9 @@ class TestConfigurationAPI:
             },
         }
 
-        with patch.object(StateStore, "extract_configuration") as mock_extract_config:
+        with patch.object(
+            StateStoreInput, "extract_configuration"
+        ) as mock_extract_config:
             mock_extract_config.side_effect = ValueError(
                 "Failed to extract configuration"
             )

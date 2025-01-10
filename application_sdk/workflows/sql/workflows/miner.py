@@ -12,9 +12,9 @@ from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.objectstore import ObjectStore
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.json import JsonOutput
+from application_sdk.outputs.objectstore import ObjectStoreOutput
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
     TemporalResource,
@@ -307,7 +307,7 @@ class SQLMinerWorkflow(WorkflowInterface):
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
 
-        await ObjectStore.push_file_to_object_store(
+        await ObjectStoreOutput.push_file_to_object_store(
             workflow_args["output_prefix"], metadata_file_path
         )
 
@@ -332,10 +332,10 @@ class SQLMinerWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         """
         workflow_guid = workflow_config["workflow_id"]
-        workflow_args = StateStore.extract_configuration(workflow_guid)
+        workflow_args = StateStoreInput.extract_configuration(workflow_guid)
 
         if not self.sql_resource:
-            credentials = StateStore.extract_credentials(
+            credentials = StateStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             self.sql_resource = SQLResource(SQLResourceConfig(credentials=credentials))

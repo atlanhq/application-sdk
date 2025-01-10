@@ -7,7 +7,7 @@ from typing import Any, List
 import orjson
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.inputs.objectstore import ObjectStoreInput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -34,7 +34,7 @@ class ChunkedObjectStoreReaderInterface(ABC):
         return self.chunk_count
 
     async def download_file(self, file_path: str) -> None:
-        await ObjectStore.download_file_from_object_store(
+        await ObjectStoreInput.download_file_from_object_store(
             self.download_file_prefix, os.path.join(self.local_file_path, file_path)
         )
 

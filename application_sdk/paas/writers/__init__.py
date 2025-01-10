@@ -7,7 +7,7 @@ from typing import Any, Dict, List
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -64,7 +64,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         activity.logger.info(
             f"Uploading file: {local_file_path} to {self.upload_file_prefix}"
         )
-        await ObjectStore.push_file_to_object_store(
+        await ObjectStoreOutput.push_file_to_object_store(
             self.upload_file_prefix, local_file_path
         )
 

@@ -10,7 +10,7 @@ from temporalio.common import RetryPolicy
 from application_sdk import activity_pd
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.json import JsonInput
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.workflows.resources.temporal_resource import (
     TemporalConfig,
@@ -485,8 +485,10 @@ class SQLWorkflow(WorkflowInterface):
         """
         As we use a single worker thread, we need to set the workflow activity context
         """
-        workflow_args = StateStore.extract_configuration(workflow_id)
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
+        workflow_args = StateStoreInput.extract_configuration(workflow_id)
+        credentials = StateStoreInput.extract_credentials(
+            workflow_args["credential_guid"]
+        )
 
         if not self.sql_resource:
             self.sql_resource = SQLResource(SQLResourceConfig())

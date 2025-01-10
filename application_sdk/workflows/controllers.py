@@ -3,7 +3,8 @@ from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.outputs.statestore import StateStoreOutput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -41,18 +42,18 @@ class WorkflowMetadataControllerInterface(WorkflowControllerInterface, ABC):
         raise NotImplementedError
 
     def get_workflow_config(self, config_id: str) -> Dict[str, Any]:
-        return StateStore.extract_configuration(config_id)
+        return StateStoreInput.extract_configuration(config_id)
 
     def update_workflow_config(
         self, config_id: str, config: Dict[str, Any]
     ) -> Dict[str, Any]:
-        extracted_config = StateStore.extract_configuration(config_id)
+        extracted_config = StateStoreInput.extract_configuration(config_id)
 
         for key in extracted_config.keys():
             if key in config and config[key] is not None:
                 extracted_config[key] = config[key]
 
-        StateStore.store_configuration(config_id, extracted_config)
+        StateStoreOutput.store_configuration(config_id, extracted_config)
         return extracted_config
 
 

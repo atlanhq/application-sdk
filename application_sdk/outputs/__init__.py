@@ -5,7 +5,7 @@ import daft
 import pandas as pd
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -41,7 +41,7 @@ class Output(ABC):
             df.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
-            await ObjectStore.push_file_to_object_store(
+            await ObjectStoreOutput.push_file_to_object_store(
                 self.upload_file_prefix, output_file_name
             )
         except Exception as e:
