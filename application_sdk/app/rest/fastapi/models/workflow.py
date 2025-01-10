@@ -23,74 +23,10 @@ class MetadataType(str, Enum):
     ALL = "all"
 
 
-class FetchMetadataRequest(BaseModel):
-    # Metadata fields
-    type: Optional[MetadataType] = None
-    database: Optional[str] = None
-    hierarchical: Optional[bool] = False
-
-    # Credential fields
-    account_id: str
-    port: str
-    auth_type: str
-    user: str
-    password: Optional[str] = None
-    role: Optional[str] = None
-    warehouse: Optional[str] = None
-    private_key: Optional[str] = None
-    private_key_password: Optional[str] = None
-    authenticator: Optional[str] = None
-
-    model_config = {
-        "json_schema_extra": {
-            "examples": [
-                {
-                    # Metadata example
-                    "type": None,  # Fetch both databases and schemas
-                    "database": None,
-                    "hierarchical": False,
-                    # Credential example
-                    "account_id": "example-account",
-                    "port": "443",
-                    "auth_type": "basic",
-                    "user": "example_user",
-                    "password": "example_password",
-                    "role": "ACCOUNTADMIN",
-                    "warehouse": "COMPUTE_WH",
-                },
-                {
-                    # Database fetch example
-                    "type": "database",
-                    "database": None,
-                    "hierarchical": True,
-                    # Credential example with keypair
-                    "account_id": "example-account",
-                    "port": "443",
-                    "auth_type": "keypair",
-                    "user": "example_user",
-                    "private_key": "-----BEGIN PRIVATE KEY-----\n...",
-                    "private_key_password": "key_password",
-                    "role": "ACCOUNTADMIN",
-                    "warehouse": "COMPUTE_WH",
-                },
-                {
-                    # Schema fetch example
-                    "type": "schema",
-                    "database": "example_db",
-                    "hierarchical": True,
-                    # Credential example with Okta
-                    "account_id": "example-account",
-                    "port": "443",
-                    "auth_type": "okta",
-                    "user": "example_user",
-                    "password": "example_password",
-                    "authenticator": "okta_url",
-                    "role": "ACCOUNTADMIN",
-                    "warehouse": "COMPUTE_WH",
-                },
-            ]
-        }
-    }
+class FetchMetadataRequest(RootModel[Dict[str, Any]]):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing the metadata and credentials"
+    )
 
 
 class FetchMetadataResponse(BaseModel):

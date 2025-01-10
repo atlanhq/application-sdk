@@ -227,7 +227,7 @@ class FastAPIApplication(AtlanAPIApplication):
         """
         await self.metadata_controller.prepare(body.model_dump())
         metadata = await self.metadata_controller.fetch_metadata(
-            metadata_type=body.type, database=body.database
+            metadata_type=body.root["type"], database=body.root["database"]
         )
         return FetchMetadataResponse(success=True, data=metadata)
 
