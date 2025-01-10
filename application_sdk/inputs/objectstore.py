@@ -17,7 +17,7 @@ class ObjectStore:
     OBJECT_GET_OPERATION = "get"
 
     @classmethod
-    async def download_file_from_object_store(
+    def download_file_from_object_store(
         cls,
         download_file_prefix: str,
         file_path: str,

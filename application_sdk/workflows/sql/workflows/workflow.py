@@ -337,6 +337,7 @@ class SQLWorkflow(WorkflowInterface):
         batch_input=lambda self, workflow_args: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
             file_names=workflow_args["batch"],
+            download_file_prefix=workflow_args["output_prefix"],
         ),
         transformed_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
@@ -538,9 +539,9 @@ class SQLWorkflow(WorkflowInterface):
 
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
-            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
+            # self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            # self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            # self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
         ]
 
         await asyncio.gather(*fetch_and_transforms)

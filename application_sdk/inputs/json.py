@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 from typing import Iterator, List, Optional
@@ -30,10 +29,10 @@ class JsonInput(Input):
         self.file_names = file_names
         self.download_file_prefix = download_file_prefix
 
-    async def download_files(self):
+    def download_files(self):
         for file_name in self.file_names:
             if not os.path.exists(os.path.join(self.path, file_name)):
-                await ObjectStore.download_file_from_object_store(
+                ObjectStore.download_file_from_object_store(
                     os.path.join(self.download_file_prefix, file_name),
                     os.path.join(self.path, file_name),
                 )
@@ -44,7 +43,7 @@ class JsonInput(Input):
         and return as a batched pandas dataframe
         """
         try:
-            asyncio.run(self.download_files())
+            self.download_files()
 
             for file_name in self.file_names:
                 json_reader_obj = pd.read_json(
@@ -63,7 +62,7 @@ class JsonInput(Input):
         """
         try:
             dataframes = []
-            asyncio.run(self.download_files())
+            self.download_files()
             for file_name in self.file_names:
                 dataframes.append(
                     pd.read_json(
@@ -81,7 +80,7 @@ class JsonInput(Input):
         and return as a batched daft dataframe
         """
         try:
-            asyncio.run(self.download_files())
+            self.download_files()
             for file_name in self.file_names:
                 json_reader_obj = daft.read_json(
                     path=os.path.join(self.path, file_name),
@@ -98,7 +97,7 @@ class JsonInput(Input):
         """
         try:
             dataframes = []
-            asyncio.run(self.download_files())
+            self.download_files()
             for file_name in self.file_names:
                 dataframes.append(
                     daft.read_json(path=os.path.join(self.path, file_name))
