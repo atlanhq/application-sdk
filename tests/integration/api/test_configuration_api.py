@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.outputs.statestore import StateStoreOutput
 
 
 class TestConfigurationAPI:
@@ -11,11 +12,11 @@ class TestConfigurationAPI:
         """Test successful configuration creation/update"""
         # Mock the StateStore methods
         with patch.object(
-            StateStoreInput, "store_credentials"
+            StateStoreOutput, "store_credentials"
         ) as mock_store_creds, patch.object(
             StateStoreInput, "extract_configuration"
         ) as mock_extract_config, patch.object(
-            StateStoreInput, "store_configuration"
+            StateStoreOutput, "store_configuration"
         ) as mock_store_config:
             mock_extract_config.return_value = {
                 "credential_guid": "credential_test-abcd",
@@ -80,7 +81,7 @@ class TestConfigurationAPI:
         with patch.object(
             StateStoreInput, "extract_configuration"
         ) as mock_extract_config, patch.object(
-            StateStoreInput, "store_configuration"
+            StateStoreOutput, "store_configuration"
         ) as mock_store_config:
             mock_extract_config.return_value = existing_config.copy()
             mock_store_config.return_value = "1234"
