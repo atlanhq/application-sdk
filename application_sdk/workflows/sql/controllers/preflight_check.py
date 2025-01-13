@@ -4,13 +4,14 @@ import logging
 from typing import Any, Dict, List, Set, Tuple
 
 from application_sdk import activity_pd
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
@@ -138,7 +139,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
 
     @staticmethod
     def validate_filters(
-        include_filter: Dict[str, List[str]],
+        include_filter: Dict[str, List[str] | str],
         allowed_databases: Set[str],
         allowed_schemas: Set[str],
     ) -> Tuple[bool, str]:
@@ -146,10 +147,17 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
             db = filtered_db.strip("^$")
             if db not in allowed_databases:
                 return False, f"{db} database"
-            for schema in filtered_schemas:
-                sch = schema.strip("^$")
-                if f"{db}.{sch}" not in allowed_schemas:
-                    return False, f"{db}.{sch} schema"
+
+            # Handle wildcard case
+            if filtered_schemas == "*":
+                continue
+
+            # Handle list case
+            if isinstance(filtered_schemas, list):
+                for schema in filtered_schemas:
+                    sch = schema.strip("^$")
+                    if f"{db}.{sch}" not in allowed_schemas:
+                        return False, f"{db}.{sch} schema"
         return True, ""
 
     @activity_pd(

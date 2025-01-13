@@ -33,6 +33,7 @@ import threading
 import time
 from urllib.parse import quote_plus
 
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
@@ -55,7 +56,7 @@ from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class PostgreSQLResource(AsyncSQLResource):
@@ -209,4 +210,4 @@ async def application_sql():
 
 if __name__ == "__main__":
     asyncio.run(application_sql())
-    asyncio.sleep(1000000)
+    time.sleep(1000000)

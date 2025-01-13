@@ -8,6 +8,7 @@ from typing import Any, Callable, List
 from temporalio import activity, workflow
 
 from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import (
@@ -25,7 +26,7 @@ from application_sdk.workflows.resources.temporal_resource import (
 from application_sdk.workflows.workers.worker import WorkflowWorker
 from application_sdk.workflows.workflow import WorkflowInterface
 
-logger = logging.getLogger(__name__)
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 # Workflow that will be triggered by an event
