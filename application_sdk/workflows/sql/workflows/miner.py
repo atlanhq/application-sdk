@@ -123,7 +123,7 @@ class SQLMinerWorkflow(WorkflowInterface):
         :return: The end marker timestamp for this chunk.
         """
         await raw_output.write_df(batch_input)
-        return kwargs.get("end_marker", None)
+        return kwargs.get("end_marker", 0)
 
     async def parallelize_query(
         self,
