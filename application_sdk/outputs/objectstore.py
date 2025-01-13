@@ -14,7 +14,6 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class ObjectStoreOutput:
     OBJECT_STORE_NAME = "objectstore"
     OBJECT_CREATE_OPERATION = "create"
-    OBJECT_GET_OPERATION = "get"
 
     @classmethod
     async def push_file_to_object_store(

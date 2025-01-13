@@ -13,7 +13,6 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 class ObjectStoreInput:
     OBJECT_STORE_NAME = "objectstore"
-    OBJECT_CREATE_OPERATION = "create"
     OBJECT_GET_OPERATION = "get"
 
     @classmethod
