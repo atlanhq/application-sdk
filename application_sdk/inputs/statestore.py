@@ -3,6 +3,7 @@
 import json
 import logging
 import uuid
+from datetime import datetime
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
@@ -114,3 +115,40 @@ class StateStore:
             raise ValueError("Invalid configuration ID provided.")
         config = cls._get_state(f"config_{config_id}")
         return config
+
+    @classmethod
+    def extract_last_processed_timestamp(cls, workflow_id: str) -> datetime:
+        """
+        Extract the last processed timestamp from the state store using the workflow ID.
+
+        :param workflow_id: The unique identifier for the workflow.
+        :return: The last processed timestamp if found.
+        :raises ValueError: If the workflow_id is invalid or last processed timestamp is not found.
+        :raises Exception: If there's an error with the Dapr client operations.
+        """
+        if not workflow_id:
+            raise ValueError("Invalid workflow ID provided")
+        config = cls._get_state(f"timestamp_{workflow_id}")
+        return config.get("last_processed_timestamp", None)
+
+    @classmethod
+    def store_last_processed_timestamp(
+        cls, last_processed_timestamp: datetime, workflow_id: str
+    ) -> str:
+        """
+        Store last processed timestamp in the state store using workflow ID.
+
+        :param workflow_id: The unique identifier for the workflow.
+        :param last_processed_timestamp: The last processed timestamp to store.
+        :return: The workflow ID which serves as the key for the timestamp in the state store.
+        :raises Exception: If there's an error with the Dapr client operations.
+
+        Usage:
+            >>> StateStore.store_last_processed_timestamp(datetime.now(), "1234567890")
+            "timestamp_1234567890"
+        """
+        cls._save_state(
+            f"timestamp_{workflow_id}",
+            {"last_processed_timestamp": last_processed_timestamp},
+        )
+        return workflow_id

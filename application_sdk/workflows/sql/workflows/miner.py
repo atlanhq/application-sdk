@@ -120,9 +120,10 @@ class SQLMinerWorkflow(WorkflowInterface):
         Fetch and process queries from the database.
 
         :param workflow_args: The workflow arguments.
-        :return: The fetched queries.
+        :return: The end marker timestamp for this chunk.
         """
         await raw_output.write_df(batch_input)
+        return kwargs.get("end_marker", None)
 
     async def parallelize_query(
         self,
@@ -275,7 +276,37 @@ class SQLMinerWorkflow(WorkflowInterface):
     async def get_query_batches(
         self, workflow_args: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
+        workflow_guid = workflow_args["workflow_id"]
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
+
+        # Try to get last processed timestamp from StateStore
+        try:
+            last_processed_timestamp = StateStore.extract_last_processed_timestamp(
+                workflow_guid
+            )
+            if last_processed_timestamp:
+                # Convert datetime to epoch milliseconds
+                miner_args.miner_start_time_epoch = int(
+                    last_processed_timestamp.timestamp() * 1000
+                )
+                logger.info(
+                    f"Using last processed timestamp from state store: {last_processed_timestamp}"
+                )
+        except Exception as e:
+            logger.info(f"No last processed timestamp found in state store: {e}")
+            # If no last processed timestamp, use the one from miner_args if present
+            if not miner_args.miner_start_time_epoch:
+                # Default to 2 weeks ago if no timestamp in miner_args
+                miner_args.miner_start_time_epoch = int(
+                    (datetime.now() - timedelta(days=14)).timestamp() * 1000
+                )
+                logger.info(
+                    f"Using default start time (2 weeks ago): {datetime.fromtimestamp(miner_args.miner_start_time_epoch/1000)}"
+                )
+            else:
+                logger.info(
+                    f"Using start time from miner_args: {datetime.fromtimestamp(miner_args.miner_start_time_epoch/1000)}"
+                )
 
         queries_sql_query = self.fetch_queries_sql.format(
             database_name_cleaned=miner_args.database_name_cleaned,
@@ -371,7 +402,7 @@ class SQLMinerWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        miner_activities: List[Coroutine[Any, Any, None]] = []
+        miner_activities: List[Coroutine[Any, Any, str]] = []
 
         # Extract Queries
         for result in results:
@@ -389,6 +420,17 @@ class SQLMinerWorkflow(WorkflowInterface):
                 )
             )
 
-        await asyncio.gather(*miner_activities)
+        # Collect all end timestamps from parallel activities
+        last_timestamps = await asyncio.gather(*miner_activities)
+
+        # Find the most recent timestamp
+        latest_timestamp = max(last_timestamps, key=int)
+
+        # Convert timestamp to datetime and store it
+        latest_datetime = datetime.fromtimestamp(
+            int(latest_timestamp) / 1000
+        )  # Convert milliseconds to seconds
+        StateStore.store_last_processed_timestamp(latest_datetime, workflow_guid)
 
         workflow.logger.info(f"Miner workflow completed for {workflow_id}")
+        workflow.logger.info(f"Latest processed timestamp: {latest_datetime}")
