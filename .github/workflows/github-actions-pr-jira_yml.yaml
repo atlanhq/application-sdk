@@ -12,6 +12,4 @@ jobs:
     steps:
       - name: Enforce Pull Request Title includes Jira Issue Key
         uses: ryanvade/enforce-pr-title-style-action@v2.1.1
-        with:
-          projectKey: "PLT"
 
