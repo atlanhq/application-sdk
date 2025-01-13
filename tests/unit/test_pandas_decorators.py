@@ -120,6 +120,7 @@ class TestPandasDecorators:
             batch_input=lambda self, arg: JsonInput(
                 path="/tmp/tests/test_pandas_decorator/raw/",
                 file_names=["schema/1.json"],
+                download_file_prefix="raw",
             ),
             out1=lambda self, arg: JsonOutput(
                 output_path="/tmp/tests/test_pandas_decorator/transformed/schema",

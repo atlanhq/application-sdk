@@ -162,6 +162,7 @@ class TestDaftDecorators:
             batch_input=lambda self, arg: JsonInput(
                 path="/tmp/tests/test_daft_decorator/raw/",
                 file_names=["schema/1.json"],
+                download_file_prefix="raw",
             ),
             out1=lambda self, arg: JsonOutput(
                 output_path="/tmp/tests/test_daft_decorator/transformed/schema",
