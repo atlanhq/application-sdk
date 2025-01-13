@@ -539,9 +539,9 @@ class SQLWorkflow(WorkflowInterface):
 
         fetch_and_transforms = [
             self.fetch_and_transform(self.fetch_databases, workflow_args, retry_policy),
-            # self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
-            # self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
-            # self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_schemas, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_tables, workflow_args, retry_policy),
+            self.fetch_and_transform(self.fetch_columns, workflow_args, retry_policy),
         ]
 
         await asyncio.gather(*fetch_and_transforms)
