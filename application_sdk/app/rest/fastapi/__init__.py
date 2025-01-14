@@ -1,7 +1,10 @@
 import logging
+import os
+import signal
 from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, FastAPI, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
@@ -66,6 +69,7 @@ class FastAPIApplication(AtlanAPIApplication):
     workflow_router: APIRouter = APIRouter()
     dapr_router: APIRouter = APIRouter()
     events_router: APIRouter = APIRouter()
+    system_router: APIRouter = APIRouter()
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
@@ -107,6 +111,7 @@ class FastAPIApplication(AtlanAPIApplication):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+        self.app.include_router(self.system_router, prefix="/system")
 
         super().register_routers()
 
@@ -187,6 +192,12 @@ class FastAPIApplication(AtlanAPIApplication):
             methods=["POST"],
         )
 
+        self.system_router.add_api_route(
+            "/stop",
+            self.on_stop,
+            methods=["POST"],
+        )
+
         super().register_routes()
 
     async def get_dapr_subscriptions(
@@ -211,6 +222,15 @@ class FastAPIApplication(AtlanAPIApplication):
                 await trigger.workflow.start(
                     workflow_args=event, workflow_class=trigger.workflow.__class__
                 )
+
+    async def on_stop(self):
+        logger.info("Stopping application")
+        await self.on_app_stop()
+
+        os.kill(os.getpid(), signal.SIGTERM)
+        return JSONResponse(
+            status_code=status.HTTP_200_OK, content={"message": "Application stopped"}
+        )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         await self.auth_controller.prepare(body.model_dump())
