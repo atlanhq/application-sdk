@@ -4,7 +4,7 @@ from typing import Any, List
 from temporalio.types import CallableType
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.workflows.resources.temporal_resource import TemporalResource
+from application_sdk.clients.temporal_resource import TemporalResource
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

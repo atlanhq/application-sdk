@@ -5,7 +5,7 @@ Utility functions for monitoring Temporal workflow execution status.
 import asyncio
 
 from application_sdk.test_utils.workflow_monitoring import run_and_monitor_workflow
-from application_sdk.workflows.resources.temporal_resource import (
+from application_sdk.clients.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )

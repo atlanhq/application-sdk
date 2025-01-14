@@ -7,7 +7,7 @@ from application_sdk.workflows.controllers import (
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.resources.temporal_resource import TemporalResource
+from application_sdk.clients.temporal_resource import TemporalResource
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))

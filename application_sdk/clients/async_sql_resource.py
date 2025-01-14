@@ -6,7 +6,7 @@ from temporalio import activity
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.sql_query import AsyncSQLQueryInput
-from application_sdk.workflows.sql.resources.sql_resource import (
+from application_sdk.clients.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )

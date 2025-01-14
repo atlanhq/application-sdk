@@ -15,11 +15,11 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
-from application_sdk.workflows.resources.temporal_resource import (
+from application_sdk.clients.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
-from application_sdk.workflows.sql.resources.sql_resource import (
+from application_sdk.clients.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )

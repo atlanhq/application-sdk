@@ -40,7 +40,7 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.resources.temporal_resource import (
+from application_sdk.clients.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
@@ -48,8 +48,8 @@ from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
-from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
-from application_sdk.workflows.sql.resources.sql_resource import SQLResourceConfig
+from application_sdk.clients.async_sql_resource import AsyncSQLResource
+from application_sdk.clients.sql_resource import SQLResourceConfig
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker

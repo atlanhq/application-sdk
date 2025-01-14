@@ -18,8 +18,8 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
 )
 from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.resources.constants import TemporalConstants
-from application_sdk.workflows.resources.temporal_resource import (
+from application_sdk.clients.constants import TemporalConstants
+from application_sdk.clients.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )

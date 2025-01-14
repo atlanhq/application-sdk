@@ -45,7 +45,7 @@ class TestDaftDecoratorsIceberg:
     @classmethod
     def setup_class(cls):
         """
-        Method to setup the test resources
+        Method to setup the test clients
         """
         sqlite_db_url = "sqlite:////tmp/test_iceberg.db"
         cls.engine = sqlalchemy.create_engine(sqlite_db_url)
@@ -64,7 +64,7 @@ class TestDaftDecoratorsIceberg:
     @classmethod
     def teardown_class(cls):
         """
-        Clean up the test resources
+        Clean up the test clients
         """
         cls.catalog.drop_table("default.test_table")
         cls.catalog.drop_table("default.test_table_two")

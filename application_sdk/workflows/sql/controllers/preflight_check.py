@@ -8,7 +8,7 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.clients.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))

@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.workflows.resources.temporal_resource import (
+from application_sdk.clients.temporal_resource import (
     TemporalConfig,
     TemporalResource,
 )
@@ -32,7 +32,7 @@ from application_sdk.workflows.sql.builders.builder import SQLMinerBuilder
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
-from application_sdk.workflows.sql.resources.sql_resource import (
+from application_sdk.clients.sql_resource import (
     SQLResource,
     SQLResourceConfig,
 )

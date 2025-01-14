@@ -7,7 +7,7 @@ import pytest
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.clients.sql_resource import SQLResource
 
 
 @pytest.fixture

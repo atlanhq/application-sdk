@@ -7,7 +7,7 @@ from application_sdk.app.rest.fastapi.models.workflow import MetadataType
 from application_sdk.workflows.sql.controllers.metadata import (
     SQLWorkflowMetadataController,
 )
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
+from application_sdk.clients.sql_resource import SQLResource
 
 T = TypeVar("T")
 

@@ -1,6 +1,5 @@
 import logging
 import uuid
-from abc import ABC
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -29,7 +28,7 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
-from application_sdk.workflows.resources.constants import TemporalConstants
+from application_sdk.clients.constants import TemporalConstants
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -94,18 +93,6 @@ class EventInterceptor(Interceptor):
         self, input: WorkflowInterceptorClassInput
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
         return EventWorkflowInboundInterceptor
-
-
-class ResourceInterface(ABC):
-    def __init__(self):
-        pass
-
-    async def load(self):
-        pass
-
-    def set_credentials(self, credentials: Dict[str, Any]):
-        pass
-
 
 class TemporalConfig:
     host = TemporalConstants.HOST.value
