@@ -132,7 +132,7 @@ class TemporalConfig:
         return self.namespace
 
 
-class TemporalResource(ClientInterface):
+class TemporalClient(ClientInterface):
     def __init__(
         self,
         temporal_config: TemporalConfig,

@@ -4,7 +4,7 @@ import logging
 from typing import Any, Dict, List, Set, Tuple
 
 from application_sdk import activity_pd
-from application_sdk.clients.sql_resource import SQLResource
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -48,7 +48,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    def __init__(self, sql_resource: SQLResource | None = None):
+    def __init__(self, sql_resource: SQLClient | None = None):
         self.sql_resource = sql_resource
 
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:

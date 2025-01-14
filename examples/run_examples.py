@@ -4,7 +4,7 @@ Utility functions for monitoring Temporal workflow execution status.
 
 import asyncio
 
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.test_utils.workflow_monitoring import run_and_monitor_workflow
 from examples.application_sql import application_sql
 from examples.application_sql_miner import application_sql_miner
@@ -14,7 +14,7 @@ from examples.application_sql_with_custom_transformer import (
 
 
 async def main():
-    temporal_resource = TemporalResource(TemporalConfig())
+    temporal_resource = TemporalClient(TemporalConfig())
     await temporal_resource.load()
     # run all the examples
 

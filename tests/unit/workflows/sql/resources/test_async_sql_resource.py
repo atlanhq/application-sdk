@@ -5,16 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.clients.async_sql_resource import (
-    AsyncSQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.clients.async_sql_client import AsyncSQLClient, SQLClientConfig
 
 
 @pytest.fixture
 def config():
-    # Create a sample SQLResourceConfig object with mock credentials
-    return SQLResourceConfig(
+    # Create a sample SQLClientConfig object with mock credentials
+    return SQLClientConfig(
         credentials={
             "user": "test_user",
             "password": "test_password",
@@ -27,19 +24,19 @@ def config():
 
 
 @pytest.fixture
-def async_sql_resource(config: SQLResourceConfig):
-    resource = AsyncSQLResource(config=config)
+def async_sql_resource(config: SQLClientConfig):
+    resource = AsyncSQLClient(config=config)
     resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return resource
 
 
 def test_init_without_config():
     with pytest.raises(ValueError, match="config is required"):
-        AsyncSQLResource()
+        AsyncSQLClient()
 
 
 @patch("application_sdk.clients.async_sql_resource.create_async_engine")
-def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLResource):
+def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLClient):
     # Mock the engine and connection
     mock_engine = AsyncMock()
     mock_connection = MagicMock()
@@ -60,9 +57,7 @@ def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLResource):
 
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
-async def test_fetch_metadata(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
-):
+async def test_fetch_metadata(mock_run_query: Any, async_sql_resource: AsyncSQLClient):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     mock_run_query.return_value = pd.DataFrame(data)
@@ -85,7 +80,7 @@ async def test_fetch_metadata(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
+    mock_run_query: Any, async_sql_resource: AsyncSQLClient
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -109,7 +104,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
+    mock_run_query: Any, async_sql_resource: AsyncSQLClient
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     mock_run_query.return_value = pd.DataFrame(data)
@@ -134,7 +129,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, async_sql_resource: AsyncSQLResource
+    mock_run_query: AsyncMock, async_sql_resource: AsyncSQLClient
 ):
     mock_run_query.side_effect = Exception("Simulated query failure")
 

@@ -9,7 +9,7 @@ from temporalio import activity, workflow
 
 from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.clients.constants import TemporalConstants
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.paas.eventstore import EventStore
@@ -101,10 +101,10 @@ class SampleWorkflow(WorkflowInterface):
 
 
 class SampleWorkflowBuilder(WorkflowBuilderInterface):
-    temporal_resource: TemporalResource
+    temporal_resource: TemporalClient
 
     def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+        self, temporal_resource: TemporalClient
     ) -> "SampleWorkflowBuilder":
         self.temporal_resource = temporal_resource
         return self
@@ -114,7 +114,7 @@ class SampleWorkflowBuilder(WorkflowBuilderInterface):
 
 
 async def start_worker():
-    temporal_resource = TemporalResource(
+    temporal_resource = TemporalClient(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
         )
@@ -160,7 +160,7 @@ async def start_fast_api_app():
 
         return False
 
-    temporal_resource = TemporalResource(
+    temporal_resource = TemporalClient(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
         )

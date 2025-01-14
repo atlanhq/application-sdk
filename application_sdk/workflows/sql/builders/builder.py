@@ -1,8 +1,8 @@
 import logging
 from abc import ABC
 
-from application_sdk.clients.sql_resource import SQLResource
-from application_sdk.clients.temporal_resource import TemporalResource
+from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.builder import (
     MinerBuilderInterface,
@@ -19,7 +19,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
-    sql_resource: SQLResource
+    sql_resource: SQLClient
     transformer: TransformerInterface
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
 
@@ -29,11 +29,11 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
         self.preflight_check_controller = preflight_check_controller
         return self
 
-    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflowBuilder":
+    def set_sql_resource(self, sql_resource: SQLClient) -> "SQLWorkflowBuilder":
         self.sql_resource = sql_resource
         return self
 
-    def get_sql_resource(self) -> SQLResource:
+    def get_sql_resource(self) -> SQLClient:
         return self.sql_resource
 
     def set_transformer(
@@ -54,15 +54,15 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
 
 
 class SQLMinerBuilder(MinerBuilderInterface, ABC):
-    sql_resource: SQLResource
+    sql_resource: SQLClient
     transformer: TransformerInterface
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
 
-    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLMinerBuilder":
+    def set_sql_resource(self, sql_resource: SQLClient) -> "SQLMinerBuilder":
         self.sql_resource = sql_resource
         return self
 
-    def get_sql_resource(self) -> SQLResource:
+    def get_sql_resource(self) -> SQLClient:
         return self.sql_resource
 
     def set_transformer(self, transformer: TransformerInterface) -> "SQLMinerBuilder":
@@ -70,7 +70,7 @@ class SQLMinerBuilder(MinerBuilderInterface, ABC):
         return self
 
     def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+        self, temporal_resource: TemporalClient
     ) -> "SQLMinerBuilder":
         super().set_temporal_resource(temporal_resource)
         return self

@@ -4,7 +4,7 @@ from typing import Any, Dict
 import pandas as pd
 
 from application_sdk import activity_pd
-from application_sdk.clients.sql_resource import SQLResource
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
 
@@ -34,9 +34,9 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 
-    sql_resource: SQLResource
+    sql_resource: SQLClient
 
-    def __init__(self, sql_resource: SQLResource):
+    def __init__(self, sql_resource: SQLClient):
         self.sql_resource = sql_resource
 
         super().__init__()

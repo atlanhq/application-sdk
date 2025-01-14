@@ -33,9 +33,9 @@ import threading
 import time
 from urllib.parse import quote_plus
 
-from application_sdk.clients.async_sql_resource import AsyncSQLResource
-from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.async_sql_client import AsyncSQLClient
+from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -53,7 +53,7 @@ APPLICATION_NAME = "postgres"
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class PostgreSQLResource(AsyncSQLResource):
+class PostgreSQLResource(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.config.credentials["password"])
         return f"postgresql+psycopg://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['host']}:{self.config.credentials['port']}/{self.config.credentials['database']}"
@@ -98,7 +98,7 @@ class SampleSQLWorkflow(SQLWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    sql_resource: SQLResource | None = PostgreSQLResource(SQLResourceConfig())
+    sql_resource: SQLClient | None = PostgreSQLResource(SQLClientConfig())
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
@@ -128,7 +128,7 @@ class SampleSQLWorkflowPreflightCheckController(SQLWorkflowPreflightCheckControl
 async def application_sql():
     print("Starting application_sql")
 
-    temporal_resource = TemporalResource(
+    temporal_resource = TemporalClient(
         TemporalConfig(
             application_name=APPLICATION_NAME,
         )
@@ -143,7 +143,7 @@ async def application_sql():
         tenant_id=tenant_id,
     )
 
-    sql_resource = PostgreSQLResource(SQLResourceConfig())
+    sql_resource = PostgreSQLResource(SQLClientConfig())
 
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()

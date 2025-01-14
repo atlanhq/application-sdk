@@ -23,8 +23,8 @@ import time
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
-from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.sql.builders.builder import SQLMinerBuilder
 from application_sdk.workflows.sql.controllers.preflight_check import (
@@ -112,7 +112,7 @@ class SampleSQLMinerWorkflowBuilder(SQLMinerBuilder):
         return super().build(miner=miner or SampleSQLMinerWorkflow())
 
 
-class SnowflakeSQLResource(SQLResource):
+class SnowflakeSQLResource(SQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.config.credentials["password"])
         base_url = f"snowflake://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['account_id']}"
@@ -129,7 +129,7 @@ class SnowflakeSQLResource(SQLResource):
         return base_url
 
 
-class SnowflakeResource(SQLResource):
+class SnowflakeResource(SQLClient):
     default_database_alias_key = "database_name"
     default_schema_alias_key = "name"
 
@@ -151,14 +151,14 @@ class SampleSnowflakeWorkflowPreflightCheckController(
 async def application_sql_miner():
     print("Starting application_sql_miner")
 
-    temporal_resource = TemporalResource(
+    temporal_resource = TemporalClient(
         TemporalConfig(
             application_name=APPLICATION_NAME,
         )
     )
     await temporal_resource.load()
 
-    sql_resource = SnowflakeSQLResource(SQLResourceConfig())
+    sql_resource = SnowflakeSQLResource(SQLClientConfig())
 
     miner_workflow: SQLMinerWorkflow = (
         SampleSQLMinerWorkflowBuilder()

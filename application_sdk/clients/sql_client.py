@@ -14,7 +14,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class SQLResourceConfig:
+class SQLClientConfig:
     use_server_side_cursor: bool = True
     credentials: Dict[str, Any] = None
     sql_alchemy_connect_args: Dict[str, Any] = None
@@ -39,8 +39,8 @@ class SQLResourceConfig:
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
 
-class SQLResource(ClientInterface):
-    config: SQLResourceConfig
+class SQLClient(ClientInterface):
+    config: SQLClientConfig
     connection = None
     engine = None
     sql_input = SQLQueryInput
@@ -48,7 +48,7 @@ class SQLResource(ClientInterface):
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
 
-    def __init__(self, config: SQLResourceConfig | None = None):
+    def __init__(self, config: SQLClientConfig | None = None):
         if config is None:
             raise ValueError("config is required")
 

@@ -1,7 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 
-from application_sdk.clients.temporal_resource import TemporalResource
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
@@ -31,7 +31,7 @@ class WorkflowBuilderInterface(ABC):
     metadata_controller: WorkflowMetadataControllerInterface
     auth_controller: WorkflowAuthControllerInterface
 
-    temporal_resource: TemporalResource
+    temporal_resource: TemporalClient
 
     async def load_resources(self):
         await self.temporal_resource.load()
@@ -59,14 +59,14 @@ class WorkflowBuilderInterface(ABC):
         return self
 
     def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+        self, temporal_resource: TemporalClient
     ) -> "WorkflowBuilderInterface":
         self.temporal_resource = temporal_resource
         return self
 
 
 class MinerBuilderInterface(ABC):
-    temporal_resource: TemporalResource
+    temporal_resource: TemporalClient
 
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
 
@@ -78,7 +78,7 @@ class MinerBuilderInterface(ABC):
         raise NotImplementedError("build method must be implemented")
 
     def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+        self, temporal_resource: TemporalClient
     ) -> "MinerBuilderInterface":
         self.temporal_resource = temporal_resource
         return self

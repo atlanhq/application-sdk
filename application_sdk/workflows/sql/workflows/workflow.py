@@ -8,8 +8,8 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
-from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.statestore import StateStore
@@ -29,7 +29,7 @@ class SQLWorkflow(WorkflowInterface):
     fetch_table_sql = ""
     fetch_column_sql = ""
 
-    sql_resource: SQLResource | None = None
+    sql_resource: SQLClient | None = None
     transformer: TransformerInterface | None = None
 
     application_name: str = "sql-connector"
@@ -40,7 +40,7 @@ class SQLWorkflow(WorkflowInterface):
     def __init__(self):
         super().__init__()
 
-    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflow":
+    def set_sql_resource(self, sql_resource: SQLClient) -> "SQLWorkflow":
         self.sql_resource = sql_resource
         return self
 
@@ -62,9 +62,7 @@ class SQLWorkflow(WorkflowInterface):
         self.max_transform_concurrency = max_transform_concurrency
         return self
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalResource
-    ) -> "SQLWorkflow":
+    def set_temporal_resource(self, temporal_resource: TemporalClient) -> "SQLWorkflow":
         super().set_temporal_resource(temporal_resource)
         return self
 
@@ -483,7 +481,7 @@ class SQLWorkflow(WorkflowInterface):
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
         if not self.sql_resource:
-            self.sql_resource = SQLResource(SQLResourceConfig())
+            self.sql_resource = SQLClient(SQLClientConfig())
 
         self.sql_resource.set_credentials(credentials)
         await self.sql_resource.load()
@@ -506,7 +504,7 @@ class SQLWorkflow(WorkflowInterface):
         )
 
         if not self.temporal_resource:
-            self.temporal_resource = TemporalResource(
+            self.temporal_resource = TemporalClient(
                 TemporalConfig(application_name=self.application_name)
             )
 

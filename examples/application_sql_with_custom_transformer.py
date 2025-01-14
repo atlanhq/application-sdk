@@ -36,9 +36,9 @@ from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
-from application_sdk.clients.async_sql_resource import AsyncSQLResource
-from application_sdk.clients.sql_resource import SQLResourceConfig
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.async_sql_client import AsyncSQLClient
+from application_sdk.clients.sql_client import SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -58,7 +58,7 @@ DATABASE_DIALECT = "postgresql"
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class PostgreSQLResource(AsyncSQLResource):
+class PostgreSQLResource(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.config.credentials["password"])
         return f"postgresql+psycopg://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['host']}:{self.config.credentials['port']}/{self.config.credentials['database']}"
@@ -148,7 +148,7 @@ class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
 async def application_sql_with_custom_transformer():
     print("Starting application_sql_with_custom_transformer")
 
-    temporal_resource = TemporalResource(
+    temporal_resource = TemporalClient(
         TemporalConfig(
             application_name=APPLICATION_NAME,
         )
@@ -162,7 +162,7 @@ async def application_sql_with_custom_transformer():
         tenant_id="1234567890",
     )
 
-    sql_resource = PostgreSQLResource(SQLResourceConfig())
+    sql_resource = PostgreSQLResource(SQLClientConfig())
 
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()

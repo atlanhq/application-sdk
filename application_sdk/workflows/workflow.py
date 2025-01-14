@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
 
-from application_sdk.clients.temporal_resource import TemporalResource
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -16,7 +16,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowInterface(ABC):
-    temporal_resource: TemporalResource | None = None
+    temporal_resource: TemporalClient | None = None
 
     # Controllers
     preflight_check_controller: WorkflowPreflightCheckControllerInterface | None = None
@@ -50,7 +50,7 @@ class WorkflowInterface(ABC):
             raise e
 
     def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+        self, temporal_resource: TemporalClient
     ) -> "WorkflowInterface":
         self.temporal_resource = temporal_resource
         return self

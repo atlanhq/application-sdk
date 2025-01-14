@@ -11,8 +11,8 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
-from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
-from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
+from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
@@ -42,7 +42,7 @@ class MinerArgs(BaseModel):
 class SQLMinerWorkflow(WorkflowInterface):
     fetch_queries_sql = ""
 
-    sql_resource: SQLResource | None = None
+    sql_resource: SQLClient | None = None
 
     application_name: str = "sql-miner"
     batch_size: int = 100000
@@ -51,7 +51,7 @@ class SQLMinerWorkflow(WorkflowInterface):
     def __init__(self):
         super().__init__()
 
-    def set_sql_resource(self, sql_resource: SQLResource) -> "SQLMinerWorkflow":
+    def set_sql_resource(self, sql_resource: SQLClient) -> "SQLMinerWorkflow":
         self.sql_resource = sql_resource
         return self
 
@@ -64,7 +64,7 @@ class SQLMinerWorkflow(WorkflowInterface):
         return self
 
     def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+        self, temporal_resource: TemporalClient
     ) -> "SQLMinerWorkflow":
         super().set_temporal_resource(temporal_resource)
         return self
@@ -332,10 +332,10 @@ class SQLMinerWorkflow(WorkflowInterface):
             credentials = StateStore.extract_credentials(
                 workflow_args["credential_guid"]
             )
-            self.sql_resource = SQLResource(SQLResourceConfig(credentials=credentials))
+            self.sql_resource = SQLClient(SQLClientConfig(credentials=credentials))
 
         if not self.temporal_resource:
-            self.temporal_resource = TemporalResource(
+            self.temporal_resource = TemporalClient(
                 TemporalConfig(application_name=self.application_name)
             )
 

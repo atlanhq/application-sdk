@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from application_sdk.clients.sql_resource import SQLResource
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
@@ -12,7 +12,7 @@ from application_sdk.workflows.sql.controllers.preflight_check import (
 
 @pytest.fixture
 def mock_sql_resource():
-    sql_resource = Mock(spec=SQLResource)
+    sql_resource = Mock(spec=SQLClient)
     sql_resource.fetch_metadata.return_value = [
         {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
         {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},

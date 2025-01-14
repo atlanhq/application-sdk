@@ -2,7 +2,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from application_sdk.app.rest.fastapi.models.workflow import MetadataType
-from application_sdk.clients.sql_resource import SQLResource
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
 
@@ -46,9 +46,9 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    sql_resource: SQLResource | None = None
+    sql_resource: SQLClient | None = None
 
-    def __init__(self, sql_resource: SQLResource | None = None):
+    def __init__(self, sql_resource: SQLClient | None = None):
         self.sql_resource = sql_resource
 
     async def prepare(self, credentials: Dict[str, Any]) -> None:
