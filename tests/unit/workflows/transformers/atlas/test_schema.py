@@ -10,7 +10,7 @@ from application_sdk.workflows.transformers.atlas import AtlasTransformer
 
 @pytest.fixture
 def resources_dir():
-    return os.path.join(os.path.dirname(__file__), "resrouces")
+    return os.path.join(os.path.dirname(__file__), "resources")
 
 
 @pytest.fixture
