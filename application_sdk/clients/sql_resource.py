@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 from temporalio import activity
 
 from application_sdk import activity_pd
-from application_sdk.clients.temporal_resource import ResourceInterface
+from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.sql_query import SQLQueryInput
 
@@ -39,7 +39,7 @@ class SQLResourceConfig:
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
 
-class SQLResource(ResourceInterface):
+class SQLResource(ClientInterface):
     config: SQLResourceConfig
     connection = None
     engine = None
