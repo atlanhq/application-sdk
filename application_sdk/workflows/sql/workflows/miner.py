@@ -228,7 +228,7 @@ class SQLMinerWorkflow(WorkflowInterface):
 
         # Execute all activities in parallel and collect end markers
         end_markers = await asyncio.gather(*miner_activities)
-        
+
         # Find the latest timestamp and store it
         if end_markers:
             latest_end_marker = max(int(marker) for marker in end_markers if marker)
