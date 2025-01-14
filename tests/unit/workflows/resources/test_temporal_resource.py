@@ -18,7 +18,7 @@ def temporal_resource(temporal_config: TemporalConfig):
 
 
 @patch(
-    "application_sdk.workflows.clients.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_load(mock_connect: AsyncMock, temporal_resource: TemporalResource):
@@ -39,9 +39,9 @@ async def test_load(mock_connect: AsyncMock, temporal_resource: TemporalResource
     assert temporal_resource.client == mock_client
 
 
-@patch("application_sdk.workflows.clients.temporal_resource.StateStore")
+@patch("application_sdk.clients.temporal_resource.StateStore")
 @patch(
-    "application_sdk.workflows.clients.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow(
@@ -80,9 +80,9 @@ async def test_start_workflow(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.workflows.clients.temporal_resource.StateStore")
+@patch("application_sdk.clients.temporal_resource.StateStore")
 @patch(
-    "application_sdk.workflows.clients.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_with_workflow_id(
@@ -130,9 +130,9 @@ async def test_start_workflow_with_workflow_id(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.workflows.clients.temporal_resource.StateStore")
+@patch("application_sdk.clients.temporal_resource.StateStore")
 @patch(
-    "application_sdk.workflows.clients.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_failure(
@@ -162,9 +162,9 @@ async def test_start_workflow_failure(
     mock_client.start_workflow.assert_called_once()
 
 
-@patch("application_sdk.workflows.clients.temporal_resource.Worker")
+@patch("application_sdk.clients.temporal_resource.Worker")
 @patch(
-    "application_sdk.workflows.clients.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_create_worker_without_client(
@@ -188,9 +188,9 @@ async def test_create_worker_without_client(
         )
 
 
-@patch("application_sdk.workflows.clients.temporal_resource.Worker")
+@patch("application_sdk.clients.temporal_resource.Worker")
 @patch(
-    "application_sdk.workflows.clients.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_resource.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_create_worker(
