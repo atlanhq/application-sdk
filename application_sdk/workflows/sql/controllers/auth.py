@@ -4,9 +4,9 @@ from typing import Any, Dict
 import pandas as pd
 
 from application_sdk import activity_pd
+from application_sdk.clients.sql_resource import SQLResource
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
-from application_sdk.clients.sql_resource import SQLResource
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

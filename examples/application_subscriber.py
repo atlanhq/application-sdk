@@ -8,6 +8,8 @@ from typing import Any, Callable, List
 from temporalio import activity, workflow
 
 from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
+from application_sdk.clients.constants import TemporalConstants
+from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.paas.eventstore import EventStore
@@ -18,11 +20,6 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
 )
 from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.clients.constants import TemporalConstants
-from application_sdk.clients.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
 from application_sdk.workflows.workers.worker import WorkflowWorker
 from application_sdk.workflows.workflow import WorkflowInterface
 

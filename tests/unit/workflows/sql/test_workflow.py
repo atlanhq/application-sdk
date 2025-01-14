@@ -3,14 +3,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from application_sdk.clients.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
-from application_sdk.clients.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
+from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers import TransformerInterface
 

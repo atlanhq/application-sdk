@@ -2,10 +2,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.clients.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
+from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
 
 
 @pytest.fixture

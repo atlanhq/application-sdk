@@ -8,18 +8,12 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
+from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
+from application_sdk.clients.temporal_resource import TemporalConfig, TemporalResource
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
-from application_sdk.clients.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
-from application_sdk.clients.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
 from application_sdk.workflows.sql.utils import prepare_filters
 from application_sdk.workflows.transformers import TransformerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater

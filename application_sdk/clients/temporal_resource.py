@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Dict, Optional, Sequence, Type
+from typing import Any, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
@@ -19,6 +19,8 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk.clients import ClientInterface
+from application_sdk.clients.constants import TemporalConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.paas.eventstore import EventStore
@@ -28,7 +30,6 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
-from application_sdk.clients.constants import TemporalConstants
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -94,6 +95,7 @@ class EventInterceptor(Interceptor):
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
         return EventWorkflowInboundInterceptor
 
+
 class TemporalConfig:
     host = TemporalConstants.HOST.value
     port = TemporalConstants.PORT.value
@@ -130,7 +132,7 @@ class TemporalConfig:
         return self.namespace
 
 
-class TemporalResource(ResourceInterface):
+class TemporalResource(ClientInterface):
     def __init__(
         self,
         temporal_config: TemporalConfig,

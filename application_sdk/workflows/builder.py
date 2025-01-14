@@ -1,13 +1,13 @@
 import logging
 from abc import ABC, abstractmethod
 
+from application_sdk.clients.temporal_resource import TemporalResource
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.clients.temporal_resource import TemporalResource
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))

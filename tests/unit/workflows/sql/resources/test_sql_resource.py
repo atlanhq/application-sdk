@@ -5,10 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.clients.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.clients.sql_resource import SQLResource, SQLResourceConfig
 
 
 @pytest.fixture
