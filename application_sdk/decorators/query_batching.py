@@ -8,7 +8,8 @@ from application_sdk.inputs.statestore import StateStore
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 def incremental_query_batching(
     workflow_id: str,
@@ -20,10 +21,13 @@ def incremental_query_batching(
     ranged_sql_start_key: str,
     ranged_sql_end_key: str,
     default_start_time: Optional[datetime] = None,
-) -> Callable[[Callable[..., AsyncIterator[Dict[str, Any]]]], Callable[..., AsyncIterator[Dict[str, Any]]]]:
+) -> Callable[
+    [Callable[..., AsyncIterator[Dict[str, Any]]]],
+    Callable[..., AsyncIterator[Dict[str, Any]]],
+]:
     """
     A decorator that handles incremental query batching with state management.
-    
+
     Args:
         workflow_id: Unique identifier for the workflow
         query: The SQL query to parallelize
@@ -35,29 +39,53 @@ def incremental_query_batching(
         ranged_sql_end_key: Placeholder for range end timestamp
         default_start_time: Default start time if no previous state exists
     """
+
     def decorator(
-        func: Callable[..., AsyncIterator[Dict[str, Any]]]
+        func: Callable[..., AsyncIterator[Dict[str, Any]]],
     ) -> Callable[..., AsyncIterator[Dict[str, Any]]]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> AsyncIterator[Dict[str, Any]]:
             try:
                 # Get last processed timestamp from StateStore
                 try:
-                    last_processed_timestamp = StateStore.extract_last_processed_timestamp(workflow_id)
+                    last_processed_timestamp = (
+                        StateStore.extract_last_processed_timestamp(workflow_id)
+                    )
                     if last_processed_timestamp:
-                        start_time_epoch = int(last_processed_timestamp.timestamp() * 1000)
-                        logger.info(f"Using last processed timestamp: {last_processed_timestamp}")
+                        start_time_epoch = int(
+                            last_processed_timestamp.timestamp() * 1000
+                        )
+                        logger.info(
+                            f"Using last processed timestamp: {last_processed_timestamp}"
+                        )
                     else:
-                        start_time_epoch = int((default_start_time or datetime.now() - timedelta(days=14)).timestamp() * 1000)
-                        logger.info(f"Using default start time: {datetime.fromtimestamp(start_time_epoch/1000)}")
+                        start_time_epoch = int(
+                            (
+                                default_start_time
+                                or datetime.now() - timedelta(days=14)
+                            ).timestamp()
+                            * 1000
+                        )
+                        logger.info(
+                            f"Using default start time: {datetime.fromtimestamp(start_time_epoch/1000)}"
+                        )
                 except Exception as e:
                     logger.info(f"No last processed timestamp found: {e}")
-                    start_time_epoch = int((default_start_time or datetime.now() - timedelta(days=14)).timestamp() * 1000)
-                    logger.info(f"Using default start time: {datetime.fromtimestamp(start_time_epoch/1000)}")
+                    start_time_epoch = int(
+                        (
+                            default_start_time or datetime.now() - timedelta(days=14)
+                        ).timestamp()
+                        * 1000
+                    )
+                    logger.info(
+                        f"Using default start time: {datetime.fromtimestamp(start_time_epoch/1000)}"
+                    )
 
                 # Format query with start time
-                formatted_query = query.replace(ranged_sql_start_key, str(start_time_epoch))
-                
+                formatted_query = query.replace(
+                    ranged_sql_start_key, str(start_time_epoch)
+                )
+
                 # Initialize variables for chunking
                 parallel_markers: List[Dict[str, Any]] = []
                 chunk_start_marker: Optional[str] = None
@@ -68,13 +96,18 @@ def incremental_query_batching(
                 # Execute the decorated function to get query results
                 async for result_batch in func(*args, **kwargs):
                     for row in result_batch:
-                        if not isinstance(row, dict) or timestamp_column.lower() not in row:
+                        if (
+                            not isinstance(row, dict)
+                            or timestamp_column.lower() not in row
+                        ):
                             continue
-                            
-                        timestamp_value = cast(Optional[datetime], row.get(timestamp_column.lower()))
+
+                        timestamp_value = cast(
+                            Optional[datetime], row.get(timestamp_column.lower())
+                        )
                         if not isinstance(timestamp_value, datetime):
                             continue
-                            
+
                         new_marker = str(int(timestamp_value.timestamp() * 1000))
 
                         if last_marker == new_marker:
@@ -88,7 +121,11 @@ def incremental_query_batching(
                         record_count += 1
                         last_marker = new_marker
 
-                        if record_count >= chunk_size and chunk_start_marker and chunk_end_marker:
+                        if (
+                            record_count >= chunk_size
+                            and chunk_start_marker
+                            and chunk_end_marker
+                        ):
                             _create_chunked_query(
                                 query=formatted_query,
                                 start_marker=chunk_start_marker,
@@ -123,23 +160,30 @@ def incremental_query_batching(
 
                 # Store the latest timestamp
                 if chunk_end_marker:
-                    latest_datetime = datetime.fromtimestamp(int(chunk_end_marker) / 1000)
-                    StateStore.store_last_processed_timestamp(latest_datetime, workflow_id)
+                    latest_datetime = datetime.fromtimestamp(
+                        int(chunk_end_marker) / 1000
+                    )
+                    StateStore.store_last_processed_timestamp(
+                        latest_datetime, workflow_id
+                    )
                     logger.info(f"Stored last processed timestamp: {latest_datetime}")
 
                 # Store parallel markers in StateStore
                 StateStore.store_configuration(
-                    f"parallel_markers_{workflow_id}",
-                    {"markers": parallel_markers}
+                    f"parallel_markers_{workflow_id}", {"markers": parallel_markers}
                 )
-                logger.info(f"Stored {len(parallel_markers)} query chunks in state store")
+                logger.info(
+                    f"Stored {len(parallel_markers)} query chunks in state store"
+                )
 
             except Exception as e:
                 logger.error(f"Error in incremental query batching: {str(e)}")
                 raise
 
         return wrapper
+
     return decorator
+
 
 def _create_chunked_query(
     query: str,
@@ -166,9 +210,11 @@ def _create_chunked_query(
     )
     logger.info(f"Chunked SQL: {chunked_sql}")
 
-    parallel_markers.append({
-        "sql": chunked_sql,
-        "start": start_marker,
-        "end": end_marker,
-        "count": record_count,
-    }) 
+    parallel_markers.append(
+        {
+            "sql": chunked_sql,
+            "start": start_marker,
+            "end": end_marker,
+            "count": record_count,
+        }
+    )
