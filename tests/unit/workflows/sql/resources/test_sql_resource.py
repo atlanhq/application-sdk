@@ -35,7 +35,7 @@ def test_init_without_config():
         SQLClient()
 
 
-@patch("application_sdk.clients.sql_resource.create_engine")
+@patch("application_sdk.clients.sql_client.create_engine")
 def test_load(mock_create_engine: Any, sql_resource: SQLClient):
     # Mock the engine and connection
     mock_engine = MagicMock()
@@ -150,9 +150,9 @@ async def test_fetch_metadata_with_error(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql_resource.text")
+@patch("application_sdk.clients.sql_client.text")
 @patch(
-    "application_sdk.clients.sql_resource.asyncio.get_running_loop",
+    "application_sdk.clients.sql_client.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
 async def test_run_query(
@@ -226,9 +226,9 @@ async def test_run_query(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql_resource.text")
+@patch("application_sdk.clients.sql_client.text")
 @patch(
-    "application_sdk.clients.sql_resource.asyncio.get_running_loop",
+    "application_sdk.clients.sql_client.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
 async def test_run_query_with_error(

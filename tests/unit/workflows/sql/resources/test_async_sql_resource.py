@@ -35,7 +35,7 @@ def test_init_without_config():
         AsyncSQLClient()
 
 
-@patch("application_sdk.clients.async_sql_resource.create_async_engine")
+@patch("application_sdk.clients.async_sql_client.create_async_engine")
 def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLClient):
     # Mock the engine and connection
     mock_engine = AsyncMock()
@@ -151,7 +151,7 @@ async def test_fetch_metadata_with_error(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.async_sql_resource.text",
+    "application_sdk.clients.async_sql_client.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_client_side_cursor(
@@ -201,7 +201,7 @@ async def test_run_query_client_side_cursor(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.async_sql_resource.text",
+    "application_sdk.clients.async_sql_client.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_server_side_cursor(
@@ -254,7 +254,7 @@ async def test_run_query_server_side_cursor(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.async_sql_resource.text",
+    "application_sdk.clients.async_sql_client.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_with_error(
