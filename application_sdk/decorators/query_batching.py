@@ -1,7 +1,18 @@
 import functools
 import logging
 from datetime import datetime, timedelta
-from typing import Any, AsyncIterator, Callable, Dict, List, Optional, TypeVar, cast
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypeVar,
+    Union,
+    cast,
+)
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
@@ -9,7 +20,10 @@ from application_sdk.inputs.statestore import StateStore
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 T = TypeVar("T")
-F = TypeVar("F", bound=Callable[..., Any])
+AsyncFunc = TypeVar("AsyncFunc", bound=Callable[..., Awaitable[Any]])
+AsyncIterFunc = TypeVar(
+    "AsyncIterFunc", bound=Callable[..., AsyncIterator[Dict[str, Any]]]
+)
 
 
 def incremental_query_batching(
@@ -22,7 +36,7 @@ def incremental_query_batching(
     ranged_sql_start_key: str | Callable[..., str],
     ranged_sql_end_key: str | Callable[..., str],
     default_start_time: Optional[datetime] = None,
-) -> Callable[[F], F]:
+) -> Callable[[Union[AsyncFunc, AsyncIterFunc]], Union[AsyncFunc, AsyncIterFunc]]:
     """
     A decorator that handles incremental query batching with state management.
     Can be applied to both async iterator functions and regular coroutine functions.
@@ -47,7 +61,9 @@ def incremental_query_batching(
             return param(*args, **kwargs)
         return param
 
-    def decorator(func: F) -> F:
+    def decorator(
+        func: Union[AsyncFunc, AsyncIterFunc],
+    ) -> Union[AsyncFunc, AsyncIterFunc]:
         @functools.wraps(func)
         async def wrapper(*args: Any, **kwargs: Any) -> Any:
             try:
@@ -123,12 +139,12 @@ def incremental_query_batching(
                 # Execute the decorated function
                 result = await func(*args, **kwargs)
 
-                # Process results if it's an async iterator
+                # Handle async iterator functions
                 if isinstance(result, AsyncIterator):
                     async for batch in result:
-                        if isinstance(batch, Dict):
+                        if isinstance(batch, dict):
                             await process_batch(
-                                batch,
+                                cast(Dict[str, Any], batch),
                                 resolved_timestamp_column,
                                 resolved_chunk_size,
                                 formatted_query,
@@ -144,53 +160,33 @@ def incremental_query_batching(
                             )
                             yield batch
 
-                    # Store the latest timestamp
-                    if chunk_end_marker:
-                        latest_datetime = datetime.fromtimestamp(
-                            int(chunk_end_marker) / 1000
-                        )
-                        StateStore.store_last_processed_timestamp(
-                            latest_datetime, resolved_workflow_id
-                        )
-                        logger.info(
-                            f"Stored last processed timestamp: {latest_datetime}"
-                        )
+                # Store state after processing all batches
+                if chunk_end_marker:
+                    latest_datetime = datetime.fromtimestamp(
+                        int(chunk_end_marker) / 1000
+                    )
+                    StateStore.store_last_processed_timestamp(
+                        latest_datetime, resolved_workflow_id
+                    )
+                    logger.info(f"Stored last processed timestamp: {latest_datetime}")
 
-                    # Store parallel markers in StateStore
-                    StateStore.store_configuration(
-                        f"parallel_markers_{resolved_workflow_id}",
-                        {"markers": parallel_markers},
-                    )
-                    logger.info(
-                        f"Stored {len(parallel_markers)} query chunks in state store"
-                    )
-                else:
-                    # For non-iterator functions, store state and return result
-                    if chunk_end_marker:
-                        latest_datetime = datetime.fromtimestamp(
-                            int(chunk_end_marker) / 1000
-                        )
-                        StateStore.store_last_processed_timestamp(
-                            latest_datetime, resolved_workflow_id
-                        )
-                        logger.info(
-                            f"Stored last processed timestamp: {latest_datetime}"
-                        )
+                StateStore.store_configuration(
+                    f"parallel_markers_{resolved_workflow_id}",
+                    {"markers": parallel_markers},
+                )
+                logger.info(
+                    f"Stored {len(parallel_markers)} query chunks in state store"
+                )
 
-                    StateStore.store_configuration(
-                        f"parallel_markers_{resolved_workflow_id}",
-                        {"markers": parallel_markers},
-                    )
-                    logger.info(
-                        f"Stored {len(parallel_markers)} query chunks in state store"
-                    )
+                # For non-iterator functions, return the original result
+                if not isinstance(result, AsyncIterator):
                     return result
 
             except Exception as e:
                 logger.error(f"Error in incremental query batching: {str(e)}")
                 raise
 
-        return cast(F, wrapper)
+        return cast(Union[AsyncFunc, AsyncIterFunc], wrapper)
 
     return decorator
 
