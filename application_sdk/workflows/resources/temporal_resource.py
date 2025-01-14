@@ -4,7 +4,7 @@ from abc import ABC
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
-from temporalio.client import Client, WorkflowFailureError
+from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import (
     ActivityInboundInterceptor,
@@ -235,3 +235,16 @@ class TemporalResource(ResourceInterface):
             ),
             interceptors=[EventInterceptor()],
         )
+
+    async def get_workflow_status(self, workflow_id: str, run_id: str) -> dict:
+        workflow_handle = self.client.get_workflow_handle(workflow_id, run_id=run_id)
+        workflow_execution = await workflow_handle.describe()
+        execution_info = workflow_execution.raw_description.workflow_execution_info
+
+        workflow_info = {
+            "workflow_id": workflow_id,
+            "run_id": run_id,
+            "status": WorkflowExecutionStatus(execution_info.status).name,
+            "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
+        }
+        return workflow_info

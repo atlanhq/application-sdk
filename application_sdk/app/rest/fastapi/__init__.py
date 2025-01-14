@@ -36,6 +36,10 @@ from application_sdk.workflows.controllers import (
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
 )
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
+)
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -179,6 +183,12 @@ class FastAPIApplication(AtlanAPIApplication):
             response_model=WorkflowConfigResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/status/{workflow_id}/{run_id}",
+            self.get_workflow_status,
+            methods=["GET"],
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -224,6 +234,9 @@ class FastAPIApplication(AtlanAPIApplication):
                 )
 
     async def on_stop(self):
+        """
+        Stop the application
+        """
         logger.info("Stopping application")
         await self.on_app_stop()
 
@@ -265,6 +278,29 @@ class FastAPIApplication(AtlanAPIApplication):
             success=True,
             message="Workflow configuration fetched successfully",
             data=config,
+        )
+
+    async def get_workflow_status(self, workflow_id: str, run_id: str) -> JSONResponse:
+        """
+        Get the status of a workflow
+        Args:
+            workflow_id: The ID of the workflow
+            run_id: The ID of the run
+        Returns:
+            JSONResponse containing the status of the workflow
+        """
+        temporal_resource = TemporalResource(TemporalConfig())
+        await temporal_resource.load()
+        workflow_status = await temporal_resource.get_workflow_status(
+            workflow_id, run_id
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "message": "Workflow status fetched successfully",
+                "data": workflow_status,
+            },
         )
 
     def update_workflow_config(
