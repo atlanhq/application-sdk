@@ -178,9 +178,9 @@ def incremental_query_batching(
                     f"Stored {len(parallel_markers)} query chunks in state store"
                 )
 
-                # For non-iterator functions, return the original result
+                # For non-iterator functions, yield the result instead of returning it
                 if not isinstance(result, AsyncIterator):
-                    return result
+                    yield result
 
             except Exception as e:
                 logger.error(f"Error in incremental query batching: {str(e)}")
