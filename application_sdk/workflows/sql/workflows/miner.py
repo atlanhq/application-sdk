@@ -130,7 +130,6 @@ class SQLMinerWorkflow(WorkflowInterface):
         if not result or "error" in result:
             raise ValueError("Preflight check failed")
 
-    @workflow.run
     @incremental_query_batching(
         workflow_id=lambda workflow_config: workflow_config["workflow_id"],
         query=lambda workflow_config: StateStore.extract_configuration(
@@ -155,6 +154,7 @@ class SQLMinerWorkflow(WorkflowInterface):
             workflow_config["workflow_id"]
         )["miner_args"]["ranged_sql_end_key"],
     )
+    @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):
         """
         Run the workflow.
