@@ -3,7 +3,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Any, Callable, Coroutine, Dict, List
+from typing import Any, Callable, Dict, List
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -12,6 +12,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.decorators.query_batching import incremental_query_batching
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
@@ -125,224 +126,64 @@ class SQLMinerWorkflow(WorkflowInterface):
         await raw_output.write_df(batch_input)
         return kwargs.get("end_marker", 0)
 
-    async def parallelize_query(
-        self,
-        query: str,
-        timestamp_column: str,
-        chunk_size: int,
-        current_marker: str,
-        sql_ranged_replace_from: str,
-        sql_ranged_replace_to: str,
-        ranged_sql_start_key: str,
-        ranged_sql_end_key: str,
-    ):
-        """
-        Processes a single chunk of the query, collecting timestamp ranges.
-
-        Args:
-            query: The SQL query to process
-            timestamp_column: Column name containing the timestamp
-            chunk_size: Number of records per chunk
-            current_marker: Starting timestamp marker
-            sql_ranged_replace_from: Original SQL fragment to replace
-            sql_ranged_replace_to: SQL fragment with range placeholders
-            ranged_sql_start_key: Placeholder for range start timestamp
-            ranged_sql_end_key: Placeholder for range end timestamp
-            parallel_markers: List to store the chunked queries
-
-        Returns:
-            Tuple of (final chunk count, records in last chunk)
-        """
-        if chunk_size <= 0:
-            raise ValueError("Chunk size must be greater than 0")
-
-        parallel_markers: List[Dict[str, Any]] = []
-
-        marked_sql = query.replace(ranged_sql_start_key, current_marker)
-        rewritten_query = f"WITH T AS ({marked_sql}) SELECT {timestamp_column} FROM T ORDER BY {timestamp_column} ASC"
-        logger.info(f"Executing query: {rewritten_query}")
-
-        chunk_start_marker = None
-        chunk_end_marker = None
-        record_count = 0
-        last_marker = None
-
-        if not self.sql_resource:
-            raise ValueError("SQL resource is not initialized")
-
-        async for result_batch in self.sql_resource.run_query(rewritten_query):
-            for row in result_batch:
-                timestamp = row[timestamp_column.lower()]
-                new_marker = str(int(timestamp.timestamp() * 1000))
-
-                if last_marker == new_marker:
-                    logger.info("Skipping duplicate start time")
-                    record_count += 1
-                    continue
-
-                if not chunk_start_marker:
-                    chunk_start_marker = new_marker
-                chunk_end_marker = new_marker
-                record_count += 1
-                last_marker = new_marker
-
-                if record_count >= chunk_size:
-                    self._create_chunked_query(
-                        query=query,
-                        start_marker=chunk_start_marker,
-                        end_marker=chunk_end_marker,
-                        parallel_markers=parallel_markers,
-                        record_count=record_count,
-                        sql_ranged_replace_from=sql_ranged_replace_from,
-                        sql_ranged_replace_to=sql_ranged_replace_to,
-                        ranged_sql_start_key=ranged_sql_start_key,
-                        ranged_sql_end_key=ranged_sql_end_key,
-                    )
-                    record_count = 0
-                    chunk_start_marker = None
-                    chunk_end_marker = None
-
-        if record_count > 0:
-            self._create_chunked_query(
-                query=query,
-                start_marker=chunk_start_marker,
-                end_marker=chunk_end_marker,
-                parallel_markers=parallel_markers,
-                record_count=record_count,
-                sql_ranged_replace_from=sql_ranged_replace_from,
-                sql_ranged_replace_to=sql_ranged_replace_to,
-                ranged_sql_start_key=ranged_sql_start_key,
-                ranged_sql_end_key=ranged_sql_end_key,
-            )
-
-        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
-
-        return parallel_markers
-
-    def _create_chunked_query(
-        self,
-        query: str,
-        start_marker: str | None,
-        end_marker: str | None,
-        parallel_markers: List[Dict[str, Any]],
-        record_count: int,
-        sql_ranged_replace_from: str,
-        sql_ranged_replace_to: str,
-        ranged_sql_start_key: str,
-        ranged_sql_end_key: str,
-    ) -> None:
-        """
-        Creates a chunked query with the specified time range and adds it to parallel_markers.
-
-        Args:
-            query: The base SQL query
-            chunk_count: Current chunk number
-            start_marker: Start timestamp for the chunk
-            end_marker: End timestamp for the chunk
-            parallel_markers: List to store the chunked queries
-            record_count: Number of records in this chunk
-            sql_ranged_replace_from: Original SQL fragment to replace
-            sql_ranged_replace_to: SQL fragment with range placeholders
-            ranged_sql_start_key: Placeholder for range start timestamp
-            ranged_sql_end_key: Placeholder for range end timestamp
-        """
-        if not start_marker or not end_marker:
-            return
-
-        chunked_sql = query.replace(
-            sql_ranged_replace_from,
-            sql_ranged_replace_to.replace(ranged_sql_start_key, start_marker).replace(
-                ranged_sql_end_key, end_marker
-            ),
-        )
-
-        logger.info(
-            f"Processed {record_count} records in chunk {len(parallel_markers)}, "
-            f"with start marker {start_marker} and end marker {end_marker}"
-        )
-        logger.info(f"Chunked SQL: {chunked_sql}")
-
-        parallel_markers.append(
-            {
-                "sql": chunked_sql,
-                "start": start_marker,
-                "end": end_marker,
-                "count": record_count,
-            }
-        )
-
     @activity.defn
     @auto_heartbeater
+    @incremental_query_batching(
+        workflow_id=lambda self, workflow_args: workflow_args["workflow_id"],
+        query=lambda self, workflow_args: self.fetch_queries_sql.format(
+            database_name_cleaned=workflow_args["miner_args"]["database_name_cleaned"],
+            schema_name_cleaned=workflow_args["miner_args"]["schema_name_cleaned"],
+            miner_start_time_epoch=workflow_args["miner_args"][
+                "miner_start_time_epoch"
+            ],
+        ),
+        timestamp_column=lambda self, workflow_args: workflow_args["miner_args"][
+            "timestamp_column"
+        ],
+        chunk_size=lambda self, workflow_args: workflow_args["miner_args"][
+            "chunk_size"
+        ],
+        sql_ranged_replace_from=lambda self, workflow_args: workflow_args["miner_args"][
+            "sql_replace_from"
+        ],
+        sql_ranged_replace_to=lambda self, workflow_args: workflow_args["miner_args"][
+            "sql_replace_to"
+        ],
+        ranged_sql_start_key=lambda self, workflow_args: workflow_args["miner_args"][
+            "ranged_sql_start_key"
+        ],
+        ranged_sql_end_key=lambda self, workflow_args: workflow_args["miner_args"][
+            "ranged_sql_end_key"
+        ],
+    )
     async def get_query_batches(
         self, workflow_args: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
-        workflow_guid = workflow_args["workflow_id"]
-        miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
-
-        # Try to get last processed timestamp from StateStore
-        try:
-            last_processed_timestamp = StateStore.extract_last_processed_timestamp(
-                workflow_guid
-            )
-            if last_processed_timestamp:
-                # Convert datetime to epoch milliseconds
-                miner_args.miner_start_time_epoch = int(
-                    last_processed_timestamp.timestamp() * 1000
-                )
-                logger.info(
-                    f"Using last processed timestamp from state store: {last_processed_timestamp}"
-                )
-        except Exception as e:
-            logger.info(f"No last processed timestamp found in state store: {e}")
-            # If no last processed timestamp, use the one from miner_args if present
-            if not miner_args.miner_start_time_epoch:
-                # Default to 2 weeks ago if no timestamp in miner_args
-                miner_args.miner_start_time_epoch = int(
-                    (datetime.now() - timedelta(days=14)).timestamp() * 1000
-                )
-                logger.info(
-                    f"Using default start time (2 weeks ago): {datetime.fromtimestamp(miner_args.miner_start_time_epoch/1000)}"
-                )
-            else:
-                logger.info(
-                    f"Using start time from miner_args: {datetime.fromtimestamp(miner_args.miner_start_time_epoch/1000)}"
-                )
-
+        """
+        Get query batches using the incremental_query_batching decorator.
+        The decorator handles:
+        - Last processed timestamp management
+        - Query chunking
+        - Parallel markers storage
+        """
         queries_sql_query = self.fetch_queries_sql.format(
-            database_name_cleaned=miner_args.database_name_cleaned,
-            schema_name_cleaned=miner_args.schema_name_cleaned,
-            miner_start_time_epoch=miner_args.miner_start_time_epoch,
+            database_name_cleaned=workflow_args["miner_args"]["database_name_cleaned"],
+            schema_name_cleaned=workflow_args["miner_args"]["schema_name_cleaned"],
+            miner_start_time_epoch=workflow_args["miner_args"][
+                "miner_start_time_epoch"
+            ],
         )
 
         try:
-            parallel_markers = await self.parallelize_query(
-                query=queries_sql_query,
-                timestamp_column=miner_args.timestamp_column,
-                chunk_size=miner_args.chunk_size,
-                current_marker=str(miner_args.current_marker),
-                sql_ranged_replace_from=miner_args.sql_replace_from,
-                sql_ranged_replace_to=miner_args.sql_replace_to,
-                ranged_sql_start_key=miner_args.ranged_sql_start_key,
-                ranged_sql_end_key=miner_args.ranged_sql_end_key,
-            )
+            if not self.sql_resource:
+                raise ValueError("SQL resource is not initialized")
+
+            async for result_batch in self.sql_resource.run_query(queries_sql_query):
+                yield result_batch
+
         except Exception as e:
-            logger.error(f"Failed to parallelize queries: {e}")
+            logger.error(f"Failed to get query batches: {e}")
             raise e
-
-        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
-
-        # Write the results to a metadata file
-        output_path = os.path.join(workflow_args["output_path"], "raw", "query")
-        metadata_file_path = os.path.join(output_path, "metadata.json")
-        os.makedirs(os.path.dirname(metadata_file_path), exist_ok=True)
-        with open(metadata_file_path, "w") as f:
-            f.write(json.dumps(parallel_markers))
-
-        await ObjectStore.push_file_to_object_store(
-            workflow_args["output_prefix"], metadata_file_path
-        )
-
-        return parallel_markers
 
     @activity.defn(name="miner_preflight_check")
     @auto_heartbeater
@@ -395,24 +236,29 @@ class SQLMinerWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        results: List[Dict[str, Any]] = await workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+        # Get query batches - the decorator will handle chunking and state management
+        await workflow.execute_activity(
             self.get_query_batches,
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        miner_activities: List[Coroutine[Any, Any, str]] = []
+        # Extract parallel markers from state store
+        parallel_markers = StateStore._get_state(f"parallel_markers_{workflow_id}")[
+            "markers"
+        ]
+        miner_activities = []
 
         # Extract Queries
-        for result in results:
+        for marker in parallel_markers:
             activity_args = workflow_args.copy()
-            activity_args["sql_query"] = result["sql"]
-            activity_args["start_marker"] = result["start"]
-            activity_args["end_marker"] = result["end"]
+            activity_args["sql_query"] = marker["sql"]
+            activity_args["start_marker"] = marker["start"]
+            activity_args["end_marker"] = marker["end"]
 
             miner_activities.append(
-                workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+                workflow.execute_activity(
                     self.fetch_queries,
                     activity_args,
                     retry_policy=retry_policy,
@@ -420,17 +266,7 @@ class SQLMinerWorkflow(WorkflowInterface):
                 )
             )
 
-        # Collect all end timestamps from parallel activities
-        last_timestamps = await asyncio.gather(*miner_activities)
-
-        # Find the most recent timestamp
-        latest_timestamp = max(last_timestamps, key=int)
-
-        # Convert timestamp to datetime and store it
-        latest_datetime = datetime.fromtimestamp(
-            int(latest_timestamp) / 1000
-        )  # Convert milliseconds to seconds
-        StateStore.store_last_processed_timestamp(latest_datetime, workflow_guid)
+        # Execute all activities in parallel
+        await asyncio.gather(*miner_activities)
 
         workflow.logger.info(f"Miner workflow completed for {workflow_id}")
-        workflow.logger.info(f"Latest processed timestamp: {latest_datetime}")
