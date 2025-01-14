@@ -185,6 +185,9 @@ class SQLMinerWorkflow(WorkflowInterface):
                 TemporalConfig(application_name=self.application_name)
             )
 
+        # Add sql_resource to workflow_config for the decorator
+        workflow_config["sql_resource"] = self.sql_resource
+
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting miner workflow for {workflow_id}")
         retry_policy = RetryPolicy(

@@ -84,6 +84,9 @@ def incremental_query_batching(
                 resolved_ranged_sql_end_key = resolve_param(
                     ranged_sql_end_key, *args, **kwargs
                 )
+                resolved_timestamp_column = resolve_param(
+                    timestamp_column, *args, **kwargs
+                )
 
                 # Get last processed timestamp from StateStore
                 try:
@@ -125,32 +128,77 @@ def incremental_query_batching(
                 # Initialize parallel markers list
                 parallel_markers: List[Dict[str, Any]] = []
 
-                # Create time-based chunks
-                current_time = datetime.now()
-                current_time_epoch = int(current_time.timestamp() * 1000)
+                # Create initial query to get records after last processed timestamp
+                initial_query = resolved_query.replace(
+                    resolved_sql_ranged_replace_from,
+                    f"{resolved_timestamp_column} >= {start_time_epoch}",
+                )
 
-                chunk_start = start_time_epoch
-                while chunk_start < current_time_epoch:
-                    chunk_end = min(
-                        chunk_start + (resolved_chunk_size * 1000), current_time_epoch
-                    )
+                record_count = 0
+                chunk_start_marker = None
+                chunk_end_marker = None
+                last_marker = None
 
+                # Get SQL resource from args (assuming it's passed in kwargs)
+                sql_resource = kwargs.get("sql_resource")
+                if not sql_resource:
+                    raise ValueError("SQL resource not found in kwargs")
+
+                async for result_batch in sql_resource.run_query(initial_query):
+                    for row in result_batch:
+                        timestamp = row[resolved_timestamp_column.lower()]
+                        new_marker = str(int(timestamp.timestamp() * 1000))
+
+                        if last_marker == new_marker:
+                            logger.info("Skipping duplicate start time")
+                            record_count += 1
+                            continue
+
+                        if not chunk_start_marker:
+                            chunk_start_marker = new_marker
+                        chunk_end_marker = new_marker
+                        record_count += 1
+                        last_marker = new_marker
+
+                        if record_count >= resolved_chunk_size:
+                            # Create chunked query
+                            chunked_sql = resolved_query.replace(
+                                resolved_sql_ranged_replace_from,
+                                resolved_sql_ranged_replace_to.replace(
+                                    resolved_ranged_sql_start_key, chunk_start_marker
+                                ).replace(
+                                    resolved_ranged_sql_end_key, chunk_end_marker
+                                ),
+                            )
+
+                            parallel_markers.append(
+                                {
+                                    "sql": chunked_sql,
+                                    "start": chunk_start_marker,
+                                    "end": chunk_end_marker,
+                                }
+                            )
+
+                            record_count = 0
+                            chunk_start_marker = None
+                            chunk_end_marker = None
+
+                # Handle remaining records
+                if record_count > 0 and chunk_start_marker and chunk_end_marker:
                     chunked_sql = resolved_query.replace(
                         resolved_sql_ranged_replace_from,
                         resolved_sql_ranged_replace_to.replace(
-                            resolved_ranged_sql_start_key, str(chunk_start)
-                        ).replace(resolved_ranged_sql_end_key, str(chunk_end)),
+                            resolved_ranged_sql_start_key, chunk_start_marker
+                        ).replace(resolved_ranged_sql_end_key, chunk_end_marker),
                     )
 
                     parallel_markers.append(
                         {
                             "sql": chunked_sql,
-                            "start": str(chunk_start),
-                            "end": str(chunk_end),
+                            "start": chunk_start_marker,
+                            "end": chunk_end_marker,
                         }
                     )
-
-                    chunk_start = chunk_end + 1
 
                 # Store chunks in state store
                 StateStore.store_configuration(
