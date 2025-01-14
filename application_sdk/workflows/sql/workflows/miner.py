@@ -51,7 +51,6 @@ class SQLMinerWorkflow(WorkflowInterface):
     application_name: str = "sql-miner"
     batch_size: int = 100000
 
-    # Note: the defaults are passed as temporal tries to initialize the workflow with no args
     def __init__(self):
         super().__init__()
 
@@ -74,10 +73,7 @@ class SQLMinerWorkflow(WorkflowInterface):
         return self
 
     def get_activities(self) -> List[Callable[..., Any]]:
-        return [
-            self.get_query_batches,
-            self.fetch_queries,
-        ] + super().get_activities()
+        return [self.fetch_queries] + super().get_activities()
 
     async def start(
         self, workflow_args: Dict[str, Any], workflow_class: Any | None = None
@@ -123,65 +119,6 @@ class SQLMinerWorkflow(WorkflowInterface):
         await raw_output.write_df(batch_input)
         return kwargs.get("end_marker", 0)
 
-    @activity.defn
-    @auto_heartbeater
-    @incremental_query_batching(
-        workflow_id=lambda self, workflow_args: workflow_args["workflow_id"],
-        query=lambda self, workflow_args: self.fetch_queries_sql.format(
-            database_name_cleaned=workflow_args["miner_args"]["database_name_cleaned"],
-            schema_name_cleaned=workflow_args["miner_args"]["schema_name_cleaned"],
-            miner_start_time_epoch=workflow_args["miner_args"][
-                "miner_start_time_epoch"
-            ],
-        ),
-        timestamp_column=lambda self, workflow_args: workflow_args["miner_args"][
-            "timestamp_column"
-        ],
-        chunk_size=lambda self, workflow_args: workflow_args["miner_args"][
-            "chunk_size"
-        ],
-        sql_ranged_replace_from=lambda self, workflow_args: workflow_args["miner_args"][
-            "sql_replace_from"
-        ],
-        sql_ranged_replace_to=lambda self, workflow_args: workflow_args["miner_args"][
-            "sql_replace_to"
-        ],
-        ranged_sql_start_key=lambda self, workflow_args: workflow_args["miner_args"][
-            "ranged_sql_start_key"
-        ],
-        ranged_sql_end_key=lambda self, workflow_args: workflow_args["miner_args"][
-            "ranged_sql_end_key"
-        ],
-    )
-    async def get_query_batches(
-        self, workflow_args: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
-        """
-        Get query batches using the incremental_query_batching decorator.
-        The decorator handles:
-        - Last processed timestamp management
-        - Query chunking
-        - Parallel markers storage
-        """
-        queries_sql_query = self.fetch_queries_sql.format(
-            database_name_cleaned=workflow_args["miner_args"]["database_name_cleaned"],
-            schema_name_cleaned=workflow_args["miner_args"]["schema_name_cleaned"],
-            miner_start_time_epoch=workflow_args["miner_args"][
-                "miner_start_time_epoch"
-            ],
-        )
-
-        try:
-            if not self.sql_resource:
-                raise ValueError("SQL resource is not initialized")
-
-            async for result_batch in self.sql_resource.run_query(queries_sql_query):
-                yield result_batch
-
-        except Exception as e:
-            logger.error(f"Failed to get query batches: {e}")
-            raise e
-
     @activity.defn(name="miner_preflight_check")
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
@@ -194,6 +131,30 @@ class SQLMinerWorkflow(WorkflowInterface):
             raise ValueError("Preflight check failed")
 
     @workflow.run
+    @incremental_query_batching(
+        workflow_id=lambda workflow_config: workflow_config["workflow_id"],
+        query=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["query"],
+        timestamp_column=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["timestamp_column"],
+        chunk_size=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["chunk_size"],
+        sql_ranged_replace_from=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["sql_replace_from"],
+        sql_ranged_replace_to=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["sql_replace_to"],
+        ranged_sql_start_key=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["ranged_sql_start_key"],
+        ranged_sql_end_key=lambda workflow_config: StateStore.extract_configuration(
+            workflow_config["workflow_id"]
+        )["miner_args"]["ranged_sql_end_key"],
+    )
     async def run(self, workflow_config: Dict[str, Any]):
         """
         Run the workflow.
@@ -202,6 +163,16 @@ class SQLMinerWorkflow(WorkflowInterface):
         """
         workflow_guid = workflow_config["workflow_id"]
         workflow_args = StateStore.extract_configuration(workflow_guid)
+
+        # Format and store the query in miner_args
+        workflow_args["miner_args"]["query"] = self.fetch_queries_sql.format(
+            database_name_cleaned=workflow_args["miner_args"]["database_name_cleaned"],
+            schema_name_cleaned=workflow_args["miner_args"]["schema_name_cleaned"],
+            miner_start_time_epoch=workflow_args["miner_args"][
+                "miner_start_time_epoch"
+            ],
+        )
+        StateStore.store_configuration(workflow_guid, workflow_args)
 
         if not self.sql_resource:
             credentials = StateStore.extract_credentials(
@@ -233,18 +204,10 @@ class SQLMinerWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        # Get query batches - the decorator will handle chunking and state management
-        await workflow.execute_activity(
-            self.get_query_batches,
-            workflow_args,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-
-        # Extract parallel markers from state store
-        parallel_markers = StateStore._get_state(f"parallel_markers_{workflow_id}")[
-            "markers"
-        ]
+        # Execute queries in parallel using the parallel markers from state store
+        parallel_markers = StateStore.extract_configuration(
+            f"parallel_markers_{workflow_id}"
+        )["markers"]
         miner_activities = []
 
         # Extract Queries
