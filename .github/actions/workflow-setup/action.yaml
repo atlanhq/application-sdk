@@ -1,7 +1,7 @@
 name: Workflow Setup
 description: A reusable action for setting up workflow test environment
 inputs:
-  ORG_PAT_GITHUB: 
+  ORG_PAT_GITHUB:
      description: "github pat token"
      required: true
 runs:
