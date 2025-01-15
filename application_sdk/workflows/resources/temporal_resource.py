@@ -236,7 +236,12 @@ class TemporalResource(ResourceInterface):
             interceptors=[EventInterceptor()],
         )
 
-    async def get_workflow_status(self, workflow_id: str, run_id: str) -> dict:
+    async def get_workflow_status(
+        self, workflow_id: str, run_id: str
+    ) -> Dict[str, Any]:
+        if not self.client:
+            raise ValueError("Client is not loaded")
+
         workflow_handle = self.client.get_workflow_handle(workflow_id, run_id=run_id)
         try:
             workflow_execution = await workflow_handle.describe()

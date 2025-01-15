@@ -24,6 +24,24 @@ router = APIRouter(
 )
 
 
+def get_ip_address():
+    """Get IP address with fallback options."""
+    try:
+        # Try getting IP using hostname first
+        return socket.gethostbyname(socket.gethostname())
+    except socket.gaierror:
+        try:
+            # Fallback: Create a socket connection to an external server
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            # We don't actually connect, just start the process
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"  # Return localhost if all else fails
+
+
 @router.get("/health")
 async def health():
     """
@@ -37,7 +55,7 @@ async def health():
         "platform_version": platform.version(),
         "architecture": platform.machine(),
         "hostname": socket.gethostname(),
-        "ip_address": socket.gethostbyname(socket.gethostname()),
+        "ip_address": get_ip_address(),
         "mac_address": ":".join(re.findall("..", "%012x" % uuid.getnode())),
         "processor": platform.processor(),
         "ram": str(round(psutil.virtual_memory().total / (1024.0**3))) + " GB",
