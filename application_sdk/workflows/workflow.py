@@ -61,5 +61,8 @@ class WorkflowInterface(ABC):
         self.preflight_check_controller = preflight_check_controller
         return self
 
+    def get_activities(self) -> List[Callable[..., Any]]:
+        return [self.preflight_check]
+
     async def run(self, workflow_config: Dict[str, Any]):
         pass
