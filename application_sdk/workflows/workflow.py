@@ -1,6 +1,6 @@
 import logging
 from abc import ABC
-from typing import Any, Callable, Dict, List, Type
+from typing import Any, Callable, Dict, List
 
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
@@ -11,7 +11,6 @@ from application_sdk.workflows.controllers import (
 )
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.utils.activity import auto_heartbeater
-from application_sdk.activities import ActivitiesInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -61,10 +60,6 @@ class WorkflowInterface(ABC):
     ) -> "WorkflowInterface":
         self.preflight_check_controller = preflight_check_controller
         return self
-
-    @staticmethod
-    def get_activities(activities: Type[ActivitiesInterface]) -> List[Callable[..., Any]]:
-        return [activities.preflight_check]
 
     async def run(self, workflow_config: Dict[str, Any]):
         pass
