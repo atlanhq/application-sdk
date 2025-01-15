@@ -30,16 +30,6 @@ class SQLHandler:
         pass
 
 
-class SQLAuthHandler:
-    def set_sql_client(self, sql_client: SQLClient):
-        pass
-
-
-class FetchMetadataHandler:
-    def set_sql_client(self, sql_client: SQLClient):
-        pass
-
-
 # ------------------------------ TEMPORARY ------------------------------
 
 
