@@ -21,5 +21,3 @@ class ActivitiesInterface(ABC):
 
     async def _clean_state(self):
         self._state.pop(get_workflow_id())
-
-    # Activity methods
