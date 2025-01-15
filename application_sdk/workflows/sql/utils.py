@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
 
 
 def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:

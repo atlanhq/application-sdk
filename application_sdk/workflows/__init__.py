@@ -17,5 +17,6 @@ class WorkflowInterface(ABC):
     async def run(self, _: Dict[str, Any]) -> None:
         raise NotImplementedError("Workflow run method not implemented")
     
-    def get_activities(self) -> Sequence[Callable[..., Any]]:
+    @staticmethod
+    def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
         raise NotImplementedError("Workflow get_activities method not implemented")

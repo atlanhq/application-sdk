@@ -1,7 +1,7 @@
 from typing import Dict, Any
 from abc import ABC
 from application_sdk.activities.utils import get_workflow_id
-
+from temporalio import activity
 class ActivitiesInterface(ABC):
     def __init__(self):
         self._state: Dict[str, Any] = {}
@@ -19,3 +19,8 @@ class ActivitiesInterface(ABC):
     
     async def _clean_state(self):
         self._state.pop(get_workflow_id())
+
+    # Activity methods
+    @activity.defn
+    async def preflight_check(self, workflow_args: Dict[str, Any]):
+        return True
