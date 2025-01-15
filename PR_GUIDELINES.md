@@ -29,4 +29,17 @@ To ensure a smooth and efficient process for raising and merging pull requests (
 ## 8. Communicate Effectively
 - **Notify Reviewers**: After submitting a PR, proactively notify team members to encourage timely reviews. Regular communication helps prevent delays in the review process.
 
+## 9. Code Review Norms
+
+To cut through ambiguity in code review comments, please adopt the following notation:
+
+- **BLOCKER**: Must be addressed before this PR can be merged.
+  - Example: “BLOCKER: this API is not available on mobile browsers and will cause the phone to implode”
+  
+- **FAST-FOLLOW**: Should be addressed, but optionally via a follow-up PR.
+  - Example: “FAST-FOLLOW: We really shouldn’t have this business logic in a controller action - please pull it out into a domain class”
+  
+- **NIT**: Feedback that is optional; an opportunity for discussion on team norms.
+  - Example: “NIT: I would probably have pulled this out into a little helper function”
+
 By adhering to these guidelines, we can improve our pull request processes, leading to better collaboration, higher code quality, and increased efficiency in our software development efforts.
