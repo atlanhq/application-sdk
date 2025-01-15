@@ -1,5 +1,4 @@
-import asyncio
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Type
+from typing import Any, Dict, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -7,13 +6,12 @@ from temporalio import activity
 from application_sdk import activity_pd
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.utils import get_workflow_id
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
-from application_sdk.workflows.sql.utils import prepare_filters, prepare_query
+from application_sdk.workflows.sql.utils import prepare_query
 from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
-from temporalio.common import RetryPolicy
-from temporalio import workflow
-from datetime import timedelta
+
 
 # ------------------------------ TEMPORARY ------------------------------
 class SQLClient:
@@ -62,6 +60,9 @@ class SQLExtractionActivities(ActivitiesInterface):
         super().__init__()
 
     # State methods
+    async def _get_state(self, workflow_args: Dict[str, Any]):
+        return await super()._get_state(workflow_args)
+
     async def _set_state(self, workflow_args: Dict[str, Any]):
         await super()._set_state(workflow_args)
 
@@ -134,18 +135,18 @@ class SQLExtractionActivities(ActivitiesInterface):
                     f"Error processing row for {typename}: {row_error}"
                 )
         return pd.DataFrame(transformed_metadata_list)
-    
+
     @activity.defn
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
-       state = await self._get_state(workflow_args)
-       return True
+        state = await self._get_state(workflow_args)
+        return True
 
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: SQLInput(
-            engine=self.get_state(workflow_args)["sql_client"].engine,
+        batch_input=lambda self, workflow_args: SQLQueryInput(
+            engine=self._get_state(workflow_args)["sql_client"].engine,
             query=prepare_query(
                 query=self.fetch_database_sql, workflow_args=workflow_args
             ),
@@ -174,8 +175,10 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self._get_state(workflow_args)[
+            "sql_client"
+        ].sql_input(
+            engine=self._get_state(workflow_args)["sql_client"].engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_schema_sql, workflow_args=workflow_args
             ),
@@ -204,8 +207,10 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self._get_state(workflow_args)[
+            "sql_client"
+        ].sql_input(
+            self._get_state(workflow_args)["sql_client"].engine,
             query=prepare_query(
                 query=self.fetch_table_sql, workflow_args=workflow_args
             ),
@@ -234,8 +239,10 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.get_state(workflow_args)["sql_client"].sql_input(
-            self.get_state(workflow_args)["sql_client"].engine,
+        batch_input=lambda self, workflow_args: self._get_state(workflow_args)[
+            "sql_client"
+        ].sql_input(
+            self._get_state(workflow_args)["sql_client"].engine,
             query=prepare_query(
                 query=self.fetch_column_sql, workflow_args=workflow_args
             ),
@@ -314,19 +321,3 @@ class SQLExtractionActivities(ActivitiesInterface):
             "total_record_count": transformed_output.total_record_count,
             "chunk_count": transformed_output.chunk_count,
         }
-
-    @activity.defn
-    async def set_workflow_activity_context(self, workflow_id: str):
-        """
-        As we use a single worker thread, we need to set the workflow activity context
-        """
-        workflow_args = StateStore.extract_configuration(workflow_id)
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
-
-        if not self.sql_resource:
-            self.sql_resource = SQLResource(SQLResourceConfig())
-
-        self.sql_resource.set_credentials(credentials)
-        await self.sql_resource.load()
-        return workflow_args
-
