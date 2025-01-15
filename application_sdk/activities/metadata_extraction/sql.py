@@ -13,26 +13,6 @@ from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 
-# ------------------------------ TEMPORARY ------------------------------
-class SQLClient:
-    def set_credentials(self, credentials: Dict[str, Any]):
-        pass
-
-    async def load(self):
-        pass
-
-    async def close(self):
-        pass
-
-
-class SQLHandler:
-    def set_sql_client(self, sql_client: SQLClient):
-        pass
-
-
-# ------------------------------ TEMPORARY ------------------------------
-
-
 class SQLExtractionActivities(ActivitiesInterface):
     state: Dict[str, Any] = {}
 
