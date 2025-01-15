@@ -89,50 +89,50 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        # batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
+        batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
 
-        # for i in range(len(batches)):
-        #     transform_activities.append(
-        #         workflow.execute_activity_method(
-        #             self.activities_cls.transform_data,
-        #             {
-        #                 "typename": typename,
-        #                 "batch": batches[i],
-        #                 "chunk_start": chunk_starts[i],
-        #                 **workflow_args,
-        #             },
-        #             retry_policy=retry_policy,
-        #             start_to_close_timeout=timedelta(seconds=1000),
-        #         )
-        #     )
+        for i in range(len(batches)):
+            transform_activities.append(
+                workflow.execute_activity_method(
+                    self.activities_cls.transform_data,
+                    {
+                        "typename": typename,
+                        "batch": batches[i],
+                        "chunk_start": chunk_starts[i],
+                        **workflow_args,
+                    },
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=timedelta(seconds=1000),
+                )
+            )
 
-        # record_counts = await asyncio.gather(*transform_activities)
+        record_counts = await asyncio.gather(*transform_activities)
 
-        # # Calculate the parameters necessary for writing metadata
-        # total_record_count = sum(
-        #     max(
-        #         record_output.get("total_record_count", 0)
-        #         for record_output in record_count
-        #     )
-        #     for record_count in record_counts
-        # )
-        # chunk_count = sum(
-        #     max(record_output.get("chunk_count", 0) for record_output in record_count)
-        #     for record_count in record_counts
-        # )
+        # Calculate the parameters necessary for writing metadata
+        total_record_count = sum(
+            max(
+                record_output.get("total_record_count", 0)
+                for record_output in record_count
+            )
+            for record_count in record_counts
+        )
+        chunk_count = sum(
+            max(record_output.get("chunk_count", 0) for record_output in record_count)
+            for record_count in record_counts
+        )
 
-        # # Write the transformed metadata
-        # await workflow.execute_activity_method(
-        #     self.activities_cls.write_type_metadata,
-        #     {
-        #         "record_count": total_record_count,
-        #         "chunk_count": chunk_count,
-        #         "typename": typename,
-        #         **workflow_args,
-        #     },
-        #     retry_policy=retry_policy,
-        #     start_to_close_timeout=timedelta(seconds=1000),
-        # )
+        # Write the transformed metadata
+        await workflow.execute_activity_method(
+            self.activities_cls.write_type_metadata,
+            {
+                "record_count": total_record_count,
+                "chunk_count": chunk_count,
+                "typename": typename,
+                **workflow_args,
+            },
+            retry_policy=retry_policy,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
     def get_transform_batches(self, chunk_count: int, typename: str):
         # concurrency logic
