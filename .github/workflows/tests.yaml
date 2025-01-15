@@ -1,7 +1,7 @@
 # Github Actions workflow to run python unit and integration tests with coverage reporting
 # The action also builds a docker image for the application
 
-name: Unit and Integration Tests
+name: Tests
 
 on:
   workflow_call:
