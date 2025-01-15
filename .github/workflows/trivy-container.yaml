@@ -33,7 +33,7 @@ jobs:
           file: ./Dockerfile
           push: false
           secrets: |
-            "PRIVATE_REPO_ACCESS_TOKEN=${{ secrets.PRIVATE_REPO_ACCESS_TOKEN }}"
+            "PRIVATE_REPO_ACCESS_TOKEN=${{ secrets.ORG_PAT_GITHUB }}"
           tags: "docker-trivy-tag"
 
       - name: Run Trivy vulnerability scanner
