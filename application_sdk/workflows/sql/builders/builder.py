@@ -2,12 +2,10 @@ import logging
 from abc import ABC
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.handlers import WorkflowHandlerInterface
 from application_sdk.workflows.builder import (
     MinerBuilderInterface,
     WorkflowBuilderInterface,
-)
-from application_sdk.workflows.controllers import (
-    WorkflowPreflightCheckControllerInterface,
 )
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
@@ -21,12 +19,12 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     sql_resource: SQLResource
     transformer: TransformerInterface
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    handler: WorkflowHandlerInterface
 
-    def set_preflight_check_controller(
-        self, preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    def set_handler(
+        self, handler: WorkflowHandlerInterface
     ) -> "WorkflowBuilderInterface":
-        self.preflight_check_controller = preflight_check_controller
+        self.handler = handler
         return self
 
     def set_sql_resource(self, sql_resource: SQLResource) -> "SQLWorkflowBuilder":
@@ -49,14 +47,14 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
             workflow.set_sql_resource(self.sql_resource)
             .set_transformer(self.transformer)
             .set_temporal_resource(self.temporal_resource)
-            .set_preflight_check_controller(self.preflight_check_controller)
+            .set_handler(self.handler)
         )
 
 
 class SQLMinerBuilder(MinerBuilderInterface, ABC):
     sql_resource: SQLResource
     transformer: TransformerInterface
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface
+    handler: WorkflowHandlerInterface
 
     def set_sql_resource(self, sql_resource: SQLResource) -> "SQLMinerBuilder":
         self.sql_resource = sql_resource
@@ -81,5 +79,5 @@ class SQLMinerBuilder(MinerBuilderInterface, ABC):
         return (
             miner.set_sql_resource(self.sql_resource)
             .set_temporal_resource(self.temporal_resource)
-            .set_preflight_check_controller(self.preflight_check_controller)
+            .set_handler(self.handler)
         )

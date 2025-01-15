@@ -6,7 +6,6 @@ from typing import Any, Dict, List
 from sqlalchemy import create_engine, text
 from temporalio import activity
 
-from application_sdk import activity_pd
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.workflows.resources.temporal_resource import ResourceInterface
@@ -69,45 +68,6 @@ class SQLResource(ResourceInterface):
 
     def get_sqlalchemy_connection_string(self) -> str:
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
-
-    @activity_pd(
-        batch_input=lambda self, args: self.sql_input(
-            self.engine,
-            args["metadata_sql"],
-            chunk_size=None,
-        )
-    )
-    async def fetch_metadata(
-        self,
-        batch_input: str,
-        metadata_sql: str,
-        database_alias_key: str | None = None,
-        schema_alias_key: str | None = None,
-        database_result_key: str = "TABLE_CATALOG",
-        schema_result_key: str = "TABLE_SCHEMA",
-        **kwargs,
-    ):
-        if database_alias_key is None:
-            database_alias_key = self.default_database_alias_key
-
-        if schema_alias_key is None:
-            schema_alias_key = self.default_schema_alias_key
-
-        result: List[Dict[Any, Any]] = []
-        try:
-            for row in batch_input.to_dict(orient="records"):
-                result.append(
-                    {
-                        database_result_key: row[database_alias_key],
-                        schema_result_key: row[schema_alias_key],
-                    }
-                )
-
-        except Exception as e:
-            logger.error(f"Failed to fetch metadata: {str(e)}")
-            raise e
-
-        return result
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """

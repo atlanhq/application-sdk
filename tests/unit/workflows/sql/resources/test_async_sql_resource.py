@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
+from application_sdk.handlers.sql import SQLWorkflowHandler
 from application_sdk.workflows.sql.resources.async_sql_resource import (
     AsyncSQLResource,
     SQLResourceConfig,
@@ -31,6 +32,14 @@ def async_sql_resource(config: SQLResourceConfig):
     resource = AsyncSQLResource(config=config)
     resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return resource
+
+
+@pytest.fixture
+def handler(async_sql_resource: Any) -> SQLWorkflowHandler:
+    handler = SQLWorkflowHandler(async_sql_resource)
+    handler.DATABASE_ALIAS_KEY = "TABLE_CATALOG"
+    handler.SCHEMA_ALIAS_KEY = "TABLE_SCHEMA"
+    return handler
 
 
 def test_init_without_config():
@@ -60,9 +69,7 @@ def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLResource):
 
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
-async def test_fetch_metadata(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
-):
+async def test_fetch_metadata(mock_run_query: Any, handler: SQLWorkflowHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     mock_run_query.return_value = pd.DataFrame(data)
@@ -76,7 +83,7 @@ async def test_fetch_metadata(
         "database_alias_key": "TABLE_CATALOG",
         "schema_alias_key": "TABLE_SCHEMA",
     }
-    result = await async_sql_resource.fetch_metadata(args)
+    result = await handler.prepare_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -85,7 +92,7 @@ async def test_fetch_metadata(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
+    mock_run_query: Any, handler: SQLWorkflowHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -95,12 +102,12 @@ async def test_fetch_metadata_without_database_alias_key(
     metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    async_sql_resource.default_database_alias_key = "TABLE_CATALOG"
-    async_sql_resource.default_schema_alias_key = "TABLE_SCHEMA"
+    handler.default_database_alias_key = "TABLE_CATALOG"
+    handler.default_schema_alias_key = "TABLE_SCHEMA"
     args = {
         "metadata_sql": metadata_sql,
     }
-    result = await async_sql_resource.fetch_metadata(args)
+    result = await handler.prepare_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -109,7 +116,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
+    mock_run_query: Any, handler: SQLWorkflowHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     mock_run_query.return_value = pd.DataFrame(data)
@@ -117,15 +124,12 @@ async def test_fetch_metadata_with_result_keys(
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
 
+    handler.DATABASE_RESULT_KEY = "DATABASE"
+    handler.SCHEMA_RESULT_KEY = "SCHEMA"
+
     # Run fetch_metadata
-    args = {
-        "metadata_sql": metadata_sql,
-        "database_alias_key": "TABLE_CATALOG",
-        "schema_alias_key": "TABLE_SCHEMA",
-        "database_result_key": "DATABASE",
-        "schema_result_key": "SCHEMA",
-    }
-    result = await async_sql_resource.fetch_metadata(args)
+    args = {"metadata_sql": metadata_sql}
+    result = await handler.prepare_metadata(args)
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
@@ -134,7 +138,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, async_sql_resource: AsyncSQLResource
+    mock_run_query: AsyncMock, handler: SQLWorkflowHandler
 ):
     mock_run_query.side_effect = Exception("Simulated query failure")
 
@@ -148,7 +152,7 @@ async def test_fetch_metadata_with_error(
             "database_alias_key": "TABLE_CATALOG",
             "schema_alias_key": "TABLE_SCHEMA",
         }
-        await async_sql_resource.fetch_metadata(args)
+        await handler.prepare_metadata(args)
 
     # Assertions
     mock_run_query.assert_called_once_with()

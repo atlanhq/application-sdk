@@ -6,9 +6,7 @@ from temporalio import activity
 from temporalio.client import WorkflowFailureError
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.workflows.controllers import (
-    WorkflowPreflightCheckControllerInterface,
-)
+from application_sdk.handlers import WorkflowHandlerInterface
 from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
@@ -16,10 +14,12 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowInterface(ABC):
-    temporal_resource: TemporalResource | None = None
+    """
+    Workflow interface class
+    """
 
-    # Controllers
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface | None = None
+    temporal_resource: TemporalResource | None = None
+    handler: WorkflowHandlerInterface | None = None
 
     def __init__(self):
         pass
@@ -27,7 +27,7 @@ class WorkflowInterface(ABC):
     @activity.defn
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
-        result = await self.preflight_check_controller.preflight_check(
+        result = await self.handler.preflight_check(
             {
                 "form_data": workflow_args["metadata"],
             }
@@ -55,10 +55,8 @@ class WorkflowInterface(ABC):
         self.temporal_resource = temporal_resource
         return self
 
-    def set_preflight_check_controller(
-        self, preflight_check_controller: WorkflowPreflightCheckControllerInterface
-    ) -> "WorkflowInterface":
-        self.preflight_check_controller = preflight_check_controller
+    def set_handler(self, handler: WorkflowHandlerInterface) -> "WorkflowInterface":
+        self.handler = handler
         return self
 
     def get_activities(self) -> List[Callable[..., Any]]:
