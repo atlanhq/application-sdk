@@ -1,18 +1,31 @@
-from typing import Type
-from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
-from temporalio import workflow
-from application_sdk.workflows import WorkflowInterface
-from temporalio.common import RetryPolicy
 import asyncio
 from datetime import timedelta
-from typing import Dict, Any, Sequence, Callable
+from typing import Any, Callable, Dict, Sequence, Type
+
+from temporalio import workflow
+from temporalio.common import RetryPolicy
+
+from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
 from application_sdk.inputs.statestore import StateStore
+from application_sdk.workflows import WorkflowInterface
+
 
 @workflow.defn
 class SQLMetadataExtractionWorkflow(WorkflowInterface):
     activities_cls: Type[SQLExtractionActivities] = SQLExtractionActivities
 
-    def __init__(self, activities_cls: Type[SQLExtractionActivities] = SQLExtractionActivities):
+    fetch_database_sql: str = ""
+    fetch_schema_sql: str = ""
+    fetch_table_sql: str = ""
+    fetch_column_sql: str = ""
+
+    application_name: str = "sql-connector"
+    batch_size: int = 100000
+    max_transform_concurrency: int = 5
+
+    def __init__(
+        self, activities_cls: Type[SQLExtractionActivities] = SQLExtractionActivities
+    ):
         super().__init__(activities_cls=activities_cls)
 
     def get_activities(self) -> Sequence[Callable[..., Any]]:
@@ -54,5 +67,3 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
                 start_to_close_timeout=timedelta(seconds=1000),
             ),
         )
-
-        
