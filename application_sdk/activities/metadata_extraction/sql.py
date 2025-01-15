@@ -64,6 +64,7 @@ class SQLExtractionActivities(ActivitiesInterface):
         return await super()._get_state(workflow_args)
 
     async def _set_state(self, workflow_args: Dict[str, Any]):
+        #
         await super()._set_state(workflow_args)
 
         sql_client = self.sql_client_class()
@@ -140,7 +141,18 @@ class SQLExtractionActivities(ActivitiesInterface):
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         state = await self._get_state(workflow_args)
-        return True
+        handler = state["handler"]
+
+        if not handler:
+            raise ValueError("Preflight check handler not found")
+
+        result = await handler.preflight_check(
+            {
+                "form_data": workflow_args["metadata"],
+            }
+        )
+        if not result or "error" in result:
+            raise ValueError("Preflight check failed")
 
     @activity.defn
     @auto_heartbeater
