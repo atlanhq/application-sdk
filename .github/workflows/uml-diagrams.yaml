@@ -58,10 +58,34 @@ jobs:
         with:
           script: |
             const artifactUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-            const comment = `### UML Diagrams Generated 📊\nNew UML diagrams have been generated for this PR.\nYou can view them in the [workflow artifacts](${artifactUrl}).`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
+            const commentBody = `### UML Diagrams Generated 📊\nNew UML diagrams have been generated for this PR.\nYou can view them in the [workflow artifacts](${artifactUrl}).`;
+
+            // Get existing comments
+            const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: comment
+              issue_number: context.issue.number
             });
+
+            // Look for existing UML diagram comment
+            const umlComment = comments.data.find(comment =>
+              comment.body.includes('### UML Diagrams Generated 📊')
+            );
+
+            if (umlComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: umlComment.id,
+                body: commentBody
+              });
+            } else {
+              // Create new comment if none exists
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: commentBody
+              });
+            }
