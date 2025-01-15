@@ -1,6 +1,4 @@
 import logging
-import os
-import signal
 from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, FastAPI, status
@@ -24,9 +22,9 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
+from application_sdk.app.rest.fastapi.routers.system import get_health_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.eventstore import EventStore
@@ -202,12 +200,6 @@ class FastAPIApplication(AtlanAPIApplication):
             methods=["POST"],
         )
 
-        self.system_router.add_api_route(
-            "/stop",
-            self.on_stop,
-            methods=["POST"],
-        )
-
         super().register_routes()
 
     async def get_dapr_subscriptions(
@@ -232,18 +224,6 @@ class FastAPIApplication(AtlanAPIApplication):
                 await trigger.workflow.start(
                     workflow_args=event, workflow_class=trigger.workflow.__class__
                 )
-
-    async def on_stop(self):
-        """
-        Stop the application
-        """
-        logger.info("Stopping application")
-        await self.on_app_stop()
-
-        os.kill(os.getpid(), signal.SIGTERM)
-        return JSONResponse(
-            status_code=status.HTTP_200_OK, content={"message": "Application stopped"}
-        )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         await self.auth_controller.prepare(body.model_dump())
@@ -298,6 +278,7 @@ class FastAPIApplication(AtlanAPIApplication):
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={
+                "success": True,
                 "message": "Workflow status fetched successfully",
                 "data": workflow_status,
             },

@@ -238,8 +238,14 @@ class TemporalResource(ResourceInterface):
 
     async def get_workflow_status(self, workflow_id: str, run_id: str) -> dict:
         workflow_handle = self.client.get_workflow_handle(workflow_id, run_id=run_id)
-        workflow_execution = await workflow_handle.describe()
-        execution_info = workflow_execution.raw_description.workflow_execution_info
+        try:
+            workflow_execution = await workflow_handle.describe()
+            execution_info = workflow_execution.raw_description.workflow_execution_info
+        except Exception as e:
+            logger.error(f"Error getting workflow status: {e}")
+            raise Exception(
+                f"Error getting workflow status for {workflow_id} {run_id}: {e}"
+            )
 
         workflow_info = {
             "workflow_id": workflow_id,
