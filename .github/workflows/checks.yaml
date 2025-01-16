@@ -33,5 +33,5 @@ jobs:
     - name: Install dependencies
       run: |
         poetry config virtualenvs.in-project true
-        poetry install --no-root --without dev,test --extras "workflows dashboard"
+        poetry install --no-root --without dev,test --extras "workflows"
     - uses: pre-commit/action@v3.0.1

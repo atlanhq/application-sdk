@@ -8,9 +8,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 import daft
 import pandas as pd
 
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
-from application_sdk.activities import ActivitiesInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

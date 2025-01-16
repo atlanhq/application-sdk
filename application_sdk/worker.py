@@ -12,10 +12,8 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class Worker:
     def __init__(
         self,
-
         temporal_resource: TemporalResource | None = None,
         temporal_activities: Sequence[CallableType] = [],
-        
         passthrough_modules: List[str] = ["application_sdk", "os"],
         workflow_classes: List[Any] = [],
     ):
