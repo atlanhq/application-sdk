@@ -42,3 +42,9 @@ class AtlanApplicationInterface(ABC):
 
     async def start(self):
         pass
+
+    def register_routers(self):
+        pass
+
+    def register_routes(self):
+        pass
