@@ -10,6 +10,7 @@ import pandas as pd
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
+from application_sdk.activities import ActivitiesInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -144,6 +145,7 @@ async def run_process(
     args: Dict[str, Any],
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
+    state: Dict[str, Any],
 ):
     fn_kwargs = await prepare_fn_kwargs(
         self=self,
@@ -158,7 +160,7 @@ async def run_process(
     if batch_input is None:
         return await f(self, **fn_kwargs)
 
-    batch_input_obj = batch_input(self, *args)
+    batch_input_obj = batch_input(self, *args, state=state)
     # We'll decide whether to read the data in chunks or not based on the chunk_size attribute
     # If chunk_size is None, we'll read the data in one go
     if not hasattr(batch_input_obj, "chunk_size") or not batch_input_obj.chunk_size:
@@ -185,7 +187,8 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
 
     def decorator(f):
         @wraps(f)
-        async def new_fn(self, *args, **inner_kwargs):
+        async def new_fn(self: ActivitiesInterface, *args, **inner_kwargs):
+            state = await self._get_state(args[0])
             return await run_process(
                 self=self,
                 f=f,
@@ -195,6 +198,7 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 args=args,
                 inner_kwargs=inner_kwargs,
                 kwargs=kwargs,
+                state=state,
             )
 
         return new_fn
