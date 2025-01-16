@@ -1,9 +1,15 @@
 name: Build Docs and Push to Kryptonite
 
 on:
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - main
+      - develop
   push:
     branches:
       - main
+      - develop
 
 permissions:
   id-token: write
@@ -16,16 +22,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Get branch name
         run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
         id: get_branch
+
       - name: Set up Python 3.11
         uses: actions/setup-python@v1
         with:
           python-version: "3.11"
-      #----------------------------------------------
-      #  -----  install & configure poetry  -----
-      #----------------------------------------------
+
       - name: Install Poetry
         uses: snok/install-poetry@v1
         with:
@@ -34,23 +40,45 @@ jobs:
           virtualenvs-in-project: true
           virtualenvs-path: .venv
           installer-parallel: true
+
       - name: Install graphviz
         run: |
           sudo apt install graphviz
-      - name: Generate Sphinx Docs
+
+      - name: Generate Sphinx Docs and UML Diagrams
         run: |
           export POETRY_VIRTUALENVS_IN_PROJECT=1
           export POETRY_VIRTUALENVS_CREATE=1
           git config --global url."https://${{ secrets.GITHUB_TOKEN }}".insteadOf "ssh://git";
-          poetry install
+          poetry install --with dev --all-extras
           source .venv/bin/activate
           make sphinx_docs
+          pyreverse -o html application_sdk
+
       - name: Setup AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
       - name: Upload Docs to Kryptonite Bucket
         if: ${{ github.event_name == 'push' }}
         run: |
-          aws s3 sync ./docs/_build/html s3://kryptonite-store/application-sdk --delete
+          aws s3 sync ./docs/_build/html s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }} --delete
+          aws s3 cp packages.html s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }}/packages.html
+          aws s3 cp classes.html s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }}/classes.html
+
+      - name: Upload Docs to Kryptonite Bucket
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+          aws s3 sync ./docs/_build/html s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
+          aws s3 cp packages.html s3://kryptonite-store/application-sdk/${{ github.head_ref }}/packages.html
+          aws s3 cp classes.html s3://kryptonite-store/application-sdk/${{ github.head_ref }}/classes.html
+
+      - name: Comment Kryptonite URL on PR
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: "docs"
+          message: |
+            🛠 Library Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
