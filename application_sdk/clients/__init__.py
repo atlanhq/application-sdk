@@ -11,6 +11,3 @@ class ClientInterface(ABC):
 
     async def close(self):
         pass
-
-    def set_credentials(self, credentials: Dict[str, Any]):
-        pass

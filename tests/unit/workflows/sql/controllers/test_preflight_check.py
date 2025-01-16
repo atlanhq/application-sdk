@@ -11,38 +11,38 @@ from application_sdk.workflows.sql.controllers.preflight_check import (
 
 
 @pytest.fixture
-def mock_sql_resource():
-    sql_resource = Mock(spec=SQLClient)
-    sql_resource.fetch_metadata.return_value = [
+def mock_sql_client():
+    sql_client = Mock(spec=SQLClient)
+    sql_client.fetch_metadata.return_value = [
         {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
         {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},
         {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": "schema1"},
     ]
-    return sql_resource
+    return sql_client
 
 
 @pytest.fixture
-def controller(mock_sql_resource: Any) -> SQLWorkflowPreflightCheckController:
-    controller = SQLWorkflowPreflightCheckController(sql_client=mock_sql_resource)
+def controller(mock_sql_client: Any) -> SQLWorkflowPreflightCheckController:
+    controller = SQLWorkflowPreflightCheckController(sql_client=mock_sql_client)
     controller.METADATA_SQL = "SELECT * FROM information_schema.tables"
     controller.TABLES_CHECK_SQL = "SELECT COUNT(*) FROM information_schema.tables"
     return controller
 
 
 async def test_fetch_metadata(
-    controller: SQLWorkflowPreflightCheckController, mock_sql_resource: Any
+    controller: SQLWorkflowPreflightCheckController, mock_sql_client: Any
 ):
     result = await controller.fetch_metadata()
 
-    mock_sql_resource.fetch_metadata.assert_called_once()
+    mock_sql_client.fetch_metadata.assert_called_once()
     assert len(result) == 3
     assert result[0]["TABLE_CATALOG"] == "db1"
     assert result[0]["TABLE_SCHEMA"] == "schema1"
 
 
-async def test_fetch_metadata_no_resource():
+async def test_fetch_metadata_no_client():
     controller = SQLWorkflowPreflightCheckController()
-    with pytest.raises(ValueError, match="SQL Resource not defined"):
+    with pytest.raises(ValueError, match="SQL Client not defined"):
         await controller.fetch_metadata()
 
 
