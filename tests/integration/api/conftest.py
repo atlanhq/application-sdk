@@ -54,7 +54,6 @@ def app(
         preflight_check_controller=preflight_check_controller,
     )
     app.register_routers()
-    app.register_routes()
     return app
 
 

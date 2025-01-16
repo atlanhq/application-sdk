@@ -87,13 +87,16 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
 
     def register_routers(self):
+        super().register_routers()
+        
+        # Register all routes first
+        self.register_routes()
+        
+        # Then include all routers
         self.app.include_router(get_health_router())
-
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
-
-        super().register_routers()
 
     def register_workflow(
         self, workflow: WorkflowInterface, triggers: List[WorkflowTrigger]
