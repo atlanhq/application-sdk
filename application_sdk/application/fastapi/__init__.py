@@ -127,6 +127,8 @@ class FastAPIApplication(AtlanApplicationInterface):
                 self.event_triggers.append(trigger)
 
     def register_routes(self):
+        super().register_routes()
+
         self.workflow_router.add_api_route(
             "/auth",
             self.test_auth,
@@ -171,8 +173,6 @@ class FastAPIApplication(AtlanApplicationInterface):
             self.on_event,
             methods=["POST"],
         )
-
-        super().register_routes()
 
     async def get_dapr_subscriptions(
         self,
