@@ -14,7 +14,7 @@ class WorkflowInterface(ABC):
         self.activities_cls = activities_cls
 
     @workflow.run
-    async def run(self, _: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> None:
         raise NotImplementedError("Workflow run method not implemented")
 
     @staticmethod

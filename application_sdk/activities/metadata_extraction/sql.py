@@ -16,6 +16,7 @@ from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 
+# TODO: Rename to SQLMetadataExtractionActivities
 class SQLExtractionActivities(ActivitiesInterface):
     _state: Dict[str, Any] = {}
 
@@ -134,9 +135,10 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
+        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=kwargs["activity_input"]["query"],
+            query=activity_input["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/database",
@@ -165,9 +167,10 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
+        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=kwargs["activity_input"]["query"],
+            query=activity_input["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -196,9 +199,10 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
+        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=kwargs["activity_input"]["query"],
+            query=activity_input["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -227,9 +231,10 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
+        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=kwargs["activity_input"]["query"],
+            query=activity_input["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",

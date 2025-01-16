@@ -14,7 +14,7 @@ class Worker:
         self,
         temporal_client: TemporalClient | None = None,
         temporal_activities: Sequence[CallableType] = [],
-        passthrough_modules: List[str] = ["application_sdk", "os"],
+        passthrough_modules: List[str] = ["application_sdk", "os", "threading"],
         workflow_classes: List[Any] = [],
     ):
         self.temporal_client = temporal_client
