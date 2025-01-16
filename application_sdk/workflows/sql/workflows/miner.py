@@ -310,7 +310,7 @@ class SQLMinerWorkflow(WorkflowInterface):
     @activity.defn(name="miner_preflight_check")
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
-        result = await self.preflight_check_controller.preflight_check(
+        result = await self.handler.preflight_check(
             {
                 "form_data": workflow_args["metadata"],
             }

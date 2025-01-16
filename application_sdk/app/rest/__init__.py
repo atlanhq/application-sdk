@@ -5,11 +5,7 @@ from uvicorn import Config, Server
 from uvicorn._types import ASGIApplication
 
 from application_sdk.app import AtlanApplication, AtlanApplicationConfig
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
+from application_sdk.handlers import WorkflowHandlerInterface
 
 
 class AtlanAPIApplicationConfig(AtlanApplicationConfig):
@@ -28,17 +24,11 @@ class AtlanAPIApplication(AtlanApplication, ABC):
 
     def __init__(
         self,
-        auth_controller: Optional[WorkflowAuthControllerInterface] = None,
-        metadata_controller: Optional[WorkflowMetadataControllerInterface] = None,
-        preflight_check_controller: Optional[
-            WorkflowPreflightCheckControllerInterface
-        ] = None,
+        handler: Optional[WorkflowHandlerInterface] = None,
         config: AtlanAPIApplicationConfig = AtlanAPIApplicationConfig(),
     ):
         super().__init__(
-            auth_controller=auth_controller,
-            metadata_controller=metadata_controller,
-            preflight_check_controller=preflight_check_controller,
+            handler=handler,
             config=config,
         )
 
