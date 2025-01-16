@@ -41,14 +41,6 @@ workflows = [
     "dapr",
     "temporalio"
 ]
-dashboard = [
-    "dash",
-    "pandas",
-    "dash-ag-grid",
-    "dash-bootstrap-components",
-    "pygwalker",
-    "dash-dangerously-set-inner-html"
-]
 scale_data_generator = [
     "pyyaml",
     "pandas",
