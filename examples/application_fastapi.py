@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from typing import Any, Dict, List
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
+from application_sdk.application.fastapi import FastAPIApplication
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,

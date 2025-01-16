@@ -1,7 +1,7 @@
 import logging
 from typing import Any, Dict, List, Optional
 
-from application_sdk.app.rest.fastapi.models.workflow import MetadataType
+from application_sdk.application.fastapi import MetadataType
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource

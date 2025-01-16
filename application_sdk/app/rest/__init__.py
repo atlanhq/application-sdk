@@ -4,7 +4,10 @@ from typing import Optional
 from uvicorn import Config, Server
 from uvicorn._types import ASGIApplication
 
-from application_sdk.app import AtlanApplication, AtlanApplicationConfig
+from application_sdk.application import (
+    AtlanApplicationConfig,
+    AtlanApplicationInterface,
+)
 from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
@@ -22,7 +25,7 @@ class AtlanAPIApplicationConfig(AtlanApplicationConfig):
         self.port = port
 
 
-class AtlanAPIApplication(AtlanApplication, ABC):
+class AtlanAPIApplication(AtlanApplicationInterface, ABC):
     app: ASGIApplication
     config: AtlanAPIApplicationConfig
 

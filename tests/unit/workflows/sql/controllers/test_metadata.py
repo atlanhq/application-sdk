@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
-from application_sdk.app.rest.fastapi.models.workflow import MetadataType
+from application_sdk.application.fastapi import MetadataType
 from application_sdk.workflows.sql.controllers.metadata import (
     SQLWorkflowMetadataController,
 )

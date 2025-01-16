@@ -5,10 +5,10 @@ from fastapi import APIRouter, FastAPI, status
 from pydantic import BaseModel
 
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
-from application_sdk.app.rest.fastapi.middlewares.error_handler import (
+from application_sdk.application.fastapi.middlewares.error_handler import (
     internal_server_error_handler,
 )
-from application_sdk.app.rest.fastapi.models.workflow import (
+from application_sdk.application.fastapi.models.workflow import (
     FetchMetadataRequest,
     FetchMetadataResponse,
     PreflightCheckRequest,
@@ -21,10 +21,10 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.app.rest.fastapi.routers.health import get_health_router
-from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
-from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
-from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
+from application_sdk.application.fastapi.routers.health import get_health_router
+from application_sdk.application.fastapi.routers.logs import get_logs_router
+from application_sdk.application.fastapi.routers.metrics import get_metrics_router
+from application_sdk.application.fastapi.routers.traces import get_traces_router
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import AtlanEvent

@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
-from application_sdk.app.rest.fastapi.models.workflow import (
+from application_sdk.application.fastapi import (
+    EventWorkflowTrigger,
+    FastAPIApplication,
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
