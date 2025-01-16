@@ -97,7 +97,7 @@ class SQLMinerWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine, query=workflow_args["sql_query"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(

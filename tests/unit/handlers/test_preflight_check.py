@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from application_sdk.clients.sql_client import SQLClient
-from application_sdk.handlers.sql import SQLWorkflowHandler
+from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture
@@ -15,8 +15,8 @@ def mock_sql_client():
 
 
 @pytest.fixture
-def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_client=mock_sql_client)
+def handler(mock_sql_client: Any) -> SQLHandler:
+    handler = SQLHandler(sql_client=mock_sql_client)
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
     handler.tables_check_sql = "SELECT COUNT(*) FROM information_schema.tables"
     handler.prepare_metadata = AsyncMock()
@@ -28,7 +28,7 @@ def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
     return handler
 
 
-async def test_fetch_metadata(handler: SQLWorkflowHandler):
+async def test_fetch_metadata(handler: SQLHandler):
     result = await handler.prepare_metadata()
 
     handler.prepare_metadata.assert_called_once()
@@ -38,12 +38,12 @@ async def test_fetch_metadata(handler: SQLWorkflowHandler):
 
 
 async def test_fetch_metadata_no_resource():
-    handler = SQLWorkflowHandler()
+    handler = SQLHandler()
     with pytest.raises(ValueError, match="SQL client is not defined"):
         await handler.fetch_metadata()
 
 
-async def test_check_schemas_and_databases_success(handler: SQLWorkflowHandler):
+async def test_check_schemas_and_databases_success(handler: SQLHandler):
     payload = {"form_data": {"include_filter": json.dumps({"db1": ["schema1"]})}}
 
     result = await handler.check_schemas_and_databases(payload)
@@ -53,7 +53,7 @@ async def test_check_schemas_and_databases_success(handler: SQLWorkflowHandler):
     assert result["failureMessage"] == ""
 
 
-async def test_check_schemas_and_databases_failure(handler: SQLWorkflowHandler):
+async def test_check_schemas_and_databases_failure(handler: SQLHandler):
     payload = {
         "form_data": {"include_filter": json.dumps({"invalid_db": ["invalid_schema"]})}
     }
@@ -65,7 +65,7 @@ async def test_check_schemas_and_databases_failure(handler: SQLWorkflowHandler):
 
 
 async def test_check_schemas_and_databases_with_wildcard_success(
-    handler: SQLWorkflowHandler,
+    handler: SQLHandler,
 ):
     # Test with wildcard for all schemas in db1
     payload = {"form_data": {"include_filter": json.dumps({"^db1$": "*"})}}
@@ -78,7 +78,7 @@ async def test_check_schemas_and_databases_with_wildcard_success(
 
 
 async def test_check_schemas_and_databases_with_wildcard_invalid_db(
-    handler: SQLWorkflowHandler,
+    handler: SQLHandler,
 ):
     # Test with wildcard but invalid database
     payload = {"form_data": {"include_filter": json.dumps({"^invalid_db$": "*"})}}
@@ -89,7 +89,7 @@ async def test_check_schemas_and_databases_with_wildcard_invalid_db(
     assert "invalid_db database" in result["failureMessage"]
 
 
-async def test_check_schemas_and_databases_mixed_format(handler: SQLWorkflowHandler):
+async def test_check_schemas_and_databases_mixed_format(handler: SQLHandler):
     # Test with mix of wildcard and specific schema selections
     payload = {
         "form_data": {
@@ -109,7 +109,7 @@ async def test_check_schemas_and_databases_mixed_format(handler: SQLWorkflowHand
     assert result["failureMessage"] == ""
 
 
-async def test_preflight_check_success(handler: SQLWorkflowHandler):
+async def test_preflight_check_success(handler: SQLHandler):
     payload = {"form_data": {"include_filter": json.dumps({"db1": ["schema1"]})}}
 
     with patch.object(handler, "tables_check") as mock_tables_check:
@@ -126,7 +126,7 @@ async def test_preflight_check_success(handler: SQLWorkflowHandler):
         assert result["tablesCheck"]["success"] is True
 
 
-async def test_preflight_check_with_wildcard_success(handler: SQLWorkflowHandler):
+async def test_preflight_check_with_wildcard_success(handler: SQLHandler):
     payload = {"form_data": {"include_filter": json.dumps({"^db1$": "*"})}}
 
     with patch.object(handler, "tables_check") as mock_tables_check:
@@ -143,7 +143,7 @@ async def test_preflight_check_with_wildcard_success(handler: SQLWorkflowHandler
         assert result["tablesCheck"]["success"] is True
 
 
-async def test_preflight_check_failure(handler: SQLWorkflowHandler):
+async def test_preflight_check_failure(handler: SQLHandler):
     payload = {"form_data": {"include_filter": json.dumps({"invalid_db": ["schema1"]})}}
 
     result = await handler.preflight_check(payload)

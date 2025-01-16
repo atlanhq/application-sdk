@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
 from pydantic import BaseModel
@@ -26,7 +26,7 @@ from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import AtlanEvent
 from application_sdk.workflows.workflow import WorkflowInterface
@@ -43,7 +43,7 @@ class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
 
 
 class WorkflowTrigger(BaseModel):
-    workflow: Optional[WorkflowInterface] = None
+    workflow_class: Type[WorkflowInterface]
     model_config = {"arbitrary_types_allowed": True}
 
 
@@ -68,7 +68,7 @@ class FastAPIApplication(AtlanAPIApplication):
 
     def __init__(
         self,
-        handler: Optional[WorkflowHandlerInterface] = None,
+        handler: Optional[HandlerInterface] = None,
         config: FastAPIApplicationConfig = FastAPIApplicationConfig(),
         *args,
         **kwargs,
@@ -98,7 +98,7 @@ class FastAPIApplication(AtlanAPIApplication):
         super().register_routers()
 
     def register_workflow(
-        self, workflow: WorkflowInterface, triggers: List[WorkflowTrigger]
+        self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
         for trigger in triggers:
             trigger.workflow = workflow
@@ -106,8 +106,8 @@ class FastAPIApplication(AtlanAPIApplication):
             if isinstance(trigger, HttpWorkflowTrigger):
 
                 async def start_workflow(body: WorkflowRequest):
-                    workflow_data = await workflow.start(
-                        body.model_dump(), workflow_class=workflow.__class__
+                    workflow_data = await self.temporal_client.start_workflow(
+                        body.model_dump(), workflow_class=workflow_class
                     )
                     return WorkflowResponse(
                         success=True,

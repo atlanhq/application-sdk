@@ -8,9 +8,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 import daft
 import pandas as pd
 
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
-from application_sdk.activities import ActivitiesInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -155,12 +155,15 @@ async def run_process(
         kwargs=kwargs,
     )
 
+    fn_kwargs.update({"state": state})
+    fn_kwargs["activity_input"] = args[0]
+
     # If batch_input is not provided, we'll call the function directly
     # since there is nothing to be read as the inputs
     if batch_input is None:
         return await f(self, **fn_kwargs)
 
-    batch_input_obj = batch_input(self, *args, state=state)
+    batch_input_obj = batch_input(self, *args, **fn_kwargs)
     # We'll decide whether to read the data in chunks or not based on the chunk_size attribute
     # If chunk_size is None, we'll read the data in one go
     if not hasattr(batch_input_obj, "chunk_size") or not batch_input_obj.chunk_size:
@@ -188,7 +191,10 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
     def decorator(f):
         @wraps(f)
         async def new_fn(self: ActivitiesInterface, *args, **inner_kwargs):
-            state = await self._get_state(args[0])
+            # TODO: Jugaad
+            state = None
+            if hasattr(self, "_get_state"):
+                state = await self._get_state(args[0])
             return await run_process(
                 self=self,
                 f=f,

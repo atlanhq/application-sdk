@@ -13,6 +13,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
+# TODO: File name should sql.py
 class SQLClientConfig:
     use_server_side_cursor: bool = True
     credentials: Dict[str, Any] = None
@@ -39,7 +40,6 @@ class SQLClientConfig:
 
 
 class SQLClient(ClientInterface):
-    config: SQLClientConfig
     connection = None
     engine = None
     sql_input = SQLQueryInput
@@ -47,24 +47,22 @@ class SQLClient(ClientInterface):
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
 
-    def __init__(self, config: SQLClientConfig | None = None):
-        if config is None:
-            raise ValueError("config is required")
+    sql_alchemy_connect_args: Dict[str, Any] = {}
+    credentials: Dict[str, Any] = {}
+    use_server_side_cursor: bool = True
 
-        self.config = config
-
+    def __init__(self):
         super().__init__()
 
-    async def load(self):
+    # TODO: load vs prepare?
+    async def load(self, credentials: Dict[str, Any]):
+        self.credentials = credentials
         self.engine = create_engine(
             self.get_sqlalchemy_connection_string(),
-            connect_args=self.config.get_sqlalchemy_connect_args(),
+            connect_args=self.sql_alchemy_connect_args,
             pool_pre_ping=True,
         )
         self.connection = self.engine.connect()
-
-    def set_credentials(self, credentials: Dict[str, Any]) -> None:
-        self.config.set_credentials(credentials)
 
     def get_sqlalchemy_connection_string(self) -> str:
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
@@ -83,7 +81,7 @@ class SQLClient(ClientInterface):
         """
         loop = asyncio.get_running_loop()
 
-        if self.config.use_server_side_cursor:
+        if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
         activity.logger.info(f"Running query: {query}")

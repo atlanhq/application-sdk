@@ -3,7 +3,7 @@ from typing import Optional
 
 from application_sdk.app import models
 from application_sdk.app.database import get_engine
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 
 
 class AtlanApplicationConfig:
@@ -15,11 +15,11 @@ class AtlanApplication(ABC):
     Base class for Atlan applications.
     """
 
-    handler: Optional[WorkflowHandlerInterface]
+    handler: Optional[HandlerInterface]
 
     def __init__(
         self,
-        handler: Optional[WorkflowHandlerInterface] = None,
+        handler: Optional[HandlerInterface] = None,
         config: AtlanApplicationConfig = AtlanApplicationConfig(),
     ):
         self.handler = handler

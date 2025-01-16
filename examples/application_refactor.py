@@ -1,12 +1,17 @@
-from application_sdk.worker import Worker
-from application_sdk.workflows.resources.temporal_resource import TemporalResource, TemporalConfig
-from application_sdk.workflows.metadata_extraction.sql.workflow import SQLMetadataExtractionWorkflow
-from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
-import threading
-from typing import Type, Dict, Any
 import asyncio
 import os
+import threading
+from typing import Any, Dict, Type
+
 from temporalio import workflow
+
+from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.worker import Worker
+from application_sdk.workflows.metadata_extraction.sql.workflow import (
+    SQLMetadataExtractionWorkflow,
+)
+
 
 @workflow.defn
 class PostgresWorkflow(SQLMetadataExtractionWorkflow):
@@ -19,11 +24,12 @@ class PostgresWorkflow(SQLMetadataExtractionWorkflow):
     async def run(self, workflow_config: Dict[str, Any]):
         await super().run(workflow_config)
 
-async def start_worker(temporal_resource: TemporalResource):
+
+async def start_worker(temporal_client: TemporalClient):
     activities = SQLExtractionActivities()
 
     worker: Worker = Worker(
-        temporal_resource=temporal_resource,
+        temporal_client=temporal_client,
         temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
         workflow_classes=[SQLMetadataExtractionWorkflow],
         passthrough_modules=["application_sdk", "os", "pandas"],
@@ -35,10 +41,13 @@ async def start_worker(temporal_resource: TemporalResource):
     )
     worker_thread.start()
 
-async def start_workflow(temporal_resource: TemporalResource, workflow_cls: Type[SQLMetadataExtractionWorkflow]):
+
+async def start_workflow(
+    temporal_client: TemporalClient, workflow_cls: Type[SQLMetadataExtractionWorkflow]
+):
     await asyncio.sleep(5)
 
-    await temporal_resource.start_workflow(
+    await temporal_client.start_workflow(
         workflow_args={
             "credentials": {
                 "host": os.getenv("POSTGRES_HOST", "localhost"),
@@ -65,14 +74,16 @@ async def start_workflow(temporal_resource: TemporalResource, workflow_cls: Type
         workflow_class=workflow_cls,
     )
 
-async def main():
-    temporal_resource = TemporalResource(temporal_config=TemporalConfig())
-    await temporal_resource.load()
 
-    await start_worker(temporal_resource)
-    await start_workflow(temporal_resource, SQLMetadataExtractionWorkflow)
+async def main():
+    temporal_client = TemporalClient(temporal_config=TemporalConfig())
+    await temporal_client.load()
+
+    await start_worker(temporal_client)
+    await start_workflow(temporal_client, SQLMetadataExtractionWorkflow)
 
     await asyncio.sleep(1000000)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -4,7 +4,7 @@ from typing import Any, Dict
 from application_sdk.inputs.statestore import StateStore
 
 
-class WorkflowHandlerInterface(ABC):
+class HandlerInterface(ABC):
     """
     Abstract base class for workflow handlers
     """

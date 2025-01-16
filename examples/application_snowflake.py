@@ -11,13 +11,10 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLExtractionActivities,
     SQLHandler,
 )
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql.workflow import (
     SQLMetadataExtractionWorkflow,
-)
-from application_sdk.workflows.resources.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
 )
 
 
@@ -73,13 +70,11 @@ class SnowflakeWorkflow(SQLMetadataExtractionWorkflow):
         )
 
 
-async def start_worker(
-    temporal_resource: TemporalResource, workflow: SnowflakeWorkflow
-):
+async def start_worker(temporal_client: TemporalClient, workflow: SnowflakeWorkflow):
     activities = SnowflakeActivities()
 
     worker: Worker = Worker(
-        temporal_resource=temporal_resource,
+        temporal_client=temporal_client,
         temporal_activities=[
             activities.fetch_warehouses,
             activities.fetch_pipes,
@@ -114,13 +109,13 @@ async def start_workflow(
 
 
 async def main():
-    temporal_resource = TemporalResource(temporal_config=TemporalConfig())
-    await temporal_resource.load()
+    temporal_client = TemporalClient(temporal_config=TemporalConfig())
+    await temporal_client.load()
 
     workflow = SnowflakeWorkflow()
 
-    await start_worker(temporal_resource, workflow)
-    await start_workflow(temporal_resource, SnowflakeWorkflow)
+    await start_worker(temporal_client)
+    await start_workflow(temporal_client, SnowflakeWorkflow)
 
     await asyncio.sleep(1000000)
 

@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
-from application_sdk.handlers.sql import SQLWorkflowHandler
+from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture
@@ -32,8 +32,8 @@ def sql_client(config: SQLClientConfig):
 
 
 @pytest.fixture
-def handler(sql_client: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_client)
+def handler(sql_client: Any) -> SQLHandler:
+    handler = SQLHandler(sql_client)
     handler.database_alias_key = "TABLE_CATALOG"
     handler.schema_alias_key = "TABLE_SCHEMA"
     return handler
@@ -66,7 +66,7 @@ def test_load(mock_create_engine: Any, sql_client: SQLClient):
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata(mock_run_query: Any, handler: SQLWorkflowHandler):
+async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     mock_run_query.return_value = pd.DataFrame(data)
@@ -87,7 +87,7 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLWorkflowHandler):
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, handler: SQLWorkflowHandler
+    mock_run_query: Any, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -111,7 +111,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, handler: SQLWorkflowHandler
+    mock_run_query: Any, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     mock_run_query.return_value = pd.DataFrame(data)
@@ -132,7 +132,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, handler: SQLWorkflowHandler
+    mock_run_query: AsyncMock, handler: SQLHandler
 ):
     mock_run_query.side_effect = Exception("Simulated query failure")
 
