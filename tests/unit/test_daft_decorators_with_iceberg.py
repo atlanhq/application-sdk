@@ -47,7 +47,8 @@ class TestDaftDecoratorsIceberg:
         """
         Method to setup the test resources
         """
-        cls.engine = sqlalchemy.create_engine("sqlite:///:memory:")
+        sqlite_db_url = "sqlite:////tmp/test_iceberg.db"
+        cls.engine = sqlalchemy.create_engine(sqlite_db_url)
         warehouse_path = "/tmp/tests/warehouse"
         os.makedirs(warehouse_path, exist_ok=True)
         cls.namespace = "default"
@@ -167,7 +168,7 @@ class TestDaftDecoratorsIceberg:
 
         await func(self)
 
-        table = self.catalog.load_table("default.test_table_two")
+        table = self.catalog.load_table("default.test_table_three")
         data_scan = table.scan().to_arrow()
         assert len(data_scan) == 10
 
