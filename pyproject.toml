@@ -2,7 +2,7 @@
 name = "application-sdk"
 version = "0.1.0"
 description = ""
-authors = ["Nishchith Shetty <inishchith@gmail.com>"]
+authors = ["Atlan App Team <apps@atlan.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
