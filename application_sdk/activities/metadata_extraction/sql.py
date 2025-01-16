@@ -38,7 +38,6 @@ class SQLExtractionActivities(ActivitiesInterface):
         return await super()._get_state(workflow_args)
 
     async def _set_state(self, workflow_args: Dict[str, Any]):
-        #
         await super()._set_state(workflow_args)
 
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])

@@ -29,6 +29,7 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
     ):
         super().__init__(activities_cls=activities_cls)
 
+    # TODO: Seems a little hacky
     @staticmethod
     def get_activities(
         activities: SQLExtractionActivities,
