@@ -11,10 +11,29 @@ from application_sdk.outputs.json import JsonOutput
 from application_sdk.workflows.sql.utils import prepare_query
 from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
+from application_sdk.inputs.statestore import StateStore
+
+# ------------------------------ TEMPORARY ------------------------------
+class SQLClient:
+    def set_credentials(self, credentials: Dict[str, Any]):
+        pass
+
+    async def load(self):
+        pass
+
+    async def close(self):
+        pass
+
+
+class SQLHandler:
+    def set_sql_client(self, sql_client: SQLClient):
+        pass
+
+# ------------------------------ TEMPORARY ------------------------------
 
 
 class SQLExtractionActivities(ActivitiesInterface):
-    state: Dict[str, Any] = {}
+    _state: Dict[str, Any] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -37,14 +56,17 @@ class SQLExtractionActivities(ActivitiesInterface):
         #
         await super()._set_state(workflow_args)
 
+        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
+
         sql_client = self.sql_client_class()
         await sql_client.load()
-        sql_client.set_credentials(workflow_args["credentials"])
+
+        sql_client.set_credentials(credentials)
 
         handler = self.handler_class()
         handler.set_sql_client(sql_client)
 
-        self.state[get_workflow_id()] = {
+        self._state[get_workflow_id()] = {
             # Client
             "sql_client": sql_client,
             # Handlers
@@ -58,7 +80,7 @@ class SQLExtractionActivities(ActivitiesInterface):
         }
 
     async def _clean_state(self):
-        await self.state["sql_client"].close()
+        await self._state["sql_client"].close()
 
         await super()._clean_state()
 
@@ -127,11 +149,9 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: SQLQueryInput(
-            engine=self._get_state(workflow_args)["sql_client"].engine,
-            query=prepare_query(
-                query=self.fetch_database_sql, workflow_args=workflow_args
-            ),
+        batch_input=lambda self, workflow_args, state, **kwargs: SQLQueryInput(
+            engine=state["sql_client"].engine,
+            query=kwargs["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/database",
@@ -157,13 +177,11 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self._get_state(workflow_args)[
+        batch_input=lambda self, workflow_args, state, **kwargs: self._get_state(workflow_args)[
             "sql_client"
         ].sql_input(
-            engine=self._get_state(workflow_args)["sql_client"].engine,
-            query=SQLWorkflow.prepare_query(
-                query=self.fetch_schema_sql, workflow_args=workflow_args
-            ),
+            engine=state["sql_client"].engine,
+            query=kwargs["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -189,13 +207,11 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self._get_state(workflow_args)[
+        batch_input=lambda self, workflow_args, state, **kwargs: self._get_state(workflow_args)[
             "sql_client"
         ].sql_input(
-            self._get_state(workflow_args)["sql_client"].engine,
-            query=prepare_query(
-                query=self.fetch_table_sql, workflow_args=workflow_args
-            ),
+            engine=state["sql_client"].engine,
+            query=kwargs["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -221,13 +237,11 @@ class SQLExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self._get_state(workflow_args)[
+        batch_input=lambda self, workflow_args, state, **kwargs: self._get_state(workflow_args)[
             "sql_client"
         ].sql_input(
-            self._get_state(workflow_args)["sql_client"].engine,
-            query=prepare_query(
-                query=self.fetch_column_sql, workflow_args=workflow_args
-            ),
+            engine=state["sql_client"].engine,
+            query=kwargs["query"],
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",

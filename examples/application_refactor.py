@@ -60,6 +60,7 @@ async def start_workflow(temporal_resource: TemporalResource, workflow_cls: Type
                 "exclude_views": "true",
                 "exclude_empty_tables": "false",
             },
+            "tenant_id": "123",
         },
         workflow_class=workflow_cls,
     )

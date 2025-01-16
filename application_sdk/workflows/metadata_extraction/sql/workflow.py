@@ -9,6 +9,8 @@ from application_sdk.activities.metadata_extraction.sql import SQLExtractionActi
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows import WorkflowInterface
 
+from application_sdk.workflows.sql.utils import prepare_query
+
 
 @workflow.defn
 class SQLMetadataExtractionWorkflow(WorkflowInterface):
@@ -190,10 +192,10 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
         workflow_args["output_path"] = output_path
 
         fetch_and_transforms = [
-            self.fetch_and_transform(self.activities_cls.fetch_databases, workflow_args, retry_policy),
-            self.fetch_and_transform(self.activities_cls.fetch_schemas, workflow_args, retry_policy),
-            self.fetch_and_transform(self.activities_cls.fetch_tables, workflow_args, retry_policy),
-            self.fetch_and_transform(self.activities_cls.fetch_columns, workflow_args, retry_policy),
+            self.fetch_and_transform(self.activities_cls.fetch_databases, workflow_args + {"query": prepare_query(self.fetch_database_sql, workflow_args)}, retry_policy),
+            self.fetch_and_transform(self.activities_cls.fetch_schemas, workflow_args + {"query": prepare_query(self.fetch_schema_sql, workflow_args)}, retry_policy),
+            self.fetch_and_transform(self.activities_cls.fetch_tables, workflow_args + {"query": prepare_query(self.fetch_table_sql, workflow_args)}, retry_policy),
+            self.fetch_and_transform(self.activities_cls.fetch_columns, workflow_args + {"query": prepare_query(self.fetch_column_sql, workflow_args)}, retry_policy),
         ]
 
         await asyncio.gather(*fetch_and_transforms)
