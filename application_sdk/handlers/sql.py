@@ -1,11 +1,12 @@
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
 from application_sdk import activity_pd
+from application_sdk.app.rest.fastapi.models.workflow import MetadataType
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import WorkflowHandlerInterface
 from application_sdk.workflows.sql.resources.sql_resource import SQLResource
@@ -21,14 +22,16 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
 
     sql_resource: SQLResource | None
     # Variables for testing authentication
-    TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
+    test_authentication_sql: str = "SELECT 1;"
     # Variables for fetching metadata
-    METADATA_SQL: str | None = None
-    TABLES_CHECK_SQL: str | None = None
-    DATABASE_ALIAS_KEY: str = "catalog_name"
-    SCHEMA_ALIAS_KEY: str = "schema_name"
-    DATABASE_RESULT_KEY: str = "TABLE_CATALOG"
-    SCHEMA_RESULT_KEY: str = "TABLE_SCHEMA"
+    metadata_sql: str | None = None
+    tables_check_sql: str | None = None
+    fetch_databases_sql: str | None = None
+    fetch_schemas_sql: str | None = None
+    database_alias_key: str = "catalog_name"
+    schema_alias_key: str = "schema_name"
+    database_result_key: str = "TABLE_CATALOG"
+    schema_result_key: str = "TABLE_SCHEMA"
 
     def __init__(self, sql_resource: SQLResource | None = None):
         self.sql_resource = sql_resource
@@ -43,7 +46,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
     @activity_pd(
         batch_input=lambda self, args: self.sql_resource.sql_input(
             engine=self.sql_resource.engine,
-            query=self.METADATA_SQL,
+            query=self.metadata_sql,
             chunk_size=None,
         )
     )
@@ -60,8 +63,8 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
             for row in batch_input.to_dict(orient="records"):
                 result.append(
                     {
-                        self.DATABASE_RESULT_KEY: row[self.DATABASE_ALIAS_KEY],
-                        self.SCHEMA_RESULT_KEY: row[self.SCHEMA_ALIAS_KEY],
+                        self.database_result_key: row[self.database_alias_key],
+                        self.schema_result_key: row[self.schema_alias_key],
                     }
                 )
         except Exception as exc:
@@ -71,7 +74,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
 
     @activity_pd(
         batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL, chunk_size=None
+            self.sql_resource.engine, self.test_authentication_sql, chunk_size=None
         )
     )
     async def test_auth(self, batch_input: pd.DataFrame, **kwargs) -> bool:
@@ -90,14 +93,74 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
             )
             raise exc
 
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(
+        self,
+        metadata_type: Optional[MetadataType] = None,
+        database: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
         """
-        Method to fetch metadata
+        Fetch metadata based on the requested type.
+        Args:
+            metadata_type: Optional type of metadata to fetch (database or schema)
+            database: Optional database name when fetching schemas
+        Returns:
+            List of metadata dictionaries
+        Raises:
+            ValueError: If metadata_type is invalid or if database is required but not provided
         """
+
         if not self.sql_resource:
             raise ValueError("SQL client is not defined")
-        args = {}
-        return await self.prepare_metadata(args)
+
+        if metadata_type == MetadataType.ALL:
+            # Use flat mode for backward compatibility
+            args = {}
+            result = await self.prepare_metadata(args)
+            return result
+
+        else:
+            try:
+                if metadata_type == MetadataType.DATABASE:
+                    return await self.fetch_databases()
+                elif metadata_type == MetadataType.SCHEMA:
+                    if not database:
+                        raise ValueError(
+                            "Database must be specified when fetching schemas"
+                        )
+                    return await self.fetch_schemas(database)
+                else:
+                    raise ValueError(f"Invalid metadata type: {metadata_type}")
+            except Exception as e:
+                logger.error(f"Failed to fetch metadata: {str(e)}")
+                raise
+
+    async def fetch_databases(self) -> List[Dict[str, str]]:
+        """Fetch only database information."""
+        if not self.sql_resource:
+            raise ValueError("SQL Resource not defined")
+        databases = []
+        async for batch in self.sql_resource.run_query(self.fetch_databases_sql):
+            for row in batch:
+                databases.append(
+                    {self.database_result_key: row[self.database_result_key]}
+                )
+        return databases
+
+    async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
+        """Fetch schemas for a specific database."""
+        if not self.sql_resource:
+            raise ValueError("SQL Resource not defined")
+        schemas = []
+        schema_query = self.fetch_schemas_sql.format(database_name=database)
+        async for batch in self.sql_resource.run_query(schema_query):
+            for row in batch:
+                schemas.append(
+                    {
+                        self.database_result_key: database,
+                        self.schema_result_key: row[self.schema_result_key],
+                    }
+                )
+        return schemas
 
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -136,7 +199,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         Method to check the schemas and databases
         """
         try:
-            schemas_results: List[Dict[str, str]] = await self.fetch_metadata()
+            schemas_results: List[Dict[str, str]] = await self.prepare_metadata({})
 
             include_filter = json.loads(
                 payload.get("form_data", {}).get("include_filter", "{}")
@@ -176,9 +239,9 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         allowed_databases: Set[str] = set()
         allowed_schemas: Set[str] = set()
         for schema in schemas_results:
-            allowed_databases.add(schema[self.DATABASE_RESULT_KEY])
+            allowed_databases.add(schema[self.database_result_key])
             allowed_schemas.add(
-                f"{schema[self.DATABASE_RESULT_KEY]}.{schema[self.SCHEMA_RESULT_KEY]}"
+                f"{schema[self.database_result_key]}.{schema[self.schema_result_key]}"
             )
         return allowed_databases, allowed_schemas
 
@@ -212,7 +275,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
             engine=self.sql_resource.engine,
             query=SQLWorkflow.prepare_query(
-                query=self.TABLES_CHECK_SQL, workflow_args=workflow_args
+                query=self.tables_check_sql, workflow_args=workflow_args
             ),
             chunk_size=None,
         )

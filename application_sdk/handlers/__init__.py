@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from application_sdk.inputs.statestore import StateStore
 
@@ -10,14 +10,14 @@ class WorkflowHandlerInterface(ABC):
     """
 
     @abstractmethod
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
+    async def prepare(self, **kwargs: Any) -> None:
         """
         Method to prepare the handler
         """
         pass
 
     @abstractmethod
-    async def test_auth(self, _: Dict[str, Any]) -> bool:
+    async def test_auth(self, **kwargs: Any) -> bool:
         """
         Abstract method to test the authentication credentials
         To be implemented by the subclass
@@ -25,7 +25,7 @@ class WorkflowHandlerInterface(ABC):
         raise NotImplementedError("test_auth method not implemented")
 
     @abstractmethod
-    async def preflight_check(self, _: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(self, **kwargs: Any) -> Any:
         """
         Abstract method to perform preflight checks
         To be implemented by the subclass
@@ -33,7 +33,7 @@ class WorkflowHandlerInterface(ABC):
         raise NotImplementedError("preflight_check method not implemented")
 
     @abstractmethod
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self, **kwargs: Any) -> Any:
         """
         Abstract method to fetch metadata
         To be implemented by the subclass

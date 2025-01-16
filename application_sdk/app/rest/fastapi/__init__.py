@@ -212,7 +212,9 @@ class FastAPIApplication(AtlanAPIApplication):
         Get the credentials from the request body and fetch the metadata
         """
         await self.handler.prepare(body.model_dump())
-        metadata = await self.handler.fetch_metadata()
+        metadata = await self.handler.fetch_metadata(
+            metadata_type=body.root["type"], database=body.root["database"]
+        )
         return FetchMetadataResponse(success=True, data=metadata)
 
     async def preflight_check(

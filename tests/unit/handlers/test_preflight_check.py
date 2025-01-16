@@ -17,8 +17,8 @@ def mock_sql_resource():
 @pytest.fixture
 def handler(mock_sql_resource: Any) -> SQLWorkflowHandler:
     handler = SQLWorkflowHandler(sql_resource=mock_sql_resource)
-    handler.METADATA_SQL = "SELECT * FROM information_schema.tables"
-    handler.TABLES_CHECK_SQL = "SELECT COUNT(*) FROM information_schema.tables"
+    handler.metadata_sql = "SELECT * FROM information_schema.tables"
+    handler.tables_check_sql = "SELECT COUNT(*) FROM information_schema.tables"
     handler.prepare_metadata = AsyncMock()
     handler.prepare_metadata.return_value = [
         {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},

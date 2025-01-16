@@ -20,7 +20,7 @@ def handler(mock_sql_resource: Any) -> SQLWorkflowHandler:
     handler = SQLWorkflowHandler(mock_sql_resource)
     handler.prepare_metadata = AsyncMock()
     handler.tables_check = AsyncMock()
-    handler.TABLES_CHECK_SQL = """
+    handler.tables_check_sql = """
         SELECT count(*) as "count"
         FROM ACCOUNT_USAGE.TABLES
         WHERE NOT TABLE_NAME RLIKE '{exclude_table}'

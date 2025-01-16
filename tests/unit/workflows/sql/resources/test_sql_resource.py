@@ -37,8 +37,8 @@ def sql_resource(config: SQLResourceConfig):
 @pytest.fixture
 def handler(sql_resource: Any) -> SQLWorkflowHandler:
     handler = SQLWorkflowHandler(sql_resource)
-    handler.DATABASE_ALIAS_KEY = "TABLE_CATALOG"
-    handler.SCHEMA_ALIAS_KEY = "TABLE_SCHEMA"
+    handler.database_alias_key = "TABLE_CATALOG"
+    handler.schema_alias_key = "TABLE_SCHEMA"
     return handler
 
 
@@ -121,8 +121,8 @@ async def test_fetch_metadata_with_result_keys(
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
-    handler.DATABASE_RESULT_KEY = "DATABASE"
-    handler.SCHEMA_RESULT_KEY = "SCHEMA"
+    handler.database_result_key = "DATABASE"
+    handler.schema_result_key = "SCHEMA"
 
     # Run fetch_metadata
     args = {"metadata_sql": metadata_sql}
