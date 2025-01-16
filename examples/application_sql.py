@@ -37,7 +37,6 @@ from temporalio import workflow
 
 from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
 from application_sdk.clients.async_sql_client import AsyncSQLClient
-from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
 from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler

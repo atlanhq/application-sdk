@@ -112,9 +112,7 @@ async def main():
     temporal_client = TemporalClient(temporal_config=TemporalConfig())
     await temporal_client.load()
 
-    workflow = SnowflakeWorkflow()
-
-    await start_worker(temporal_client)
+    await start_worker(temporal_client, SnowflakeWorkflow)
     await start_workflow(temporal_client, SnowflakeWorkflow)
 
     await asyncio.sleep(1000000)

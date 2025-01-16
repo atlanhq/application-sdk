@@ -9,6 +9,7 @@ class HandlerInterface(ABC):
     Abstract base class for workflow handlers
     """
 
+    # TODO: Need for prepare? Or should we call it load?
     @abstractmethod
     async def prepare(self, **kwargs: Any) -> None:
         """
