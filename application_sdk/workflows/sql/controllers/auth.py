@@ -4,9 +4,9 @@ from typing import Any, Dict
 import pandas as pd
 
 from application_sdk import activity_pd
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import WorkflowAuthControllerInterface
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -34,20 +34,20 @@ class SQLWorkflowAuthController(WorkflowAuthControllerInterface):
 
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 
-    sql_resource: SQLResource
+    sql_client: SQLClient
 
-    def __init__(self, sql_resource: SQLResource):
-        self.sql_resource = sql_resource
+    def __init__(self, sql_client: SQLClient):
+        self.sql_client = sql_client
 
         super().__init__()
 
     async def prepare(self, credentials: Dict[str, Any]) -> None:
-        self.sql_resource.set_credentials(credentials)
-        await self.sql_resource.load()
+        self.sql_client.set_credentials(credentials)
+        await self.sql_client.load()
 
     @activity_pd(
-        batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.TEST_AUTHENTICATION_SQL, chunk_size=None
+        batch_input=lambda self, workflow_args=None: self.sql_client.sql_input(
+            self.sql_client.engine, self.TEST_AUTHENTICATION_SQL, chunk_size=None
         )
     )
     async def test_auth(self, batch_input: pd.DataFrame, **kwargs) -> bool:

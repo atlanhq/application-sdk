@@ -39,7 +39,7 @@ class TestDaftDecorators:
     @classmethod
     def teardown_class(cls):
         """
-        Clean up the test resources
+        Clean up the test clients
         """
         os.remove("/tmp/test_connectorx.db")
 

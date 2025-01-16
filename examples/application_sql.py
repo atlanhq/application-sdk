@@ -33,22 +33,16 @@ import threading
 import time
 from urllib.parse import quote_plus
 
+from application_sdk.clients.async_sql_client import AsyncSQLClient
+from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.resources.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
 from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
-)
-from application_sdk.workflows.sql.resources.async_sql_resource import AsyncSQLResource
-from application_sdk.workflows.sql.resources.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
 )
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers.atlas import AtlasTransformer
@@ -59,7 +53,7 @@ APPLICATION_NAME = "postgres"
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class PostgreSQLResource(AsyncSQLResource):
+class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.config.credentials["password"])
         return f"postgresql+psycopg://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['host']}:{self.config.credentials['port']}/{self.config.credentials['database']}"
@@ -104,7 +98,7 @@ class SampleSQLWorkflow(SQLWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    sql_resource: SQLResource | None = PostgreSQLResource(SQLResourceConfig())
+    sql_client: SQLClient | None = PostgreSQLClient(SQLClientConfig())
 
 
 class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
@@ -134,12 +128,12 @@ class SampleSQLWorkflowPreflightCheckController(SQLWorkflowPreflightCheckControl
 async def application_sql():
     print("Starting application_sql")
 
-    temporal_resource = TemporalResource(
+    temporal_client = TemporalClient(
         TemporalConfig(
             application_name=APPLICATION_NAME,
         )
     )
-    await temporal_resource.load()
+    await temporal_client.load()
 
     tenant_id = os.getenv("TENANT_ID", "development")
 
@@ -149,21 +143,21 @@ async def application_sql():
         tenant_id=tenant_id,
     )
 
-    sql_resource = PostgreSQLResource(SQLResourceConfig())
+    sql_client = PostgreSQLClient(SQLClientConfig())
 
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
         .set_transformer(transformer)
-        .set_temporal_resource(temporal_resource)
-        .set_sql_resource(sql_resource)
+        .set_temporal_client(temporal_client)
+        .set_sql_client(sql_client)
         .set_preflight_check_controller(
-            SampleSQLWorkflowPreflightCheckController(sql_resource)
+            SampleSQLWorkflowPreflightCheckController(sql_client)
         )
         .build()
     )
 
     worker: WorkflowWorker = WorkflowWorker(
-        temporal_resource=temporal_resource,
+        temporal_client=temporal_client,
         temporal_activities=workflow.get_activities(),
         workflow_classes=[SQLWorkflow],
         passthrough_modules=["application_sdk", "os", "pandas"],
