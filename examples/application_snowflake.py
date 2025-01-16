@@ -92,12 +92,12 @@ async def start_worker(temporal_client: TemporalClient, workflow: SnowflakeWorkf
 
 
 async def start_workflow(
-    temporal_resource: TemporalResource,
+    temporal_client: TemporalClient,
     workflow_cls: Type[SQLMetadataExtractionWorkflow],
 ):
     await asyncio.sleep(5)
 
-    await temporal_resource.start_workflow(
+    await temporal_client.start_workflow(
         workflow_args={
             "credentials": {
                 "username": "test",
