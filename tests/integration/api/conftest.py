@@ -9,15 +9,15 @@ from application_sdk.handlers.sql import SQLWorkflowHandler
 
 
 @pytest.fixture(autouse=True, scope="session")
-def mock_sql_resource() -> Any:
+def mock_sql_client() -> Any:
     mock = Mock()
     mock.sql_input = AsyncMock()
     return mock
 
 
 @pytest.fixture(autouse=True, scope="session")
-def handler(mock_sql_resource: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(mock_sql_resource)
+def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
+    handler = SQLWorkflowHandler(mock_sql_client)
     handler.prepare_metadata = AsyncMock()
     handler.tables_check = AsyncMock()
     handler.tables_check_sql = """

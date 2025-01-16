@@ -4,19 +4,19 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.handlers.sql import SQLWorkflowHandler
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 
 @pytest.fixture
-def mock_sql_resource():
-    sql_resource = Mock(spec=SQLResource)
+def mock_sql_client():
+    sql_resource = Mock(spec=SQLClient)
     return sql_resource
 
 
 @pytest.fixture
-def handler(mock_sql_resource: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_resource=mock_sql_resource)
+def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
+    handler = SQLWorkflowHandler(sql_resource=mock_sql_client)
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
     handler.tables_check_sql = "SELECT COUNT(*) FROM information_schema.tables"
     handler.prepare_metadata = AsyncMock()

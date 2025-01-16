@@ -5,9 +5,9 @@ from typing import Any, Callable, Dict, List
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
 
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import WorkflowHandlerInterface
-from application_sdk.workflows.resources.temporal_resource import TemporalResource
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -18,7 +18,7 @@ class WorkflowInterface(ABC):
     Workflow interface class
     """
 
-    temporal_resource: TemporalResource | None = None
+    temporal_client: TemporalClient | None = None
     handler: WorkflowHandlerInterface | None = None
 
     def __init__(self):
@@ -39,20 +39,20 @@ class WorkflowInterface(ABC):
         workflow_class = workflow_class or self.__class__
 
         try:
-            if self.temporal_resource is None:
-                raise ValueError("Temporal resource is not set")
+            if self.temporal_client is None:
+                raise ValueError("Temporal client is not set")
 
-            return await self.temporal_resource.start_workflow(
+            return await self.temporal_client.start_workflow(
                 workflow_args=workflow_args, workflow_class=workflow_class
             )
         except WorkflowFailureError as e:
             logger.error(f"Workflow failure: {e}")
             raise e
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "WorkflowInterface":
-        self.temporal_resource = temporal_resource
+        self.temporal_client = temporal_client
         return self
 
     def set_handler(self, handler: WorkflowHandlerInterface) -> "WorkflowInterface":
