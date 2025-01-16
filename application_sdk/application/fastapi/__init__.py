@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
+from application_sdk.application.fastapi.models import MetadataType  # noqa: F401
 from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
