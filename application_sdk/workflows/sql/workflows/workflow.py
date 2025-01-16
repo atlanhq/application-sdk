@@ -29,7 +29,7 @@ class SQLWorkflow(WorkflowInterface):
     fetch_table_sql = ""
     fetch_column_sql = ""
 
-    sql_resource: SQLClient | None = None
+    sql_client: SQLClient | None = None
     transformer: TransformerInterface | None = None
 
     application_name: str = "sql-connector"
@@ -40,8 +40,8 @@ class SQLWorkflow(WorkflowInterface):
     def __init__(self):
         super().__init__()
 
-    def set_sql_resource(self, sql_resource: SQLClient) -> "SQLWorkflow":
-        self.sql_resource = sql_resource
+    def set_sql_client(self, sql_client: SQLClient) -> "SQLWorkflow":
+        self.sql_client = sql_client
         return self
 
     def set_transformer(self, transformer: TransformerInterface) -> "SQLWorkflow":
@@ -62,8 +62,8 @@ class SQLWorkflow(WorkflowInterface):
         self.max_transform_concurrency = max_transform_concurrency
         return self
 
-    def set_temporal_resource(self, temporal_resource: TemporalClient) -> "SQLWorkflow":
-        super().set_temporal_resource(temporal_resource)
+    def set_temporal_client(self, temporal_client: TemporalClient) -> "SQLWorkflow":
+        super().set_temporal_client(temporal_client)
         return self
 
     def get_activities(self) -> List[Callable[..., Any]]:
@@ -87,8 +87,8 @@ class SQLWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
-        if self.sql_resource is None:
-            raise ValueError("SQL resource is not set")
+        if self.sql_client is None:
+            raise ValueError("SQL client is not set")
 
         workflow_class = workflow_class or self.__class__
 
@@ -178,8 +178,8 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            engine=self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_database_sql, workflow_args=workflow_args
             ),
@@ -208,8 +208,8 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            engine=self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_schema_sql, workflow_args=workflow_args
             ),
@@ -238,8 +238,8 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_table_sql, workflow_args=workflow_args
             ),
@@ -268,8 +268,8 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_column_sql, workflow_args=workflow_args
             ),
@@ -480,11 +480,11 @@ class SQLWorkflow(WorkflowInterface):
         workflow_args = StateStore.extract_configuration(workflow_id)
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
-        if not self.sql_resource:
-            self.sql_resource = SQLClient(SQLClientConfig())
+        if not self.sql_client:
+            self.sql_client = SQLClient(SQLClientConfig())
 
-        self.sql_resource.set_credentials(credentials)
-        await self.sql_resource.load()
+        self.sql_client.set_credentials(credentials)
+        await self.sql_client.load()
         return workflow_args
 
     @workflow.run
@@ -503,8 +503,8 @@ class SQLWorkflow(WorkflowInterface):
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        if not self.temporal_resource:
-            self.temporal_resource = TemporalClient(
+        if not self.temporal_client:
+            self.temporal_client = TemporalClient(
                 TemporalConfig(application_name=self.application_name)
             )
 

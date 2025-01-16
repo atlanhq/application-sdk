@@ -31,10 +31,10 @@ class WorkflowBuilderInterface(ABC):
     metadata_controller: WorkflowMetadataControllerInterface
     auth_controller: WorkflowAuthControllerInterface
 
-    temporal_resource: TemporalClient
+    temporal_client: TemporalClient
 
-    async def load_resources(self):
-        await self.temporal_resource.load()
+    async def load_clients(self):
+        await self.temporal_client.load()
 
     @abstractmethod
     def build(self) -> WorkflowInterface:
@@ -58,29 +58,29 @@ class WorkflowBuilderInterface(ABC):
         self.auth_controller = auth_controller
         return self
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalClient
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "WorkflowBuilderInterface":
-        self.temporal_resource = temporal_resource
+        self.temporal_client = temporal_client
         return self
 
 
 class MinerBuilderInterface(ABC):
-    temporal_resource: TemporalClient
+    temporal_client: TemporalClient
 
     preflight_check_controller: WorkflowPreflightCheckControllerInterface
 
-    async def load_resources(self):
-        await self.temporal_resource.load()
+    async def load_clients(self):
+        await self.temporal_client.load()
 
     @abstractmethod
     def build(self) -> WorkflowInterface:
         raise NotImplementedError("build method must be implemented")
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalClient
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "MinerBuilderInterface":
-        self.temporal_resource = temporal_resource
+        self.temporal_client = temporal_client
         return self
 
     def set_preflight_check_controller(

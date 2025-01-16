@@ -23,7 +23,7 @@ def mock_sql_resource():
 
 @pytest.fixture
 def controller(mock_sql_resource: Any) -> SQLWorkflowPreflightCheckController:
-    controller = SQLWorkflowPreflightCheckController(sql_resource=mock_sql_resource)
+    controller = SQLWorkflowPreflightCheckController(sql_client=mock_sql_resource)
     controller.METADATA_SQL = "SELECT * FROM information_schema.tables"
     controller.TABLES_CHECK_SQL = "SELECT COUNT(*) FROM information_schema.tables"
     return controller

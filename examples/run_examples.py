@@ -14,8 +14,8 @@ from examples.application_sql_with_custom_transformer import (
 
 
 async def main():
-    temporal_resource = TemporalClient(TemporalConfig())
-    await temporal_resource.load()
+    temporal_client = TemporalClient(TemporalConfig())
+    await temporal_client.load()
     # run all the examples
 
     with open("workflow_status.md", "w") as f:
@@ -34,7 +34,7 @@ async def main():
     failed_examples: list[str] = []
 
     for example in examples:
-        status, time_taken = await run_and_monitor_workflow(example, temporal_resource)
+        status, time_taken = await run_and_monitor_workflow(example, temporal_client)
         time_taken_formatted = f"{time_taken:.2f} seconds"
 
         with open("workflow_status.md", "a") as f:

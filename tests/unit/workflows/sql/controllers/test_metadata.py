@@ -41,7 +41,7 @@ class TestSQLWorkflowMetadataController:
     async def test_fetch_metadata_flat_mode(self, mock_sql_resource: MagicMock) -> None:
         """Test fetch_metadata when hierarchical fetching is disabled (MetadataType.ALL)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.METADATA_SQL = "SELECT * FROM test"
         controller.DATABASE_ALIAS_KEY = "db_alias"
         controller.SCHEMA_ALIAS_KEY = "schema_alias"
@@ -77,7 +77,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetch_metadata when hierarchical fetching is enabled (direct method calls)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
@@ -127,7 +127,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching only databases using MetadataType.DATABASE"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
         controller.DATABASE_KEY = "TABLE_CATALOG"
 
@@ -154,7 +154,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching schemas using MetadataType.SCHEMA"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
         )
@@ -190,7 +190,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetch_metadata with invalid/None metadata type"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
 
         # Execute and Assert with None type
         with pytest.raises(ValueError, match="Invalid metadata type: None"):
@@ -206,7 +206,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching schemas without database using MetadataType.SCHEMA"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
 
         # Execute and Assert with MetadataType.SCHEMA but no database
         with pytest.raises(
@@ -224,7 +224,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching empty databases using MetadataType.DATABASE"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
 
         # Mock empty database result
@@ -248,7 +248,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching empty schemas using MetadataType.SCHEMA"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         test_database = "test_db"
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
@@ -280,7 +280,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test error handling in metadata fetching"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
 
         # Mock query to raise an exception
@@ -311,7 +311,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetch_metadata with MetadataType.ALL and no database"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.METADATA_SQL = "SELECT * FROM test"
         controller.DATABASE_ALIAS_KEY = "db_alias"
         controller.SCHEMA_ALIAS_KEY = "schema_alias"
@@ -345,7 +345,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetch_metadata with MetadataType.ALL and database (should ignore database)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.METADATA_SQL = "SELECT * FROM test"
         controller.DATABASE_ALIAS_KEY = "db_alias"
         controller.SCHEMA_ALIAS_KEY = "schema_alias"
@@ -381,7 +381,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching databases with MetadataType.DATABASE and no database"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
         controller.DATABASE_KEY = "TABLE_CATALOG"
 
@@ -408,7 +408,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching databases with MetadataType.DATABASE and database (should ignore database)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_DATABASES_SQL = "SELECT database_name FROM databases"
         controller.DATABASE_KEY = "TABLE_CATALOG"
 
@@ -437,7 +437,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching schemas with MetadataType.SCHEMA and no database (should error)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
         )
@@ -458,7 +458,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetching schemas with MetadataType.SCHEMA and database"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
         test_database = "test_db"
         controller.FETCH_SCHEMAS_SQL = (
             "SELECT schema_name FROM schemas WHERE database = '{database_name}'"
@@ -495,7 +495,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetch_metadata with None type and no database (should error)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
 
         # Execute and Assert with None type and no database
         with pytest.raises(ValueError, match="Invalid metadata type: None"):
@@ -511,7 +511,7 @@ class TestSQLWorkflowMetadataController:
     ) -> None:
         """Test fetch_metadata with None type and database (should error)"""
         # Setup
-        controller = SQLWorkflowMetadataController(sql_resource=mock_sql_resource)
+        controller = SQLWorkflowMetadataController(sql_client=mock_sql_resource)
 
         # Execute and Assert with None type and database
         with pytest.raises(ValueError, match="Invalid metadata type: None"):

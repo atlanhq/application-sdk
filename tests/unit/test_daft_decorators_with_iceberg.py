@@ -72,7 +72,7 @@ class TestDaftDecoratorsIceberg:
         cls.catalog.drop_table("default.test_table_four")
         cls.catalog.drop_namespace("default")
 
-    def _create_test_resources(self, query: str):
+    def _create_test_clients(self, query: str):
         """
         Create the tables required for tests
         """
@@ -118,7 +118,7 @@ class TestDaftDecoratorsIceberg:
         Test to read the SQL data in a single chunk
         """
 
-        self._create_test_resources(query=INSERT_QUERY)
+        self._create_test_clients(query=INSERT_QUERY)
 
         @activity_daft(
             batch_input=lambda self: SQLQueryInput(
@@ -149,7 +149,7 @@ class TestDaftDecoratorsIceberg:
         Test to read the SQL data in multiple chunks
         """
 
-        self._create_test_resources(query=INSERT_QUERY)
+        self._create_test_clients(query=INSERT_QUERY)
         expected_row_count = [3, 3, 3, 1]
 
         @activity_daft(

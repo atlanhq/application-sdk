@@ -101,32 +101,32 @@ class SampleWorkflow(WorkflowInterface):
 
 
 class SampleWorkflowBuilder(WorkflowBuilderInterface):
-    temporal_resource: TemporalClient
+    temporal_client: TemporalClient
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalClient
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "SampleWorkflowBuilder":
-        self.temporal_resource = temporal_resource
+        self.temporal_client = temporal_client
         return self
 
     def build(self, workflow: SampleWorkflow | None = None) -> WorkflowInterface:
-        return SampleWorkflow().set_temporal_resource(self.temporal_resource)
+        return SampleWorkflow().set_temporal_client(self.temporal_client)
 
 
 async def start_worker():
-    temporal_resource = TemporalClient(
+    temporal_client = TemporalClient(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
         )
     )
-    await temporal_resource.load()
+    await temporal_client.load()
 
     workflow: WorkflowInterface = (
-        SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
+        SampleWorkflowBuilder().set_temporal_client(temporal_client).build()
     )
 
     worker: WorkflowWorker = WorkflowWorker(
-        temporal_resource=temporal_resource,
+        temporal_client=temporal_client,
         temporal_activities=workflow.get_activities(),
         workflow_classes=[SampleWorkflow],
         passthrough_modules=["application_sdk", "os", "pandas"],
@@ -160,14 +160,14 @@ async def start_fast_api_app():
 
         return False
 
-    temporal_resource = TemporalClient(
+    temporal_client = TemporalClient(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
         )
     )
-    await temporal_resource.load()
+    await temporal_client.load()
     sample_worflow = (
-        SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
+        SampleWorkflowBuilder().set_temporal_client(temporal_client).build()
     )
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends

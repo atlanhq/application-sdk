@@ -32,8 +32,8 @@ def transformer():
 @pytest.fixture
 def workflow(sql_resource, temporal_resource, transformer):
     workflow = SQLWorkflow()
-    workflow.set_sql_resource(sql_resource)
-    workflow.set_temporal_resource(temporal_resource)
+    workflow.set_sql_client(sql_resource)
+    workflow.set_temporal_client(temporal_resource)
     workflow.set_transformer(transformer)
     return workflow
 
@@ -43,7 +43,7 @@ def test_workflow_initialization():
     assert workflow.application_name == "sql-connector"
     assert workflow.batch_size == 100000
     assert workflow.max_transform_concurrency == 5
-    assert workflow.sql_resource is None
+    assert workflow.sql_client is None
     assert workflow.transformer is None
 
 
@@ -51,12 +51,12 @@ def test_workflow_setters(sql_resource, temporal_resource, transformer):
     workflow = SQLWorkflow()
 
     # Test setting SQL resource
-    workflow.set_sql_resource(sql_resource)
-    assert workflow.sql_resource == sql_resource
+    workflow.set_sql_client(sql_resource)
+    assert workflow.sql_client == sql_resource
 
     # Test setting temporal resource
-    workflow.set_temporal_resource(temporal_resource)
-    assert workflow.temporal_resource == temporal_resource
+    workflow.set_temporal_client(temporal_resource)
+    assert workflow.temporal_client == temporal_resource
 
     # Test setting transformer
     workflow.set_transformer(transformer)
@@ -85,7 +85,7 @@ async def test_start_without_sql_resource():
 @pytest.mark.asyncio
 async def test_transform_batch_without_transformer(sql_resource):
     workflow = SQLWorkflow()
-    workflow.set_sql_resource(sql_resource)
+    workflow.set_sql_client(sql_resource)
 
     with pytest.raises(ValueError, match="Transformer is not set"):
         await workflow._transform_batch(

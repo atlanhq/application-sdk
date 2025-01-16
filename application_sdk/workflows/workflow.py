@@ -16,7 +16,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowInterface(ABC):
-    temporal_resource: TemporalClient | None = None
+    temporal_client: TemporalClient | None = None
 
     # Controllers
     preflight_check_controller: WorkflowPreflightCheckControllerInterface | None = None
@@ -39,20 +39,20 @@ class WorkflowInterface(ABC):
         workflow_class = workflow_class or self.__class__
 
         try:
-            if self.temporal_resource is None:
-                raise ValueError("Temporal resource is not set")
+            if self.temporal_client is None:
+                raise ValueError("Temporal client is not set")
 
-            return await self.temporal_resource.start_workflow(
+            return await self.temporal_client.start_workflow(
                 workflow_args=workflow_args, workflow_class=workflow_class
             )
         except WorkflowFailureError as e:
             logger.error(f"Workflow failure: {e}")
             raise e
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalClient
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "WorkflowInterface":
-        self.temporal_resource = temporal_resource
+        self.temporal_client = temporal_client
         return self
 
     def set_preflight_check_controller(

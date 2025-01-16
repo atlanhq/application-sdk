@@ -42,7 +42,7 @@ class MinerArgs(BaseModel):
 class SQLMinerWorkflow(WorkflowInterface):
     fetch_queries_sql = ""
 
-    sql_resource: SQLClient | None = None
+    sql_client: SQLClient | None = None
 
     application_name: str = "sql-miner"
     batch_size: int = 100000
@@ -51,8 +51,8 @@ class SQLMinerWorkflow(WorkflowInterface):
     def __init__(self):
         super().__init__()
 
-    def set_sql_resource(self, sql_resource: SQLClient) -> "SQLMinerWorkflow":
-        self.sql_resource = sql_resource
+    def set_sql_client(self, sql_client: SQLClient) -> "SQLMinerWorkflow":
+        self.sql_client = sql_client
         return self
 
     def set_application_name(self, application_name: str) -> "SQLMinerWorkflow":
@@ -63,10 +63,10 @@ class SQLMinerWorkflow(WorkflowInterface):
         self.batch_size = batch_size
         return self
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalClient
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "SQLMinerWorkflow":
-        super().set_temporal_resource(temporal_resource)
+        super().set_temporal_client(temporal_client)
         return self
 
     def get_activities(self) -> List[Callable[..., Any]]:
@@ -84,11 +84,11 @@ class SQLMinerWorkflow(WorkflowInterface):
         :param workflow_args: The workflow arguments.
         :return: The workflow results.
         """
-        if self.sql_resource is None:
-            raise ValueError("SQL resource is not set")
+        if self.sql_client is None:
+            raise ValueError("SQL client is not set")
 
-        self.sql_resource.set_credentials(workflow_args["credentials"])
-        await self.sql_resource.load()
+        self.sql_client.set_credentials(workflow_args["credentials"])
+        await self.sql_client.load()
 
         workflow_class = workflow_class or self.__class__
 
@@ -97,8 +97,8 @@ class SQLMinerWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine, query=workflow_args["sql_query"]
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            engine=self.sql_client.engine, query=workflow_args["sql_query"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/query",
@@ -160,10 +160,10 @@ class SQLMinerWorkflow(WorkflowInterface):
         record_count = 0
         last_marker = None
 
-        if not self.sql_resource:
-            raise ValueError("SQL resource is not initialized")
+        if not self.sql_client:
+            raise ValueError("SQL client is not initialized")
 
-        async for result_batch in self.sql_resource.run_query(rewritten_query):
+        async for result_batch in self.sql_client.run_query(rewritten_query):
             for row in result_batch:
                 timestamp = row[timestamp_column.lower()]
                 new_marker = str(int(timestamp.timestamp() * 1000))
@@ -328,14 +328,14 @@ class SQLMinerWorkflow(WorkflowInterface):
         workflow_guid = workflow_config["workflow_id"]
         workflow_args = StateStore.extract_configuration(workflow_guid)
 
-        if not self.sql_resource:
+        if not self.sql_client:
             credentials = StateStore.extract_credentials(
                 workflow_args["credential_guid"]
             )
-            self.sql_resource = SQLClient(SQLClientConfig(credentials=credentials))
+            self.sql_client = SQLClient(SQLClientConfig(credentials=credentials))
 
-        if not self.temporal_resource:
-            self.temporal_resource = TemporalClient(
+        if not self.temporal_client:
+            self.temporal_client = TemporalClient(
                 TemporalConfig(application_name=self.application_name)
             )
 
