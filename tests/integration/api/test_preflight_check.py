@@ -20,8 +20,8 @@ class TestSQLPreflightCheck:
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
 
-        # Setup mock for sql_resource.fetch_metadata
-        preflight_check_controller.sql_resource.fetch_metadata.return_value = [
+        # Setup mock for sql_client.fetch_metadata
+        preflight_check_controller.sql_client.fetch_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
         ]
 
@@ -55,7 +55,7 @@ class TestSQLPreflightCheck:
         assert "data" in response_data
 
         # Verify that preflight_check was called with correct args
-        preflight_check_controller.sql_resource.fetch_metadata.assert_called_once()
+        preflight_check_controller.sql_client.fetch_metadata.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -78,7 +78,7 @@ class TestSQLPreflightCheck:
     ):
         """Test the /check endpoint with empty filters"""
 
-        preflight_check_controller.sql_resource.fetch_metadata.return_value = []
+        preflight_check_controller.sql_client.fetch_metadata.return_value = []
 
         preflight_check_controller.tables_check.return_value = {
             "success": True,
@@ -123,7 +123,7 @@ class TestSQLPreflightCheck:
     ):
         """Test the /check endpoint with both filters"""
 
-        preflight_check_controller.sql_resource.fetch_metadata.return_value = [
+        preflight_check_controller.sql_client.fetch_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
         ]

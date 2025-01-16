@@ -4,11 +4,11 @@ import logging
 from typing import Any, Dict, List, Set, Tuple
 
 from application_sdk import activity_pd
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
 )
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -48,8 +48,8 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    def __init__(self, sql_resource: SQLResource | None = None):
-        self.sql_resource = sql_resource
+    def __init__(self, sql_client: SQLClient | None = None):
+        self.sql_client = sql_client
 
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         logger.info("Starting preflight check")
@@ -78,8 +78,8 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
         return results
 
     async def fetch_metadata(self) -> List[Dict[str, str]]:
-        if not self.sql_resource:
-            raise ValueError("SQL Resource not defined")
+        if not self.sql_client:
+            raise ValueError("SQL Client not defined")
         args = {
             "metadata_sql": self.METADATA_SQL,
             "database_alias_key": self.DATABASE_ALIAS_KEY,
@@ -87,7 +87,7 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
             "database_result_key": self.DATABASE_KEY,
             "schema_result_key": self.SCHEMA_KEY,
         }
-        return await self.sql_resource.fetch_metadata(args)
+        return await self.sql_client.fetch_metadata(args)
 
     async def check_schemas_and_databases(
         self, payload: Dict[str, Any]
@@ -161,8 +161,8 @@ class SQLWorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterf
         return True, ""
 
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            self.sql_client.engine,
             SQLWorkflow.prepare_query(
                 query=self.TABLES_CHECK_SQL, workflow_args=workflow_args
             ),

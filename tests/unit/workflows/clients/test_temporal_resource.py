@@ -2,10 +2,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.workflows.resources.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 
 
 @pytest.fixture
@@ -17,14 +14,14 @@ def temporal_config():
 
 @pytest.fixture
 def temporal_resource(temporal_config: TemporalConfig):
-    return TemporalResource(temporal_config=temporal_config)
+    return TemporalClient(temporal_config=temporal_config)
 
 
 @patch(
-    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_client.Client.connect",
     new_callable=AsyncMock,
 )
-async def test_load(mock_connect: AsyncMock, temporal_resource: TemporalResource):
+async def test_load(mock_connect: AsyncMock, temporal_resource: TemporalClient):
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -42,15 +39,15 @@ async def test_load(mock_connect: AsyncMock, temporal_resource: TemporalResource
     assert temporal_resource.client == mock_client
 
 
-@patch("application_sdk.workflows.resources.temporal_resource.StateStore")
+@patch("application_sdk.clients.temporal_client.StateStore")
 @patch(
-    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_client.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow(
     mock_connect: AsyncMock,
     mock_state_store: MagicMock,
-    temporal_resource: TemporalResource,
+    temporal_resource: TemporalClient,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -83,15 +80,15 @@ async def test_start_workflow(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.workflows.resources.temporal_resource.StateStore")
+@patch("application_sdk.clients.temporal_client.StateStore")
 @patch(
-    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_client.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_with_workflow_id(
     mock_connect: AsyncMock,
     mock_state_store: MagicMock,
-    temporal_resource: TemporalResource,
+    temporal_resource: TemporalClient,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -133,15 +130,15 @@ async def test_start_workflow_with_workflow_id(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.workflows.resources.temporal_resource.StateStore")
+@patch("application_sdk.clients.temporal_client.StateStore")
 @patch(
-    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_client.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_failure(
     mock_connect: AsyncMock,
     mock_state_store: MagicMock,
-    temporal_resource: TemporalResource,
+    temporal_resource: TemporalClient,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -165,15 +162,15 @@ async def test_start_workflow_failure(
     mock_client.start_workflow.assert_called_once()
 
 
-@patch("application_sdk.workflows.resources.temporal_resource.Worker")
+@patch("application_sdk.clients.temporal_client.Worker")
 @patch(
-    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_client.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_create_worker_without_client(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,
-    temporal_resource: TemporalResource,
+    temporal_resource: TemporalClient,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -191,15 +188,15 @@ async def test_create_worker_without_client(
         )
 
 
-@patch("application_sdk.workflows.resources.temporal_resource.Worker")
+@patch("application_sdk.clients.temporal_client.Worker")
 @patch(
-    "application_sdk.workflows.resources.temporal_resource.Client.connect",
+    "application_sdk.clients.temporal_client.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_create_worker(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,
-    temporal_resource: TemporalResource,
+    temporal_resource: TemporalClient,
 ):
     # Mock the client connection
     mock_client = AsyncMock()

@@ -2,9 +2,9 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from application_sdk.app.rest.fastapi.models.workflow import MetadataType
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import WorkflowMetadataControllerInterface
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -46,17 +46,17 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
     DATABASE_KEY: str = "TABLE_CATALOG"
     SCHEMA_KEY: str = "TABLE_SCHEMA"
 
-    sql_resource: SQLResource | None = None
+    sql_client: SQLClient | None = None
 
-    def __init__(self, sql_resource: SQLResource | None = None):
-        self.sql_resource = sql_resource
+    def __init__(self, sql_client: SQLClient | None = None):
+        self.sql_client = sql_client
 
     async def prepare(self, credentials: Dict[str, Any]) -> None:
-        """Prepare the SQL resource with credentials from the request."""
-        if not self.sql_resource:
-            raise ValueError("SQL Resource not defined")
-        self.sql_resource.set_credentials(credentials)
-        await self.sql_resource.load()
+        """Prepare the SQL client with credentials from the request."""
+        if not self.sql_client:
+            raise ValueError("SQL Client not defined")
+        self.sql_client.set_credentials(credentials)
+        await self.sql_client.load()
 
     async def fetch_metadata(
         self,
@@ -74,8 +74,8 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
             ValueError: If metadata_type is invalid or if database is required but not provided
         """
 
-        if not self.sql_resource:
-            raise ValueError("SQL Resource not defined")
+        if not self.sql_client:
+            raise ValueError("SQL Client not defined")
 
         if metadata_type == MetadataType.ALL:
             # Use flat mode for backward compatibility
@@ -86,7 +86,7 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
                 "database_result_key": self.DATABASE_KEY,
                 "schema_result_key": self.SCHEMA_KEY,
             }
-            result = await self.sql_resource.fetch_metadata(args)
+            result = await self.sql_client.fetch_metadata(args)
             return result
 
         else:
@@ -107,21 +107,21 @@ class SQLWorkflowMetadataController(WorkflowMetadataControllerInterface):
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
         """Fetch only database information."""
-        if not self.sql_resource:
-            raise ValueError("SQL Resource not defined")
+        if not self.sql_client:
+            raise ValueError("SQL Client not defined")
         databases = []
-        async for batch in self.sql_resource.run_query(self.FETCH_DATABASES_SQL):
+        async for batch in self.sql_client.run_query(self.FETCH_DATABASES_SQL):
             for row in batch:
                 databases.append({self.DATABASE_KEY: row[self.DATABASE_KEY]})
         return databases
 
     async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
         """Fetch schemas for a specific database."""
-        if not self.sql_resource:
-            raise ValueError("SQL Resource not defined")
+        if not self.sql_client:
+            raise ValueError("SQL Client not defined")
         schemas = []
         schema_query = self.FETCH_SCHEMAS_SQL.format(database_name=database)
-        async for batch in self.sql_resource.run_query(schema_query):
+        async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
                 schemas.append(
                     {self.DATABASE_KEY: database, self.SCHEMA_KEY: row[self.SCHEMA_KEY]}

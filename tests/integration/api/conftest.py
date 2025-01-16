@@ -14,7 +14,7 @@ from application_sdk.workflows.sql.controllers.preflight_check import (
 
 
 @pytest.fixture(autouse=True, scope="session")
-def mock_sql_resource() -> Any:
+def mock_sql_client() -> Any:
     mock = Mock()
     mock.fetch_metadata = AsyncMock()
     mock.sql_input = AsyncMock()
@@ -22,16 +22,16 @@ def mock_sql_resource() -> Any:
 
 
 @pytest.fixture
-def metadata_controller(mock_sql_resource: Any) -> SQLWorkflowMetadataController:
-    controller = SQLWorkflowMetadataController(mock_sql_resource)
+def metadata_controller(mock_sql_client: Any) -> SQLWorkflowMetadataController:
+    controller = SQLWorkflowMetadataController(mock_sql_client)
     return controller
 
 
 @pytest.fixture
 def preflight_check_controller(
-    mock_sql_resource: Any,
+    mock_sql_client: Any,
 ) -> SQLWorkflowPreflightCheckController:
-    controller = SQLWorkflowPreflightCheckController(mock_sql_resource)
+    controller = SQLWorkflowPreflightCheckController(mock_sql_client)
     controller.tables_check = AsyncMock()
     controller.TABLES_CHECK_SQL = """
         SELECT count(*) as "count"
