@@ -2,9 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from application_sdk.workflows.sql.controllers.preflight_check import (
-    SQLWorkflowPreflightCheckController,
-)
+from application_sdk.handlers.sql import SQLWorkflowHandler
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 
@@ -16,16 +14,16 @@ class TestSQLPreflightCheck:
     async def test_check_endpoint_basic_filters(
         self,
         client: TestClient,
-        preflight_check_controller: SQLWorkflowPreflightCheckController,
+        handler: SQLWorkflowHandler,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
 
-        # Setup mock for sql_client.fetch_metadata
-        preflight_check_controller.sql_client.fetch_metadata.return_value = [
+        # Setup mock for handler.prepare_metadata
+        handler.prepare_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
         ]
 
-        preflight_check_controller.tables_check.return_value = {
+        handler.tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful. Table count: 1",
             "failureMessage": "",
@@ -55,7 +53,7 @@ class TestSQLPreflightCheck:
         assert "data" in response_data
 
         # Verify that preflight_check was called with correct args
-        preflight_check_controller.sql_client.fetch_metadata.assert_called_once()
+        handler.prepare_metadata.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -66,21 +64,19 @@ class TestSQLPreflightCheck:
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(
-            preflight_check_controller.TABLES_CHECK_SQL, payload
-        )
+        prepared_sql = SQLWorkflow.prepare_query(handler.tables_check_sql, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
     async def test_check_endpoint_empty_filters(
         self,
         client: TestClient,
-        preflight_check_controller: SQLWorkflowPreflightCheckController,
+        handler: SQLWorkflowHandler,
     ):
         """Test the /check endpoint with empty filters"""
 
-        preflight_check_controller.sql_client.fetch_metadata.return_value = []
+        handler.prepare_metadata.return_value = []
 
-        preflight_check_controller.tables_check.return_value = {
+        handler.tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful. Table count: 1",
             "failureMessage": "",
@@ -111,24 +107,22 @@ class TestSQLPreflightCheck:
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '.*'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(
-            preflight_check_controller.TABLES_CHECK_SQL, payload
-        )
+        prepared_sql = SQLWorkflow.prepare_query(handler.tables_check_sql, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
     async def test_check_endpoint_both_filters(
         self,
         client: TestClient,
-        preflight_check_controller: SQLWorkflowPreflightCheckController,
+        handler: SQLWorkflowHandler,
     ):
         """Test the /check endpoint with both filters"""
 
-        preflight_check_controller.sql_client.fetch_metadata.return_value = [
+        handler.prepare_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
         ]
 
-        preflight_check_controller.tables_check.return_value = {
+        handler.tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful. Table count: 1",
             "failureMessage": "",
@@ -159,7 +153,5 @@ class TestSQLPreflightCheck:
             AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(
-            preflight_check_controller.TABLES_CHECK_SQL, payload
-        )
+        prepared_sql = SQLWorkflow.prepare_query(handler.tables_check_sql, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)

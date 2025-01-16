@@ -3,11 +3,7 @@ from typing import Optional
 
 from application_sdk.app import models
 from application_sdk.app.database import get_engine
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
+from application_sdk.handlers import WorkflowHandlerInterface
 
 
 class AtlanApplicationConfig:
@@ -15,23 +11,18 @@ class AtlanApplicationConfig:
 
 
 class AtlanApplication(ABC):
-    auth_controller: Optional[WorkflowAuthControllerInterface]
-    metadata_controller: Optional[WorkflowMetadataControllerInterface]
-    preflight_check_controller: Optional[WorkflowPreflightCheckControllerInterface]
+    """
+    Base class for Atlan applications.
+    """
+
+    handler: Optional[WorkflowHandlerInterface]
 
     def __init__(
         self,
-        auth_controller: Optional[WorkflowAuthControllerInterface] = None,
-        metadata_controller: Optional[WorkflowMetadataControllerInterface] = None,
-        preflight_check_controller: Optional[
-            WorkflowPreflightCheckControllerInterface
-        ] = None,
+        handler: Optional[WorkflowHandlerInterface] = None,
         config: AtlanApplicationConfig = AtlanApplicationConfig(),
     ):
-        self.auth_controller = auth_controller
-        self.metadata_controller = metadata_controller
-        self.preflight_check_controller = preflight_check_controller
-
+        self.handler = handler
         self.config = config
 
     async def on_app_start(self):
