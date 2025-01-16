@@ -18,7 +18,7 @@ class TestSQLPreflightCheck:
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
 
-        # Setup mock for sql_resource.fetch_metadata
+        # Setup mock for handler.prepare_metadata
         handler.prepare_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
         ]

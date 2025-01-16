@@ -5,17 +5,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
+from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
 from application_sdk.handlers.sql import SQLWorkflowHandler
-from application_sdk.workflows.sql.resources.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
 
 
 @pytest.fixture
 def config():
-    # Create a sample SQLResourceConfig object with mock credentials
-    return SQLResourceConfig(
+    # Create a sample SQLClientConfig object with mock credentials
+    return SQLClientConfig(
         credentials={
             "user": "test_user",
             "password": "test_password",
@@ -28,15 +25,15 @@ def config():
 
 
 @pytest.fixture
-def sql_resource(config: SQLResourceConfig):
-    resource = SQLResource(config=config)
+def sql_client(config: SQLClientConfig):
+    resource = SQLClient(config=config)
     resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return resource
 
 
 @pytest.fixture
-def handler(sql_resource: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_resource)
+def handler(sql_client: Any) -> SQLWorkflowHandler:
+    handler = SQLWorkflowHandler(sql_client)
     handler.database_alias_key = "TABLE_CATALOG"
     handler.schema_alias_key = "TABLE_SCHEMA"
     return handler
@@ -44,11 +41,11 @@ def handler(sql_resource: Any) -> SQLWorkflowHandler:
 
 def test_init_without_config():
     with pytest.raises(ValueError, match="config is required"):
-        SQLResource()
+        SQLClient()
 
 
-@patch("application_sdk.workflows.sql.resources.sql_resource.create_engine")
-def test_load(mock_create_engine: Any, sql_resource: SQLResource):
+@patch("application_sdk.clients.sql_client.create_engine")
+def test_load(mock_create_engine: Any, sql_client: SQLClient):
     # Mock the engine and connection
     mock_engine = MagicMock()
     mock_connection = MagicMock()
@@ -56,16 +53,16 @@ def test_load(mock_create_engine: Any, sql_resource: SQLResource):
     mock_engine.connect.return_value = mock_connection
 
     # Run the load function
-    asyncio.run(sql_resource.load())
+    asyncio.run(sql_client.load())
 
     # Assertions to verify behavior
     mock_create_engine.assert_called_once_with(
-        sql_resource.get_sqlalchemy_connection_string(),
-        connect_args=sql_resource.config.get_sqlalchemy_connect_args(),
+        sql_client.get_sqlalchemy_connection_string(),
+        connect_args=sql_client.config.get_sqlalchemy_connect_args(),
         pool_pre_ping=True,
     )
-    assert sql_resource.engine == mock_engine
-    assert sql_resource.connection == mock_connection
+    assert sql_client.engine == mock_engine
+    assert sql_client.connection == mock_connection
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
@@ -156,13 +153,13 @@ async def test_fetch_metadata_with_error(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.workflows.sql.resources.sql_resource.text")
+@patch("application_sdk.clients.sql_client.text")
 @patch(
-    "application_sdk.workflows.sql.resources.sql_resource.asyncio.get_running_loop",
+    "application_sdk.clients.sql_client.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
 async def test_run_query(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_resource: SQLResource
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient
 ):
     # Mock the query text
     query = "SELECT * FROM test_table"
@@ -204,8 +201,8 @@ async def test_run_query(
         ]
     )
 
-    sql_resource.connection = MagicMock()
-    sql_resource.connection.execute.return_value = mock_cursor
+    sql_client.connection = MagicMock()
+    sql_client.connection.execute.return_value = mock_cursor
 
     # Mock run_in_executor to return cursor and then batches
     mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -218,7 +215,7 @@ async def test_run_query(
 
     # Run run_query and collect all results
     results: list[dict[str, str]] = []
-    async for batch in sql_resource.run_query(query):
+    async for batch in sql_client.run_query(query):
         results.extend(batch)
 
     # Expected results formatted as dictionaries
@@ -232,13 +229,13 @@ async def test_run_query(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.workflows.sql.resources.sql_resource.text")
+@patch("application_sdk.clients.sql_client.text")
 @patch(
-    "application_sdk.workflows.sql.resources.sql_resource.asyncio.get_running_loop",
+    "application_sdk.clients.sql_client.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
 async def test_run_query_with_error(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_resource: SQLResource
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient
 ):
     # Mock the query text
     query = "SELECT * FROM test_table"
@@ -255,8 +252,8 @@ async def test_run_query_with_error(
 
     mock_cursor.cursor.description = [col1, col2]
 
-    sql_resource.connection = MagicMock()
-    sql_resource.connection.execute.return_value = mock_cursor
+    sql_client.connection = MagicMock()
+    sql_client.connection.execute.return_value = mock_cursor
 
     # Mock run_in_executor to return cursor and then batches
     mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -269,5 +266,5 @@ async def test_run_query_with_error(
     # Run run_query and collect all results
     results: list[dict[str, str]] = []
     with pytest.raises(Exception, match="Simulated query failure"):
-        async for batch in sql_resource.run_query(query):
+        async for batch in sql_client.run_query(query):
             results.extend(batch)

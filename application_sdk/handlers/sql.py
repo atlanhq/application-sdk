@@ -7,9 +7,9 @@ import pandas as pd
 
 from application_sdk import activity_pd
 from application_sdk.app.rest.fastapi.models.workflow import MetadataType
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import WorkflowHandlerInterface
-from application_sdk.workflows.sql.resources.sql_resource import SQLResource
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -20,7 +20,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
     Handler class for SQL workflows
     """
 
-    sql_resource: SQLResource | None
+    sql_client: SQLClient | None
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
     # Variables for fetching metadata
@@ -33,19 +33,19 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
     database_result_key: str = "TABLE_CATALOG"
     schema_result_key: str = "TABLE_SCHEMA"
 
-    def __init__(self, sql_resource: SQLResource | None = None):
-        self.sql_resource = sql_resource
+    def __init__(self, sql_client: SQLClient | None = None):
+        self.sql_client = sql_client
 
     async def prepare(self, credentials: Dict[str, Any]) -> None:
         """
         Method to prepare and load the SQL resource
         """
-        self.sql_resource.set_credentials(credentials)
-        await self.sql_resource.load()
+        self.sql_client.set_credentials(credentials)
+        await self.sql_client.load()
 
     @activity_pd(
-        batch_input=lambda self, args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
+        batch_input=lambda self, args: self.sql_client.sql_input(
+            engine=self.sql_client.engine,
             query=self.metadata_sql,
             chunk_size=None,
         )
@@ -73,8 +73,8 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         return result
 
     @activity_pd(
-        batch_input=lambda self, workflow_args=None: self.sql_resource.sql_input(
-            self.sql_resource.engine, self.test_authentication_sql, chunk_size=None
+        batch_input=lambda self, workflow_args=None: self.sql_client.sql_input(
+            self.sql_client.engine, self.test_authentication_sql, chunk_size=None
         )
     )
     async def test_auth(self, batch_input: pd.DataFrame, **kwargs) -> bool:
@@ -109,7 +109,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
             ValueError: If metadata_type is invalid or if database is required but not provided
         """
 
-        if not self.sql_resource:
+        if not self.sql_client:
             raise ValueError("SQL client is not defined")
 
         if metadata_type == MetadataType.ALL:
@@ -136,10 +136,10 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
         """Fetch only database information."""
-        if not self.sql_resource:
+        if not self.sql_client:
             raise ValueError("SQL Resource not defined")
         databases = []
-        async for batch in self.sql_resource.run_query(self.fetch_databases_sql):
+        async for batch in self.sql_client.run_query(self.fetch_databases_sql):
             for row in batch:
                 databases.append(
                     {self.database_result_key: row[self.database_result_key]}
@@ -148,11 +148,11 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
 
     async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
         """Fetch schemas for a specific database."""
-        if not self.sql_resource:
+        if not self.sql_client:
             raise ValueError("SQL Resource not defined")
         schemas = []
         schema_query = self.fetch_schemas_sql.format(database_name=database)
-        async for batch in self.sql_resource.run_query(schema_query):
+        async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
                 schemas.append(
                     {
@@ -272,8 +272,8 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         return True, ""
 
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_resource.sql_input(
-            engine=self.sql_resource.engine,
+        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+            engine=self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.tables_check_sql, workflow_args=workflow_args
             ),

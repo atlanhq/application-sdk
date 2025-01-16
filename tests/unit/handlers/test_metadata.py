@@ -26,6 +26,7 @@ class AsyncIteratorMock(Generic[T]):
             raise StopAsyncIteration
 
 
+@pytest.fixture
 def mock_sql_client() -> MagicMock:
     client = MagicMock(spec=SQLClient)
     client.run_query = MagicMock()  # Use regular MagicMock instead of AsyncMock
@@ -34,7 +35,7 @@ def mock_sql_client() -> MagicMock:
 
 @pytest.fixture
 def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_resource=mock_sql_client)
+    handler = SQLWorkflowHandler(sql_client=mock_sql_client)
     handler.prepare_metadata = AsyncMock()
     return handler
 

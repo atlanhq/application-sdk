@@ -10,13 +10,13 @@ from application_sdk.handlers.sql import SQLWorkflowHandler
 
 @pytest.fixture
 def mock_sql_client():
-    sql_resource = Mock(spec=SQLClient)
-    return sql_resource
+    sql_client = Mock(spec=SQLClient)
+    return sql_client
 
 
 @pytest.fixture
 def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_resource=mock_sql_client)
+    handler = SQLWorkflowHandler(sql_client=mock_sql_client)
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
     handler.tables_check_sql = "SELECT COUNT(*) FROM information_schema.tables"
     handler.prepare_metadata = AsyncMock()
