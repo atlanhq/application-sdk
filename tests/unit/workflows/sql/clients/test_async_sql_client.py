@@ -5,15 +5,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.clients.async_sql_client import AsyncSQLClient
-from application_sdk.clients.sql_client import SQLClientConfig
+from application_sdk.clients.sql import AsyncSQLClient, SQLClientConfig
 from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture
-def config():
-    # Create a sample SQLClientConfig object with mock credentials
-    return SQLClientConfig(
+def async_sql_client(config: SQLClientConfig):
+    resource = AsyncSQLClient(
         credentials={
             "user": "test_user",
             "password": "test_password",
@@ -23,11 +21,6 @@ def config():
         },
         sql_alchemy_connect_args={},
     )
-
-
-@pytest.fixture
-def async_sql_client(config: SQLClientConfig):
-    resource = AsyncSQLClient(config=config)
     resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return resource
 
