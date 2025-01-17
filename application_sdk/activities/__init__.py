@@ -1,7 +1,9 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from application_sdk.activities.utils import get_workflow_id
+from temporalio import activity
+
+from application_sdk.activities.utils import auto_heartbeater, get_workflow_id
 
 
 class ActivitiesInterface(ABC):
@@ -21,3 +23,13 @@ class ActivitiesInterface(ABC):
 
     async def _clean_state(self):
         self._state.pop(get_workflow_id())
+
+    # TODO: Try it out
+    @abstractmethod
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
+        raise NotImplementedError("Preflight check not implemented")
+
+    @activity.defn
+    @auto_heartbeater
+    async def clean_state(self, workflow_args: Dict[str, Any]):
+        await self._clean_state()

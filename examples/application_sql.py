@@ -35,13 +35,15 @@ from urllib.parse import quote_plus
 
 from temporalio import workflow
 
-from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
+from application_sdk.activities.metadata_extraction.sql import (
+    SQLMetadataExtractionActivities,
+)
 from application_sdk.clients.async_sql_client import AsyncSQLClient
 from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
-from application_sdk.workflows.metadata_extraction.sql.workflow import (
+from application_sdk.workflows.metadata_extraction.sql import (
     SQLMetadataExtractionWorkflow,
 )
 
@@ -50,14 +52,16 @@ APPLICATION_NAME = "postgres"
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
+# TODO: Make an empty file with same example, but with no SQL, hello-world example
+
+
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
         return f"postgresql+psycopg://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
-@workflow.defn
-class SampleSQLWorkflow(SQLMetadataExtractionWorkflow):
+class SampleSQLActivities(SQLMetadataExtractionActivities):
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
@@ -96,10 +100,6 @@ class SampleSQLWorkflow(SQLMetadataExtractionWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    @workflow.run
-    async def run(self, *args, **kwargs) -> None:
-        return await super().run(*args, **kwargs)
-
 
 class SampleSQLWorkflowHandler(SQLHandler):
     tables_check_sql = """
@@ -121,6 +121,7 @@ class SampleSQLWorkflowHandler(SQLHandler):
 async def application_sql() -> None:
     print("Starting application_sql")
 
+    # TODO: Make this part of the worker
     temporal_client = TemporalClient(
         TemporalConfig(
             application_name=APPLICATION_NAME,
@@ -128,14 +129,15 @@ async def application_sql() -> None:
     )
     await temporal_client.load()
 
-    activities = SQLExtractionActivities(
+    activities = SampleSQLActivities(
         sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
+    # TODO: Make this part of the application-sdk
     worker: Worker = Worker(
         temporal_client=temporal_client,
-        workflow_classes=[SampleSQLWorkflow],
-        temporal_activities=SampleSQLWorkflow.get_activities(activities),
+        workflow_classes=[SQLMetadataExtractionWorkflow],
+        temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
     # Start the worker in a separate thread
     worker_thread = threading.Thread(
@@ -172,7 +174,7 @@ async def application_sql() -> None:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    await temporal_client.start_workflow(workflow_args, SampleSQLWorkflow)
+    await temporal_client.start_workflow(workflow_args, SQLMetadataExtractionWorkflow)
 
 
 if __name__ == "__main__":

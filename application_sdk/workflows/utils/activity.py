@@ -19,6 +19,27 @@ from temporalio import activity
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
+"""
+Note:
+- We have activities that can run for a long time, in case of a failure (say: worker crash)
+  Temporal will not retry the activity until the configured timeout is reached.
+- We add auto_heartbeater to activities to ensure an failure is detected earlier
+  and the activity is retried.
+
+source:
+- https://temporal.io/blog/activity-timeouts
+- https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
+"""
+
+import asyncio
+from datetime import timedelta
+from functools import wraps
+from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
+
+from temporalio import activity
+
+F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+
 
 def auto_heartbeater(fn: F) -> F:
     """

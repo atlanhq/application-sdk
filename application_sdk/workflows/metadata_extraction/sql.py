@@ -5,7 +5,9 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
+from application_sdk.activities.metadata_extraction.sql import (
+    SQLMetadataExtractionActivities,
+)
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows import WorkflowInterface
 from application_sdk.workflows.sql.utils import prepare_query
@@ -13,26 +15,26 @@ from application_sdk.workflows.sql.utils import prepare_query
 
 @workflow.defn
 class SQLMetadataExtractionWorkflow(WorkflowInterface):
-    activities_cls: Type[SQLExtractionActivities] = SQLExtractionActivities
-
-    fetch_database_sql: str = "temptemptemp"
-    fetch_schema_sql: str = ""
-    fetch_table_sql: str = ""
-    fetch_column_sql: str = ""
+    activities_cls: Type[SQLMetadataExtractionActivities] = (
+        SQLMetadataExtractionActivities
+    )
 
     application_name: str = "sql-connector"
     batch_size: int = 100000
     max_transform_concurrency: int = 5
 
     def __init__(
-        self, activities_cls: Type[SQLExtractionActivities] = SQLExtractionActivities
+        self,
+        activities_cls: Type[
+            SQLMetadataExtractionActivities
+        ] = SQLMetadataExtractionActivities,
     ):
         super().__init__(activities_cls=activities_cls)
 
     # TODO: Seems a little hacky
     @staticmethod
     def get_activities(
-        activities: SQLExtractionActivities,
+        activities: SQLMetadataExtractionActivities,
     ) -> Sequence[Callable[..., Any]]:
         return [
             activities.preflight_check,
@@ -170,6 +172,8 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
+        await super().run(workflow_config)
+
         workflow_id = workflow_config["workflow_id"]
         workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
 
@@ -196,26 +200,22 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
         fetch_and_transforms = [
             self.fetch_and_transform(
                 self.activities_cls.fetch_databases,
-                workflow_args
-                | {"query": prepare_query(self.fetch_database_sql, workflow_args)},
+                workflow_args,
                 retry_policy,
             ),
             self.fetch_and_transform(
                 self.activities_cls.fetch_schemas,
-                workflow_args
-                | {"query": prepare_query(self.fetch_schema_sql, workflow_args)},
+                workflow_args,
                 retry_policy,
             ),
             self.fetch_and_transform(
                 self.activities_cls.fetch_tables,
-                workflow_args
-                | {"query": prepare_query(self.fetch_table_sql, workflow_args)},
+                workflow_args,
                 retry_policy,
             ),
             self.fetch_and_transform(
                 self.activities_cls.fetch_columns,
-                workflow_args
-                | {"query": prepare_query(self.fetch_column_sql, workflow_args)},
+                workflow_args,
                 retry_policy,
             ),
         ]

@@ -242,7 +242,7 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
 
             miner_activities.append(
                 workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                    self.fetch_queries,
+                    self.activities_class.fetch_queries,
                     activity_args,
                     retry_policy=retry_policy,
                     start_to_close_timeout=timedelta(seconds=1000),
@@ -250,5 +250,11 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
             )
 
         await asyncio.gather(*miner_activities)
+
+        await workflow.execute_activity_method(
+            self.activities_class.clean_state,
+            workflow_args,
+            start_to_close_timeout=timedelta(seconds=1000),
+        )
 
         workflow.logger.info(f"Miner workflow completed for {workflow_id}")

@@ -16,9 +16,13 @@ from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 
-# TODO: Rename to SQLMetadataExtractionActivities
-class SQLExtractionActivities(ActivitiesInterface):
+class SQLMetadataExtractionActivities(ActivitiesInterface):
     _state: Dict[str, Any] = {}
+
+    fetch_database_sql = ""
+    fetch_schema_sql = ""
+    fetch_table_sql = ""
+    fetch_column_sql = ""
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -37,6 +41,7 @@ class SQLExtractionActivities(ActivitiesInterface):
     async def _get_state(self, workflow_args: Dict[str, Any]):
         return await super()._get_state(workflow_args)
 
+    # TODO: The state is adding more overhead for developers, we are forcing them to use it as a platform and understand it
     async def _set_state(self, workflow_args: Dict[str, Any]):
         await super()._set_state(workflow_args)
 
@@ -47,6 +52,7 @@ class SQLExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
+        # TODO: Make it an object
         self._state[get_workflow_id()] = {
             # Client
             "sql_client": sql_client,
@@ -60,6 +66,7 @@ class SQLExtractionActivities(ActivitiesInterface):
             ),
         }
 
+    # TODO: Its fine for now, need to tackle it later, worker lifecycle, workflow lifecycle, events
     async def _clean_state(self):
         await self._state["sql_client"].close()
 
@@ -134,10 +141,9 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
-        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=activity_input["query"],
+            query=prepare_query(self.fetch_database_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/database",
@@ -166,10 +172,9 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
-        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=activity_input["query"],
+            query=prepare_query(self.fetch_schema_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -198,10 +203,9 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
-        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=activity_input["query"],
+            query=prepare_query(self.fetch_table_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -230,10 +234,9 @@ class SQLExtractionActivities(ActivitiesInterface):
         batch_input=lambda self,
         workflow_args,
         state,
-        activity_input,
         **kwargs: self.sql_client_class.sql_input(
             engine=state["sql_client"].engine,
-            query=activity_input["query"],
+            query=prepare_query(self.fetch_column_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",

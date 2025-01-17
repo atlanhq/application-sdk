@@ -32,7 +32,7 @@ from application_sdk.clients.temporal_client import TemporalClient, TemporalConf
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
-from application_sdk.workflows.query_extraction.sql.workflow import (
+from application_sdk.workflows.query_extraction.sql.sql import (
     SQLQueryExtractionWorkflow,
 )
 
