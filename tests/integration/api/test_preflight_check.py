@@ -2,7 +2,7 @@ import json
 
 from fastapi.testclient import TestClient
 
-from application_sdk.handlers.sql import SQLWorkflowHandler
+from application_sdk.handlers.sql import SQLHandler
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 
@@ -14,7 +14,7 @@ class TestSQLPreflightCheck:
     async def test_check_endpoint_basic_filters(
         self,
         client: TestClient,
-        handler: SQLWorkflowHandler,
+        handler: SQLHandler,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
 
@@ -36,7 +36,7 @@ class TestSQLPreflightCheck:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
                 "exclude_filter": "{}",
                 "temp_table_regex": "",
@@ -70,7 +70,7 @@ class TestSQLPreflightCheck:
     async def test_check_endpoint_empty_filters(
         self,
         client: TestClient,
-        handler: SQLWorkflowHandler,
+        handler: SQLHandler,
     ):
         """Test the /check endpoint with empty filters"""
 
@@ -89,7 +89,7 @@ class TestSQLPreflightCheck:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": "{}",
                 "exclude_filter": "{}",
                 "temp_table_regex": "",
@@ -113,7 +113,7 @@ class TestSQLPreflightCheck:
     async def test_check_endpoint_both_filters(
         self,
         client: TestClient,
-        handler: SQLWorkflowHandler,
+        handler: SQLHandler,
     ):
         """Test the /check endpoint with both filters"""
 
@@ -135,7 +135,7 @@ class TestSQLPreflightCheck:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
                 "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
                 "temp_table_regex": "",

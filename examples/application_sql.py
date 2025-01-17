@@ -33,33 +33,35 @@ import threading
 import time
 from urllib.parse import quote_plus
 
+from temporalio import workflow
+
+from application_sdk.activities.metadata_extraction.sql import (
+    SQLMetadataExtractionActivities,
+)
 from application_sdk.clients.async_sql_client import AsyncSQLClient
-from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
 from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.workflows.controllers import (
-    WorkflowPreflightCheckControllerInterface,
+from application_sdk.handlers.sql import SQLHandler
+from application_sdk.worker import Worker
+from application_sdk.workflows.metadata_extraction.sql import (
+    SQLMetadataExtractionWorkflow,
 )
-from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
-from application_sdk.workflows.sql.controllers.preflight_check import (
-    SQLWorkflowPreflightCheckController,
-)
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
-from application_sdk.workflows.workers.worker import WorkflowWorker
 
 APPLICATION_NAME = "postgres"
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
+# TODO: Make an empty file with same example, but with no SQL, hello-world example
+
+
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password: str = quote_plus(self.config.credentials["password"])
-        return f"postgresql+psycopg://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['host']}:{self.config.credentials['port']}/{self.config.credentials['database']}"
+        encoded_password: str = quote_plus(self.credentials["password"])
+        return f"postgresql+psycopg://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
-class SampleSQLWorkflow(SQLWorkflow):
+class SampleSQLActivities(SQLMetadataExtractionActivities):
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
@@ -98,18 +100,9 @@ class SampleSQLWorkflow(SQLWorkflow):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    sql_client: SQLClient | None = PostgreSQLClient(SQLClientConfig())
 
-
-class SampleSQLWorkflowBuilder(SQLWorkflowBuilder):
-    preflight_check_controller: WorkflowPreflightCheckControllerInterface
-
-    def build(self, workflow: SQLWorkflow | None = None) -> SQLWorkflow:
-        return super().build(workflow=workflow or SampleSQLWorkflow())
-
-
-class SampleSQLWorkflowPreflightCheckController(SQLWorkflowPreflightCheckController):
-    TABLES_CHECK_SQL = """
+class SampleSQLWorkflowHandler(SQLHandler):
+    tables_check_sql = """
     SELECT count(*)
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_NAME !~ '{exclude_table}'
@@ -118,16 +111,17 @@ class SampleSQLWorkflowPreflightCheckController(SQLWorkflowPreflightCheckControl
             AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
     """
 
-    METADATA_SQL = """
+    metadata_sql = """
     SELECT schema_name, catalog_name
         FROM INFORMATION_SCHEMA.SCHEMATA
         WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
     """
 
 
-async def application_sql():
+async def application_sql() -> None:
     print("Starting application_sql")
 
+    # TODO: Make this part of the worker
     temporal_client = TemporalClient(
         TemporalConfig(
             application_name=APPLICATION_NAME,
@@ -135,71 +129,49 @@ async def application_sql():
     )
     await temporal_client.load()
 
-    tenant_id = os.getenv("TENANT_ID", "development")
-
-    transformer = AtlasTransformer(
-        connector_name=APPLICATION_NAME,
-        connector_type="sql",
-        tenant_id=tenant_id,
+    activities = SampleSQLActivities(
+        sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
-    sql_client = PostgreSQLClient(SQLClientConfig())
-
-    workflow: SQLWorkflow = (
-        SampleSQLWorkflowBuilder()
-        .set_transformer(transformer)
-        .set_temporal_client(temporal_client)
-        .set_sql_client(sql_client)
-        .set_preflight_check_controller(
-            SampleSQLWorkflowPreflightCheckController(sql_client)
-        )
-        .build()
-    )
-
-    worker: WorkflowWorker = WorkflowWorker(
+    worker: Worker = Worker(
         temporal_client=temporal_client,
-        temporal_activities=workflow.get_activities(),
-        workflow_classes=[SQLWorkflow],
-        passthrough_modules=["application_sdk", "os", "pandas"],
+        workflow_classes=[SQLMetadataExtractionWorkflow],
+        temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
 
     # Start the worker in a separate thread
-    worker_thread = threading.Thread(
-        target=lambda: asyncio.run(worker.start()), daemon=True
-    )
-    worker_thread.start()
+    await worker.start(daemon=True)
 
     # wait for the worker to start
     time.sleep(3)
 
-    workflow_response = await workflow.start(
-        {
-            "credentials": {
-                "host": os.getenv("POSTGRES_HOST", "localhost"),
-                "port": os.getenv("POSTGRES_PORT", "5432"),
-                "user": os.getenv("POSTGRES_USER", "postgres"),
-                "password": os.getenv("POSTGRES_PASSWORD", "password"),
-                "database": os.getenv("POSTGRES_DATABASE", "postgres"),
-            },
-            "connection": {"connection": "dev"},
-            "metadata": {
-                "exclude_filter": "{}",
-                "include_filter": "{}",
-                "temp_table_regex": "",
-                "advanced_config_strategy": "default",
-                "use_source_schema_filtering": "false",
-                "use_jdbc_internal_methods": "true",
-                "authentication": "BASIC",
-                "extraction-method": "direct",
-                "exclude_views": "true",
-                "exclude_empty_tables": "false",
-            },
-            # "workflow_id": "27498f69-13ae-44ec-a2dc-13ff81c517de",  # if you want to rerun an existing workflow, just keep this field.
-            # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
-        }
-    )
+    workflow_args = {
+        "credentials": {
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": os.getenv("POSTGRES_PORT", "5432"),
+            "user": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", "password"),
+            "database": os.getenv("POSTGRES_DATABASE", "postgres"),
+        },
+        "connection": {"connection": "dev"},
+        "metadata": {
+            "exclude_filter": "{}",
+            "include_filter": "{}",
+            "temp_table_regex": "",
+            "advanced_config_strategy": "default",
+            "use_source_schema_filtering": "false",
+            "use_jdbc_internal_methods": "true",
+            "authentication": "BASIC",
+            "extraction-method": "direct",
+            "exclude_views": "true",
+            "exclude_empty_tables": "false",
+        },
+        "tenant_id": "123",
+        # "workflow_id": "27498f69-13ae-44ec-a2dc-13ff81c517de",  # if you want to rerun an existing workflow, just keep this field.
+        # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
+    }
 
-    return workflow_response
+    await temporal_client.start_workflow(workflow_args, SQLMetadataExtractionWorkflow)
 
 
 if __name__ == "__main__":

@@ -55,7 +55,6 @@ class CustomEvent(Event):
     data: Dict[str, Any] = Field(default_factory=dict)
 
 
-# TODO: Rename
 class AtlanEvent(BaseModel):
     data: WorkflowEndEvent | ActivityEndEvent | ActivityStartEvent | CustomEvent
     datacontenttype: str = Field()

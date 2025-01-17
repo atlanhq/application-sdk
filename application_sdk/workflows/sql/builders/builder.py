@@ -4,7 +4,7 @@ from abc import ABC
 from application_sdk.clients.sql_client import SQLClient
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows.builder import (
     MinerBuilderInterface,
     WorkflowBuilderInterface,
@@ -19,11 +19,9 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
     sql_client: SQLClient
     transformer: TransformerInterface
-    handler: WorkflowHandlerInterface
+    handler: HandlerInterface
 
-    def set_handler(
-        self, handler: WorkflowHandlerInterface
-    ) -> "WorkflowBuilderInterface":
+    def set_handler(self, handler: HandlerInterface) -> "WorkflowBuilderInterface":
         self.handler = handler
         return self
 
@@ -54,7 +52,7 @@ class SQLWorkflowBuilder(WorkflowBuilderInterface, ABC):
 class SQLMinerBuilder(MinerBuilderInterface, ABC):
     sql_client: SQLClient
     transformer: TransformerInterface
-    handler: WorkflowHandlerInterface
+    handler: HandlerInterface
 
     def set_sql_client(self, sql_client: SQLClient) -> "SQLMinerBuilder":
         self.sql_client = sql_client

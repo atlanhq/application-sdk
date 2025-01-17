@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.application.fastapi import FastAPIApplication
-from application_sdk.handlers.sql import SQLWorkflowHandler
+from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture(autouse=True, scope="session")
@@ -16,8 +16,8 @@ def mock_sql_client() -> Any:
 
 
 @pytest.fixture(autouse=True, scope="session")
-def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(mock_sql_client)
+def handler(mock_sql_client: Any) -> SQLHandler:
+    handler = SQLHandler(mock_sql_client)
     handler.prepare_metadata = AsyncMock()
     handler.tables_check = AsyncMock()
     handler.tables_check_sql = """
@@ -32,7 +32,7 @@ def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
 
 @pytest.fixture
 def app(
-    handler: SQLWorkflowHandler,
+    handler: SQLHandler,
 ) -> FastAPIApplication:
     """Create FastAPI test application"""
     app = FastAPIApplication(handler=handler)

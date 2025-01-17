@@ -9,13 +9,13 @@ from application_sdk import activity_pd
 from application_sdk.app.rest.fastapi.models.workflow import MetadataType
 from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class SQLWorkflowHandler(WorkflowHandlerInterface):
+class SQLHandler(HandlerInterface):
     """
     Handler class for SQL workflows
     """
@@ -36,15 +36,15 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client
 
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, credentials: Dict[str, Any]) -> None:
         """
-        Method to prepare and load the SQL resource
+        Method to load and load the SQL client
         """
         self.sql_client.set_credentials(credentials)
         await self.sql_client.load()
 
     @activity_pd(
-        batch_input=lambda self, args: self.sql_client.sql_input(
+        batch_input=lambda self, args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine,
             query=self.metadata_sql,
             chunk_size=None,
@@ -73,7 +73,9 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         return result
 
     @activity_pd(
-        batch_input=lambda self, workflow_args=None: self.sql_client.sql_input(
+        batch_input=lambda self,
+        workflow_args=None,
+        **kwargs: self.sql_client.sql_input(
             self.sql_client.engine, self.test_authentication_sql, chunk_size=None
         )
     )
@@ -137,7 +139,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
     async def fetch_databases(self) -> List[Dict[str, str]]:
         """Fetch only database information."""
         if not self.sql_client:
-            raise ValueError("SQL Resource not defined")
+            raise ValueError("SQL Client not defined")
         databases = []
         async for batch in self.sql_client.run_query(self.fetch_databases_sql):
             for row in batch:
@@ -149,7 +151,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
     async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
         """Fetch schemas for a specific database."""
         if not self.sql_client:
-            raise ValueError("SQL Resource not defined")
+            raise ValueError("SQL Client not defined")
         schemas = []
         schema_query = self.fetch_schemas_sql.format(database_name=database)
         async for batch in self.sql_client.run_query(schema_query):
@@ -202,7 +204,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
             schemas_results: List[Dict[str, str]] = await self.prepare_metadata({})
 
             include_filter = json.loads(
-                payload.get("form_data", {}).get("include_filter", "{}")
+                payload.get("metadata", {}).get("include_filter", "{}")
             )
             allowed_databases, allowed_schemas = self.extract_allowed_schemas(
                 schemas_results
@@ -272,7 +274,7 @@ class SQLWorkflowHandler(WorkflowHandlerInterface):
         return True, ""
 
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.tables_check_sql, workflow_args=workflow_args

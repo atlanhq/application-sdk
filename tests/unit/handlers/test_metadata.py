@@ -5,7 +5,7 @@ import pytest
 
 from application_sdk.app.rest.fastapi.models.workflow import MetadataType
 from application_sdk.clients.sql_client import SQLClient
-from application_sdk.handlers.sql import SQLWorkflowHandler
+from application_sdk.handlers.sql import SQLHandler
 
 T = TypeVar("T")
 
@@ -34,8 +34,8 @@ def mock_sql_client() -> MagicMock:
 
 
 @pytest.fixture
-def handler(mock_sql_client: Any) -> SQLWorkflowHandler:
-    handler = SQLWorkflowHandler(sql_client=mock_sql_client)
+def handler(mock_sql_client: Any) -> SQLHandler:
+    handler = SQLHandler(sql_client=mock_sql_client)
     handler.prepare_metadata = AsyncMock()
     return handler
 

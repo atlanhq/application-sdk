@@ -1,5 +1,5 @@
 import logging
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
 from pydantic import BaseModel
@@ -23,7 +23,7 @@ from application_sdk.application.fastapi.models import (
 from application_sdk.application.fastapi.routers.health import get_health_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import AtlanEvent
 from application_sdk.workflows.workflow import WorkflowInterface
@@ -32,7 +32,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowTrigger(BaseModel):
-    workflow: Optional[WorkflowInterface] = None
+    workflow_class: Type[WorkflowInterface]
     model_config = {"arbitrary_types_allowed": True}
 
 
@@ -58,8 +58,8 @@ class FastAPIApplication(AtlanApplicationInterface):
     def __init__(
         self,
         lifespan=None,
-        handler: Optional[WorkflowHandlerInterface] = None,
-        config=None,
+        handler: Optional[HandlerInterface] = None,
+        config = None,
         *args,
         **kwargs,
     ):
@@ -88,7 +88,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.app.include_router(self.events_router, prefix="/events/v1")
 
     def register_workflow(
-        self, workflow: WorkflowInterface, triggers: List[WorkflowTrigger]
+        self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
         for trigger in triggers:
             trigger.workflow = workflow
@@ -96,8 +96,8 @@ class FastAPIApplication(AtlanApplicationInterface):
             if isinstance(trigger, HttpWorkflowTrigger):
 
                 async def start_workflow(body: WorkflowRequest):
-                    workflow_data = await workflow.start(
-                        body.model_dump(), workflow_class=workflow.__class__
+                    workflow_data = await self.temporal_client.start_workflow(
+                        body.model_dump(), workflow_class=workflow_class
                     )
                     return WorkflowResponse(
                         success=True,
@@ -193,7 +193,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         """
         Get the credentials from the request body and test the authentication
         """
-        await self.handler.prepare(body.model_dump())
+        await self.handler.load(body.model_dump())
         await self.handler.test_auth()
         return TestAuthResponse(success=True, message="Authentication successful")
 
@@ -201,7 +201,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         """
         Get the credentials from the request body and fetch the metadata
         """
-        await self.handler.prepare(body.model_dump())
+        await self.handler.load(body.model_dump())
         metadata = await self.handler.fetch_metadata(
             metadata_type=body.root["type"], database=body.root["database"]
         )

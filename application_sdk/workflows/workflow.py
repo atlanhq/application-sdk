@@ -7,7 +7,7 @@ from temporalio.client import WorkflowFailureError
 
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -19,7 +19,7 @@ class WorkflowInterface(ABC):
     """
 
     temporal_client: TemporalClient | None = None
-    handler: WorkflowHandlerInterface | None = None
+    handler: HandlerInterface | None = None
 
     def __init__(self):
         pass
@@ -29,7 +29,7 @@ class WorkflowInterface(ABC):
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         result = await self.handler.preflight_check(
             {
-                "form_data": workflow_args["metadata"],
+                "metadata": workflow_args["metadata"],
             }
         )
         if not result or "error" in result:
@@ -55,7 +55,7 @@ class WorkflowInterface(ABC):
         self.temporal_client = temporal_client
         return self
 
-    def set_handler(self, handler: WorkflowHandlerInterface) -> "WorkflowInterface":
+    def set_handler(self, handler: HandlerInterface) -> "WorkflowInterface":
         self.handler = handler
         return self
 

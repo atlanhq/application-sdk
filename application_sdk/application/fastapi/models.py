@@ -38,7 +38,7 @@ class PreflightCheckRequest(BaseModel):
     credentials: Dict[str, Any] = Field(
         ..., description="Required JSON field containing database credentials"
     )
-    form_data: Dict[str, Any] = Field(
+    metadata: Dict[str, Any] = Field(
         ...,
         description="Required JSON field containing form data for filtering and configuration",
     )
@@ -53,7 +53,7 @@ class PreflightCheckRequest(BaseModel):
                     "password": "password",
                     "database": "databasename",
                 },
-                "form_data": {
+                "metadata": {
                     "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
                     "exclude_filter": "{}",
                     "temp_table_regex": "",

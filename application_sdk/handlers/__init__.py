@@ -4,15 +4,15 @@ from typing import Any, Dict
 from application_sdk.inputs.statestore import StateStore
 
 
-class WorkflowHandlerInterface(ABC):
+class HandlerInterface(ABC):
     """
     Abstract base class for workflow handlers
     """
 
     @abstractmethod
-    async def prepare(self, **kwargs: Any) -> None:
+    async def load(self, **kwargs: Any) -> None:
         """
-        Method to prepare the handler
+        Method to load the handler
         """
         pass
 

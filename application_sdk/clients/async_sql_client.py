@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Dict
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -12,7 +13,6 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class AsyncSQLClient(SQLClient):
-    config: SQLClientConfig
     connection: AsyncConnection | None = None
     engine: AsyncEngine | None = None
     sql_input = AsyncSQLQueryInput
@@ -20,10 +20,11 @@ class AsyncSQLClient(SQLClient):
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
 
-    async def load(self):
+    async def load(self, credentials: Dict[str, Any]):
+        self.credentials = credentials
         self.engine = create_async_engine(
             self.get_sqlalchemy_connection_string(),
-            connect_args=self.config.get_sqlalchemy_connect_args(),
+            connect_args=self.sql_alchemy_connect_args,
             pool_pre_ping=True,
         )
         self.connection = await self.engine.connect()
@@ -44,7 +45,7 @@ class AsyncSQLClient(SQLClient):
             raise ValueError("Connection is not established")
 
         activity.logger.info(f"Running query: {query}")
-        use_server_side_cursor = self.config.use_server_side_cursor
+        use_server_side_cursor = self.use_server_side_cursor
 
         try:
             if use_server_side_cursor:

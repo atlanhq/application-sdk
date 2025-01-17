@@ -146,7 +146,7 @@ class SQLWorkflow(WorkflowInterface):
         Only fetches all metadata when both include and exclude filters are empty.
         """
         try:
-            metadata = workflow_args.get("metadata", workflow_args.get("form_data", {}))
+            metadata = workflow_args.get("metadata", workflow_args.get("metadata", {}))
 
             # using "or" instead of default correct defaults are set in case of empty string
             include_filter = metadata.get("include_filter") or "{}"
@@ -178,7 +178,7 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_database_sql, workflow_args=workflow_args
@@ -208,7 +208,7 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_schema_sql, workflow_args=workflow_args
@@ -238,7 +238,7 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_table_sql, workflow_args=workflow_args
@@ -268,7 +268,7 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: self.sql_client.sql_input(
+        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             self.sql_client.engine,
             query=SQLWorkflow.prepare_query(
                 query=self.fetch_column_sql, workflow_args=workflow_args
@@ -326,7 +326,7 @@ class SQLWorkflow(WorkflowInterface):
     @activity.defn
     @auto_heartbeater
     @activity_pd(
-        batch_input=lambda self, workflow_args: JsonInput(
+        batch_input=lambda self, workflow_args, **kwargs: JsonInput(
             path=f"{workflow_args['output_path']}/raw/",
             file_suffixes=workflow_args["batch"],
         ),
