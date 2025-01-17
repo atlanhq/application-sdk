@@ -146,17 +146,19 @@ async def run_process(
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
     state: Dict[str, Any],
-):
+):            
+    state = None
+    if hasattr(self, "_get_state"):
+        state = await self._get_state(args[0])
+
     fn_kwargs = await prepare_fn_kwargs(
         self=self,
         get_dataframe_fn=get_dataframe_fn,
         args=args,
         inner_kwargs=inner_kwargs,
         kwargs=kwargs,
+        state=state,
     )
-
-    fn_kwargs.update({"state": state})
-    fn_kwargs["activity_input"] = args[0]
 
     # If batch_input is not provided, we'll call the function directly
     # since there is nothing to be read as the inputs
@@ -191,10 +193,6 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
     def decorator(f):
         @wraps(f)
         async def new_fn(self: ActivitiesInterface, *args, **inner_kwargs):
-            # TODO: Jugaad
-            state = None
-            if hasattr(self, "_get_state"):
-                state = await self._get_state(args[0])
             return await run_process(
                 self=self,
                 f=f,
@@ -204,7 +202,6 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 args=args,
                 inner_kwargs=inner_kwargs,
                 kwargs=kwargs,
-                state=state,
             )
 
         return new_fn
