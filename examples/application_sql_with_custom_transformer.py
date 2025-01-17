@@ -149,7 +149,7 @@ async def application_sql_with_custom_transformer():
     print("Starting application_sql_with_custom_transformer")
 
     temporal_client = TemporalClient(
-            application_name=APPLICATION_NAME,
+        application_name=APPLICATION_NAME,
     )
     await temporal_client.load()
 

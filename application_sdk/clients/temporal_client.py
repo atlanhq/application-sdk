@@ -96,6 +96,7 @@ class EventInterceptor(Interceptor):
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
         return EventWorkflowInboundInterceptor
 
+
 class TemporalClient(ClientInterface):
     def __init__(
         self,
@@ -109,7 +110,11 @@ class TemporalClient(ClientInterface):
         self.worker_task_queue = self.get_worker_task_queue()
         self.host = host if host else TemporalConstants.HOST.value
         self.port = port if port else TemporalConstants.PORT.value
-        self.application_name = application_name if application_name else TemporalConstants.APPLICATION_NAME.value
+        self.application_name = (
+            application_name
+            if application_name
+            else TemporalConstants.APPLICATION_NAME.value
+        )
         self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
 
         workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))

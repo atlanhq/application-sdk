@@ -504,7 +504,9 @@ class SQLWorkflow(WorkflowInterface):
         )
 
         if not self.temporal_client:
-            self.temporal_client = TemporalClient(application_name=self.application_name)
+            self.temporal_client = TemporalClient(
+                application_name=self.application_name
+            )
 
         workflow_run_id = workflow.info().run_id
         workflow_args["workflow_run_id"] = workflow_run_id

@@ -2,8 +2,9 @@ import re
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from application_sdk.clients.temporal_client import TemporalClient
+
 from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers import TransformerInterface
 

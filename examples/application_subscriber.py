@@ -115,7 +115,7 @@ class SampleWorkflowBuilder(WorkflowBuilderInterface):
 
 async def start_worker():
     temporal_client = TemporalClient(
-            application_name=TemporalConstants.APPLICATION_NAME.value,
+        application_name=TemporalConstants.APPLICATION_NAME.value,
     )
     await temporal_client.load()
 
@@ -159,7 +159,7 @@ async def start_fast_api_app():
         return False
 
     temporal_client = TemporalClient(
-            application_name=TemporalConstants.APPLICATION_NAME.value,
+        application_name=TemporalConstants.APPLICATION_NAME.value,
     )
     await temporal_client.load()
     sample_worflow = (

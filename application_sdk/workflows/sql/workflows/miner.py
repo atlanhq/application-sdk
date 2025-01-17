@@ -317,7 +317,9 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
             self.sql_client = SQLClient(SQLClientConfig(credentials=credentials))
 
         if not self.temporal_client:
-            self.temporal_client = TemporalClient(application_name=self.application_name)
+            self.temporal_client = TemporalClient(
+                application_name=self.application_name
+            )
 
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting miner workflow for {workflow_id}")

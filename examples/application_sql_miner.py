@@ -152,7 +152,7 @@ async def application_sql_miner():
     print("Starting application_sql_miner")
 
     temporal_client = TemporalClient(
-            application_name=APPLICATION_NAME,
+        application_name=APPLICATION_NAME,
     )
     await temporal_client.load()
 

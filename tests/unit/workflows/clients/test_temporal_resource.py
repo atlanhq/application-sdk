@@ -7,7 +7,9 @@ from application_sdk.clients.temporal_client import TemporalClient
 
 @pytest.fixture
 def temporal_resource():
-    return TemporalClient( host="localhost", port="7233", application_name="test_app", namespace="default")
+    return TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
 
 
 @patch(
