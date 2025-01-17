@@ -13,9 +13,6 @@ from application_sdk.inputs.statestore import StateStore
 class WorkflowInterface(ABC):
     activities_cls: Type[ActivitiesInterface]
 
-    def __init__(self, activities_cls: Type[ActivitiesInterface]):
-        self.activities_cls = activities_cls
-
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
         raise NotImplementedError("Workflow get_activities method not implemented")

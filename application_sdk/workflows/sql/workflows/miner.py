@@ -289,7 +289,7 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
 
         return parallel_markers
 
-    @activity.defn(name="miner_preflight_check")
+    @activity.defn(name="preflight_check")
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         result = await self.handler.preflight_check(

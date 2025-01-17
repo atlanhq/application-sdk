@@ -32,9 +32,7 @@ from application_sdk.clients.temporal_client import TemporalClient, TemporalConf
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
-from application_sdk.workflows.query_extraction.sql.sql import (
-    SQLQueryExtractionWorkflow,
-)
+from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -106,13 +104,8 @@ WITH qs AS (
 """
 
 
-@workflow.defn
-class SampleSQLMinerWorkflow(SQLQueryExtractionWorkflow):
+class SampleSQLMinerActivities(SQLQueryExtractionActivities):
     fetch_queries_sql = FETCH_QUERIES_SQL
-
-    @workflow.run
-    async def run(self, workflow_config: Dict[str, Any]):
-        await super().run(workflow_config)
 
 
 class SnowflakeSQLClient(SQLClient):
@@ -130,11 +123,6 @@ class SnowflakeSQLClient(SQLClient):
                 base_url = f"{base_url}?role={self.credentials['role']}"
 
         return base_url
-
-
-class SnowflakeClient(SQLClient):
-    default_database_alias_key = "database_name"
-    default_schema_alias_key = "name"
 
 
 class SampleSnowflakeHandler(SQLHandler):
@@ -158,14 +146,14 @@ async def application_sql_miner():
     )
     await temporal_client.load()
 
-    activities = SQLQueryExtractionActivities(
+    activities = SampleSQLMinerActivities(
         sql_client_class=SnowflakeSQLClient, handler_class=SampleSnowflakeHandler
     )
 
     worker: Worker = Worker(
         temporal_client=temporal_client,
-        workflow_classes=[SampleSQLMinerWorkflow],
-        temporal_activities=SampleSQLMinerWorkflow.get_activities(activities),
+        workflow_classes=[SQLQueryExtractionWorkflow],
+        temporal_activities=SQLQueryExtractionWorkflow.get_activities(activities),
     )
     # Start the worker in a separate thread
     worker_thread = threading.Thread(
@@ -175,7 +163,7 @@ async def application_sql_miner():
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(hours=2)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
 
     workflow_args = {
         "miner_args": {
@@ -211,10 +199,11 @@ async def application_sql_miner():
     }
 
     await temporal_client.start_workflow(
-        workflow_class=SampleSQLMinerWorkflow,
+        workflow_class=SQLQueryExtractionWorkflow,
         workflow_args=workflow_args,
     )
 
 
 if __name__ == "__main__":
     asyncio.run(application_sql_miner())
+    time.sleep(1000000)
