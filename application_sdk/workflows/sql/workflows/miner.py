@@ -294,7 +294,7 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         result = await self.handler.preflight_check(
             {
-                "form_data": workflow_args["metadata"],
+                "metadata": workflow_args["metadata"],
             }
         )
         if not result or "error" in result:

@@ -52,7 +52,7 @@ class TestFastAPIApplication:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
                 "exclude_filter": "{}",
                 "temp_table_regex": "",

@@ -10,7 +10,7 @@ from application_sdk.workflows.workflow import WorkflowInterface
 
 
 class CustomHandler(HandlerInterface):
-    async def prepare(self, **kwargs: Any) -> None:
+    async def load(self, **kwargs: Any) -> None:
         pass
 
     async def test_auth(self, **kwargs: Any) -> bool:

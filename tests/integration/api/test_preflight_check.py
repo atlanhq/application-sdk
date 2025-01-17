@@ -36,7 +36,7 @@ class TestSQLPreflightCheck:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
                 "exclude_filter": "{}",
                 "temp_table_regex": "",
@@ -89,7 +89,7 @@ class TestSQLPreflightCheck:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": "{}",
                 "exclude_filter": "{}",
                 "temp_table_regex": "",
@@ -135,7 +135,7 @@ class TestSQLPreflightCheck:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
                 "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
                 "temp_table_regex": "",

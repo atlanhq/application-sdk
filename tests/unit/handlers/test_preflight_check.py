@@ -44,7 +44,7 @@ async def test_fetch_metadata_no_resource():
 
 
 async def test_check_schemas_and_databases_success(handler: SQLHandler):
-    payload = {"form_data": {"include_filter": json.dumps({"db1": ["schema1"]})}}
+    payload = {"metadata": {"include_filter": json.dumps({"db1": ["schema1"]})}}
 
     result = await handler.check_schemas_and_databases(payload)
 
@@ -55,7 +55,7 @@ async def test_check_schemas_and_databases_success(handler: SQLHandler):
 
 async def test_check_schemas_and_databases_failure(handler: SQLHandler):
     payload = {
-        "form_data": {"include_filter": json.dumps({"invalid_db": ["invalid_schema"]})}
+        "metadata": {"include_filter": json.dumps({"invalid_db": ["invalid_schema"]})}
     }
 
     result = await handler.check_schemas_and_databases(payload)
@@ -68,7 +68,7 @@ async def test_check_schemas_and_databases_with_wildcard_success(
     handler: SQLHandler,
 ):
     # Test with wildcard for all schemas in db1
-    payload = {"form_data": {"include_filter": json.dumps({"^db1$": "*"})}}
+    payload = {"metadata": {"include_filter": json.dumps({"^db1$": "*"})}}
 
     result = await handler.check_schemas_and_databases(payload)
 
@@ -81,7 +81,7 @@ async def test_check_schemas_and_databases_with_wildcard_invalid_db(
     handler: SQLHandler,
 ):
     # Test with wildcard but invalid database
-    payload = {"form_data": {"include_filter": json.dumps({"^invalid_db$": "*"})}}
+    payload = {"metadata": {"include_filter": json.dumps({"^invalid_db$": "*"})}}
 
     result = await handler.check_schemas_and_databases(payload)
 
@@ -92,7 +92,7 @@ async def test_check_schemas_and_databases_with_wildcard_invalid_db(
 async def test_check_schemas_and_databases_mixed_format(handler: SQLHandler):
     # Test with mix of wildcard and specific schema selections
     payload = {
-        "form_data": {
+        "metadata": {
             "include_filter": json.dumps(
                 {
                     "^db1$": "*",  # All schemas in db1
@@ -110,7 +110,7 @@ async def test_check_schemas_and_databases_mixed_format(handler: SQLHandler):
 
 
 async def test_preflight_check_success(handler: SQLHandler):
-    payload = {"form_data": {"include_filter": json.dumps({"db1": ["schema1"]})}}
+    payload = {"metadata": {"include_filter": json.dumps({"db1": ["schema1"]})}}
 
     with patch.object(handler, "tables_check") as mock_tables_check:
         mock_tables_check.return_value = {
@@ -127,7 +127,7 @@ async def test_preflight_check_success(handler: SQLHandler):
 
 
 async def test_preflight_check_with_wildcard_success(handler: SQLHandler):
-    payload = {"form_data": {"include_filter": json.dumps({"^db1$": "*"})}}
+    payload = {"metadata": {"include_filter": json.dumps({"^db1$": "*"})}}
 
     with patch.object(handler, "tables_check") as mock_tables_check:
         mock_tables_check.return_value = {
@@ -144,7 +144,7 @@ async def test_preflight_check_with_wildcard_success(handler: SQLHandler):
 
 
 async def test_preflight_check_failure(handler: SQLHandler):
-    payload = {"form_data": {"include_filter": json.dumps({"invalid_db": ["schema1"]})}}
+    payload = {"metadata": {"include_filter": json.dumps({"invalid_db": ["schema1"]})}}
 
     result = await handler.preflight_check(payload)
 

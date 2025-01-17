@@ -30,15 +30,6 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
 
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
 
-    # TODO: Why do we need to pass the activities_cls here?
-    def __init__(
-        self,
-        activities_cls: Type[
-            SQLQueryExtractionActivities
-        ] = SQLQueryExtractionActivities,
-    ):
-        super().__init__(activities_cls=activities_cls)
-
     @staticmethod
     def get_activities(
         activities: ActivitiesInterface,

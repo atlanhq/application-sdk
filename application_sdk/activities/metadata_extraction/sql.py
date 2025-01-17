@@ -134,10 +134,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         if not handler:
             raise ValueError("Preflight check handler not found")
 
-        # TODO: Remove form_data
         result = await handler.preflight_check(
             {
-                "form_data": workflow_args["metadata"],
+                "metadata": workflow_args["metadata"],
             }
         )
         if not result or "error" in result:
@@ -312,7 +311,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         typename = kwargs.get("typename")
         workflow_id = kwargs.get("workflow_id")
         workflow_run_id = kwargs.get("workflow_run_id")
-        # TODO: Hack while using activity_input
         transformed_chunk = await self._transform_batch(
             batch_input,
             typename,

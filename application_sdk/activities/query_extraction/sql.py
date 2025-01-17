@@ -129,7 +129,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         result = await state["handler"].preflight_check(
             {
-                "form_data": workflow_args["metadata"],
+                "metadata": workflow_args["metadata"],
             }
         )
         if not result or "error" in result:

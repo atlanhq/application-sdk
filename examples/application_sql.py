@@ -133,7 +133,6 @@ async def application_sql() -> None:
         sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
-    # TODO: Make this part of the application-sdk
     worker: Worker = Worker(
         temporal_client=temporal_client,
         workflow_classes=[SQLMetadataExtractionWorkflow],

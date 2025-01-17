@@ -20,7 +20,6 @@ class AsyncSQLClient(SQLClient):
     default_database_alias_key = "catalog_name"
     default_schema_alias_key = "schema_name"
 
-    # TODO: Should we pass credentials to the constructor instead?
     async def load(self, credentials: Dict[str, Any]):
         self.credentials = credentials
         self.engine = create_async_engine(

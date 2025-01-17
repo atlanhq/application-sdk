@@ -148,7 +148,6 @@ class TemporalClient(ClientInterface):
 
         super().__init__()
 
-    # TODO: load or prepare, whats the right name?
     async def load(self):
         self.client = await Client.connect(
             self.config.get_connection_string(),
