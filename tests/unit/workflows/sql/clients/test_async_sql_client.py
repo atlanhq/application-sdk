@@ -5,8 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.clients.async_sql_client import AsyncSQLClient
-from application_sdk.clients.sql_client import SQLClientConfig
+from application_sdk.clients.sql import AsyncSQLClient, SQLClientConfig
 from application_sdk.handlers.sql import SQLHandler
 
 

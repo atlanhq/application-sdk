@@ -36,7 +36,7 @@ from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
-from application_sdk.clients.async_sql_client import AsyncSQLClient
+from application_sdk.clients.sql import AsyncSQLClient
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (

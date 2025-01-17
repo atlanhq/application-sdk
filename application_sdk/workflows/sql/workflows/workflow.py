@@ -8,7 +8,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.json import JsonInput

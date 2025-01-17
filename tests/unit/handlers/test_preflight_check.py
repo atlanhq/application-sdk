@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 

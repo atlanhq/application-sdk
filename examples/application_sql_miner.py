@@ -27,7 +27,7 @@ from urllib.parse import quote_plus
 from temporalio import workflow
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler

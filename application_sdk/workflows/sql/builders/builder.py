@@ -1,7 +1,7 @@
 import logging
 from abc import ABC
 
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface

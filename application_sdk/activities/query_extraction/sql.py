@@ -10,7 +10,7 @@ from temporalio import activity
 
 from application_sdk import activity_pd
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
