@@ -2,19 +2,12 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.clients.temporal_client import TemporalClient
 
 
 @pytest.fixture
-def temporal_config():
-    return TemporalConfig(
-        host="localhost", port="7233", application_name="test_app", namespace="default"
-    )
-
-
-@pytest.fixture
-def temporal_resource(temporal_config: TemporalConfig):
-    return TemporalClient(temporal_config=temporal_config)
+def temporal_resource():
+    return TemporalClient( host="localhost", port="7233", application_name="test_app", namespace="default")
 
 
 @patch(

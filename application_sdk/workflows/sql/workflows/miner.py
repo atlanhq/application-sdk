@@ -12,7 +12,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
 from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
-from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
@@ -317,9 +317,7 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
             self.sql_client = SQLClient(SQLClientConfig(credentials=credentials))
 
         if not self.temporal_client:
-            self.temporal_client = TemporalClient(
-                TemporalConfig(application_name=self.application_name)
-            )
+            self.temporal_client = TemporalClient(application_name=self.application_name)
 
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting miner workflow for {workflow_id}")
