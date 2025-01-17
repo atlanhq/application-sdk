@@ -11,10 +11,9 @@ class ActivitiesInterface(ABC):
         self._state: Dict[str, Any] = {}
 
     # State methods
-    async def _set_state(self, workflow_args: Dict[str, Any]):
-        self._state[get_workflow_id()] = {
-            "workflow_args": workflow_args,
-        }
+    @abstractmethod
+    async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
+        raise ValueError("_set_state not implemented")
 
     async def _get_state(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
         if get_workflow_id() not in self._state:

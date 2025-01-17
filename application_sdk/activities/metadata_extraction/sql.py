@@ -1,6 +1,7 @@
 from typing import Any, Dict, Optional, Type
 
 import pandas as pd
+from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk import activity_pd
@@ -16,13 +17,20 @@ from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
 
-class SQLMetadataExtractionActivities(ActivitiesInterface):
-    _state: Dict[str, Any] = {}
+class StateModel(BaseModel):
+    sql_client: SQLClient
+    handler: SQLHandler
+    transformer: AtlasTransformer
+    workflow_args: Dict[str, Any]
 
-    fetch_database_sql = ""
-    fetch_schema_sql = ""
-    fetch_table_sql = ""
-    fetch_column_sql = ""
+
+class SQLMetadataExtractionActivities(ActivitiesInterface):
+    _state: Dict[str, StateModel] = {}
+
+    fetch_database_sql = None
+    fetch_schema_sql = None
+    fetch_table_sql = None
+    fetch_column_sql = None
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -43,8 +51,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     # TODO: The state is adding more overhead for developers, we are forcing them to use it as a platform and understand it
     async def _set_state(self, workflow_args: Dict[str, Any]):
-        await super()._set_state(workflow_args)
-
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
         sql_client = self.sql_client_class()
@@ -52,23 +58,23 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        # TODO: Make it an object
-        self._state[get_workflow_id()] = {
+        self._state[get_workflow_id()] = StateModel(
             # Client
-            "sql_client": sql_client,
+            sql_client=sql_client,
             # Handlers
-            "handler": handler,
+            handler=handler,
             # Transformer
-            "transformer": AtlasTransformer(
+            transformer=AtlasTransformer(
                 connector_name=workflow_args["application_name"],
                 connector_type="sql",
                 tenant_id=workflow_args["tenant_id"],
             ),
-        }
+            workflow_args=workflow_args,
+        )
 
     # TODO: Its fine for now, need to tackle it later, worker lifecycle, workflow lifecycle, events
     async def _clean_state(self):
-        await self._state["sql_client"].close()
+        await self._state[get_workflow_id()].sql_client.close()
 
         await super()._clean_state()
 
@@ -96,16 +102,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         for row in results.to_dict(orient="records"):
             try:
-                if not state["transformer"]:
+                if not state.transformer:
                     raise ValueError("Transformer is not set")
 
-                transformed_metadata: Optional[Dict[str, Any]] = state[
-                    "transformer"
-                ].transform_metadata(
-                    typename,
-                    row,
-                    workflow_id=workflow_id,
-                    workflow_run_id=workflow_run_id,
+                transformed_metadata: Optional[Dict[str, Any]] = (
+                    state.transformer.transform_metadata(
+                        typename,
+                        row,
+                        workflow_id=workflow_id,
+                        workflow_run_id=workflow_run_id,
+                    )
                 )
                 if transformed_metadata is not None:
                     transformed_metadata_list.append(transformed_metadata)
@@ -121,7 +127,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         state = await self._get_state(workflow_args)
-        handler = state["handler"]
+        handler = state.handler
 
         if not handler:
             raise ValueError("Preflight check handler not found")
@@ -142,7 +148,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state["sql_client"].engine,
+            engine=state.sql_client.engine,
             query=prepare_query(self.fetch_database_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -173,7 +179,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state["sql_client"].engine,
+            engine=state.sql_client.engine,
             query=prepare_query(self.fetch_schema_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -204,7 +210,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state["sql_client"].engine,
+            engine=state.sql_client.engine,
             query=prepare_query(self.fetch_table_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -235,7 +241,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state["sql_client"].engine,
+            engine=state.sql_client.engine,
             query=prepare_query(self.fetch_column_sql, workflow_args),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
