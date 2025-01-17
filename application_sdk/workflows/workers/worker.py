@@ -21,7 +21,7 @@ class WorkflowWorker:
         self,
         temporal_client: TemporalClient | None = None,
         temporal_activities: List[CallableType] | None = [],
-        passthrough_modules: List[str] | None = ["application_sdk", "os"],
+        passthrough_modules: List[str] | None = ["application_sdk", "os", "threading"],
         workflow_classes: List[Any] | None = [],
     ):
         self.temporal_client = temporal_client

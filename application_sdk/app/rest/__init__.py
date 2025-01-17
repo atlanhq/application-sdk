@@ -5,7 +5,7 @@ from uvicorn import Config, Server
 from uvicorn._types import ASGIApplication
 
 from application_sdk.app import AtlanApplication, AtlanApplicationConfig
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 
 
 class AtlanAPIApplicationConfig(AtlanApplicationConfig):
@@ -24,7 +24,7 @@ class AtlanAPIApplication(AtlanApplication, ABC):
 
     def __init__(
         self,
-        handler: Optional[WorkflowHandlerInterface] = None,
+        handler: Optional[HandlerInterface] = None,
         config: AtlanAPIApplicationConfig = AtlanAPIApplicationConfig(),
     ):
         super().__init__(

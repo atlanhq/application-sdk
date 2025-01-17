@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any, Optional, Sequence, Type
+from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowFailureError
@@ -30,6 +30,7 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
+from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -147,13 +148,16 @@ class TemporalClient(ClientInterface):
 
         super().__init__()
 
+    # TODO: load or prepare, whats the right name?
     async def load(self):
         self.client = await Client.connect(
             self.config.get_connection_string(),
             namespace=self.config.get_namespace(),
         )
 
-    async def start_workflow(self, workflow_args: Any, workflow_class: Any):
+    async def start_workflow(
+        self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
+    ) -> None:
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
             workflow_args["credential_guid"] = StateStore.store_credentials(

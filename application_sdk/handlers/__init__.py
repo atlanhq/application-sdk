@@ -4,11 +4,12 @@ from typing import Any, Dict
 from application_sdk.inputs.statestore import StateStore
 
 
-class WorkflowHandlerInterface(ABC):
+class HandlerInterface(ABC):
     """
     Abstract base class for workflow handlers
     """
 
+    # TODO: Need for prepare? Or should we call it load?
     @abstractmethod
     async def prepare(self, **kwargs: Any) -> None:
         """

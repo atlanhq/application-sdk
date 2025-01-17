@@ -8,9 +8,9 @@ from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 import daft
 import pandas as pd
 
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
-from application_sdk.activities import ActivitiesInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -66,6 +66,7 @@ async def prepare_fn_kwargs(
     args: Dict[str, Any],
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
+    state: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Helper method to prepare the kwargs for the function
@@ -79,6 +80,7 @@ async def prepare_fn_kwargs(
             fn_kwargs[name] = await _get_dataframe(arg, get_dataframe_fn)
         else:
             fn_kwargs[name] = arg
+    fn_kwargs["state"] = state
     return fn_kwargs
 
 
@@ -145,14 +147,18 @@ async def run_process(
     args: Dict[str, Any],
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
-    state: Dict[str, Any],
-):
+):            
+    state = None
+    if hasattr(self, "_get_state"):
+        state = await self._get_state(args[0])
+
     fn_kwargs = await prepare_fn_kwargs(
         self=self,
         get_dataframe_fn=get_dataframe_fn,
         args=args,
         inner_kwargs=inner_kwargs,
         kwargs=kwargs,
+        state=state,
     )
 
     # If batch_input is not provided, we'll call the function directly
@@ -160,7 +166,7 @@ async def run_process(
     if batch_input is None:
         return await f(self, **fn_kwargs)
 
-    batch_input_obj = batch_input(self, *args, state=state)
+    batch_input_obj = batch_input(self, *args, **fn_kwargs)
     # We'll decide whether to read the data in chunks or not based on the chunk_size attribute
     # If chunk_size is None, we'll read the data in one go
     if not hasattr(batch_input_obj, "chunk_size") or not batch_input_obj.chunk_size:
@@ -188,7 +194,6 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
     def decorator(f):
         @wraps(f)
         async def new_fn(self: ActivitiesInterface, *args, **inner_kwargs):
-            state = await self._get_state(args[0])
             return await run_process(
                 self=self,
                 f=f,
@@ -198,7 +203,6 @@ def activity_pd(batch_input: Optional[Input] = None, **kwargs):
                 args=args,
                 inner_kwargs=inner_kwargs,
                 kwargs=kwargs,
-                state=state,
             )
 
         return new_fn

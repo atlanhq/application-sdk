@@ -9,7 +9,7 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
-from application_sdk.handlers import WorkflowHandlerInterface
+from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
 from application_sdk.workflows.builder import WorkflowBuilderInterface
 from application_sdk.workflows.workflow import WorkflowInterface
@@ -26,13 +26,13 @@ class SampleWorkflowBuilder(WorkflowBuilderInterface):
 
 class TestFastAPIApplication:
     @pytest.fixture
-    def mock_handler(self) -> WorkflowHandlerInterface:
-        handler = Mock(spec=WorkflowHandlerInterface)
+    def mock_handler(self) -> HandlerInterface:
+        handler = Mock(spec=HandlerInterface)
         handler.preflight_check = AsyncMock()
         return handler
 
     @pytest.fixture
-    def app(self, mock_handler: WorkflowHandlerInterface) -> FastAPIApplication:
+    def app(self, mock_handler: HandlerInterface) -> FastAPIApplication:
         return FastAPIApplication(handler=mock_handler)
 
     @pytest.fixture
@@ -63,7 +63,7 @@ class TestFastAPIApplication:
     async def test_preflight_check_success(
         self,
         app: FastAPIApplication,
-        mock_handler: WorkflowHandlerInterface,
+        mock_handler: HandlerInterface,
         sample_payload: Dict[str, Any],
     ) -> None:
         """Test successful preflight check response"""
@@ -96,7 +96,7 @@ class TestFastAPIApplication:
     async def test_preflight_check_failure(
         self,
         app: FastAPIApplication,
-        mock_handler: WorkflowHandlerInterface,
+        mock_handler: HandlerInterface,
         sample_payload: Dict[str, Any],
     ) -> None:
         """Test preflight check with failed handler response"""
