@@ -9,11 +9,11 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.workflows import WorkflowInterface
+from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 
 @workflow.defn
-class SQLMetadataExtractionWorkflow(WorkflowInterface):
+class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     activities_cls: Type[SQLMetadataExtractionActivities] = (
         SQLMetadataExtractionActivities
     )
