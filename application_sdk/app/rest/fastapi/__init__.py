@@ -203,7 +203,7 @@ class FastAPIApplication(AtlanAPIApplication):
         """
         Get the credentials from the request body and test the authentication
         """
-        await self.handler.prepare(body.model_dump())
+        await self.handler.load(body.model_dump())
         await self.handler.test_auth()
         return TestAuthResponse(success=True, message="Authentication successful")
 
@@ -211,7 +211,7 @@ class FastAPIApplication(AtlanAPIApplication):
         """
         Get the credentials from the request body and fetch the metadata
         """
-        await self.handler.prepare(body.model_dump())
+        await self.handler.load(body.model_dump())
         metadata = await self.handler.fetch_metadata(
             metadata_type=body.root["type"], database=body.root["database"]
         )

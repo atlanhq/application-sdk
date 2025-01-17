@@ -54,7 +54,6 @@ class SQLClient(ClientInterface):
     def __init__(self):
         super().__init__()
 
-    # TODO: load vs prepare?
     async def load(self, credentials: Dict[str, Any]):
         self.credentials = credentials
         self.engine = create_engine(

@@ -36,9 +36,9 @@ class SQLHandler(HandlerInterface):
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client
 
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, credentials: Dict[str, Any]) -> None:
         """
-        Method to prepare and load the SQL client
+        Method to load and load the SQL client
         """
         self.sql_client.set_credentials(credentials)
         await self.sql_client.load()
