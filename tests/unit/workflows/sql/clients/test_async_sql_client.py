@@ -11,9 +11,8 @@ from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture
-def config():
-    # Create a sample SQLClientConfig object with mock credentials
-    return SQLClientConfig(
+def async_sql_client(config: SQLClientConfig):
+    resource = AsyncSQLClient(
         credentials={
             "user": "test_user",
             "password": "test_password",
@@ -23,11 +22,6 @@ def config():
         },
         sql_alchemy_connect_args={},
     )
-
-
-@pytest.fixture
-def async_sql_client(config: SQLClientConfig):
-    resource = AsyncSQLClient(config=config)
     resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return resource
 
