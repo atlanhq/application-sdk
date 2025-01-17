@@ -139,11 +139,9 @@ async def application_sql() -> None:
         workflow_classes=[SQLMetadataExtractionWorkflow],
         temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
+
     # Start the worker in a separate thread
-    worker_thread = threading.Thread(
-        target=lambda: asyncio.run(worker.start()), daemon=True
-    )
-    worker_thread.start()
+    await worker.start(daemon=True)
 
     # wait for the worker to start
     time.sleep(3)

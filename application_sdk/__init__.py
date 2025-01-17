@@ -66,6 +66,7 @@ async def prepare_fn_kwargs(
     args: Dict[str, Any],
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
+    state: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Helper method to prepare the kwargs for the function
@@ -79,6 +80,7 @@ async def prepare_fn_kwargs(
             fn_kwargs[name] = await _get_dataframe(arg, get_dataframe_fn)
         else:
             fn_kwargs[name] = arg
+    fn_kwargs["state"] = state
     return fn_kwargs
 
 
@@ -145,7 +147,6 @@ async def run_process(
     args: Dict[str, Any],
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
-    state: Dict[str, Any],
 ):            
     state = None
     if hasattr(self, "_get_state"):

@@ -1,5 +1,7 @@
 import logging
 from typing import Any, List, Sequence
+import asyncio
+import threading
 
 from temporalio.types import CallableType
 
@@ -14,7 +16,7 @@ class Worker:
         self,
         temporal_client: TemporalClient | None = None,
         temporal_activities: Sequence[CallableType] = [],
-        passthrough_modules: List[str] = ["application_sdk", "os", "threading"],
+        passthrough_modules: List[str] = ["application_sdk", "os"],
         workflow_classes: List[Any] = [],
     ):
         self.temporal_client = temporal_client
@@ -23,7 +25,14 @@ class Worker:
         self.workflow_classes = workflow_classes
         self.passthrough_modules = passthrough_modules
 
-    async def start(self, *args: Any, **kwargs: Any) -> None:
+    async def start(self, daemon: bool = False, *args: Any, **kwargs: Any) -> None:
+        if daemon:
+            worker_thread = threading.Thread(
+                target=lambda: asyncio.run(self.start(daemon = False)), daemon=True
+            )
+            worker_thread.start()
+            return
+
         if not self.temporal_client:
             raise ValueError("Temporal client is not set")
 
