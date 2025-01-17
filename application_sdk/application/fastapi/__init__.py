@@ -59,7 +59,6 @@ class FastAPIApplication(AtlanApplicationInterface):
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
-        config=None,
         *args,
         **kwargs,
     ):
@@ -70,7 +69,6 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.handler = handler
         super().__init__(
             handler,
-            config,
             *args,
             **kwargs,
         )
