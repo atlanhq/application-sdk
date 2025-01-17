@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi.testclient import TestClient
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
+from application_sdk.application.fastapi import FastAPIApplication
 from application_sdk.handlers.sql import SQLHandler
 
 
@@ -37,7 +37,6 @@ def app(
     """Create FastAPI test application"""
     app = FastAPIApplication(handler=handler)
     app.register_routers()
-    app.register_routes()
     return app
 
 

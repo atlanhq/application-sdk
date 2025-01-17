@@ -3,12 +3,11 @@ from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
 from pydantic import BaseModel
+from uvicorn import Config, Server
 
-from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
-from application_sdk.app.rest.fastapi.middlewares.error_handler import (
-    internal_server_error_handler,
-)
-from application_sdk.app.rest.fastapi.models.workflow import (
+from application_sdk.application import AtlanApplicationInterface
+from application_sdk.application.fastapi.models import MetadataType  # noqa: F401
+from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
     PreflightCheckRequest,
@@ -21,10 +20,8 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.app.rest.fastapi.routers.health import get_health_router
-from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
-from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
-from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
+from application_sdk.application.fastapi.routers.health import get_health_router
+from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore import EventStore
@@ -32,14 +29,6 @@ from application_sdk.paas.eventstore.models import AtlanEvent
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-
-
-class FastAPIApplicationConfig(AtlanAPIApplicationConfig):
-    lifespan = None
-
-    def __init__(self, lifespan=None, *args, **kwargs):
-        self.lifespan = lifespan
-        super().__init__(*args, **kwargs)
 
 
 class WorkflowTrigger(BaseModel):
@@ -56,7 +45,7 @@ class EventWorkflowTrigger(WorkflowTrigger):
     should_trigger_workflow: Callable[[Any], bool]
 
 
-class FastAPIApplication(AtlanAPIApplication):
+class FastAPIApplication(AtlanApplicationInterface):
     app: FastAPI
 
     workflow_router: APIRouter = APIRouter()
@@ -68,40 +57,39 @@ class FastAPIApplication(AtlanAPIApplication):
 
     def __init__(
         self,
+        lifespan=None,
         handler: Optional[HandlerInterface] = None,
-        config: FastAPIApplicationConfig = FastAPIApplicationConfig(),
         *args,
         **kwargs,
     ):
-        self.app = FastAPI(lifespan=config.lifespan if config else None)
+        self.app = FastAPI(lifespan=lifespan)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
         self.handler = handler
         super().__init__(
             handler,
-            config,
             *args,
             **kwargs,
         )
 
     def register_routers(self):
-        self.app.include_router(get_health_router())
-        self.app.include_router(get_logs_router())
-        self.app.include_router(get_metrics_router())
-        self.app.include_router(get_traces_router())
+        super().register_routers()
 
+        # Register all routes first
+        self.register_routes()
+
+        # Then include all routers
+        self.app.include_router(get_health_router())
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
-
-        super().register_routers()
 
     def register_workflow(
         self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
         for trigger in triggers:
-            trigger.workflow = workflow
+            trigger.workflow_class = workflow_class
 
             if isinstance(trigger, HttpWorkflowTrigger):
 
@@ -129,6 +117,8 @@ class FastAPIApplication(AtlanAPIApplication):
                 self.event_triggers.append(trigger)
 
     def register_routes(self):
+        super().register_routes()
+
         self.workflow_router.add_api_route(
             "/auth",
             self.test_auth,
@@ -173,8 +163,6 @@ class FastAPIApplication(AtlanAPIApplication):
             self.on_event,
             methods=["POST"],
         )
-
-        super().register_routes()
 
     async def get_dapr_subscriptions(
         self,
@@ -244,3 +232,13 @@ class FastAPIApplication(AtlanAPIApplication):
             message="Workflow configuration updated successfully",
             data=config,
         )
+
+    async def start(self, host: str = "0.0.0.0", port: int = 8000):
+        server = Server(
+            Config(
+                app=self.app,
+                host=host,
+                port=port,
+            )
+        )
+        await server.serve()

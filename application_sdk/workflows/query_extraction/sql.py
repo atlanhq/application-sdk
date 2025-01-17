@@ -8,8 +8,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
-from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows import WorkflowInterface

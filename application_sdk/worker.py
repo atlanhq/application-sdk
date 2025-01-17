@@ -1,7 +1,7 @@
-import logging
-from typing import Any, List, Sequence
 import asyncio
+import logging
 import threading
+from typing import Any, List, Sequence
 
 from temporalio.types import CallableType
 
@@ -28,7 +28,7 @@ class Worker:
     async def start(self, daemon: bool = False, *args: Any, **kwargs: Any) -> None:
         if daemon:
             worker_thread = threading.Thread(
-                target=lambda: asyncio.run(self.start(daemon = False)), daemon=True
+                target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
             )
             worker_thread.start()
             return
