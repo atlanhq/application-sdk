@@ -1,6 +1,6 @@
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Callable, Dict, Optional, Sequence, Type
+from typing import Any, Callable, Dict, Sequence, Type
 
 from temporalio import workflow as temporal_workflow
 from temporalio.common import RetryPolicy

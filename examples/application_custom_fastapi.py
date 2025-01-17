@@ -1,6 +1,6 @@
 import asyncio
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import APIRouter
 

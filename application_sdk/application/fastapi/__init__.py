@@ -59,7 +59,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
-        config = None,
+        config=None,
         *args,
         **kwargs,
     ):

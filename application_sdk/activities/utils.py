@@ -7,6 +7,7 @@ from temporalio import activity
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
+
 def get_workflow_id() -> str:
     return activity.info().workflow_id
 
