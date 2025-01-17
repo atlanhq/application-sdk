@@ -13,32 +13,6 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-# TODO: File name should sql.py
-class SQLClientConfig:
-    use_server_side_cursor: bool = True
-    credentials: Dict[str, Any] = None
-    sql_alchemy_connect_args: Dict[str, Any] = None
-
-    def __init__(
-        self,
-        use_server_side_cursor: bool = True,
-        credentials: Dict[str, Any] = None,
-        sql_alchemy_connect_args: Dict[str, Any] = {},
-    ):
-        self.use_server_side_cursor = use_server_side_cursor
-        self.credentials = credentials
-        self.sql_alchemy_connect_args = sql_alchemy_connect_args
-
-    def set_credentials(self, credentials: Dict[str, Any]):
-        self.credentials = credentials
-
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
-        return self.sql_alchemy_connect_args
-
-    def set_sql_alchemy_connect_args(self, sql_alchemy_connect_args: Dict[str, Any]):
-        self.sql_alchemy_connect_args = sql_alchemy_connect_args
-
-
 class SQLClient(ClientInterface):
     connection = None
     engine = None
@@ -51,8 +25,25 @@ class SQLClient(ClientInterface):
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = True
 
-    def __init__(self):
+    def __init__(
+        self,
+        use_server_side_cursor: bool = True,
+        credentials: Dict[str, Any] = None,
+        sql_alchemy_connect_args: Dict[str, Any] = {},
+    ):
         super().__init__()
+        self.use_server_side_cursor = use_server_side_cursor
+        self.credentials = credentials
+        self.sql_alchemy_connect_args = sql_alchemy_connect_args
+
+    def set_credentials(self, credentials: Dict[str, Any]):
+        self.credentials = credentials
+
+    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
+        return self.sql_alchemy_connect_args
+
+    def set_sql_alchemy_connect_args(self, sql_alchemy_connect_args: Dict[str, Any]):
+        self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
     async def load(self, credentials: Dict[str, Any]):
         self.credentials = credentials

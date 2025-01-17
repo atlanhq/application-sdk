@@ -11,7 +11,7 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk import activity_pd
-from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
+from application_sdk.clients.sql_client import SQLClient
 from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
@@ -314,7 +314,7 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
             credentials = StateStore.extract_credentials(
                 workflow_args["credential_guid"]
             )
-            self.sql_client = SQLClient(SQLClientConfig(credentials=credentials))
+            self.sql_client = SQLClient(credentials=credentials)
 
         if not self.temporal_client:
             self.temporal_client = TemporalClient(
