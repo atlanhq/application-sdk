@@ -134,10 +134,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         if not handler:
             raise ValueError("Preflight check handler not found")
 
-        # TODO: Remove form_data
+        # TODO: Remove metadata
         result = await handler.preflight_check(
             {
-                "form_data": workflow_args["metadata"],
+                "metadata": workflow_args["metadata"],
             }
         )
         if not result or "error" in result:
