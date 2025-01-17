@@ -180,11 +180,11 @@ class FastAPIApplication(AtlanApplicationInterface):
         for trigger in self.event_triggers:
             if trigger.should_trigger_workflow(AtlanEvent(**event)):
                 logger.info(
-                    f"Triggering workflow {trigger.workflow} with event {event}"
+                    f"Triggering workflow {trigger.workflow_class} with event {event}"
                 )
 
-                await trigger.workflow.start(
-                    workflow_args=event, workflow_class=trigger.workflow.__class__
+                await trigger.workflow_class.start(
+                    workflow_args=event, workflow_class=trigger.workflow_class.__class__
                 )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:

@@ -16,7 +16,7 @@ from application_sdk.workflows.builder import WorkflowBuilderInterface
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
-class SampleWorkflow(AsyncMock):
+class SampleWorkflow(WorkflowInterface):
     pass
 
 
@@ -126,7 +126,10 @@ class TestFastAPIApplication:
         app.register_workflow(
             sample_workflow,
             triggers=[
-                EventWorkflowTrigger(should_trigger_workflow=should_trigger_workflow)
+                EventWorkflowTrigger(
+                    should_trigger_workflow=should_trigger_workflow,
+                    workflow_class=SampleWorkflow,
+                )
             ],
         )
 
@@ -171,8 +174,14 @@ class TestFastAPIApplication:
         app.register_workflow(
             sample_workflow,
             triggers=[
-                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_on_start),
-                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_name),
+                EventWorkflowTrigger(
+                    should_trigger_workflow=trigger_workflow_on_start,
+                    workflow_class=SampleWorkflow,
+                ),
+                EventWorkflowTrigger(
+                    should_trigger_workflow=trigger_workflow_name,
+                    workflow_class=SampleWorkflow,
+                ),
             ],
         )
 

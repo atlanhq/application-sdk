@@ -5,24 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.clients.sql import AsyncSQLClient, SQLClientConfig
+from application_sdk.clients.sql import AsyncSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture
-def async_sql_client(config: SQLClientConfig):
-    resource = AsyncSQLClient(
-        credentials={
-            "user": "test_user",
-            "password": "test_password",
-            "host": "localhost",
-            "port": 5432,
-            "database": "test_db",
-        },
-        sql_alchemy_connect_args={},
-    )
-    resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
-    return resource
+def async_sql_client():
+    client = AsyncSQLClient()
+    client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
+    return client
 
 
 @pytest.fixture
@@ -33,26 +24,22 @@ def handler(async_sql_client: Any) -> SQLHandler:
     return handler
 
 
-def test_init_without_config():
-    with pytest.raises(ValueError, match="config is required"):
-        AsyncSQLClient()
-
-
-@patch("application_sdk.clients.async_sql_client.create_async_engine")
+@patch("application_sdk.clients.sql.create_async_engine")
 def test_load(create_async_engine: Any, async_sql_client: AsyncSQLClient):
     # Mock the engine and connection
     mock_engine = AsyncMock()
     mock_connection = MagicMock()
     create_async_engine.return_value = mock_engine
     mock_engine.connect.return_value = mock_connection
+    credentials = {"user": "test_user", "password": "test_password"}
 
     # Run the load function
-    asyncio.run(async_sql_client.load())
+    asyncio.run(async_sql_client.load(credentials))
 
     # Assertions to verify behavior
     create_async_engine.assert_called_once_with(
         async_sql_client.get_sqlalchemy_connection_string(),
-        connect_args=async_sql_client.config.get_sqlalchemy_connect_args(),
+        connect_args=async_sql_client.sql_alchemy_connect_args,
         pool_pre_ping=True,
     )
     assert async_sql_client.engine == mock_engine
@@ -151,7 +138,7 @@ async def test_fetch_metadata_with_error(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.async_sql_client.text",
+    "application_sdk.clients.sql.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_client_side_cursor(
@@ -178,8 +165,7 @@ async def test_run_query_client_side_cursor(
     async_sql_client.connection.execute = AsyncMock(return_value=mock_result)
 
     # Set the configuration to NOT use server-side cursor
-    async_sql_client.config = MagicMock()
-    async_sql_client.config.use_server_side_cursor = False
+    async_sql_client.use_server_side_cursor = False
 
     # Call the run_query method
     results: list[dict[str, str]] = []
@@ -201,7 +187,7 @@ async def test_run_query_client_side_cursor(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.async_sql_client.text",
+    "application_sdk.clients.sql.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_server_side_cursor(
@@ -231,8 +217,7 @@ async def test_run_query_server_side_cursor(
     async_sql_client.connection.execution_options.side_effect = empty_fn
 
     # Set the configuration to use server-side cursor
-    async_sql_client.config = MagicMock()
-    async_sql_client.config.use_server_side_cursor = True
+    async_sql_client.use_server_side_cursor = True
 
     # Call the run_query method
     results: list[dict[str, str]] = []
@@ -254,7 +239,7 @@ async def test_run_query_server_side_cursor(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.async_sql_client.text",
+    "application_sdk.clients.sql.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_with_error(mock_text: MagicMock, async_sql_client: MagicMock):
@@ -277,8 +262,7 @@ async def test_run_query_with_error(mock_text: MagicMock, async_sql_client: Magi
     async_sql_client.connection.execution_options.side_effect = empty_fn
 
     # Set the configuration to use server-side cursor
-    async_sql_client.config = MagicMock()
-    async_sql_client.config.use_server_side_cursor = True
+    async_sql_client.use_server_side_cursor = True
 
     results: list[dict[str, str]] = []
     with pytest.raises(Exception, match="Simulated query failure"):
