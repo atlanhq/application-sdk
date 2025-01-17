@@ -147,7 +147,7 @@ async def run_process(
     args: Dict[str, Any],
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
-):            
+):
     state = None
     if hasattr(self, "_get_state"):
         state = await self._get_state(args[0])

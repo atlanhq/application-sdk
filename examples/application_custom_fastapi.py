@@ -1,10 +1,10 @@
 import asyncio
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
+from application_sdk.application.fastapi import FastAPIApplication
 from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows.workflow import WorkflowInterface
 
@@ -50,16 +50,13 @@ class MyCustomFastAPIApplication(FastAPIApplication):
 
         super().register_routes()
 
-    async def test(self, **kwargs) -> Dict[str, str]:
+    async def test(self, **kwargs: Dict[str, Any]) -> Dict[str, str]:
         return {"message": "Hello, World!"}
 
 
 async def application_custom_fastapi():
-    fast_api_app = MyCustomFastAPIApplication(
-        auth_controller=WorkflowAuthController(),
-        metadata_controller=WorkflowMetadataController(),
-        preflight_check_controller=WorkflowPreflightCheckController(),
-    )
+    handler = CustomHandler()
+    fast_api_app = MyCustomFastAPIApplication(handler=handler, config=None)
 
     await fast_api_app.start()
 

@@ -7,7 +7,7 @@ from typing import Any, Callable, List
 
 from temporalio import activity, workflow
 
-from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
+from application_sdk.application.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.clients.constants import TemporalConstants
 from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter

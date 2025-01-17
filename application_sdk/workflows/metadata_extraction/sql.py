@@ -10,7 +10,6 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows import WorkflowInterface
-from application_sdk.workflows.sql.utils import prepare_query
 
 
 @workflow.defn

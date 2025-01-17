@@ -29,11 +29,8 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 import asyncio
 import logging
 import os
-import threading
 import time
 from urllib.parse import quote_plus
-
-from temporalio import workflow
 
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,

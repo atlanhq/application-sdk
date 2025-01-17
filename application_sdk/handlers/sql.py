@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import pandas as pd
 
 from application_sdk import activity_pd
-from application_sdk.app.rest.fastapi.models.workflow import MetadataType
+from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql_client import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface
