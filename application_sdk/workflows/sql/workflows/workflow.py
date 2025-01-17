@@ -108,6 +108,8 @@ class SQLWorkflow(WorkflowInterface):
         typename: str,
         workflow_id: str,
         workflow_run_id: str,
+        connection_name: str,
+        connection_qualified_name: str,
     ) -> None:
         """
         Process a batch of results.
@@ -135,6 +137,8 @@ class SQLWorkflow(WorkflowInterface):
                         row,
                         workflow_id=workflow_id,
                         workflow_run_id=workflow_run_id,
+                        connection_name=connection_name,
+                        connection_qualified_name=connection_qualified_name,
                     )
                 )
                 if transformed_metadata is not None:
@@ -348,8 +352,10 @@ class SQLWorkflow(WorkflowInterface):
         typename = kwargs.get("typename")
         workflow_id = kwargs.get("workflow_id")
         workflow_run_id = kwargs.get("workflow_run_id")
+        connection_name = kwargs.get('connection', {}).get('connection_name', None)
+        connection_qualified_name = kwargs.get('connection', {}).get('connection_qualified_name', None)
         transformed_chunk = await self._transform_batch(
-            batch_input, typename, workflow_id, workflow_run_id
+            batch_input, typename, workflow_id, workflow_run_id, connection_name, connection_qualified_name
         )
         await transformed_output.write_df(transformed_chunk)
         return {
