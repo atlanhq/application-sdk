@@ -36,9 +36,8 @@ from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
-from application_sdk.clients.async_sql_client import AsyncSQLClient
-from application_sdk.clients.sql_client import SQLClientConfig
-from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.clients.sql import AsyncSQLClient
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.workflows.controllers import (
     WorkflowPreflightCheckControllerInterface,
@@ -149,9 +148,7 @@ async def application_sql_with_custom_transformer():
     print("Starting application_sql_with_custom_transformer")
 
     temporal_client = TemporalClient(
-        TemporalConfig(
-            application_name=APPLICATION_NAME,
-        )
+        application_name=APPLICATION_NAME,
     )
     await temporal_client.load()
 
@@ -162,7 +159,7 @@ async def application_sql_with_custom_transformer():
         tenant_id="1234567890",
     )
 
-    sql_client = PostgreSQLClient(SQLClientConfig())
+    sql_client = PostgreSQLClient()
 
     workflow: SQLWorkflow = (
         SampleSQLWorkflowBuilder()
