@@ -91,7 +91,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
         for trigger in triggers:
-            trigger.workflow = workflow
+            trigger.workflow_class = workflow_class
 
             if isinstance(trigger, HttpWorkflowTrigger):
 

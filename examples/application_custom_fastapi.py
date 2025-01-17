@@ -50,16 +50,13 @@ class MyCustomFastAPIApplication(FastAPIApplication):
 
         super().register_routes()
 
-    async def test(self, **kwargs) -> Dict[str, str]:
+    async def test(self, **kwargs: Dict[str, Any]) -> Dict[str, str]:
         return {"message": "Hello, World!"}
 
 
 async def application_custom_fastapi():
-    fast_api_app = MyCustomFastAPIApplication(
-        auth_controller=WorkflowAuthController(),
-        metadata_controller=WorkflowMetadataController(),
-        preflight_check_controller=WorkflowPreflightCheckController(),
-    )
+    handler = CustomHandler()
+    fast_api_app = MyCustomFastAPIApplication(handler=handler, config=None)
 
     await fast_api_app.start()
 
