@@ -10,11 +10,9 @@ from application_sdk.application.fastapi import (
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
+from application_sdk.handlers import WorkflowHandlerInterface
 from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
 from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.controllers import (
-    WorkflowPreflightCheckControllerInterface,
-)
 from application_sdk.workflows.workflow import WorkflowInterface
 
 
@@ -29,16 +27,14 @@ class SampleWorkflowBuilder(WorkflowBuilderInterface):
 
 class TestFastAPIApplication:
     @pytest.fixture
-    def mock_controller(self) -> WorkflowPreflightCheckControllerInterface:
-        controller = Mock(spec=WorkflowPreflightCheckControllerInterface)
-        controller.preflight_check = AsyncMock()
-        return controller
+    def mock_handler(self) -> WorkflowHandlerInterface:
+        handler = Mock(spec=WorkflowHandlerInterface)
+        handler.preflight_check = AsyncMock()
+        return handler
 
     @pytest.fixture
-    def app(
-        self, mock_controller: WorkflowPreflightCheckControllerInterface
-    ) -> FastAPIApplication:
-        return FastAPIApplication(preflight_check_controller=mock_controller)
+    def app(self, mock_handler: WorkflowHandlerInterface) -> FastAPIApplication:
+        return FastAPIApplication(handler=mock_handler)
 
     @pytest.fixture
     def sample_workflow(self) -> SampleWorkflow:
@@ -68,7 +64,7 @@ class TestFastAPIApplication:
     async def test_preflight_check_success(
         self,
         app: FastAPIApplication,
-        mock_controller: WorkflowPreflightCheckControllerInterface,
+        mock_handler: WorkflowHandlerInterface,
         sample_payload: Dict[str, Any],
     ) -> None:
         """Test successful preflight check response"""
@@ -82,7 +78,7 @@ class TestFastAPIApplication:
                 },
             }
         }
-        mock_controller.preflight_check.return_value = expected_data
+        mock_handler.preflight_check.return_value = expected_data
 
         # Create request object and call the function
         request = PreflightCheckRequest(**sample_payload)
@@ -94,21 +90,19 @@ class TestFastAPIApplication:
         assert response.success is True
         assert response.data == expected_data
 
-        # Verify controller was called with correct arguments
-        mock_controller.preflight_check.assert_called_once_with(sample_payload)
+        # Verify handler was called with correct arguments
+        mock_handler.preflight_check.assert_called_once_with(sample_payload)
 
     @pytest.mark.asyncio
     async def test_preflight_check_failure(
         self,
         app: FastAPIApplication,
-        mock_controller: WorkflowPreflightCheckControllerInterface,
+        mock_handler: WorkflowHandlerInterface,
         sample_payload: Dict[str, Any],
     ) -> None:
-        """Test preflight check with failed controller response"""
+        """Test preflight check with failed handler response"""
         # Arrange
-        mock_controller.preflight_check.side_effect = Exception(
-            "Failed to fetch metadata"
-        )
+        mock_handler.preflight_check.side_effect = Exception("Failed to fetch metadata")
 
         # Create request object
         request = PreflightCheckRequest(**sample_payload)
@@ -118,7 +112,7 @@ class TestFastAPIApplication:
             await app.preflight_check(request)
 
         assert str(exc_info.value) == "Failed to fetch metadata"
-        mock_controller.preflight_check.assert_called_once_with(sample_payload)
+        mock_handler.preflight_check.assert_called_once_with(sample_payload)
 
     async def test_event_trigger_success(
         self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder

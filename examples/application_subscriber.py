@@ -8,6 +8,8 @@ from typing import Any, Callable, List
 from temporalio import activity, workflow
 
 from application_sdk.application.fastapi import EventWorkflowTrigger, FastAPIApplication
+from application_sdk.clients.constants import TemporalConstants
+from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.paas.eventstore import EventStore
@@ -18,11 +20,6 @@ from application_sdk.paas.eventstore.models import (
     WorkflowEndEvent,
 )
 from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.resources.constants import TemporalConstants
-from application_sdk.workflows.resources.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
 from application_sdk.workflows.workers.worker import WorkflowWorker
 from application_sdk.workflows.workflow import WorkflowInterface
 
@@ -104,32 +101,32 @@ class SampleWorkflow(WorkflowInterface):
 
 
 class SampleWorkflowBuilder(WorkflowBuilderInterface):
-    temporal_resource: TemporalResource
+    temporal_client: TemporalClient
 
-    def set_temporal_resource(
-        self, temporal_resource: TemporalResource
+    def set_temporal_client(
+        self, temporal_client: TemporalClient
     ) -> "SampleWorkflowBuilder":
-        self.temporal_resource = temporal_resource
+        self.temporal_client = temporal_client
         return self
 
     def build(self, workflow: SampleWorkflow | None = None) -> WorkflowInterface:
-        return SampleWorkflow().set_temporal_resource(self.temporal_resource)
+        return SampleWorkflow().set_temporal_client(self.temporal_client)
 
 
 async def start_worker():
-    temporal_resource = TemporalResource(
+    temporal_client = TemporalClient(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
         )
     )
-    await temporal_resource.load()
+    await temporal_client.load()
 
     workflow: WorkflowInterface = (
-        SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
+        SampleWorkflowBuilder().set_temporal_client(temporal_client).build()
     )
 
     worker: WorkflowWorker = WorkflowWorker(
-        temporal_resource=temporal_resource,
+        temporal_client=temporal_client,
         temporal_activities=workflow.get_activities(),
         workflow_classes=[SampleWorkflow],
         passthrough_modules=["application_sdk", "os", "pandas"],
@@ -163,14 +160,14 @@ async def start_fast_api_app():
 
         return False
 
-    temporal_resource = TemporalResource(
+    temporal_client = TemporalClient(
         TemporalConfig(
             application_name=TemporalConstants.APPLICATION_NAME.value,
         )
     )
-    await temporal_resource.load()
+    await temporal_client.load()
     sample_worflow = (
-        SampleWorkflowBuilder().set_temporal_resource(temporal_resource).build()
+        SampleWorkflowBuilder().set_temporal_client(temporal_client).build()
     )
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends

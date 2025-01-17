@@ -1,5 +1,39 @@
 import json
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Any
+
+
+def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
+    """
+    Method to prepare the query with the include and exclude filters.
+    Only fetches all metadata when both include and exclude filters are empty.
+    """
+    try:
+        metadata = workflow_args.get("metadata", workflow_args.get("form_data", {}))
+
+        # using "or" instead of default correct defaults are set in case of empty string
+        include_filter = metadata.get("include_filter") or "{}"
+        exclude_filter = metadata.get("exclude_filter") or "{}"
+        temp_table_regex = metadata.get("temp_table_regex") or "^$"
+
+        normalized_include_regex, normalized_exclude_regex = prepare_filters(
+            include_filter, exclude_filter
+        )
+
+        exclude_empty_tables = workflow_args.get("metadata", {}).get(
+            "exclude_empty_tables", False
+        )
+        exclude_views = workflow_args.get("metadata", {}).get("exclude_views", False)
+
+        return query.format(
+            normalized_include_regex=normalized_include_regex,
+            normalized_exclude_regex=normalized_exclude_regex,
+            exclude_table=temp_table_regex,
+            exclude_empty_tables=exclude_empty_tables,
+            exclude_views=exclude_views,
+        )
+    except Exception as e:
+        logger.error(f"Error preparing query [{query}]:  {e}")
+        return None
 
 
 def prepare_filters(

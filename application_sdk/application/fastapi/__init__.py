@@ -23,13 +23,9 @@ from application_sdk.application.fastapi.models import (
 from application_sdk.application.fastapi.routers.health import get_health_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.handlers import WorkflowHandlerInterface
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import AtlanEvent
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
 from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -61,11 +57,8 @@ class FastAPIApplication(AtlanApplicationInterface):
 
     def __init__(
         self,
-        auth_controller: WorkflowAuthControllerInterface | None = None,
-        metadata_controller: WorkflowMetadataControllerInterface | None = None,
-        preflight_check_controller: WorkflowPreflightCheckControllerInterface
-        | None = None,
         lifespan=None,
+        handler: Optional[WorkflowHandlerInterface] = None,
         *args,
         **kwargs,
     ):
@@ -73,15 +66,10 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
-
-        self.auth_controller = auth_controller
-        self.metadata_controller = metadata_controller
-        self.preflight_check_controller = preflight_check_controller
-
+        self.handler = handler
         super().__init__(
-            auth_controller,
-            metadata_controller,
-            preflight_check_controller,
+            handler,
+            config,
             *args,
             **kwargs,
         )
@@ -201,20 +189,19 @@ class FastAPIApplication(AtlanApplicationInterface):
                 )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
-        await self.auth_controller.prepare(body.model_dump())
-        await self.auth_controller.test_auth()
+        """
+        Get the credentials from the request body and test the authentication
+        """
+        await self.handler.prepare(body.model_dump())
+        await self.handler.test_auth()
         return TestAuthResponse(success=True, message="Authentication successful")
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
         """
-        Fetch metadata based on the requested type.
-        Args:
-            body: Request body containing optional type and database parameters
-        Returns:
-            FetchMetadataResponse containing the requested metadata
+        Get the credentials from the request body and fetch the metadata
         """
-        await self.metadata_controller.prepare(body.model_dump())
-        metadata = await self.metadata_controller.fetch_metadata(
+        await self.handler.prepare(body.model_dump())
+        metadata = await self.handler.fetch_metadata(
             metadata_type=body.root["type"], database=body.root["database"]
         )
         return FetchMetadataResponse(success=True, data=metadata)
@@ -222,13 +209,14 @@ class FastAPIApplication(AtlanApplicationInterface):
     async def preflight_check(
         self, body: PreflightCheckRequest
     ) -> PreflightCheckResponse:
-        preflight_check = await self.preflight_check_controller.preflight_check(
-            body.model_dump()
-        )
+        """
+        Get the credentials from the request body and perform preflight checks
+        """
+        preflight_check = await self.handler.preflight_check(body.model_dump())
         return PreflightCheckResponse(success=True, data=preflight_check)
 
     def get_workflow_config(self, config_id: str) -> WorkflowConfigResponse:
-        config = self.metadata_controller.get_workflow_config(config_id)
+        config = self.handler.get_workflow_config(config_id)
         return WorkflowConfigResponse(
             success=True,
             message="Workflow configuration fetched successfully",
@@ -239,9 +227,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self, config_id: str, body: WorkflowConfigRequest
     ) -> WorkflowConfigResponse:
         # note: it's assumed that the preflight check is successful if the config is being updated
-        config = self.metadata_controller.update_workflow_config(
-            config_id, body.model_dump()
-        )
+        config = self.handler.update_workflow_config(config_id, body.model_dump())
         return WorkflowConfigResponse(
             success=True,
             message="Workflow configuration updated successfully",

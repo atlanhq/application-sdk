@@ -5,16 +5,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pandas as pd
 import pytest
 
-from application_sdk.workflows.sql.resources.async_sql_resource import (
-    AsyncSQLResource,
-    SQLResourceConfig,
-)
+from application_sdk.clients.async_sql_client import AsyncSQLClient
+from application_sdk.clients.sql_client import SQLClientConfig
+from application_sdk.handlers.sql import SQLWorkflowHandler
 
 
 @pytest.fixture
 def config():
-    # Create a sample SQLResourceConfig object with mock credentials
-    return SQLResourceConfig(
+    # Create a sample SQLClientConfig object with mock credentials
+    return SQLClientConfig(
         credentials={
             "user": "test_user",
             "password": "test_password",
@@ -27,19 +26,27 @@ def config():
 
 
 @pytest.fixture
-def async_sql_resource(config: SQLResourceConfig):
-    resource = AsyncSQLResource(config=config)
+def async_sql_client(config: SQLClientConfig):
+    resource = AsyncSQLClient(config=config)
     resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return resource
 
 
+@pytest.fixture
+def handler(async_sql_client: Any) -> SQLWorkflowHandler:
+    handler = SQLWorkflowHandler(async_sql_client)
+    handler.database_alias_key = "TABLE_CATALOG"
+    handler.schema_alias_key = "TABLE_SCHEMA"
+    return handler
+
+
 def test_init_without_config():
     with pytest.raises(ValueError, match="config is required"):
-        AsyncSQLResource()
+        AsyncSQLClient()
 
 
-@patch("application_sdk.workflows.sql.resources.async_sql_resource.create_async_engine")
-def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLResource):
+@patch("application_sdk.clients.async_sql_client.create_async_engine")
+def test_load(create_async_engine: Any, async_sql_client: AsyncSQLClient):
     # Mock the engine and connection
     mock_engine = AsyncMock()
     mock_connection = MagicMock()
@@ -47,22 +54,20 @@ def test_load(create_async_engine: Any, async_sql_resource: AsyncSQLResource):
     mock_engine.connect.return_value = mock_connection
 
     # Run the load function
-    asyncio.run(async_sql_resource.load())
+    asyncio.run(async_sql_client.load())
 
     # Assertions to verify behavior
     create_async_engine.assert_called_once_with(
-        async_sql_resource.get_sqlalchemy_connection_string(),
-        connect_args=async_sql_resource.config.get_sqlalchemy_connect_args(),
+        async_sql_client.get_sqlalchemy_connection_string(),
+        connect_args=async_sql_client.config.get_sqlalchemy_connect_args(),
         pool_pre_ping=True,
     )
-    assert async_sql_resource.engine == mock_engine
-    assert async_sql_resource.connection == mock_connection
+    assert async_sql_client.engine == mock_engine
+    assert async_sql_client.connection == mock_connection
 
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
-async def test_fetch_metadata(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
-):
+async def test_fetch_metadata(mock_run_query: Any, handler: SQLWorkflowHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     mock_run_query.return_value = pd.DataFrame(data)
@@ -76,7 +81,7 @@ async def test_fetch_metadata(
         "database_alias_key": "TABLE_CATALOG",
         "schema_alias_key": "TABLE_SCHEMA",
     }
-    result = await async_sql_resource.fetch_metadata(args)
+    result = await handler.prepare_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -85,7 +90,7 @@ async def test_fetch_metadata(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
+    mock_run_query: Any, handler: SQLWorkflowHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -95,12 +100,12 @@ async def test_fetch_metadata_without_database_alias_key(
     metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    async_sql_resource.default_database_alias_key = "TABLE_CATALOG"
-    async_sql_resource.default_schema_alias_key = "TABLE_SCHEMA"
+    handler.default_database_alias_key = "TABLE_CATALOG"
+    handler.default_schema_alias_key = "TABLE_SCHEMA"
     args = {
         "metadata_sql": metadata_sql,
     }
-    result = await async_sql_resource.fetch_metadata(args)
+    result = await handler.prepare_metadata(args)
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -109,7 +114,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, async_sql_resource: AsyncSQLResource
+    mock_run_query: Any, handler: SQLWorkflowHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     mock_run_query.return_value = pd.DataFrame(data)
@@ -117,15 +122,12 @@ async def test_fetch_metadata_with_result_keys(
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
 
+    handler.database_result_key = "DATABASE"
+    handler.schema_result_key = "SCHEMA"
+
     # Run fetch_metadata
-    args = {
-        "metadata_sql": metadata_sql,
-        "database_alias_key": "TABLE_CATALOG",
-        "schema_alias_key": "TABLE_SCHEMA",
-        "database_result_key": "DATABASE",
-        "schema_result_key": "SCHEMA",
-    }
-    result = await async_sql_resource.fetch_metadata(args)
+    args = {"metadata_sql": metadata_sql}
+    result = await handler.prepare_metadata(args)
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
@@ -134,7 +136,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.AsyncSQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, async_sql_resource: AsyncSQLResource
+    mock_run_query: AsyncMock, handler: SQLWorkflowHandler
 ):
     mock_run_query.side_effect = Exception("Simulated query failure")
 
@@ -148,7 +150,7 @@ async def test_fetch_metadata_with_error(
             "database_alias_key": "TABLE_CATALOG",
             "schema_alias_key": "TABLE_SCHEMA",
         }
-        await async_sql_resource.fetch_metadata(args)
+        await handler.prepare_metadata(args)
 
     # Assertions
     mock_run_query.assert_called_once_with()
@@ -156,11 +158,11 @@ async def test_fetch_metadata_with_error(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.workflows.sql.resources.async_sql_resource.text",
+    "application_sdk.clients.async_sql_client.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_client_side_cursor(
-    mock_text: MagicMock, async_sql_resource: MagicMock
+    mock_text: MagicMock, async_sql_client: MagicMock
 ):
     # Mock the query
     query = "SELECT * FROM test_table"
@@ -179,16 +181,16 @@ async def test_run_query_client_side_cursor(
     )
 
     # Mock the connection and method execution
-    async_sql_resource.connection = MagicMock()
-    async_sql_resource.connection.execute = AsyncMock(return_value=mock_result)
+    async_sql_client.connection = MagicMock()
+    async_sql_client.connection.execute = AsyncMock(return_value=mock_result)
 
     # Set the configuration to NOT use server-side cursor
-    async_sql_resource.config = MagicMock()
-    async_sql_resource.config.use_server_side_cursor = False
+    async_sql_client.config = MagicMock()
+    async_sql_client.config.use_server_side_cursor = False
 
     # Call the run_query method
     results: list[dict[str, str]] = []
-    async for batch in async_sql_resource.run_query(query, batch_size=2):
+    async for batch in async_sql_client.run_query(query, batch_size=2):
         results.extend(batch)
 
     # Expected results formatted as dictionaries
@@ -199,18 +201,18 @@ async def test_run_query_client_side_cursor(
 
     # Assertions
     assert results == expected_results
-    async_sql_resource.connection.execute.assert_called_once_with(query)
+    async_sql_client.connection.execute.assert_called_once_with(query)
     mock_result.cursor.fetchmany.assert_called()
     mock_result.keys.assert_called_once()
 
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.workflows.sql.resources.async_sql_resource.text",
+    "application_sdk.clients.async_sql_client.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_server_side_cursor(
-    mock_text: MagicMock, async_sql_resource: MagicMock
+    mock_text: MagicMock, async_sql_client: MagicMock
 ):
     # Mock the query
     query = "SELECT * FROM test_table"
@@ -231,17 +233,17 @@ async def test_run_query_server_side_cursor(
         pass
 
     # Mock the connection and method execution
-    async_sql_resource.connection = MagicMock()
-    async_sql_resource.connection.stream = AsyncMock(return_value=mock_result)
-    async_sql_resource.connection.execution_options.side_effect = empty_fn
+    async_sql_client.connection = MagicMock()
+    async_sql_client.connection.stream = AsyncMock(return_value=mock_result)
+    async_sql_client.connection.execution_options.side_effect = empty_fn
 
     # Set the configuration to use server-side cursor
-    async_sql_resource.config = MagicMock()
-    async_sql_resource.config.use_server_side_cursor = True
+    async_sql_client.config = MagicMock()
+    async_sql_client.config.use_server_side_cursor = True
 
     # Call the run_query method
     results: list[dict[str, str]] = []
-    async for batch in async_sql_resource.run_query(query, batch_size=2):
+    async for batch in async_sql_client.run_query(query, batch_size=2):
         results.extend(batch)
 
     # Expected results formatted as dictionaries
@@ -252,19 +254,17 @@ async def test_run_query_server_side_cursor(
 
     # Assertions
     assert results == expected_results
-    async_sql_resource.connection.stream.assert_called_once_with(query)
+    async_sql_client.connection.stream.assert_called_once_with(query)
     mock_result.fetchmany.assert_awaited()
     mock_result.keys.assert_called_once()
 
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.workflows.sql.resources.async_sql_resource.text",
+    "application_sdk.clients.async_sql_client.text",
     side_effect=lambda q: q,  # type: ignore
 )
-async def test_run_query_with_error(
-    mock_text: MagicMock, async_sql_resource: MagicMock
-):
+async def test_run_query_with_error(mock_text: MagicMock, async_sql_client: MagicMock):
     # Mock the query
     query = "SELECT * FROM test_table"
 
@@ -279,15 +279,15 @@ async def test_run_query_with_error(
         pass
 
     # Mock the connection and method execution
-    async_sql_resource.connection = MagicMock()
-    async_sql_resource.connection.stream = AsyncMock(return_value=mock_result)
-    async_sql_resource.connection.execution_options.side_effect = empty_fn
+    async_sql_client.connection = MagicMock()
+    async_sql_client.connection.stream = AsyncMock(return_value=mock_result)
+    async_sql_client.connection.execution_options.side_effect = empty_fn
 
     # Set the configuration to use server-side cursor
-    async_sql_resource.config = MagicMock()
-    async_sql_resource.config.use_server_side_cursor = True
+    async_sql_client.config = MagicMock()
+    async_sql_client.config.use_server_side_cursor = True
 
     results: list[dict[str, str]] = []
     with pytest.raises(Exception, match="Simulated query failure"):
-        async for batch in async_sql_resource.run_query(query):
+        async for batch in async_sql_client.run_query(query):
             results.extend(batch)
