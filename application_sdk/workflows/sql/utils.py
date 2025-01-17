@@ -1,5 +1,10 @@
 import json
-from typing import Dict, List, Tuple, Any
+import logging
+from typing import Any, Dict, List, Tuple
+
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:

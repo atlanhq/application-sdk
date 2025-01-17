@@ -4,7 +4,6 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from fastapi.testclient import TestClient
 
-
 from application_sdk.application.fastapi import FastAPIApplication
 from application_sdk.handlers.sql import SQLWorkflowHandler
 

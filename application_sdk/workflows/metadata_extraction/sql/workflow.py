@@ -1,6 +1,6 @@
 import asyncio
 from datetime import timedelta
-from typing import Any, Callable, Dict, Sequence, Type, Coroutine, List
+from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -8,7 +8,6 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities.metadata_extraction.sql import SQLExtractionActivities
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows import WorkflowInterface
-
 from application_sdk.workflows.sql.utils import prepare_query
 
 
@@ -31,7 +30,9 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
         super().__init__(activities_cls=activities_cls)
 
     @staticmethod
-    def get_activities(activities: SQLExtractionActivities) -> Sequence[Callable[..., Any]]:
+    def get_activities(
+        activities: SQLExtractionActivities,
+    ) -> Sequence[Callable[..., Any]]:
         return [
             activities.preflight_check,
             activities.fetch_databases,
@@ -192,10 +193,30 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
         workflow_args["output_path"] = output_path
 
         fetch_and_transforms = [
-            self.fetch_and_transform(self.activities_cls.fetch_databases, workflow_args + {"query": prepare_query(self.fetch_database_sql, workflow_args)}, retry_policy),
-            self.fetch_and_transform(self.activities_cls.fetch_schemas, workflow_args + {"query": prepare_query(self.fetch_schema_sql, workflow_args)}, retry_policy),
-            self.fetch_and_transform(self.activities_cls.fetch_tables, workflow_args + {"query": prepare_query(self.fetch_table_sql, workflow_args)}, retry_policy),
-            self.fetch_and_transform(self.activities_cls.fetch_columns, workflow_args + {"query": prepare_query(self.fetch_column_sql, workflow_args)}, retry_policy),
+            self.fetch_and_transform(
+                self.activities_cls.fetch_databases,
+                workflow_args
+                + {"query": prepare_query(self.fetch_database_sql, workflow_args)},
+                retry_policy,
+            ),
+            self.fetch_and_transform(
+                self.activities_cls.fetch_schemas,
+                workflow_args
+                + {"query": prepare_query(self.fetch_schema_sql, workflow_args)},
+                retry_policy,
+            ),
+            self.fetch_and_transform(
+                self.activities_cls.fetch_tables,
+                workflow_args
+                + {"query": prepare_query(self.fetch_table_sql, workflow_args)},
+                retry_policy,
+            ),
+            self.fetch_and_transform(
+                self.activities_cls.fetch_columns,
+                workflow_args
+                + {"query": prepare_query(self.fetch_column_sql, workflow_args)},
+                retry_policy,
+            ),
         ]
 
         await asyncio.gather(*fetch_and_transforms)

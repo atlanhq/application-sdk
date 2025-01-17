@@ -59,6 +59,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self,
         lifespan=None,
         handler: Optional[WorkflowHandlerInterface] = None,
+        config=None,
         *args,
         **kwargs,
     ):

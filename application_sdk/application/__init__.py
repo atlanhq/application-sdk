@@ -10,10 +10,6 @@ from application_sdk.workflows.controllers import (
 )
 
 
-class AtlanApplicationConfig:
-    pass
-
-
 class AtlanApplicationInterface(ABC):
     auth_controller: Optional[WorkflowAuthControllerInterface]
     metadata_controller: Optional[WorkflowMetadataControllerInterface]
@@ -26,7 +22,7 @@ class AtlanApplicationInterface(ABC):
         preflight_check_controller: Optional[
             WorkflowPreflightCheckControllerInterface
         ] = None,
-        config: AtlanApplicationConfig = AtlanApplicationConfig(),
+        config=None,
     ):
         self.auth_controller = auth_controller
         self.metadata_controller = metadata_controller
