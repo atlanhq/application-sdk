@@ -18,6 +18,8 @@ from application_sdk.workflows.utils.activity import auto_heartbeater
 
 
 class StateModel(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
     sql_client: SQLClient
     handler: SQLHandler
     transformer: AtlasTransformer
@@ -127,7 +129,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         state = await self._get_state(workflow_args)
-        handler = state.handler
+        handler: SQLHandler = state.handler
 
         if not handler:
             raise ValueError("Preflight check handler not found")
@@ -316,7 +318,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             typename,
             workflow_id,
             workflow_run_id,
-            kwargs["activity_input"],
+            kwargs,
         )
         await transformed_output.write_df(transformed_chunk)
         return {
