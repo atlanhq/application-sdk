@@ -10,6 +10,7 @@ from temporalio import activity
 
 from application_sdk import activity_pd
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities.utils import get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
@@ -35,8 +36,16 @@ class MinerArgs(BaseModel):
     )
 
 
+class StateModel(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
+    sql_client: SQLClient
+    handler: SQLHandler
+    workflow_args: Dict[str, Any]
+
+
 class SQLQueryExtractionActivities(ActivitiesInterface):
-    _state: Dict[str, Any] = {}
+    _state: Dict[str, StateModel] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -51,6 +60,15 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         super().__init__()
 
+    async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
+        sql_client = self.sql_client_class()
+        handler = self.handler_class(sql_client=sql_client)
+        self._state[get_workflow_id()] = StateModel(
+            sql_client=sql_client,
+            handler=handler,
+            workflow_args=workflow_args,
+        )
+
     @activity.defn
     @auto_heartbeater
     @activity_pd(
@@ -59,7 +77,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         state,
         activity_input,
         **kwargs: self.sql_client.sql_input(
-            engine=state["sql_client"].engine, query=activity_input["sql_query"]
+            engine=state.sql_client.engine, query=activity_input["sql_query"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/query",
@@ -127,7 +145,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     async def miner_preflight_check(self, workflow_args: Dict[str, Any]):
         state = await self._get_state()
 
-        result = await state["handler"].preflight_check(
+        result = await state.handler.preflight_check(
             {
                 "metadata": workflow_args["metadata"],
             }
