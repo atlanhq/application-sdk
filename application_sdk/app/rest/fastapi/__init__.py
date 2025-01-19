@@ -24,7 +24,7 @@ from application_sdk.app.rest.fastapi.models.workflow import (
 )
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
-from application_sdk.app.rest.fastapi.routers.system import get_health_router
+from application_sdk.app.rest.fastapi.routers.server import get_health_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.eventstore import EventStore

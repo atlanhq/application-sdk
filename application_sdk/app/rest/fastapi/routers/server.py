@@ -1,12 +1,18 @@
-"""Router for handling health-related API endpoints."""
+"""Router for handling server-related API endpoints.
+
+Note:
+- The shutdown endpoint is currently used only by the Argo compatible workflow to
+  stop the application and exit with a status code of 0 after checking the status
+  of the workflow.
+- The force flag is used to force the application to stop immediately.
+"""
 
 import asyncio
 import logging
-import os
 import platform
 import re
-import signal
 import socket
+import sys
 import uuid
 
 import psutil
@@ -18,8 +24,8 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 router = APIRouter(
-    prefix="/system",
-    tags=["health"],
+    prefix="/server",
+    tags=["server"],
     responses={404: {"description": "Not found"}},
 )
 
@@ -69,7 +75,7 @@ async def shutdown(force: bool = False):
     """
     Stop the application.
     Args:
-        force(optional): Whether to force the application to stop
+        force(optional): Whether to force the application to stop immediately
     """
     logger.info("Stopping application")
 
@@ -80,19 +86,28 @@ async def shutdown(force: bool = False):
         if force:
             logger.info("Force shutting down application")
         else:
-            # Get all running tasks except the current one
+            # Get all running asyncio tasks except the current one
             pending_tasks = [
                 task
                 for task in asyncio.all_tasks()
                 if task is not asyncio.current_task()
             ]
-            logger.info(f"Waiting for {len(pending_tasks)} tasks to complete")
-            # Wait for all pending tasks to complete
+            logger.info(f"Cancelling {len(pending_tasks)} tasks")
 
-            await asyncio.gather(*pending_tasks, return_exceptions=True)
+            # Send cancel signal to all pending tasks
+            for task in pending_tasks:
+                task.cancel()
 
-        # Stop the server gracefully
-        os.kill(os.getpid(), signal.SIGTERM)
+            try:
+                # Wait for tasks to complete with a timeout
+                await asyncio.wait(pending_tasks, timeout=10)
+            except asyncio.CancelledError:
+                logger.info("Tasks cancelled successfully")
+            except Exception as e:
+                logger.error(f"Error during task cancellation: {e}")
+
+        # Stop the server with exit code 0
+        sys.exit(0)
 
     asyncio.create_task(shutdown())
 
