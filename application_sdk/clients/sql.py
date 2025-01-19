@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
+from application_sdk.clients.constants import SQLConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.sql_query import AsyncSQLQueryInput, SQLQueryInput
 
@@ -19,31 +20,22 @@ class SQLClient(ClientInterface):
     engine = None
     sql_input = SQLQueryInput
 
-    default_database_alias_key = "catalog_name"
-    default_schema_alias_key = "schema_name"
+    default_database_alias_key = SQLConstants.DEFAULT_DATABASE_ALIAS_KEY.value
+    default_schema_alias_key = SQLConstants.DEFAULT_SCHEMA_ALIAS_KEY.value
 
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
-    use_server_side_cursor: bool = True
+    use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
 
     def __init__(
         self,
-        use_server_side_cursor: bool = True,
-        credentials: Dict[str, Any] = None,
+        use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value,
+        credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
         super().__init__()
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
-        self.sql_alchemy_connect_args = sql_alchemy_connect_args
-
-    def set_credentials(self, credentials: Dict[str, Any]):
-        self.credentials = credentials
-
-    def get_sqlalchemy_connect_args(self) -> Dict[str, Any]:
-        return self.sql_alchemy_connect_args
-
-    def set_sql_alchemy_connect_args(self, sql_alchemy_connect_args: Dict[str, Any]):
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
     async def load(self, credentials: Dict[str, Any]):
@@ -108,8 +100,8 @@ class AsyncSQLClient(SQLClient):
     engine: AsyncEngine | None = None
     sql_input = AsyncSQLQueryInput
 
-    default_database_alias_key = "catalog_name"
-    default_schema_alias_key = "schema_name"
+    default_database_alias_key = SQLConstants.DEFAULT_DATABASE_ALIAS_KEY.value
+    default_schema_alias_key = SQLConstants.DEFAULT_SCHEMA_ALIAS_KEY.value
 
     async def load(self, credentials: Dict[str, Any]):
         self.credentials = credentials

@@ -69,8 +69,7 @@ class SQLQueryExtractionWorkflow(WorkflowInterface):
         if self.sql_client is None:
             raise ValueError("SQL client is not set")
 
-        self.sql_client.set_credentials(workflow_args["credentials"])
-        await self.sql_client.load()
+        await self.sql_client.load(workflow_args["credentials"])
 
         workflow_class = workflow_class or self.__class__
 
