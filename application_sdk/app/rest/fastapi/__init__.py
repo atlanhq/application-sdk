@@ -2,6 +2,7 @@ import logging
 from typing import Any, Callable, List, Optional
 
 from fastapi import APIRouter, FastAPI, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from application_sdk.app.rest import AtlanAPIApplication, AtlanAPIApplicationConfig
@@ -21,9 +22,9 @@ from application_sdk.app.rest.fastapi.models.workflow import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.app.rest.fastapi.routers.health import get_health_router
 from application_sdk.app.rest.fastapi.routers.logs import get_logs_router
 from application_sdk.app.rest.fastapi.routers.metrics import get_metrics_router
+from application_sdk.app.rest.fastapi.routers.server import get_health_router
 from application_sdk.app.rest.fastapi.routers.traces import get_traces_router
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.paas.eventstore import EventStore
@@ -32,6 +33,10 @@ from application_sdk.workflows.controllers import (
     WorkflowAuthControllerInterface,
     WorkflowMetadataControllerInterface,
     WorkflowPreflightCheckControllerInterface,
+)
+from application_sdk.workflows.resources.temporal_resource import (
+    TemporalConfig,
+    TemporalResource,
 )
 from application_sdk.workflows.workflow import WorkflowInterface
 
@@ -66,6 +71,7 @@ class FastAPIApplication(AtlanAPIApplication):
     workflow_router: APIRouter = APIRouter()
     dapr_router: APIRouter = APIRouter()
     events_router: APIRouter = APIRouter()
+    system_router: APIRouter = APIRouter()
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
@@ -107,6 +113,7 @@ class FastAPIApplication(AtlanAPIApplication):
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
+        self.app.include_router(self.system_router, prefix="/system")
 
         super().register_routers()
 
@@ -172,6 +179,12 @@ class FastAPIApplication(AtlanAPIApplication):
             self.update_workflow_config,
             methods=["POST"],
             response_model=WorkflowConfigResponse,
+        )
+
+        self.workflow_router.add_api_route(
+            "/status/{workflow_id}/{run_id}",
+            self.get_workflow_run_status,
+            methods=["GET"],
         )
 
         self.dapr_router.add_api_route(
@@ -245,6 +258,32 @@ class FastAPIApplication(AtlanAPIApplication):
             success=True,
             message="Workflow configuration fetched successfully",
             data=config,
+        )
+
+    async def get_workflow_run_status(
+        self, workflow_id: str, run_id: str
+    ) -> JSONResponse:
+        """
+        Get the status of a workflow run
+        Args:
+            workflow_id: The ID of the workflow
+            run_id: The ID of the run
+        Returns:
+            JSONResponse containing the status of the workflow
+        """
+        temporal_resource = TemporalResource(TemporalConfig())
+        await temporal_resource.load()
+        workflow_status = await temporal_resource.get_workflow_run_status(
+            workflow_id, run_id
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "message": "Workflow status fetched successfully",
+                "data": workflow_status,
+            },
         )
 
     def update_workflow_config(
