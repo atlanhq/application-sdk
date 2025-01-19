@@ -139,7 +139,7 @@ class TemporalClient(ClientInterface):
 
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
-    ) -> None:
+    ) -> Dict[str, Any]:
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
             workflow_args["credential_guid"] = StateStore.store_credentials(
