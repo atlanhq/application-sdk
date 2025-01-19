@@ -183,7 +183,7 @@ class FastAPIApplication(AtlanAPIApplication):
 
         self.workflow_router.add_api_route(
             "/status/{workflow_id}/{run_id}",
-            self.get_workflow_status,
+            self.get_workflow_run_status,
             methods=["GET"],
         )
 
@@ -260,9 +260,11 @@ class FastAPIApplication(AtlanAPIApplication):
             data=config,
         )
 
-    async def get_workflow_status(self, workflow_id: str, run_id: str) -> JSONResponse:
+    async def get_workflow_run_status(
+        self, workflow_id: str, run_id: str
+    ) -> JSONResponse:
         """
-        Get the status of a workflow
+        Get the status of a workflow run
         Args:
             workflow_id: The ID of the workflow
             run_id: The ID of the run
@@ -271,7 +273,7 @@ class FastAPIApplication(AtlanAPIApplication):
         """
         temporal_resource = TemporalResource(TemporalConfig())
         await temporal_resource.load()
-        workflow_status = await temporal_resource.get_workflow_status(
+        workflow_status = await temporal_resource.get_workflow_run_status(
             workflow_id, run_id
         )
 

@@ -236,7 +236,7 @@ class TemporalResource(ResourceInterface):
             interceptors=[EventInterceptor()],
         )
 
-    async def get_workflow_status(
+    async def get_workflow_run_status(
         self, workflow_id: str, run_id: str
     ) -> Dict[str, Any]:
         if not self.client:
