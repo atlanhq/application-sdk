@@ -294,7 +294,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         return parallel_markers
 
-    @activity.defn(name="preflight_check")
+    @activity.defn
     @auto_heartbeater
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         state = await self._get_state(workflow_args)
