@@ -5,7 +5,7 @@ import pytest
 
 from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.workflows.sql.workflows import SQLWorkflow
 from application_sdk.workflows.transformers import TransformerInterface
 
 

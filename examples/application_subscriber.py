@@ -19,9 +19,9 @@ from application_sdk.paas.eventstore.models import (
     CustomEvent,
     WorkflowEndEvent,
 )
+from application_sdk.workflows import WorkflowInterface
 from application_sdk.workflows.builder import WorkflowBuilderInterface
 from application_sdk.workflows.workers.worker import WorkflowWorker
-from application_sdk.workflows.workflow import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 

@@ -46,7 +46,7 @@ from application_sdk.workflows.sql.builders.builder import SQLWorkflowBuilder
 from application_sdk.workflows.sql.controllers.preflight_check import (
     SQLWorkflowPreflightCheckController,
 )
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.workflows.sql.workflows import SQLWorkflow
 from application_sdk.workflows.transformers.atlas.__init__ import AtlasTransformer
 from application_sdk.workflows.workers.worker import WorkflowWorker
 

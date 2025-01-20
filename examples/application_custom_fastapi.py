@@ -6,7 +6,7 @@ from fastapi import APIRouter
 
 from application_sdk.application.fastapi import FastAPIApplication
 from application_sdk.handlers import HandlerInterface
-from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.workflows import WorkflowInterface
 
 
 class CustomHandler(HandlerInterface):
