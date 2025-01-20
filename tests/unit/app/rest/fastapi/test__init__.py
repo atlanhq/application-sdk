@@ -4,48 +4,35 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from application_sdk.app.rest.fastapi import EventWorkflowTrigger, FastAPIApplication
-from application_sdk.app.rest.fastapi.models.workflow import (
+from application_sdk.application.fastapi import (
+    EventWorkflowTrigger,
+    FastAPIApplication,
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
+from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
-from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.controllers import (
-    WorkflowPreflightCheckControllerInterface,
-)
-from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.workflows import WorkflowInterface
 
 
-class SampleWorkflow(AsyncMock):
+class SampleWorkflow(WorkflowInterface):
     pass
-
-
-class SampleWorkflowBuilder(WorkflowBuilderInterface):
-    def build(self) -> WorkflowInterface:
-        return SampleWorkflow()
 
 
 class TestFastAPIApplication:
     @pytest.fixture
-    def mock_controller(self) -> WorkflowPreflightCheckControllerInterface:
-        controller = Mock(spec=WorkflowPreflightCheckControllerInterface)
-        controller.preflight_check = AsyncMock()
-        return controller
+    def mock_handler(self) -> HandlerInterface:
+        handler = Mock(spec=HandlerInterface)
+        handler.preflight_check = AsyncMock()
+        return handler
 
     @pytest.fixture
-    def app(
-        self, mock_controller: WorkflowPreflightCheckControllerInterface
-    ) -> FastAPIApplication:
-        return FastAPIApplication(preflight_check_controller=mock_controller)
+    def app(self, mock_handler: HandlerInterface) -> FastAPIApplication:
+        return FastAPIApplication(handler=mock_handler)
 
     @pytest.fixture
     def sample_workflow(self) -> SampleWorkflow:
         return SampleWorkflow()
-
-    @pytest.fixture
-    def sample_workflow_builder(self) -> SampleWorkflowBuilder:
-        return SampleWorkflowBuilder()
 
     @pytest.fixture
     def sample_payload(self) -> Dict[str, Any]:
@@ -56,7 +43,7 @@ class TestFastAPIApplication:
                 "role": "ACCOUNTADMIN",
                 "warehouse": "COMPUTE_WH",
             },
-            "form_data": {
+            "metadata": {
                 "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
                 "exclude_filter": "{}",
                 "temp_table_regex": "",
@@ -67,7 +54,7 @@ class TestFastAPIApplication:
     async def test_preflight_check_success(
         self,
         app: FastAPIApplication,
-        mock_controller: WorkflowPreflightCheckControllerInterface,
+        mock_handler: HandlerInterface,
         sample_payload: Dict[str, Any],
     ) -> None:
         """Test successful preflight check response"""
@@ -81,7 +68,7 @@ class TestFastAPIApplication:
                 },
             }
         }
-        mock_controller.preflight_check.return_value = expected_data
+        mock_handler.preflight_check.return_value = expected_data
 
         # Create request object and call the function
         request = PreflightCheckRequest(**sample_payload)
@@ -93,21 +80,19 @@ class TestFastAPIApplication:
         assert response.success is True
         assert response.data == expected_data
 
-        # Verify controller was called with correct arguments
-        mock_controller.preflight_check.assert_called_once_with(sample_payload)
+        # Verify handler was called with correct arguments
+        mock_handler.preflight_check.assert_called_once_with(sample_payload)
 
     @pytest.mark.asyncio
     async def test_preflight_check_failure(
         self,
         app: FastAPIApplication,
-        mock_controller: WorkflowPreflightCheckControllerInterface,
+        mock_handler: HandlerInterface,
         sample_payload: Dict[str, Any],
     ) -> None:
-        """Test preflight check with failed controller response"""
+        """Test preflight check with failed handler response"""
         # Arrange
-        mock_controller.preflight_check.side_effect = Exception(
-            "Failed to fetch metadata"
-        )
+        mock_handler.preflight_check.side_effect = Exception("Failed to fetch metadata")
 
         # Create request object
         request = PreflightCheckRequest(**sample_payload)
@@ -117,21 +102,27 @@ class TestFastAPIApplication:
             await app.preflight_check(request)
 
         assert str(exc_info.value) == "Failed to fetch metadata"
-        mock_controller.preflight_check.assert_called_once_with(sample_payload)
+        mock_handler.preflight_check.assert_called_once_with(sample_payload)
 
-    async def test_event_trigger_success(
-        self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
-    ):
+    async def test_event_trigger_success(self, app: FastAPIApplication):
         def should_trigger_workflow(event: AtlanEvent):
             if event.data.event_type == "workflow_end":
                 return True
             return False
 
-        sample_workflow = sample_workflow_builder.build()
+        temporal_client = AsyncMock()
+        temporal_client.start_workflow = AsyncMock()
+
+        app.temporal_client = temporal_client
+        app.event_triggers = []
+
         app.register_workflow(
-            sample_workflow,
+            SampleWorkflow,
             triggers=[
-                EventWorkflowTrigger(should_trigger_workflow=should_trigger_workflow)
+                EventWorkflowTrigger(
+                    should_trigger_workflow=should_trigger_workflow,
+                    workflow_class=SampleWorkflow,
+                )
             ],
         )
 
@@ -157,27 +148,39 @@ class TestFastAPIApplication:
         await app.on_event(event_data)
 
         # Assert
-        sample_workflow.start.assert_called()
+        temporal_client.start_workflow.assert_called_once_with(
+            workflow_args=event_data,
+            workflow_class=SampleWorkflow,
+        )
 
-    async def test_event_trigger_conditions(
-        self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
-    ):
+    async def test_event_trigger_conditions(self, app: FastAPIApplication):
+        temporal_client = AsyncMock()
+        temporal_client.start_workflow = AsyncMock()
+
+        app.event_triggers = []
+        app.temporal_client = temporal_client
+
         def trigger_workflow_on_start(event: AtlanEvent):
             if event.data.event_type == "workflow_start":
                 return True
             return False
 
         def trigger_workflow_name(event: AtlanEvent):
-            if event.data.workflow_name == "wrong_workflow":
+            if event.data.workflow_name == "test_workflow":
                 return True
             return False
 
-        sample_workflow = sample_workflow_builder.build()
         app.register_workflow(
-            sample_workflow,
+            SampleWorkflow,
             triggers=[
-                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_on_start),
-                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_name),
+                EventWorkflowTrigger(
+                    should_trigger_workflow=trigger_workflow_on_start,
+                    workflow_class=SampleWorkflow,
+                ),
+                EventWorkflowTrigger(
+                    should_trigger_workflow=trigger_workflow_name,
+                    workflow_class=SampleWorkflow,
+                ),
             ],
         )
 
@@ -203,4 +206,8 @@ class TestFastAPIApplication:
         await app.on_event(event_data)
 
         # Assert
-        sample_workflow.start.assert_not_called()
+        assert temporal_client.start_workflow.call_count == 1
+        assert temporal_client.start_workflow.called_with(
+            workflow_args=event_data,
+            workflow_class=SampleWorkflow,
+        )

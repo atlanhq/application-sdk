@@ -39,7 +39,7 @@ class TestDaftDecorators:
     @classmethod
     def teardown_class(cls):
         """
-        Clean up the test resources
+        Clean up the test clients
         """
         os.remove("/tmp/test_connectorx.db")
 
@@ -54,7 +54,7 @@ class TestDaftDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @activity_daft(
-            batch_input=lambda self: SQLQueryInput(engine, "SELECT 1 as value")
+            batch_input=lambda self, state: SQLQueryInput(engine, "SELECT 1 as value")
         )
         async def func(self, batch_input: daft.DataFrame, **kwargs):
             assert batch_input.count_rows() == 1
@@ -82,7 +82,7 @@ class TestDaftDecorators:
             conn.commit()
 
         @activity_daft(
-            batch_input=lambda self: SQLQueryInput(
+            batch_input=lambda self, state: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=None
             )
         )
@@ -113,7 +113,7 @@ class TestDaftDecorators:
         expected_row_count = [3, 3, 3, 1]
 
         @activity_daft(
-            batch_input=lambda self: SQLQueryInput(
+            batch_input=lambda self, state: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=3
             )
         )
@@ -143,7 +143,7 @@ class TestDaftDecorators:
             conn.commit()
 
         @activity_daft(
-            batch_input=lambda self: SQLQueryInput(
+            batch_input=lambda self, state: SQLQueryInput(
                 sqlite_db_url, "SELECT * FROM numbers", chunk_size=None
             )
         )
@@ -160,11 +160,11 @@ class TestDaftDecorators:
             f.write('{"value":1}\n{"value":2}\n')
 
         @activity_daft(
-            batch_input=lambda self, arg: JsonInput(
+            batch_input=lambda self, arg, **kwargs: JsonInput(
                 path="/tmp/tests/test_daft_decorator/raw/",
                 file_suffixes=["schema/1.json"],
             ),
-            out1=lambda self, arg: JsonOutput(
+            out1=lambda self, arg, **kwargs: JsonOutput(
                 output_path="/tmp/tests/test_daft_decorator/transformed/schema",
                 upload_file_prefix="transformed",
             ),

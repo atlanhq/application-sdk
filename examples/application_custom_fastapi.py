@@ -1,36 +1,25 @@
 import asyncio
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
-from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.application.fastapi import FastAPIApplication
+from application_sdk.handlers import HandlerInterface
+from application_sdk.workflows import WorkflowInterface
 
 
-class WorkflowAuthController(WorkflowAuthControllerInterface):
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
+class CustomHandler(HandlerInterface):
+    async def load(self, **kwargs: Any) -> None:
         pass
 
-    async def test_auth(self) -> bool:
+    async def test_auth(self, **kwargs: Any) -> bool:
         return True
 
-
-class WorkflowMetadataController(WorkflowMetadataControllerInterface):
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
-        pass
-
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self, **kwargs: Any) -> Any:
         return [{"database": "test", "schema": "test"}]
 
-
-class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
-    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(self, **kwargs: Any) -> Any:
         return {"databaseSchemaCheck": ["test"], "tablesCheck": ["test"]}
 
 
@@ -61,16 +50,12 @@ class MyCustomFastAPIApplication(FastAPIApplication):
 
         super().register_routes()
 
-    async def test(self, **kwargs) -> Dict[str, str]:
+    async def test(self, **kwargs: Dict[str, Any]) -> Dict[str, str]:
         return {"message": "Hello, World!"}
 
 
 async def application_custom_fastapi():
-    fast_api_app = MyCustomFastAPIApplication(
-        auth_controller=WorkflowAuthController(),
-        metadata_controller=WorkflowMetadataController(),
-        preflight_check_controller=WorkflowPreflightCheckController(),
-    )
+    fast_api_app = MyCustomFastAPIApplication(handler=CustomHandler())
 
     await fast_api_app.start()
 
