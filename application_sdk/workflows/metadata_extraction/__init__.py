@@ -1,6 +1,5 @@
-# TODO: Add a class here for metadata extraction workflows
-# Subclass the WorkflowInterface class
+from application_sdk.workflows import WorkflowInterface
 
 
-# class MetadataExtractionWorkflow(WorkflowInterface):
-#     pass
+class MetadataExtractionWorkflow(WorkflowInterface):
+    pass

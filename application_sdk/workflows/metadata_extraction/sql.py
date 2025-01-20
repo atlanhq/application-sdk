@@ -9,11 +9,11 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.workflows import WorkflowInterface
+from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 
 @workflow.defn
-class SQLMetadataExtractionWorkflow(WorkflowInterface):
+class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     activities_cls: Type[SQLMetadataExtractionActivities] = (
         SQLMetadataExtractionActivities
     )
@@ -21,14 +21,6 @@ class SQLMetadataExtractionWorkflow(WorkflowInterface):
     application_name: str = "sql-connector"
     batch_size: int = 100000
     max_transform_concurrency: int = 5
-
-    def __init__(
-        self,
-        activities_cls: Type[
-            SQLMetadataExtractionActivities
-        ] = SQLMetadataExtractionActivities,
-    ):
-        super().__init__(activities_cls=activities_cls)
 
     # TODO: Seems a little hacky
     @staticmethod
