@@ -25,8 +25,7 @@ from application_sdk.application.fastapi.utils import internal_server_error_hand
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface
-from application_sdk.paas.eventstore import EventStore
-from application_sdk.paas.eventstore.models import AtlanEvent
+from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))

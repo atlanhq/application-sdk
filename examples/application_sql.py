@@ -118,7 +118,6 @@ class SampleSQLWorkflowHandler(SQLHandler):
 async def application_sql() -> None:
     print("Starting application_sql")
 
-    # TODO: Make this part of the worker
     temporal_client = TemporalClient(
         application_name=APPLICATION_NAME,
     )

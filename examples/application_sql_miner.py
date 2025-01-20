@@ -174,11 +174,11 @@ async def application_sql_miner():
             "ranged_sql_end_key": "[END_MARKER]",
         },
         "credentials": {
-            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-            "user": os.getenv("SNOWFLAKE_USER", "snowflake"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
+            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "qia75894"),
+            "user": os.getenv("SNOWFLAKE_USER", "sanil.khurana@atlan.com"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD", "Raymon11@836578"),
             "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
         },
         "connection": {"connection": "dev"},
         "metadata": {

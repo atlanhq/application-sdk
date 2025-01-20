@@ -5,12 +5,12 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
-from application_sdk import activity_pd
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.utils import prepare_query
+from application_sdk.decorators import activity_pd
 from application_sdk.handlers import HandlerInterface
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -276,7 +276,7 @@ class SQLHandler(HandlerInterface):
     @activity_pd(
         batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine,
-            query=SQLWorkflow.prepare_query(
+            query=prepare_query(
                 query=self.tables_check_sql, workflow_args=workflow_args
             ),
             chunk_size=None,
