@@ -1,9 +1,7 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from temporalio import activity
-
-from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.common.utils import get_workflow_id
 
 
 class ActivitiesInterface(ABC):
@@ -61,13 +59,3 @@ class ActivitiesInterface(ABC):
             NotImplementedError: When not implemented by subclass.
         """
         raise NotImplementedError("Preflight check not implemented")
-
-    @activity.defn
-    @auto_heartbeater
-    async def clean_state(self, workflow_args: Dict[str, Any]):
-        """Activity to clean up workflow state.
-
-        Args:
-            workflow_args: Dictionary containing workflow arguments.
-        """
-        await self._clean_state()
