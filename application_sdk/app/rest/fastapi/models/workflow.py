@@ -1,11 +1,12 @@
 # Request/Response DTOs for workflows
 
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field, RootModel
 
 
-class TestAuthRequest(RootModel):
+class TestAuthRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing database credentials"
     )
@@ -16,9 +17,15 @@ class TestAuthResponse(BaseModel):
     message: str
 
 
-class FetchMetadataRequest(RootModel):
+class MetadataType(str, Enum):
+    DATABASE = "database"
+    SCHEMA = "schema"
+    ALL = "all"
+
+
+class FetchMetadataRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
-        ..., description="Root JSON object containing database credentials"
+        ..., description="Root JSON object containing the metadata and credentials"
     )
 
 
@@ -73,7 +80,7 @@ class PreflightCheckResponse(BaseModel):
         }
 
 
-class WorkflowRequest(RootModel):
+class WorkflowRequest(RootModel[Dict[str, Any]]):
     root: Dict[str, Any] = Field(
         ..., description="Root JSON object containing workflow configuration"
     )
