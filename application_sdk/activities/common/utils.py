@@ -27,6 +27,10 @@ source:
 """
 
 
+def get_workflow_id() -> str:
+    return activity.info().workflow_id
+
+
 def auto_heartbeater(fn: F) -> F:
     """
     Auto-heartbeater for activities.
