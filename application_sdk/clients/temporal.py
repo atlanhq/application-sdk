@@ -239,4 +239,4 @@ class TemporalClient(ClientInterface):
         This method should properly terminate the connection and clean up
         any resources used by the client.
         """
-        pass
+        return

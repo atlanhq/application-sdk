@@ -41,7 +41,7 @@ class SQLHandler(HandlerInterface):
         """
         Method to load and load the SQL client
         """
-        await self.sql_client.load()
+        await self.sql_client.load(credentials)
 
     @activity_pd(
         batch_input=lambda self, args, **kwargs: self.sql_client.sql_input(
