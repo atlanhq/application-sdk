@@ -63,7 +63,7 @@ class PostgreSQLClient(AsyncSQLClient):
 
 class SampleSQLActivities(SQLMetadataExtractionActivities):
     fetch_database_sql = """
-    SELECT * FROM pg_database WHERE datname = current_database();
+    SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
 
     fetch_schema_sql = """
@@ -119,7 +119,7 @@ class CustomTransformer(AtlasTransformer):
 
 
 class SampleSQLHandler(SQLHandler):
-    TABLES_CHECK_SQL = """
+    tables_check_sql = """
     SELECT count(*)
         FROM INFORMATION_SCHEMA.TABLES
         WHERE TABLE_NAME !~ '{exclude_table}'
@@ -128,7 +128,7 @@ class SampleSQLHandler(SQLHandler):
             AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
     """
 
-    METADATA_SQL = """
+    metadata_sql = """
     SELECT schema_name, catalog_name
         FROM INFORMATION_SCHEMA.SCHEMATA
         WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'

@@ -135,6 +135,9 @@ class TemporalClient(ClientInterface):
             namespace=self.get_namespace(),
         )
 
+    async def close(self):
+        return
+
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
     ) -> Dict[str, Any]:

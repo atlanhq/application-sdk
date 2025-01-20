@@ -46,6 +46,10 @@ class SQLClient(ClientInterface):
         )
         self.connection = self.engine.connect()
 
+    async def close(self):
+        if self.connection:
+            self.connection.close()
+
     def get_sqlalchemy_connection_string(self) -> str:
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
 

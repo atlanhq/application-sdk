@@ -49,7 +49,7 @@ class SampleSQLWorkflow(SQLMetadataExtractionWorkflow):
 
 
 async def application_hello_world() -> None:
-    print("Starting application_sql")
+    print("Starting application_hello_world")
 
     temporal_client = TemporalClient(
         application_name=APPLICATION_NAME,
