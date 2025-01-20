@@ -10,6 +10,8 @@ class TransformerInterface(ABC):
         data: Dict[str, Any],
         workflow_id: str,
         workflow_run_id: str,
+        connection_name: str,
+        connection_qualified_name: str,
         entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
     ) -> Optional[Dict[str, Any]]:
