@@ -33,7 +33,6 @@ class SQLClient(ClientInterface):
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
-        super().__init__()
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
