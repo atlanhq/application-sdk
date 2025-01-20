@@ -11,7 +11,7 @@ from temporalio import activity
 from application_sdk import activity_pd
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.utils import get_workflow_id
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
@@ -37,8 +37,16 @@ class MinerArgs(BaseModel):
     )
 
 
+class StateModel(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
+    sql_client: SQLClient
+    handler: SQLHandler
+    workflow_args: Dict[str, Any]
+
+
 class SQLQueryExtractionActivities(ActivitiesInterface):
-    _state: Dict[str, Any] = {}
+    _state: Dict[str, StateModel] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -63,10 +71,11 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = {
-            "sql_client": sql_client,
-            "handler": handler,
-        }
+        self._state[get_workflow_id()] = StateModel(
+            sql_client=sql_client,
+            handler=handler,
+            workflow_args=workflow_args,
+        )
 
     @activity.defn
     @auto_heartbeater
@@ -291,7 +300,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         state = await self._get_state(workflow_args)
 
-        result = await state["handler"].preflight_check(
+        result = await state.handler.preflight_check(
             {
                 "metadata": workflow_args["metadata"],
             }

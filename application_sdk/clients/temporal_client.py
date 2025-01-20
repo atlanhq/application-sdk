@@ -97,13 +97,7 @@ class EventInterceptor(Interceptor):
         return EventWorkflowInboundInterceptor
 
 
-class TemporalConfig:
-    host = TemporalConstants.HOST.value
-    port = TemporalConstants.PORT.value
-    application_name = TemporalConstants.APPLICATION_NAME.value
-    # FIXME: causes issue with different namespace, TBR.
-    namespace: str = TemporalConstants.NAMESPACE.value
-
+class TemporalClient(ClientInterface):
     def __init__(
         self,
         host: str | None = None,
@@ -111,17 +105,22 @@ class TemporalConfig:
         application_name: str | None = None,
         namespace: str | None = "default",
     ):
-        if host:
-            self.host = host
+        self.client = None
+        self.worker = None
+        self.application_name = (
+            application_name
+            if application_name
+            else TemporalConstants.APPLICATION_NAME.value
+        )
+        self.worker_task_queue = self.get_worker_task_queue()
+        self.host = host if host else TemporalConstants.HOST.value
+        self.port = port if port else TemporalConstants.PORT.value
+        self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
 
-        if port:
-            self.port = port
+        workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+        activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
-        if application_name:
-            self.application_name = application_name
-
-        if namespace:
-            self.namespace = namespace
+        super().__init__()
 
     def get_worker_task_queue(self) -> str:
         return f"{self.application_name}"
@@ -132,31 +131,15 @@ class TemporalConfig:
     def get_namespace(self) -> str:
         return self.namespace
 
-
-class TemporalClient(ClientInterface):
-    def __init__(
-        self,
-        temporal_config: TemporalConfig,
-    ):
-        self.config = temporal_config
-        self.client = None
-        self.worker = None
-        self.worker_task_queue = self.config.get_worker_task_queue()
-
-        workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-        activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-
-        super().__init__()
-
     async def load(self):
         self.client = await Client.connect(
-            self.config.get_connection_string(),
-            namespace=self.config.get_namespace(),
+            self.get_connection_string(),
+            namespace=self.get_namespace(),
         )
 
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
-    ) -> None:
+    ) -> Dict[str, Any]:
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
             workflow_args["credential_guid"] = StateStore.store_credentials(
@@ -171,7 +154,7 @@ class TemporalClient(ClientInterface):
 
             workflow_args.update(
                 {
-                    "application_name": self.config.application_name,
+                    "application_name": self.application_name,
                     "workflow_id": workflow_id,
                     "output_prefix": "/tmp/output",
                 }

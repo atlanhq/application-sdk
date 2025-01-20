@@ -12,17 +12,10 @@ from application_sdk.application.fastapi import (
 )
 from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
-from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.workflows import WorkflowInterface
 
-
-class SampleWorkflow(AsyncMock):
+class SampleWorkflow(WorkflowInterface):
     pass
-
-
-class SampleWorkflowBuilder(WorkflowBuilderInterface):
-    def build(self) -> WorkflowInterface:
-        return SampleWorkflow()
 
 
 class TestFastAPIApplication:
@@ -39,10 +32,6 @@ class TestFastAPIApplication:
     @pytest.fixture
     def sample_workflow(self) -> SampleWorkflow:
         return SampleWorkflow()
-
-    @pytest.fixture
-    def sample_workflow_builder(self) -> SampleWorkflowBuilder:
-        return SampleWorkflowBuilder()
 
     @pytest.fixture
     def sample_payload(self) -> Dict[str, Any]:
@@ -115,18 +104,26 @@ class TestFastAPIApplication:
         mock_handler.preflight_check.assert_called_once_with(sample_payload)
 
     async def test_event_trigger_success(
-        self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
+        self, app: FastAPIApplication
     ):
         def should_trigger_workflow(event: AtlanEvent):
             if event.data.event_type == "workflow_end":
                 return True
             return False
+        
+        temporal_client = AsyncMock()
+        temporal_client.start_workflow = AsyncMock()
 
-        sample_workflow = sample_workflow_builder.build()
+        app.temporal_client = temporal_client
+        app.event_triggers = []
+
         app.register_workflow(
-            sample_workflow,
+            SampleWorkflow,
             triggers=[
-                EventWorkflowTrigger(should_trigger_workflow=should_trigger_workflow)
+                EventWorkflowTrigger(
+                    should_trigger_workflow=should_trigger_workflow,
+                    workflow_class=SampleWorkflow,
+                )
             ],
         )
 
@@ -152,27 +149,41 @@ class TestFastAPIApplication:
         await app.on_event(event_data)
 
         # Assert
-        sample_workflow.start.assert_called()
+        temporal_client.start_workflow.assert_called_once_with(
+            workflow_args=event_data,
+            workflow_class=SampleWorkflow,
+        )
 
     async def test_event_trigger_conditions(
-        self, app: FastAPIApplication, sample_workflow_builder: SampleWorkflowBuilder
+        self, app: FastAPIApplication
     ):
+        temporal_client = AsyncMock()
+        temporal_client.start_workflow = AsyncMock()
+        
+        app.event_triggers = []
+        app.temporal_client = temporal_client
+
         def trigger_workflow_on_start(event: AtlanEvent):
             if event.data.event_type == "workflow_start":
                 return True
             return False
 
         def trigger_workflow_name(event: AtlanEvent):
-            if event.data.workflow_name == "wrong_workflow":
+            if event.data.workflow_name == "test_workflow":
                 return True
             return False
 
-        sample_workflow = sample_workflow_builder.build()
         app.register_workflow(
-            sample_workflow,
+            SampleWorkflow,
             triggers=[
-                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_on_start),
-                EventWorkflowTrigger(should_trigger_workflow=trigger_workflow_name),
+                EventWorkflowTrigger(
+                    should_trigger_workflow=trigger_workflow_on_start,
+                    workflow_class=SampleWorkflow,
+                ),
+                EventWorkflowTrigger(
+                    should_trigger_workflow=trigger_workflow_name,
+                    workflow_class=SampleWorkflow,
+                ),
             ],
         )
 
@@ -198,4 +209,8 @@ class TestFastAPIApplication:
         await app.on_event(event_data)
 
         # Assert
-        sample_workflow.start.assert_not_called()
+        assert temporal_client.start_workflow.call_count == 1
+        assert temporal_client.start_workflow.called_with(
+            workflow_args=event_data,
+            workflow_class=SampleWorkflow,
+        )

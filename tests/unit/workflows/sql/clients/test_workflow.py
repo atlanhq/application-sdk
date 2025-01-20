@@ -3,15 +3,15 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from application_sdk.clients.sql_client import SQLClient, SQLClientConfig
-from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
 from application_sdk.workflows.transformers import TransformerInterface
 
 
 @pytest.fixture
 def sql_client():
-    client = SQLClient(SQLClientConfig())
+    client = SQLClient()
     client.run_query = AsyncMock()
     client.sql_input = MagicMock()
     return client
@@ -19,7 +19,7 @@ def sql_client():
 
 @pytest.fixture
 def temporal_client():
-    return TemporalClient(TemporalConfig(application_name="test-app"))
+    return TemporalClient(application_name="test-app")
 
 
 @pytest.fixture

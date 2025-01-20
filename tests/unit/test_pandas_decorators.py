@@ -42,7 +42,7 @@ class TestPandasDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @activity_pd(
-            batch_input=lambda self: SQLQueryInput(engine, "SELECT 1 as value")
+            batch_input=lambda self, state: SQLQueryInput(engine, "SELECT 1 as value")
         )
         async def func(self, batch_input: pd.DataFrame, **kwargs):
             assert len(batch_input) == 1
@@ -69,7 +69,7 @@ class TestPandasDecorators:
             conn.commit()
 
         @activity_pd(
-            batch_input=lambda self: SQLQueryInput(
+            batch_input=lambda self, state: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=None
             )
         )
@@ -100,7 +100,7 @@ class TestPandasDecorators:
         expected_row_count = [3, 3, 3, 1]
 
         @activity_pd(
-            batch_input=lambda self: SQLQueryInput(
+            batch_input=lambda self, state: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=3
             )
         )
@@ -117,11 +117,11 @@ class TestPandasDecorators:
             f.write('{"value":1}\n{"value":2}\n')
 
         @activity_pd(
-            batch_input=lambda self, arg: JsonInput(
+            batch_input=lambda self, arg, **kwargs: JsonInput(
                 path="/tmp/tests/test_pandas_decorator/raw/",
                 file_suffixes=["schema/1.json"],
             ),
-            out1=lambda self, arg: JsonOutput(
+            out1=lambda self, arg, **kwargs: JsonOutput(
                 output_path="/tmp/tests/test_pandas_decorator/transformed/schema",
                 upload_file_prefix="transformed",
             ),

@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
 
-from application_sdk.app.rest.fastapi.models.workflow import MetadataType
-from application_sdk.clients.sql_client import SQLClient
+from application_sdk.application.fastapi.models import MetadataType
+from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 T = TypeVar("T")

@@ -35,8 +35,8 @@ from urllib.parse import quote_plus
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
-from application_sdk.clients.async_sql_client import AsyncSQLClient
-from application_sdk.clients.temporal_client import TemporalClient, TemporalConfig
+from application_sdk.clients.sql import AsyncSQLClient
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
@@ -120,9 +120,7 @@ async def application_sql() -> None:
 
     # TODO: Make this part of the worker
     temporal_client = TemporalClient(
-        TemporalConfig(
-            application_name=APPLICATION_NAME,
-        )
+        application_name=APPLICATION_NAME,
     )
     await temporal_client.load()
 
