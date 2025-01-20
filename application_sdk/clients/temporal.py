@@ -120,8 +120,6 @@ class TemporalClient(ClientInterface):
         workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
         activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
-        super().__init__()
-
     def get_worker_task_queue(self) -> str:
         return f"{self.application_name}"
 

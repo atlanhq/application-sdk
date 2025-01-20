@@ -37,6 +37,9 @@ workflows = [
     "dapr",
     "temporalio"
 ]
+daft = [
+    "getdaft"
+]
 scale_data_generator = [
     "pyyaml",
     "pandas",
