@@ -19,10 +19,6 @@ class SQLClient(ClientInterface):
     connection = None
     engine = None
     sql_input = SQLQueryInput
-
-    default_database_alias_key = SQLConstants.DEFAULT_DATABASE_ALIAS_KEY.value
-    default_schema_alias_key = SQLConstants.DEFAULT_SCHEMA_ALIAS_KEY.value
-
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
@@ -93,14 +89,19 @@ class SQLClient(ClientInterface):
 
         activity.logger.info("Query execution completed")
 
+    async def close(self):
+        """Close the client connection.
+
+        This method should properly terminate the connection and clean up
+        any resources used by the client.
+        """
+        pass
+
 
 class AsyncSQLClient(SQLClient):
     connection: AsyncConnection | None = None
     engine: AsyncEngine | None = None
     sql_input = AsyncSQLQueryInput
-
-    default_database_alias_key = SQLConstants.DEFAULT_DATABASE_ALIAS_KEY.value
-    default_schema_alias_key = SQLConstants.DEFAULT_SCHEMA_ALIAS_KEY.value
 
     async def load(self, credentials: Dict[str, Any]):
         self.credentials = credentials

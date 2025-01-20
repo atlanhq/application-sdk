@@ -7,7 +7,7 @@ import sqlalchemy
 from pyiceberg.catalog.sql import SqlCatalog
 from sqlalchemy.sql import text
 
-from application_sdk import activity_daft
+from application_sdk.decorators import activity_daft
 from application_sdk.inputs.iceberg import IcebergInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.iceberg import IcebergOutput

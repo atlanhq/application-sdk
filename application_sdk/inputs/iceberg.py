@@ -1,10 +1,10 @@
+import logging
 from typing import Iterator, Optional
 
 import daft
 import pandas as pd
 from pyiceberg.table import Table
 
-from application_sdk import logging
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
 
