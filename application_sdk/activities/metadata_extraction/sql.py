@@ -318,10 +318,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         typename = kwargs.get("typename")
         workflow_id = kwargs.get("workflow_id")
         workflow_run_id = kwargs.get("workflow_run_id")
-        connection_name = kwargs.get('connection', {}).get('connection_name', None)
-        connection_qualified_name = kwargs.get('connection', {}).get('connection_qualified_name', None)
+        connection_name = kwargs.get("connection", {}).get("connection_name", None)
+        connection_qualified_name = kwargs.get("connection", {}).get(
+            "connection_qualified_name", None
+        )
         transformed_chunk = await self._transform_batch(
-            batch_input, typename, workflow_id, workflow_run_id, connection_name, connection_qualified_name
+            batch_input,
+            typename,
+            workflow_id,
+            workflow_run_id,
+            connection_name,
+            connection_qualified_name,
         )
         await transformed_output.write_df(transformed_chunk)
         return {

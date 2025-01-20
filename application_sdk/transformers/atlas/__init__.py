@@ -50,7 +50,6 @@ class AtlasTransformer(TransformerInterface):
             "TAG_REF": TagAttachment,
         }
 
-
     def transform_metadata(
         self,
         typename: str,
