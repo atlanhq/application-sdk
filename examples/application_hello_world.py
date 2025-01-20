@@ -1,7 +1,10 @@
 import asyncio
 import logging
 import time
+from typing import Any, Dict
 from urllib.parse import quote_plus
+
+from temporalio import workflow
 
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
@@ -38,7 +41,14 @@ class SampleSQLWorkflowHandler(SQLHandler):
     metadata_sql = ""
 
 
-async def application_sql() -> None:
+@workflow.defn
+class SampleSQLWorkflow(SQLMetadataExtractionWorkflow):
+    @workflow.run
+    async def run(self, workflow_args: Dict[str, Any]) -> None:
+        print("HELLO WORLD")
+
+
+async def application_hello_world() -> None:
     print("Starting application_sql")
 
     temporal_client = TemporalClient(
@@ -52,8 +62,8 @@ async def application_sql() -> None:
 
     worker: Worker = Worker(
         temporal_client=temporal_client,
-        workflow_classes=[SQLMetadataExtractionWorkflow],
-        temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_classes=[SampleSQLWorkflow],
+        temporal_activities=SampleSQLWorkflow.get_activities(activities),
     )
 
     # Start the worker in a separate thread
@@ -69,9 +79,9 @@ async def application_sql() -> None:
         "tenant_id": "123",
     }
 
-    await temporal_client.start_workflow(workflow_args, SQLMetadataExtractionWorkflow)
+    await temporal_client.start_workflow(workflow_args, SampleSQLWorkflow)
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql())
+    asyncio.run(application_hello_world())
     time.sleep(1000000)
