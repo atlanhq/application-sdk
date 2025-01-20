@@ -15,7 +15,6 @@ from application_sdk.inputs.objectstore import ObjectStore
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-# TODO: Refactor to use the new Input / Output interfaces
 class ChunkedObjectStoreWriterInterface(ABC):
     def __init__(
         self,

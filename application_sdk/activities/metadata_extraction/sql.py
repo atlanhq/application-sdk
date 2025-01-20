@@ -54,7 +54,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     async def _get_state(self, workflow_args: Dict[str, Any]):
         return await super()._get_state(workflow_args)
 
-    # TODO: The state is adding more overhead for developers, we are forcing them to use it as a platform and understand it
     async def _set_state(self, workflow_args: Dict[str, Any]):
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
@@ -77,7 +76,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args=workflow_args,
         )
 
-    # TODO: Its fine for now, need to tackle it later, worker lifecycle, workflow lifecycle, events
     async def _clean_state(self):
         await self._state[get_workflow_id()].sql_client.close()
 

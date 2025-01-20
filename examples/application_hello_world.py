@@ -1,51 +1,38 @@
 import asyncio
 import logging
 import time
-from typing import Any, Dict
-from urllib.parse import quote_plus
+from typing import Any, Callable, Dict, Sequence
 
 from temporalio import workflow
 
-from application_sdk.activities.metadata_extraction.sql import (
-    SQLMetadataExtractionActivities,
-)
-from application_sdk.clients.sql import AsyncSQLClient
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
-from application_sdk.workflows.metadata_extraction.sql import (
-    SQLMetadataExtractionWorkflow,
-)
+from application_sdk.workflows import WorkflowInterface
 
 APPLICATION_NAME = "hello-world"
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class CustomSQLClient(AsyncSQLClient):
-    def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password: str = quote_plus(self.credentials["password"])
-        return f"driver+psycopg://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
-
-
-class SampleSQLActivities(SQLMetadataExtractionActivities):
-    fetch_database_sql = ""
-    fetch_schema_sql = ""
-    fetch_table_sql = ""
-    fetch_column_sql = ""
-
-
-class SampleSQLWorkflowHandler(SQLHandler):
-    tables_check_sql = ""
-    metadata_sql = ""
-
-
 @workflow.defn
-class SampleSQLWorkflow(SQLMetadataExtractionWorkflow):
+class HelloWorldWorkflow(WorkflowInterface):
     @workflow.run
     async def run(self, workflow_args: Dict[str, Any]) -> None:
         print("HELLO WORLD")
+
+    @staticmethod
+    def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
+        return []
+
+
+class HelloWorldActivities(ActivitiesInterface):
+    async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
+        return
+
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
+        return
 
 
 async def application_hello_world() -> None:
@@ -56,14 +43,12 @@ async def application_hello_world() -> None:
     )
     await temporal_client.load()
 
-    activities = SampleSQLActivities(
-        sql_client_class=CustomSQLClient, handler_class=SampleSQLWorkflowHandler
-    )
+    activities = HelloWorldActivities()
 
     worker: Worker = Worker(
         temporal_client=temporal_client,
-        workflow_classes=[SampleSQLWorkflow],
-        temporal_activities=SampleSQLWorkflow.get_activities(activities),
+        workflow_classes=[HelloWorldWorkflow],
+        temporal_activities=HelloWorldWorkflow.get_activities(activities),
     )
 
     # Start the worker in a separate thread
@@ -72,14 +57,7 @@ async def application_hello_world() -> None:
     # wait for the worker to start
     time.sleep(3)
 
-    workflow_args = {
-        "credentials": {},
-        "connection": {"connection": "dev"},
-        "metadata": {},
-        "tenant_id": "123",
-    }
-
-    await temporal_client.start_workflow(workflow_args, SampleSQLWorkflow)
+    await temporal_client.start_workflow({}, HelloWorldWorkflow)
 
 
 if __name__ == "__main__":
