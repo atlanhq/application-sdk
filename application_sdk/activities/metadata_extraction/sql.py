@@ -13,6 +13,7 @@ from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
+from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
 
@@ -35,14 +36,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
+    transformer_class: Type[TransformerInterface] = AtlasTransformer
 
     def __init__(
         self,
         sql_client_class: Type[SQLClient] = SQLClient,
         handler_class: Type[SQLHandler] = SQLHandler,
+        transformer_class: Type[TransformerInterface] = AtlasTransformer,
     ):
         self.sql_client_class = sql_client_class
         self.handler_class = handler_class
+        self.transformer_class = transformer_class
 
         super().__init__()
 
@@ -65,7 +69,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             # Handlers
             handler=handler,
             # Transformer
-            transformer=AtlasTransformer(
+            transformer=self.transformer_class(
                 connector_name=workflow_args["application_name"],
                 connector_type="sql",
                 tenant_id=workflow_args["tenant_id"],

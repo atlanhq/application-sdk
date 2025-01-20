@@ -49,9 +49,6 @@ APPLICATION_NAME = "postgres"
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-# TODO: Make an empty file with same example, but with no SQL, hello-world example
-
-
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
