@@ -7,7 +7,6 @@ from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
 from application_sdk.application.fastapi.models import MetadataType  # noqa: F401
-from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -23,6 +22,7 @@ from application_sdk.application.fastapi.models import (
 )
 from application_sdk.application.fastapi.routers.health import get_health_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore import EventStore

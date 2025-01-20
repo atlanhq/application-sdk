@@ -2,7 +2,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.clients.temporal_client import TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 
 
 @pytest.fixture

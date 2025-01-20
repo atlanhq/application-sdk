@@ -5,7 +5,7 @@ from typing import Any, Callable, Dict, List
 from temporalio import activity
 from temporalio.client import WorkflowFailureError
 
-from application_sdk.clients.temporal_client import TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows.utils.activity import auto_heartbeater

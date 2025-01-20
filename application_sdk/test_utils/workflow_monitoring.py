@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from temporalio.client import WorkflowExecutionStatus, WorkflowHandle
 
-from application_sdk.clients.temporal_client import TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 
 logger = logging.getLogger(__name__)
 
