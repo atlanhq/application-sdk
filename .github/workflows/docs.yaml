@@ -41,7 +41,7 @@ jobs:
         run: |
           export POETRY_VIRTUALENVS_IN_PROJECT=1
           export POETRY_VIRTUALENVS_CREATE=1
-          git config --global url."https://${{ secrets.GITHUB_TOKEN }}".insteadOf "ssh://git";
+          git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}".insteadOf "ssh://git";
           poetry install
           source .venv/bin/activate
           make sphinx_docs
