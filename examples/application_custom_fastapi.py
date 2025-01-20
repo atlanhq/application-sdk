@@ -55,8 +55,7 @@ class MyCustomFastAPIApplication(FastAPIApplication):
 
 
 async def application_custom_fastapi():
-    handler = CustomHandler()
-    fast_api_app = MyCustomFastAPIApplication(handler=handler, config=None)
+    fast_api_app = MyCustomFastAPIApplication(handler=CustomHandler())
 
     await fast_api_app.start()
 

@@ -11,18 +11,9 @@ from application_sdk.handlers.sql import SQLHandler
 
 @pytest.fixture
 def sql_client():
-    resource = SQLClient(
-        credentials={
-            "user": "test_user",
-            "password": "test_password",
-            "host": "localhost",
-            "port": 5432,
-            "database": "test_db",
-        },
-        sql_alchemy_connect_args={},
-    )
-    resource.get_sqlalchemy_connection_string = lambda: "test_connection_string"
-    return resource
+    client = SQLClient()
+    client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
+    return client
 
 
 @pytest.fixture
@@ -33,26 +24,22 @@ def handler(sql_client: Any) -> SQLHandler:
     return handler
 
 
-def test_init_without_config():
-    with pytest.raises(ValueError, match="config is required"):
-        SQLClient()
-
-
-@patch("application_sdk.clients.sql_client.create_engine")
+@patch("application_sdk.clients.sql.create_engine")
 def test_load(mock_create_engine: Any, sql_client: SQLClient):
     # Mock the engine and connection
     mock_engine = MagicMock()
     mock_connection = MagicMock()
+    credentials = {"user": "test_user", "password": "test_password"}
     mock_create_engine.return_value = mock_engine
     mock_engine.connect.return_value = mock_connection
 
     # Run the load function
-    asyncio.run(sql_client.load())
+    asyncio.run(sql_client.load(credentials))
 
     # Assertions to verify behavior
     mock_create_engine.assert_called_once_with(
         sql_client.get_sqlalchemy_connection_string(),
-        connect_args=sql_client.config.get_sqlalchemy_connect_args(),
+        connect_args=sql_client.sql_alchemy_connect_args,
         pool_pre_ping=True,
     )
     assert sql_client.engine == mock_engine
@@ -147,9 +134,9 @@ async def test_fetch_metadata_with_error(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql_client.text")
+@patch("application_sdk.clients.sql.text")
 @patch(
-    "application_sdk.clients.sql_client.asyncio.get_running_loop",
+    "application_sdk.clients.sql.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
 async def test_run_query(
@@ -223,9 +210,9 @@ async def test_run_query(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql_client.text")
+@patch("application_sdk.clients.sql.text")
 @patch(
-    "application_sdk.clients.sql_client.asyncio.get_running_loop",
+    "application_sdk.clients.sql.asyncio.get_running_loop",
     new_callable=MagicMock,
 )
 async def test_run_query_with_error(

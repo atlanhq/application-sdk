@@ -7,6 +7,7 @@ from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
 from application_sdk.application.fastapi.models import MetadataType  # noqa: F401
+from application_sdk.clients.temporal_client import TemporalClient
 from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -26,7 +27,7 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore import EventStore
 from application_sdk.paas.eventstore.models import AtlanEvent
-from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -47,6 +48,7 @@ class EventWorkflowTrigger(WorkflowTrigger):
 
 class FastAPIApplication(AtlanApplicationInterface):
     app: FastAPI
+    temporal_client: Optional[TemporalClient]
 
     workflow_router: APIRouter = APIRouter()
     dapr_router: APIRouter = APIRouter()
@@ -59,6 +61,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
+        temporal_client: Optional[TemporalClient] = None,
         *args,
         **kwargs,
     ):
@@ -67,6 +70,7 @@ class FastAPIApplication(AtlanApplicationInterface):
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
         self.handler = handler
+        self.temporal_client = temporal_client
         super().__init__(
             handler,
             *args,
@@ -94,6 +98,9 @@ class FastAPIApplication(AtlanApplicationInterface):
             if isinstance(trigger, HttpWorkflowTrigger):
 
                 async def start_workflow(body: WorkflowRequest):
+                    if not self.temporal_client:
+                        raise Exception("Temporal client not initialized")
+
                     workflow_data = await self.temporal_client.start_workflow(
                         body.model_dump(), workflow_class=workflow_class
                     )
@@ -176,15 +183,18 @@ class FastAPIApplication(AtlanApplicationInterface):
         ]
 
     async def on_event(self, event: dict[str, Any]):
+        if not self.temporal_client:
+            raise Exception("Temporal client not initialized")
+
         logger.info(f"Received event {event}")
         for trigger in self.event_triggers:
             if trigger.should_trigger_workflow(AtlanEvent(**event)):
                 logger.info(
-                    f"Triggering workflow {trigger.workflow} with event {event}"
+                    f"Triggering workflow {trigger.workflow_class} with event {event}"
                 )
 
-                await trigger.workflow.start(
-                    workflow_args=event, workflow_class=trigger.workflow.__class__
+                await self.temporal_client.start_workflow(
+                    workflow_args=event, workflow_class=trigger.workflow_class
                 )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
