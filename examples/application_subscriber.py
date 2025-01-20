@@ -1,42 +1,35 @@
 import asyncio
 import logging
-import threading
-import time
 from datetime import timedelta
-from typing import Any, Callable, List
+from typing import Any, Callable, Dict, List
 
 from temporalio import activity, workflow
 
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.application.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.clients.constants import TemporalConstants
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.paas.eventstore import EventStore
-from application_sdk.paas.eventstore.models import (
+from application_sdk.outputs.eventstore import (
     WORKFLOW_END_EVENT,
     AtlanEvent,
     CustomEvent,
+    EventStore,
     WorkflowEndEvent,
 )
+from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
-from application_sdk.workflows.builder import WorkflowBuilderInterface
-from application_sdk.workflows.workers.worker import WorkflowWorker
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-# Workflow that will be triggered by an event
-@workflow.defn
-class SampleWorkflow(WorkflowInterface):
-    @activity.defn
-    async def set_workflow_activity_context(self, workflow_id: str) -> dict[str, Any]:
-        """
-        As we use a single worker thread, we need to set the workflow activity context
-        """
-        workflow_args = StateStore.extract_configuration(workflow_id)
+class SampleActivities(ActivitiesInterface):
+    async def _set_state(self, workflow_args: Dict[str, Any]):
+        pass
 
-        return workflow_args
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
+        pass
 
     @activity.defn
     async def activity_1(self):
@@ -60,16 +53,19 @@ class SampleWorkflow(WorkflowInterface):
 
         return
 
+
+# Workflow that will be triggered by an event
+@workflow.defn
+class SampleWorkflow(WorkflowInterface):
+    activities_cls: type[SampleActivities] = SampleActivities
+
     @workflow.run
     async def run(self, workflow_config: dict[str, Any]):
         workflow_id = workflow_config["workflow_id"]
+        workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
 
-        # dedicated activity to set the workflow activity context
-        workflow_args: dict[str, Any] = await workflow.execute_activity(
-            self.set_workflow_activity_context,
-            workflow_id,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
+        workflow_run_id = workflow.info().run_id
+        workflow_args["workflow_run_id"] = workflow_run_id
 
         # When a workflow is triggered by an event, the event is passed in as a dictionary
         event = AtlanEvent(**workflow_args)
@@ -84,33 +80,18 @@ class SampleWorkflow(WorkflowInterface):
         # workflow_id = workflow_end_event.workflow_id
         # workflow_output = workflow_end_event.workflow_output
 
-        await workflow.execute_activity(
-            self.activity_1,
+        await workflow.execute_activity_method(
+            self.activities_cls.activity_1,
             start_to_close_timeout=timedelta(seconds=10),
         )
-        await workflow.execute_activity(
-            self.activity_2,
+        await workflow.execute_activity_method(
+            self.activities_cls.activity_2,
             start_to_close_timeout=timedelta(seconds=10),
         )
 
-    async def start(self, workflow_args: Any, workflow_class: Any):
-        return await super().start(workflow_args, self.__class__)
-
-    def get_activities(self) -> List[Callable[..., Any]]:
-        return [self.activity_1, self.activity_2, self.set_workflow_activity_context]
-
-
-class SampleWorkflowBuilder(WorkflowBuilderInterface):
-    temporal_client: TemporalClient
-
-    def set_temporal_client(
-        self, temporal_client: TemporalClient
-    ) -> "SampleWorkflowBuilder":
-        self.temporal_client = temporal_client
-        return self
-
-    def build(self, workflow: SampleWorkflow | None = None) -> WorkflowInterface:
-        return SampleWorkflow().set_temporal_client(self.temporal_client)
+    @classmethod
+    def get_activities(cls, activities: SampleActivities) -> List[Callable[..., Any]]:
+        return [activities.activity_1, activities.activity_2]
 
 
 async def start_worker():
@@ -119,27 +100,28 @@ async def start_worker():
     )
     await temporal_client.load()
 
-    workflow: WorkflowInterface = (
-        SampleWorkflowBuilder().set_temporal_client(temporal_client).build()
-    )
+    activities = SampleActivities()
 
-    worker: WorkflowWorker = WorkflowWorker(
+    worker = Worker(
         temporal_client=temporal_client,
-        temporal_activities=workflow.get_activities(),
+        temporal_activities=SampleWorkflow.get_activities(activities),
         workflow_classes=[SampleWorkflow],
         passthrough_modules=["application_sdk", "os", "pandas"],
     )
 
     # Start the worker in a separate thread
-    worker_thread = threading.Thread(
-        target=lambda: asyncio.run(worker.start()), daemon=True
-    )
-    worker_thread.start()
-    time.sleep(3)
+    await worker.start(daemon=True)
 
 
 async def start_fast_api_app():
-    fast_api_app = FastAPIApplication()
+    temporal_client = TemporalClient(
+        application_name=TemporalConstants.APPLICATION_NAME.value,
+    )
+    await temporal_client.load()
+
+    fast_api_app = FastAPIApplication(
+        temporal_client=temporal_client,
+    )
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     def should_trigger_workflow(event: AtlanEvent) -> bool:
@@ -158,20 +140,13 @@ async def start_fast_api_app():
 
         return False
 
-    temporal_client = TemporalClient(
-        application_name=TemporalConstants.APPLICATION_NAME.value,
-    )
-    await temporal_client.load()
-    sample_worflow = (
-        SampleWorkflowBuilder().set_temporal_client(temporal_client).build()
-    )
-
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     fast_api_app.register_workflow(
-        sample_worflow,
+        SampleWorkflow,
         triggers=[
             EventWorkflowTrigger(
                 should_trigger_workflow=should_trigger_workflow,
+                workflow_class=SampleWorkflow,
             )
         ],
     )
