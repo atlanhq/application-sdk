@@ -82,3 +82,6 @@ jobs:
           message-id: "docs"
           message: |
             🛠 Library Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
+            
+            📝 Packages Diagram: https://k.atlan.dev/application-sdk/${{ github.head_ref }}/packages.html
+            📝 Classes Diagram: https://k.atlan.dev/application-sdk/${{ github.head_ref }}/packages.html
