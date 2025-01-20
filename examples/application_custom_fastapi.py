@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from application_sdk.application.fastapi import FastAPIApplication
+from application_sdk.application.fastapi import FastAPIApplication, HttpWorkflowTrigger
 from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows import WorkflowInterface
 
@@ -56,6 +56,16 @@ class MyCustomFastAPIApplication(FastAPIApplication):
 
 async def application_custom_fastapi():
     fast_api_app = MyCustomFastAPIApplication(handler=CustomHandler())
+    fast_api_app.register_workflow(
+        SampleWorkflow,
+        [
+            HttpWorkflowTrigger(
+                endpoint="/sample",
+                methods=["POST"],
+                workflow_class=SampleWorkflow,
+            )
+        ],
+    )
 
     await fast_api_app.start()
 

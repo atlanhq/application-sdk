@@ -70,6 +70,8 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
         self.handler = handler
         self.temporal_client = temporal_client
+
+        self.register_routers()
         super().__init__(
             handler,
             *args,
@@ -77,8 +79,6 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
 
     def register_routers(self):
-        super().register_routers()
-
         # Register all routes first
         self.register_routes()
 
