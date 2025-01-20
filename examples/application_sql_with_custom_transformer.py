@@ -35,16 +35,13 @@ from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
-from application_sdk.activities.common.utils import get_workflow_id
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
-    StateModel,
 )
 from application_sdk.clients.sql import AsyncSQLClient
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.inputs.statestore import StateStore
 from application_sdk.transformers.atlas import AtlasTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -103,28 +100,6 @@ class SampleSQLActivities(SQLMetadataExtractionActivities):
         AND c.table_name !~ '{exclude_table}';
     """
 
-    async def _set_state(self, workflow_args: Dict[str, Any]):
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
-
-        sql_client = self.sql_client_class()
-        await sql_client.load(credentials)
-
-        handler = self.handler_class(sql_client)
-
-        self._state[get_workflow_id()] = StateModel(
-            # Client
-            sql_client=sql_client,
-            # Handlers
-            handler=handler,
-            # Transformer
-            transformer=CustomTransformer(
-                connector_name=workflow_args["application_name"],
-                connector_type="sql",
-                tenant_id=workflow_args["tenant_id"],
-            ),
-            workflow_args=workflow_args,
-        )
-
 
 class PostgresDatabase(Database):
     @classmethod
@@ -171,6 +146,7 @@ async def application_sql_with_custom_transformer() -> None:
     activities = SampleSQLActivities(
         sql_client_class=PostgreSQLClient,
         handler_class=SampleSQLHandler,
+        transformer_class=CustomTransformer,
     )
 
     worker: Worker = Worker(
