@@ -11,13 +11,13 @@ from application_sdk.activities.query_extraction.sql import SQLQueryExtractionAc
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.workflows import WorkflowInterface
+from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 @workflow.defn
-class SQLQueryExtractionWorkflow(WorkflowInterface):
+class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
     activities_class: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
 
     fetch_queries_sql = ""

@@ -12,7 +12,7 @@ from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
-from application_sdk.workflows.sql.utils import prepare_query
+from application_sdk.workflows.common.utils import prepare_query
 from application_sdk.workflows.transformers.atlas import AtlasTransformer
 from application_sdk.workflows.utils.activity import auto_heartbeater
 
