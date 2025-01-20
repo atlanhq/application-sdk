@@ -5,7 +5,7 @@ from typing import Any, List, Sequence
 
 from temporalio.types import CallableType
 
-from application_sdk.clients.temporal_client import TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))

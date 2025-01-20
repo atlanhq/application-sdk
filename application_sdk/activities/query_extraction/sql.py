@@ -8,16 +8,15 @@ import pandas as pd
 from pydantic import BaseModel, Field
 from temporalio import activity
 
-from application_sdk import activity_pd
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.activities.utils import get_workflow_id
+from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.decorators import activity_pd
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
-from application_sdk.workflows.utils.activity import auto_heartbeater
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -84,7 +83,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state["sql_client"].engine, query=self.fetch_queries_sql
+            engine=state.sql_client.engine, query=self.fetch_queries_sql
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/query",
@@ -254,7 +253,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         self, workflow_args: Dict[str, Any], **kwargs
     ) -> List[Dict[str, Any]]:
         state = await self._get_state(workflow_args)
-        sql_client = state["sql_client"]
+        sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
 

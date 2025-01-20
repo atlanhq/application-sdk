@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.activities.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 
 
 class ActivitiesInterface(ABC):
@@ -15,7 +15,7 @@ class ActivitiesInterface(ABC):
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
         raise ValueError("_set_state not implemented")
 
-    async def _get_state(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+    async def _get_state(self, workflow_args: Dict[str, Any]) -> Any:
         if get_workflow_id() not in self._state:
             await self._set_state(workflow_args)
         return self._state[get_workflow_id()]

@@ -22,7 +22,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     batch_size: int = 100000
     max_transform_concurrency: int = 5
 
-    # TODO: Seems a little hacky
     @staticmethod
     def get_activities(
         activities: SQLMetadataExtractionActivities,

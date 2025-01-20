@@ -21,14 +21,11 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict
 from urllib.parse import quote_plus
-
-from temporalio import workflow
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
-from application_sdk.clients.temporal_client import TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
@@ -177,11 +174,11 @@ async def application_sql_miner():
             "ranged_sql_end_key": "[END_MARKER]",
         },
         "credentials": {
-            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-            "user": os.getenv("SNOWFLAKE_USER", "snowflake"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
+            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "qia75894"),
+            "user": os.getenv("SNOWFLAKE_USER", "sanil.khurana@atlan.com"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD", "Raymon11@836578"),
             "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
         },
         "connection": {"connection": "dev"},
         "metadata": {

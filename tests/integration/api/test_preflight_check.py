@@ -3,7 +3,7 @@ import json
 from fastapi.testclient import TestClient
 
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.workflows.sql.workflows.workflow import SQLWorkflow
+from application_sdk.workflows.sql.workflows import SQLWorkflow
 
 
 class TestSQLPreflightCheck:

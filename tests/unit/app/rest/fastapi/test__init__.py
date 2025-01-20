@@ -14,6 +14,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
 from application_sdk.workflows import WorkflowInterface
 
+
 class SampleWorkflow(WorkflowInterface):
     pass
 
@@ -103,14 +104,12 @@ class TestFastAPIApplication:
         assert str(exc_info.value) == "Failed to fetch metadata"
         mock_handler.preflight_check.assert_called_once_with(sample_payload)
 
-    async def test_event_trigger_success(
-        self, app: FastAPIApplication
-    ):
+    async def test_event_trigger_success(self, app: FastAPIApplication):
         def should_trigger_workflow(event: AtlanEvent):
             if event.data.event_type == "workflow_end":
                 return True
             return False
-        
+
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()
 
@@ -154,12 +153,10 @@ class TestFastAPIApplication:
             workflow_class=SampleWorkflow,
         )
 
-    async def test_event_trigger_conditions(
-        self, app: FastAPIApplication
-    ):
+    async def test_event_trigger_conditions(self, app: FastAPIApplication):
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()
-        
+
         app.event_triggers = []
         app.temporal_client = temporal_client
 

@@ -36,7 +36,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.clients.sql import AsyncSQLClient
-from application_sdk.clients.temporal_client import TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
@@ -118,7 +118,6 @@ class SampleSQLWorkflowHandler(SQLHandler):
 async def application_sql() -> None:
     print("Starting application_sql")
 
-    # TODO: Make this part of the worker
     temporal_client = TemporalClient(
         application_name=APPLICATION_NAME,
     )

@@ -1,10 +1,12 @@
 import json
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
 def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:

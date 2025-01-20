@@ -23,10 +23,10 @@ from application_sdk.clients import ClientInterface
 from application_sdk.clients.constants import TemporalConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
-from application_sdk.paas.eventstore import EventStore
-from application_sdk.paas.eventstore.models import (
+from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
+    EventStore,
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
