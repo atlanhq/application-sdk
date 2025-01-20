@@ -232,11 +232,3 @@ class TemporalClient(ClientInterface):
             "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
         }
         return workflow_info
-
-    async def close(self):
-        """Close the client connection.
-
-        This method should properly terminate the connection and clean up
-        any resources used by the client.
-        """
-        return

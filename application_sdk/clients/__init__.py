@@ -8,10 +8,6 @@ class ClientInterface(ABC):
     must provide for establishing and managing connections to data sources.
     """
 
-    def __init__(self):
-        """Initialize a new client instance."""
-        pass
-
     @abstractmethod
     async def load(self):
         """Establish the client connection.
@@ -19,13 +15,12 @@ class ClientInterface(ABC):
         This method should handle the initialization and connection setup
         for the specific client implementation.
         """
-        pass
+        raise NotImplementedError("load method is not implemented")
 
-    @abstractmethod
     async def close(self):
         """Close the client connection.
 
         This method should properly terminate the connection and clean up
         any resources used by the client.
         """
-        pass
+        return

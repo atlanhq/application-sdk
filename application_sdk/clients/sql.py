@@ -89,14 +89,6 @@ class SQLClient(ClientInterface):
 
         activity.logger.info("Query execution completed")
 
-    async def close(self):
-        """Close the client connection.
-
-        This method should properly terminate the connection and clean up
-        any resources used by the client.
-        """
-        return
-
 
 class AsyncSQLClient(SQLClient):
     connection: AsyncConnection | None = None
