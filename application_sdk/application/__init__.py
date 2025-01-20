@@ -1,10 +1,21 @@
 from abc import ABC, abstractmethod
+from typing import Optional
+
+from application_sdk.handlers import HandlerInterface
 
 
 class AtlanApplicationInterface(ABC):
     """
     Atlan Application Interface class
     """
+
+    handler: Optional[HandlerInterface]
+
+    def __init__(
+        self,
+        handler: Optional[HandlerInterface] = None,
+    ):
+        self.handler = handler
 
     @abstractmethod
     async def start(self) -> None:

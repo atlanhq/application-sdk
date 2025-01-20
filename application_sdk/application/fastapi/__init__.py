@@ -52,7 +52,6 @@ class FastAPIApplication(AtlanApplicationInterface):
 
     app: FastAPI
     temporal_client: Optional[TemporalClient]
-    handler: Optional[HandlerInterface]
 
     workflow_router: APIRouter = APIRouter()
     dapr_router: APIRouter = APIRouter()
