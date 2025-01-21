@@ -18,7 +18,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 @workflow.defn
 class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
-    activities_class: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
+    activities_cls: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
 
     fetch_queries_sql = ""
 
@@ -46,6 +46,8 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
         :param workflow_args: The workflow arguments.
         """
+        await super().run(workflow_config)
+
         workflow_guid = workflow_config["workflow_id"]
         workflow_args = StateStore.extract_configuration(workflow_guid)
 
@@ -61,15 +63,8 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
-        await workflow.execute_activity_method(
-            self.activities_class.preflight_check,
-            workflow_args,
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-
         results: List[Dict[str, Any]] = await workflow.execute_activity_method(  # pyright: ignore[reportUnknownMemberType]
-            self.activities_class.get_query_batches,
+            self.activities_cls.get_query_batches,
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
@@ -86,7 +81,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
             miner_activities.append(
                 workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
-                    self.activities_class.fetch_queries,
+                    self.activities_cls.fetch_queries,
                     activity_args,
                     retry_policy=retry_policy,
                     start_to_close_timeout=timedelta(seconds=1000),

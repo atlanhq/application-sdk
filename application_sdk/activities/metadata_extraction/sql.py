@@ -1,10 +1,9 @@
 from typing import Any, Dict, Optional, Type
 
 import pandas as pd
-from pydantic import BaseModel
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.utils import prepare_query
@@ -17,17 +16,16 @@ from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
 
-class StateModel(BaseModel):
+class SQLMetadataExtractionActivitiesState(ActivitiesState):
     model_config = {"arbitrary_types_allowed": True}
 
     sql_client: SQLClient
     handler: SQLHandler
-    transformer: AtlasTransformer
-    workflow_args: Dict[str, Any]
+    transformer: TransformerInterface
 
 
 class SQLMetadataExtractionActivities(ActivitiesInterface):
-    _state: Dict[str, StateModel] = {}
+    _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
 
     fetch_database_sql = None
     fetch_schema_sql = None
@@ -62,7 +60,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = StateModel(
+        self._state[get_workflow_id()] = SQLMetadataExtractionActivitiesState(
             # Client
             sql_client=sql_client,
             # Handlers
@@ -125,23 +123,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                     f"Error processing row for {typename}: {row_error}"
                 )
         return pd.DataFrame(transformed_metadata_list)
-
-    @activity.defn
-    @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]):
-        state = await self._get_state(workflow_args)
-        handler: SQLHandler = state.handler
-
-        if not handler:
-            raise ValueError("Preflight check handler not found")
-
-        result = await handler.preflight_check(
-            {
-                "metadata": workflow_args["metadata"],
-            }
-        )
-        if not result or "error" in result:
-            raise ValueError("Preflight check failed")
 
     @activity.defn
     @auto_heartbeater

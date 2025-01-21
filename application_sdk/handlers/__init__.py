@@ -25,7 +25,7 @@ class HandlerInterface(ABC):
         raise NotImplementedError("test_auth method not implemented")
 
     @abstractmethod
-    async def preflight_check(self, **kwargs: Any) -> Any:
+    async def preflight_check(self, *args, **kwargs: Any) -> Any:
         """
         Abstract method to perform preflight checks
         To be implemented by the subclass

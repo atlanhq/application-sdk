@@ -293,16 +293,3 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
         return parallel_markers
-
-    @activity.defn
-    @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]):
-        state = await self._get_state(workflow_args)
-
-        result = await state.handler.preflight_check(
-            {
-                "metadata": workflow_args["metadata"],
-            }
-        )
-        if not result or "error" in result:
-            raise ValueError("Preflight check failed")

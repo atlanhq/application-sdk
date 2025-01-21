@@ -1,7 +1,19 @@
 from abc import ABC, abstractmethod
 from typing import Any, Dict
 
-from application_sdk.activities.common.utils import get_workflow_id
+from pydantic import BaseModel
+from temporalio import activity
+
+from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.handlers import HandlerInterface
+
+
+class ActivitiesState(BaseModel):
+    model_config = {"arbitrary_types_allowed": True}
+
+    handler: HandlerInterface
+
+    workflow_args: Dict[str, Any]
 
 
 class ActivitiesInterface(ABC):
@@ -48,9 +60,9 @@ class ActivitiesInterface(ABC):
         """Remove the state data for the current workflow."""
         self._state.pop(get_workflow_id())
 
-    # TODO: Try it out
-    @abstractmethod
-    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
+    @activity.defn
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]):
         """Perform preflight checks before workflow execution.
 
         Args:
@@ -59,4 +71,16 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        raise NotImplementedError("Preflight check not implemented")
+        state = await self._get_state(workflow_args)
+        handler: HandlerInterface = state.handler
+
+        if not handler:
+            raise ValueError("Preflight check handler not found")
+
+        result: Any = await handler.preflight_check(
+            {
+                "metadata": workflow_args["metadata"],
+            }
+        )
+        if not result or "error" in result:
+            raise ValueError("Preflight check failed")
