@@ -11,6 +11,7 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.common.utils import prepare_query
 from application_sdk.decorators import activity_pd
 from application_sdk.handlers import HandlerInterface
+from application_sdk.handlers.common.constants import SQLConstants
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -28,10 +29,10 @@ class SQLHandler(HandlerInterface):
     tables_check_sql: str | None = None
     fetch_databases_sql: str | None = None
     fetch_schemas_sql: str | None = None
-    database_alias_key: str = "catalog_name"
-    schema_alias_key: str = "schema_name"
-    database_result_key: str = "TABLE_CATALOG"
-    schema_result_key: str = "TABLE_SCHEMA"
+    database_alias_key: str = SQLConstants.DATABASE_ALIAS_KEY.value
+    schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
+    database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
+    schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client
@@ -40,8 +41,7 @@ class SQLHandler(HandlerInterface):
         """
         Method to load and load the SQL client
         """
-        self.sql_client.set_credentials(credentials)
-        await self.sql_client.load()
+        await self.sql_client.load(credentials)
 
     @activity_pd(
         batch_input=lambda self, args, **kwargs: self.sql_client.sql_input(

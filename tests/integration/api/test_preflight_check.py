@@ -2,8 +2,8 @@ import json
 
 from fastapi.testclient import TestClient
 
+from application_sdk.common.utils import prepare_query
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.workflows.sql.workflows import SQLWorkflow
 
 
 class TestSQLPreflightCheck:
@@ -64,7 +64,7 @@ class TestSQLPreflightCheck:
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(handler.tables_check_sql, payload)
+        prepared_sql = prepare_query(handler.tables_check_sql, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
     async def test_check_endpoint_empty_filters(
@@ -107,7 +107,7 @@ class TestSQLPreflightCheck:
                 AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '.*'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(handler.tables_check_sql, payload)
+        prepared_sql = prepare_query(handler.tables_check_sql, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)
 
     async def test_check_endpoint_both_filters(
@@ -153,5 +153,5 @@ class TestSQLPreflightCheck:
             AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE 'TESTDB\.PUBLIC$'
         """
 
-        prepared_sql = SQLWorkflow.prepare_query(handler.tables_check_sql, payload)
+        prepared_sql = prepare_query(handler.tables_check_sql, payload)
         assert self.normalize_sql(prepared_sql) == self.normalize_sql(expected_sql)

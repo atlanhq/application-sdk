@@ -3,6 +3,7 @@ import logging
 from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.inputs.statestore import StateStore
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -112,3 +113,24 @@ def normalize_filters(
                 normalized_filter_list.append(f"{db}\\.{sch}")
 
     return normalized_filter_list
+
+
+def get_workflow_config(config_id: str) -> Dict[str, Any]:
+    """
+    Method to get the workflow configuration from the state store using config id
+    """
+    return StateStore.extract_configuration(config_id)
+
+
+def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Method to update the workflow config
+    """
+    extracted_config = get_workflow_config(config_id)
+
+    for key in extracted_config.keys():
+        if key in config and config[key] is not None:
+            extracted_config[key] = config[key]
+
+    StateStore.store_configuration(config_id, extracted_config)
+    return extracted_config

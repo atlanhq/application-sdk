@@ -10,6 +10,4 @@ class TemporalConstants(Enum):
 
 
 class SQLConstants(Enum):
-    DEFAULT_DATABASE_ALIAS_KEY = "default_database_alias"
-    DEFAULT_SCHEMA_ALIAS_KEY = "default_schema_alias"
     USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
