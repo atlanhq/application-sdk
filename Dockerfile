@@ -20,4 +20,4 @@ COPY ./pyproject.toml .
 RUN pip install poetry==1.8.3
 
 # Install any needed packages specified in requirements.txt
-RUN poetry install --no-interaction --no-root --extras "workflows dashboard"
+RUN poetry install --no-interaction --no-root --extras "workflows"
