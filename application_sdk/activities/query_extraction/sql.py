@@ -83,7 +83,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine, query=self.fetch_queries_sql
+            engine=state.sql_client.engine, query=workflow_args["sql_query"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/query",
