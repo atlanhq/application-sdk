@@ -30,6 +30,7 @@ import asyncio
 import logging
 import os
 import time
+from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from application_sdk.activities.metadata_extraction.sql import (
@@ -112,7 +113,7 @@ class SampleSQLWorkflowHandler(SQLHandler):
     """
 
 
-async def application_sql() -> None:
+async def application_sql() -> Dict[str, Any]:
     print("Starting application_sql")
 
     temporal_client = TemporalClient(
@@ -162,7 +163,10 @@ async def application_sql() -> None:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    await temporal_client.start_workflow(workflow_args, SQLMetadataExtractionWorkflow)
+    workflow_response = await temporal_client.start_workflow(
+        workflow_args, SQLMetadataExtractionWorkflow
+    )
+    return workflow_response
 
 
 if __name__ == "__main__":

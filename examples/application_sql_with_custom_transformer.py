@@ -135,7 +135,7 @@ class SampleSQLHandler(SQLHandler):
     """
 
 
-async def application_sql_with_custom_transformer() -> None:
+async def application_sql_with_custom_transformer() -> Dict[str, Any]:
     print("Starting application_sql_with_custom_transformer")
 
     temporal_client = TemporalClient(
@@ -187,7 +187,10 @@ async def application_sql_with_custom_transformer() -> None:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    await temporal_client.start_workflow(workflow_args, SQLMetadataExtractionWorkflow)
+    workflow_response = await temporal_client.start_workflow(
+        workflow_args, SQLMetadataExtractionWorkflow
+    )
+    return workflow_response
 
 
 if __name__ == "__main__":

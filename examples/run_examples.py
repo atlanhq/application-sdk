@@ -6,6 +6,7 @@ import asyncio
 
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.test_utils.workflow_monitoring import run_and_monitor_workflow
+from examples.application_hello_world import application_hello_world
 from examples.application_sql import application_sql
 from examples.application_sql_miner import application_sql_miner
 from examples.application_sql_with_custom_transformer import (
@@ -29,6 +30,7 @@ async def main():
         application_sql,
         application_sql_with_custom_transformer,
         application_sql_miner,
+        application_hello_world,
     ]
 
     failed_examples: list[str] = []
