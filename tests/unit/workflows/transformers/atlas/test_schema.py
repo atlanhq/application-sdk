@@ -27,9 +27,7 @@ def expected_data(resources_dir: str) -> Dict[str, Any]:
 
 @pytest.fixture
 def transformer():
-    return AtlasTransformer(
-        connector_name="snowflake", tenant_id="default", current_epoch=1728518400
-    )
+    return AtlasTransformer(connector_name="snowflake", tenant_id="default")
 
 
 def assert_attributes(
@@ -52,7 +50,12 @@ def test_regular_schema_transformation(
 ):
     """Test the transformation of regular schemas"""
     transformed_data = transformer.transform_metadata(
-        "SCHEMA", raw_data["regular_schema"], "test_workflow_id", "test_run_id"
+        "SCHEMA",
+        raw_data["regular_schema"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is not None
@@ -112,7 +115,12 @@ def test_schema_invalid_data(transformer: AtlasTransformer):
     invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
 
     transformed_data = transformer.transform_metadata(
-        "SCHEMA", invalid_data, workflow_id, run_id
+        "SCHEMA",
+        invalid_data,
+        workflow_id,
+        run_id,
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is None

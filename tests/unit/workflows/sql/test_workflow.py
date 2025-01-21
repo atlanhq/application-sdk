@@ -99,6 +99,8 @@ async def test_transform_batch_without_transformer(sql_resource):
             "test",
             workflow_id="test-workflow",
             workflow_run_id="test-run",
+            connection_name="test-connection",
+            connection_qualified_name="test-connection-qualified-name",
         )
 
 

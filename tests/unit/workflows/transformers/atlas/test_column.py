@@ -26,9 +26,7 @@ def expected_data(resources_dir: str) -> Dict[str, Any]:
 
 @pytest.fixture
 def transformer():
-    return AtlasTransformer(
-        connector_name="snowflake", tenant_id="default", current_epoch=1728518400
-    )
+    return AtlasTransformer(connector_name="snowflake", tenant_id="default")
 
 
 def assert_attributes(
@@ -52,7 +50,12 @@ def test_regular_column_transformation(
     """Test the transformation of regular table columns"""
 
     transformed_data = transformer.transform_metadata(
-        "COLUMN", raw_data["regular_columns"], "test_workflow_id", "test_run_id"
+        "COLUMN",
+        raw_data["regular_columns"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is not None
@@ -86,7 +89,12 @@ def test_view_column_transformation(
     """Test the transformation of view columns"""
 
     transformed_data = transformer.transform_metadata(
-        "COLUMN", raw_data["view_columns"], "test_workflow_id", "test_run_id"
+        "COLUMN",
+        raw_data["view_columns"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is not None
@@ -115,6 +123,8 @@ def test_materialized_view_column_transformation(
         raw_data["materialized_view_columns"],
         "test_workflow_id",
         "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is not None
@@ -147,6 +157,8 @@ def test_column_with_custom_attributes(
         raw_data["columns_with_custom_attrs"],
         "test_workflow_id",
         "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is not None
@@ -175,7 +187,12 @@ def test_column_invalid_data(transformer: AtlasTransformer):
 
     invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
     transformed_data = transformer.transform_metadata(
-        "COLUMN", invalid_data, "test_workflow_id", "test_run_id"
+        "COLUMN",
+        invalid_data,
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/snowflake/1728518400",
     )
 
     assert transformed_data is None
