@@ -78,8 +78,8 @@ async def test_fetch_metadata_without_database_alias_key(
     metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    handler.default_database_alias_key = "TABLE_CATALOG"
-    handler.default_schema_alias_key = "TABLE_SCHEMA"
+    handler.database_alias_key = "TABLE_CATALOG"
+    handler.schema_alias_key = "TABLE_SCHEMA"
     args = {
         "metadata_sql": metadata_sql,
     }

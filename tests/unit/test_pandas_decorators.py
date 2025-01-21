@@ -6,7 +6,7 @@ import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
 
-from application_sdk import activity_pd
+from application_sdk.decorators import activity_pd
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput

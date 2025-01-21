@@ -4,7 +4,7 @@ from typing import Any, Dict, List
 
 import pytest
 
-from application_sdk.workflows.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.atlas import AtlasTransformer
 
 
 @pytest.fixture

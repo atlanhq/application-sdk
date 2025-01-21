@@ -11,7 +11,7 @@ from application_sdk.application.fastapi import (
     PreflightCheckResponse,
 )
 from application_sdk.handlers import HandlerInterface
-from application_sdk.paas.eventstore.models import AtlanEvent, WorkflowEndEvent
+from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
 from application_sdk.workflows import WorkflowInterface
 
 
