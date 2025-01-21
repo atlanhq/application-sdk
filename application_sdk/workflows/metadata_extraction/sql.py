@@ -176,13 +176,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             backoff_coefficient=2,
         )
 
-        await workflow.execute_activity_method(
-            self.activities_cls.preflight_check,
-            args=[workflow_args],
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-        )
-
         output_prefix = workflow_args["output_prefix"]
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path

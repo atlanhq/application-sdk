@@ -19,7 +19,6 @@ class WorkflowInterface(ABC):
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
-        # TODO: Remove logic if not needed based on preflight check decisions
         workflow_id = workflow_config["workflow_id"]
         workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
 

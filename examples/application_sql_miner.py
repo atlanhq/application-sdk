@@ -21,6 +21,7 @@ import os
 import threading
 import time
 from datetime import datetime, timedelta
+from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
@@ -133,7 +134,7 @@ class SampleSnowflakeHandler(SQLHandler):
     metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
 
 
-async def application_sql_miner():
+async def application_sql_miner() -> Dict[str, Any]:
     print("Starting application_sql_miner")
 
     temporal_client = TemporalClient(
@@ -193,10 +194,11 @@ async def application_sql_miner():
         },
     }
 
-    await temporal_client.start_workflow(
+    workflow_response = await temporal_client.start_workflow(
         workflow_class=SQLQueryExtractionWorkflow,
         workflow_args=workflow_args,
     )
+    return workflow_response
 
 
 if __name__ == "__main__":

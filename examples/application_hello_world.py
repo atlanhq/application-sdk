@@ -35,7 +35,7 @@ class HelloWorldActivities(ActivitiesInterface):
         return
 
 
-async def application_hello_world() -> None:
+async def application_hello_world() -> Dict[str, Any]:
     print("Starting application_hello_world")
 
     temporal_client = TemporalClient(
@@ -57,7 +57,8 @@ async def application_hello_world() -> None:
     # wait for the worker to start
     time.sleep(3)
 
-    await temporal_client.start_workflow({}, HelloWorldWorkflow)
+    workflow_response = await temporal_client.start_workflow({}, HelloWorldWorkflow)
+    return workflow_response
 
 
 if __name__ == "__main__":

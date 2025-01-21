@@ -83,7 +83,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_args,
         state,
         **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine, query=self.fetch_queries_sql
+            engine=state.sql_client.engine, query=workflow_args["sql_query"]
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/query",
@@ -293,16 +293,3 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
         return parallel_markers
-
-    @activity.defn
-    @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]):
-        state = await self._get_state(workflow_args)
-
-        result = await state.handler.preflight_check(
-            {
-                "metadata": workflow_args["metadata"],
-            }
-        )
-        if not result or "error" in result:
-            raise ValueError("Preflight check failed")
