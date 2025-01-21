@@ -35,10 +35,10 @@ To cut through ambiguity in code review comments, please adopt the following not
 
 - **BLOCKER**: Must be addressed before this PR can be merged.
   - Example: “BLOCKER: this API is not available on mobile browsers and will cause the phone to implode”
-  
+
 - **FAST-FOLLOW**: Should be addressed, but optionally via a follow-up PR.
   - Example: “FAST-FOLLOW: We really shouldn’t have this business logic in a controller action - please pull it out into a domain class”
-  
+
 - **NIT**: Feedback that is optional; an opportunity for discussion on team norms.
   - Example: “NIT: I would probably have pulled this out into a little helper function”
 
