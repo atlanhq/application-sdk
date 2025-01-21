@@ -9,6 +9,8 @@ on:
     branches:
       - main
       - develop
+      - APP-4477-sdk-restructuring
+      - feat/adding-unit-e2e-tests
   pull_request:
     types:
       - opened
@@ -16,7 +18,8 @@ on:
     branches:
       - main
       - develop
-
+      - APP-4477-sdk-restructuring
+      - feat/adding-unit-e2e-tests
 jobs:
   tests:
     runs-on: ubuntu-latest

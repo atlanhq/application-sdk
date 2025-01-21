@@ -7,10 +7,14 @@ on:
     branches:
       - main
       - develop
+      - APP-4477-sdk-restructuring
+      - feat/adding-unit-e2e-tests
   pull_request:
     branches:
       - main
       - develop
+      - APP-4477-sdk-restructuring
+      - feat/adding-unit-e2e-tests
 
 jobs:
   test:
