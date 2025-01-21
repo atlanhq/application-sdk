@@ -37,7 +37,6 @@ class AtlasTransformer(TransformerInterface):
     """
 
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
-        self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: Dict[str, Type[Any]] = {

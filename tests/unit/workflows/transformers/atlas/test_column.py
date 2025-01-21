@@ -27,7 +27,7 @@ def expected_data(resources_dir: str) -> Dict[str, Any]:
 @pytest.fixture
 def transformer():
     return AtlasTransformer(
-        connector_name="snowflake", tenant_id="default", current_epoch=1728518400
+        connector_name="snowflake", tenant_id="default"
     )
 
 
