@@ -168,7 +168,10 @@ async def application_sql_with_custom_transformer(
             "password": os.getenv("POSTGRES_PASSWORD", "password"),
             "database": os.getenv("POSTGRES_DATABASE", "postgres"),
         },
-        "connection": {"connection": "dev"},
+        "connection": {
+            "connection_name": "test-connection",
+            "connection_qualified_name": "default/postgres/1728518400",
+        },
         "metadata": {
             "exclude_filter": "{}",
             "include_filter": "{}",

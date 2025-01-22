@@ -175,7 +175,10 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
             "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
             "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
         },
-        "connection": {"connection": "dev"},
+        "connection": {
+            "connection_name": "test-connection",
+            "connection_qualified_name": "default/postgres/1728518400",
+        },
         "metadata": {
             "exclude_filter": "{}",
             "include_filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',

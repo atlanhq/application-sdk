@@ -139,8 +139,8 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
             "database": os.getenv("POSTGRES_DATABASE", "postgres"),
         },
         "connection": {
-            "connection_name": "dev",
-            "connection_qualified_name": "dev",
+            "connection_name": "test-connection",
+            "connection_qualified_name": "default/postgres/1728518400",
         },
         "metadata": {
             "exclude_filter": "{}",
