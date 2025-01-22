@@ -55,8 +55,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         return await super()._get_state(workflow_args)
 
     async def _set_state(self, workflow_args: Dict[str, Any]):
-        if not self._state.get(get_workflow_id()):
-            self._state[get_workflow_id()] = SQLMetadataExtractionActivitiesState()
+        workflow_id = get_workflow_id()
+        if not self._state.get(workflow_id):
+            self._state[workflow_id] = SQLMetadataExtractionActivitiesState()
 
         await super()._set_state(workflow_args)
 
@@ -67,9 +68,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()].sql_client = sql_client
-        self._state[get_workflow_id()].handler = handler
-        self._state[get_workflow_id()].transformer = self.transformer_class(
+        self._state[workflow_id].sql_client = sql_client
+        self._state[workflow_id].handler = handler
+        self._state[workflow_id].transformer = self.transformer_class(
             connector_name=workflow_args["application_name"],
             connector_type="sql",
             tenant_id=workflow_args["tenant_id"],

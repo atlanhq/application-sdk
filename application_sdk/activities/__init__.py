@@ -29,10 +29,11 @@ class ActivitiesInterface(ABC):
 
     # State methods
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
-        if not self._state.get(get_workflow_id()):
-            self._state[get_workflow_id()] = ActivitiesState()
+        workflow_id = get_workflow_id()
+        if not self._state.get(workflow_id):
+            self._state[workflow_id] = ActivitiesState()
 
-        self._state[get_workflow_id()].workflow_args = workflow_args
+        self._state[workflow_id].workflow_args = workflow_args
 
     async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesState:
         """Retrieve the state for the current workflow.
