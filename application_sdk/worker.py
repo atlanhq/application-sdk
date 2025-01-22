@@ -36,13 +36,17 @@ class Worker:
         if not self.temporal_client:
             raise ValueError("Temporal client is not set")
 
-        worker = self.temporal_client.create_worker(
-            activities=self.temporal_activities,
-            workflow_classes=self.workflow_classes,
-            passthrough_modules=self.passthrough_modules,
-        )
+        try:
+            worker = self.temporal_client.create_worker(
+                activities=self.temporal_activities,
+                workflow_classes=self.workflow_classes,
+                passthrough_modules=self.passthrough_modules,
+            )
 
-        logger.info(
-            f"Starting worker with task queue: {self.temporal_client.worker_task_queue}"
-        )
-        await worker.run()
+            logger.info(
+                f"Starting worker with task queue: {self.temporal_client.worker_task_queue}"
+            )
+            await worker.run()
+        except Exception as e:
+            logger.error(f"Error starting worker: {e}")
+            raise e
