@@ -130,7 +130,6 @@ async def application_sql() -> Dict[str, Any]:
         workflow_classes=[SQLMetadataExtractionWorkflow],
         temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
-
     # Start the worker in a separate thread
     await worker.start(daemon=True)
 

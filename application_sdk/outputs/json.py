@@ -14,6 +14,15 @@ activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
+    """Generate a file path for a chunk.
+
+    Args:
+        chunk_start (int | None): Starting index of the chunk, or None for single chunk.
+        chunk_count (int): Total number of chunks.
+
+    Returns:
+        str: Generated file path for the chunk.
+    """
     if chunk_start is None:
         return f"{str(chunk_count)}.json"
     else:
@@ -21,6 +30,24 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
 
 
 class JsonOutput(Output):
+    """Output handler for writing data to JSON files.
+
+    This class handles writing DataFrames to JSON files with support for chunking
+    and automatic uploading to object store.
+
+    Attributes:
+        output_path (str): Path where JSON files will be written.
+        upload_file_prefix (str): Prefix for files when uploading to object store.
+        chunk_start (Optional[int]): Starting index for chunk numbering.
+        buffer_size (int): Size of the buffer in bytes.
+        chunk_size (int): Maximum number of records per chunk.
+        total_record_count (int): Total number of records processed.
+        chunk_count (int): Number of chunks created.
+        path_gen (Callable): Function to generate file paths for chunks.
+        buffer (List[pd.DataFrame]): Buffer holding DataFrames before writing.
+        current_buffer_size (int): Current size of the buffer.
+    """
+
     def __init__(
         self,
         output_path: str,
@@ -32,6 +59,24 @@ class JsonOutput(Output):
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
     ):
+        """Initialize the JSON output handler.
+
+        Args:
+            output_path (str): Path where JSON files will be written.
+            upload_file_prefix (str): Prefix for files when uploading to object store.
+            chunk_start (Optional[int], optional): Starting index for chunk numbering.
+                Defaults to None.
+            buffer_size (int, optional): Size of the buffer in bytes.
+                Defaults to 10MB (1024 * 1024 * 10).
+            chunk_size (int, optional): Maximum number of records per chunk.
+                Defaults to 100000.
+            total_record_count (int, optional): Initial total record count.
+                Defaults to 0.
+            chunk_count (int, optional): Initial chunk count.
+                Defaults to 0.
+            path_gen (Callable, optional): Function to generate file paths.
+                Defaults to path_gen function.
+        """
         self.output_path = output_path
         self.upload_file_prefix = upload_file_prefix
         self.chunk_start = chunk_start
@@ -45,8 +90,16 @@ class JsonOutput(Output):
         os.makedirs(f"{output_path}", exist_ok=True)
 
     async def write_df(self, df: pd.DataFrame):
-        """
-        Method to write the dataframe to a json file and push it to the object store
+        """Write a pandas DataFrame to JSON files.
+
+        This method writes the DataFrame to JSON files, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
         """
         if len(df) == 0:
             return
@@ -73,14 +126,29 @@ class JsonOutput(Output):
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
 
     async def write_daft_df(self, df: daft.DataFrame):
-        """
-        Method to write the dataframe to a json file and push it to the object store
+        """Write a daft DataFrame to JSON files.
+
+        This method converts the daft DataFrame to pandas and writes it to JSON files.
+
+        Args:
+            df (daft.DataFrame): The DataFrame to write.
+
+        Note:
+            Daft does not have built-in JSON writing support, so we convert to pandas.
         """
         # Daft does not have a built in method to write the daft dataframe to json
         # So we convert it to pandas dataframe and write it to json
         await self.write_df(df.to_pandas())
 
     async def _flush_buffer(self):
+        """Flush the current buffer to a JSON file.
+
+        This method combines all DataFrames in the buffer, writes them to a JSON file,
+        and uploads the file to the object store.
+
+        Note:
+            If the buffer is empty or has no records, the method returns without writing.
+        """
         if not self.buffer or not self.current_buffer_size:
             return
         combined_df = pd.concat(self.buffer)

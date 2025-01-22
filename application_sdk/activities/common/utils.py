@@ -18,14 +18,14 @@ def get_workflow_id() -> str:
     """Get the workflow ID from the current activity.
 
     Returns:
-        str: The ID of the workflow that this activity is part of.
-
+        str: The workflow ID of the current activity.
     Example:
         >>> workflow_id = get_workflow_id()
         >>> print(workflow_id)  # e.g. "my-workflow-123"
 
     Raises:
         RuntimeError: If called outside of an activity context.
+
     """
     return activity.info().workflow_id
 
@@ -62,6 +62,7 @@ def auto_heartbeater(fn: F) -> F:
         >>> async def my_activity():
         >>>     pass
     """
+
     @wraps(fn)
     async def wrapper(*args: Any, **kwargs: Any):
         heartbeat_timeout: Optional[timedelta] = None

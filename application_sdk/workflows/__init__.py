@@ -1,3 +1,9 @@
+"""Workflow interface module for Temporal workflows.
+
+This module provides the base workflow interface and common functionality for
+all workflow implementations in the application SDK.
+"""
+
 from abc import ABC
 from datetime import timedelta
 from typing import Any, Callable, Dict, Sequence, Type
@@ -11,14 +17,49 @@ from application_sdk.inputs.statestore import StateStore
 
 @workflow.defn
 class WorkflowInterface(ABC):
+    """Abstract base class for all workflow implementations.
+
+    This class defines the interface that all workflows must implement and provides
+    common functionality for workflow execution.
+
+    Attributes:
+        activities_cls (Type[ActivitiesInterface]): The activities class to be used
+            by the workflow.
+    """
+
     activities_cls: Type[ActivitiesInterface]
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
+        """Get the sequence of activities for this workflow.
+
+        This method must be implemented by subclasses to define the activities
+        that will be executed as part of the workflow.
+
+        Args:
+            activities (ActivitiesInterface): The activities interface instance.
+
+        Returns:
+            Sequence[Callable[..., Any]]: List of activity methods to be executed.
+
+        Raises:
+            NotImplementedError: If the method is not implemented by a subclass.
+        """
         raise NotImplementedError("Workflow get_activities method not implemented")
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
+        """Run the workflow with the given configuration.
+
+        This method provides the base implementation for workflow execution. It:
+        1. Extracts workflow configuration from the state store
+        2. Sets up workflow run ID and retry policy
+        3. Executes the preflight check activity
+
+        Args:
+            workflow_config (Dict[str, Any]): Configuration for the workflow,
+                including workflow_id and other parameters.
+        """
         workflow_id = workflow_config["workflow_id"]
         workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
 

@@ -1,3 +1,9 @@
+"""SQL query extraction workflow implementation.
+
+This module provides the workflow implementation for extracting SQL queries from
+databases. It handles batch processing of queries and manages the workflow state.
+"""
+
 import asyncio
 import logging
 from datetime import timedelta
@@ -18,6 +24,20 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 @workflow.defn
 class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
+    """SQL query extraction workflow implementation.
+
+    This class implements the workflow for extracting SQL queries from databases.
+    It handles batch processing of queries and manages the workflow state.
+
+    Attributes:
+        activities_cls (Type[SQLQueryExtractionActivities]): The activities class
+            for SQL query extraction.
+        fetch_queries_sql (str): SQL query for fetching queries.
+        sql_client (SQLClient | None): SQL client instance.
+        application_name (str): Name of the application.
+        batch_size (int): Size of each batch for processing.
+    """
+
     activities_cls: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
 
     fetch_queries_sql = ""
@@ -33,6 +53,14 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
     def get_activities(
         activities: ActivitiesInterface,
     ) -> Sequence[Callable[..., Any]]:
+        """Get the sequence of activities for this workflow.
+
+        Args:
+            activities (ActivitiesInterface): The activities interface instance.
+
+        Returns:
+            Sequence[Callable[..., Any]]: List of activity methods to be executed.
+        """
         return [
             activities.get_query_batches,
             activities.fetch_queries,

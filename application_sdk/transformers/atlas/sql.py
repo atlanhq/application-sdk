@@ -1,3 +1,9 @@
+"""SQL entity transformers for Atlas.
+
+This module provides classes for transforming SQL metadata into Atlas entities,
+including databases, schemas, tables, columns, functions, and tag attachments.
+"""
+
 import json
 import logging
 from typing import Any, Dict, List, Optional, TypeVar, Union, overload
@@ -15,8 +21,24 @@ T = TypeVar("T")
 
 
 class Database(assets.Database):
+    """Database entity transformer for Atlas.
+
+    This class handles the transformation of database metadata into Atlas Database entities.
+    """
+
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.Database:
+        """Parse a dictionary into a Database entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing database metadata.
+
+        Returns:
+            assets.Database: The created Database entity.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
         try:
             assert obj.get("database_name") is not None and isinstance(
                 obj.get("database_name"), str
@@ -38,8 +60,24 @@ class Database(assets.Database):
 
 
 class Schema(assets.Schema):
+    """Schema entity transformer for Atlas.
+
+    This class handles the transformation of schema metadata into Atlas Schema entities.
+    """
+
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.Schema:
+        """Parse a dictionary into a Schema entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing schema metadata.
+
+        Returns:
+            assets.Schema: The created Schema entity.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
         try:
             assert obj.get("schema_name") is not None and isinstance(
                 obj.get("schema_name"), str
@@ -60,8 +98,6 @@ class Schema(assets.Schema):
             schema.attributes.table_count = obj.get("table_count", 0)
             schema.attributes.views_count = obj.get("views_count", 0)
 
-            # Q: Can we use the `Attributes` class directly here?
-
             if not schema.custom_attributes:
                 schema.custom_attributes = {}
 
@@ -77,12 +113,30 @@ class Schema(assets.Schema):
 
 
 class Table(assets.Table):
+    """Table entity transformer for Atlas.
+
+    This class handles the transformation of table metadata into Atlas Table entities,
+    including regular tables, views, materialized views, and dynamic tables.
+    """
+
     @classmethod
     def parse_obj(
         cls, obj: Dict[str, Any]
     ) -> Union[
         assets.Table, assets.View, assets.MaterialisedView, assets.SnowflakeDynamicTable
     ]:
+        """Parse a dictionary into a Table entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing table metadata.
+
+        Returns:
+            Union[assets.Table, assets.View, assets.MaterialisedView, assets.SnowflakeDynamicTable]:
+                The created Table entity.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
         try:
             assert obj.get("table_name") is not None, "Table name cannot be None"
             assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
@@ -121,7 +175,6 @@ class Table(assets.Table):
             sql_table.attributes.row_count = obj.get("row_count", 0)
             sql_table.attributes.size_bytes = obj.get("size_bytes", 0)
 
-            # Custom attributes
             if not sql_table.custom_attributes:
                 sql_table.custom_attributes = {}
 
@@ -158,8 +211,24 @@ class Table(assets.Table):
 
 
 class Column(assets.Column):
+    """Column entity transformer for Atlas.
+
+    This class handles the transformation of column metadata into Atlas Column entities.
+    """
+
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.Column:
+        """Parse a dictionary into a Column entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing column metadata.
+
+        Returns:
+            assets.Column: The created Column entity.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
         try:
             assert obj.get("column_name") is not None, "Column name cannot be None"
             assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
@@ -252,6 +321,11 @@ class Column(assets.Column):
 
 
 class Function(assets.Function):
+    """Function entity transformer for Atlas.
+
+    This class handles the transformation of function metadata into Atlas Function entities.
+    """
+
     @overload
     @classmethod
     def creator(
@@ -285,6 +359,21 @@ class Function(assets.Function):
         database_qualified_name: Optional[str] = None,
         connection_qualified_name: Optional[str] = None,
     ) -> "Function":
+        """Create a new Function entity.
+
+        Args:
+            name (str): Name of the function.
+            schema_qualified_name (str): Qualified name of the schema.
+            schema_name (Optional[str], optional): Name of the schema. Defaults to None.
+            database_name (Optional[str], optional): Name of the database. Defaults to None.
+            database_qualified_name (Optional[str], optional): Qualified name of the database.
+                Defaults to None.
+            connection_qualified_name (Optional[str], optional): Qualified name of the connection.
+                Defaults to None.
+
+        Returns:
+            Function: The created Function entity.
+        """
         validate_required_fields(
             ["name", "schema_qualified_name"], [name, schema_qualified_name]
         )
@@ -299,6 +388,14 @@ class Function(assets.Function):
         return cls(attributes=attributes)
 
     class Attributes(assets.Function.Attributes):
+        """Attributes for Function entities.
+
+        This class defines the attributes specific to Function entities.
+
+        Attributes:
+            function_arguments (List[str] | None): List of function arguments.
+        """
+
         function_arguments: List[str] | None = []
 
         @classmethod
@@ -313,6 +410,21 @@ class Function(assets.Function):
             database_qualified_name: Optional[str] = None,
             connection_qualified_name: Optional[str] = None,
         ) -> "Function.Attributes":
+            """Create a new Function.Attributes instance.
+
+            Args:
+                name (str): Name of the function.
+                schema_qualified_name (str): Qualified name of the schema.
+                schema_name (Optional[str], optional): Name of the schema. Defaults to None.
+                database_name (Optional[str], optional): Name of the database. Defaults to None.
+                database_qualified_name (Optional[str], optional): Qualified name of the database.
+                    Defaults to None.
+                connection_qualified_name (Optional[str], optional): Qualified name of the connection.
+                    Defaults to None.
+
+            Returns:
+                Function.Attributes: The created attributes instance.
+            """
             validate_required_fields(
                 ["name, schema_qualified_name"], [name, schema_qualified_name]
             )
@@ -350,6 +462,17 @@ class Function(assets.Function):
 
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.Function:
+        """Parse a dictionary into a Function entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing function metadata.
+
+        Returns:
+            assets.Function: The created Function entity.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
         try:
             assert (
                 "function_name" in obj and obj["function_name"] is not None
@@ -419,6 +542,12 @@ class Function(assets.Function):
 
 
 class TagAttachment(assets.TagAttachment):
+    """Tag attachment entity transformer for Atlas.
+
+    This class handles the transformation of tag attachment metadata into Atlas
+    TagAttachment entities.
+    """
+
     @overload
     @classmethod
     def creator(
@@ -452,6 +581,21 @@ class TagAttachment(assets.TagAttachment):
         database_qualified_name: Optional[str] = None,
         connection_qualified_name: Optional[str] = None,
     ) -> "TagAttachment":
+        """Create a new TagAttachment entity.
+
+        Args:
+            name (str): Name of the tag attachment.
+            schema_qualified_name (str): Qualified name of the schema.
+            schema_name (Optional[str], optional): Name of the schema. Defaults to None.
+            database_name (Optional[str], optional): Name of the database. Defaults to None.
+            database_qualified_name (Optional[str], optional): Qualified name of the database.
+                Defaults to None.
+            connection_qualified_name (Optional[str], optional): Qualified name of the connection.
+                Defaults to None.
+
+        Returns:
+            TagAttachment: The created TagAttachment entity.
+        """
         validate_required_fields(
             ["name", "schema_qualified_name"], [name, schema_qualified_name]
         )
@@ -466,6 +610,11 @@ class TagAttachment(assets.TagAttachment):
         return cls(attributes=attributes)
 
     class Attributes(assets.TagAttachment.Attributes):
+        """Attributes for TagAttachment entities.
+
+        This class defines the attributes specific to TagAttachment entities.
+        """
+
         @classmethod
         @init_guid
         def create(
@@ -478,6 +627,21 @@ class TagAttachment(assets.TagAttachment):
             database_qualified_name: Optional[str] = None,
             connection_qualified_name: Optional[str] = None,
         ) -> "TagAttachment.Attributes":
+            """Create a new TagAttachment.Attributes instance.
+
+            Args:
+                name (str): Name of the tag attachment.
+                schema_qualified_name (str): Qualified name of the schema.
+                schema_name (Optional[str], optional): Name of the schema. Defaults to None.
+                database_name (Optional[str], optional): Name of the database. Defaults to None.
+                database_qualified_name (Optional[str], optional): Qualified name of the database.
+                    Defaults to None.
+                connection_qualified_name (Optional[str], optional): Qualified name of the connection.
+                    Defaults to None.
+
+            Returns:
+                TagAttachment.Attributes: The created attributes instance.
+            """
             validate_required_fields(
                 ["name, schema_qualified_name"], [name, schema_qualified_name]
             )
@@ -513,6 +677,17 @@ class TagAttachment(assets.TagAttachment):
 
     @classmethod
     def parse_obj(cls, obj: Dict[str, Any]) -> assets.TagAttachment:
+        """Parse a dictionary into a TagAttachment entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing tag attachment metadata.
+
+        Returns:
+            assets.TagAttachment: The created TagAttachment entity.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
         try:
             assert (
                 "tag_name" in obj and obj["tag_name"] is not None

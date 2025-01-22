@@ -17,6 +17,17 @@ from application_sdk.transformers.atlas import AtlasTransformer
 
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState):
+    """State class for SQL metadata extraction activities.
+
+    This class holds the state required for SQL metadata extraction activities,
+    including the SQL client, handler, and transformer instances.
+
+    Attributes:
+        sql_client (SQLClient): Client for SQL database operations.
+        handler (SQLHandler): Handler for SQL-specific operations.
+        transformer (TransformerInterface): Transformer for metadata conversion.
+    """
+
     model_config = {"arbitrary_types_allowed": True}
 
     sql_client: SQLClient
@@ -25,6 +36,22 @@ class SQLMetadataExtractionActivitiesState(ActivitiesState):
 
 
 class SQLMetadataExtractionActivities(ActivitiesInterface):
+    """Activities for extracting metadata from SQL databases.
+
+    This class provides activities for extracting metadata from SQL databases,
+    including databases, schemas, tables, and columns. It supports customization
+    of the SQL client, handler, and transformer classes.
+
+    Attributes:
+        fetch_database_sql (Optional[str]): SQL query for fetching databases.
+        fetch_schema_sql (Optional[str]): SQL query for fetching schemas.
+        fetch_table_sql (Optional[str]): SQL query for fetching tables.
+        fetch_column_sql (Optional[str]): SQL query for fetching columns.
+        sql_client_class (Type[SQLClient]): Class for SQL client operations.
+        handler_class (Type[SQLHandler]): Class for SQL handling operations.
+        transformer_class (Type[TransformerInterface]): Class for metadata transformation.
+    """
+
     _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
 
     fetch_database_sql = None
@@ -50,9 +77,25 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     # State methods
     async def _get_state(self, workflow_args: Dict[str, Any]):
+        """Gets the current state for the workflow.
+
+        Args:
+            workflow_args (Dict[str, Any]): Arguments passed to the workflow.
+
+        Returns:
+            SQLMetadataExtractionActivitiesState: The current state.
+        """
         return await super()._get_state(workflow_args)
 
     async def _set_state(self, workflow_args: Dict[str, Any]):
+        """Sets up the state for the workflow.
+
+        This method initializes the SQL client, handler, and transformer based on
+        the workflow arguments.
+
+        Args:
+            workflow_args (Dict[str, Any]): Arguments passed to the workflow.
+        """
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
         sql_client = self.sql_client_class()
@@ -75,6 +118,11 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         )
 
     async def _clean_state(self):
+        """Cleans up the state after workflow completion.
+
+        This method ensures proper cleanup of resources, particularly closing
+        the SQL client connection.
+        """
         await self._state[get_workflow_id()].sql_client.close()
 
         await super()._clean_state()
@@ -311,8 +359,18 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         )
     )
     async def write_raw_type_metadata(
-        self, metadata_output, batch_input=None, **kwargs
-    ):
+        self,
+        metadata_output: JsonOutput,
+        batch_input: Optional[Any] = None,
+        **kwargs: Any,
+    ) -> None:
+        """Writes raw type metadata to output.
+
+        Args:
+            metadata_output (JsonOutput): Output handler for metadata.
+            batch_input (Optional[Any], optional): Input data. Defaults to None.
+            **kwargs: Additional keyword arguments.
+        """
         await metadata_output.write_metadata()
 
     @activity.defn
@@ -328,7 +386,21 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_start=workflow_args["chunk_start"],
         ),
     )
-    async def transform_data(self, batch_input, transformed_output, **kwargs):
+    async def transform_data(
+        self, batch_input: Any, transformed_output: JsonOutput, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Transforms raw data into the required format.
+
+        Args:
+            batch_input (Any): Input data to transform.
+            transformed_output (JsonOutput): Output handler for transformed data.
+            **kwargs: Additional keyword arguments.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing:
+                - total_record_count: Total number of records processed
+                - chunk_count: Number of chunks processed
+        """
         typename = kwargs.get("typename")
         workflow_id = kwargs.get("workflow_id")
         workflow_run_id = kwargs.get("workflow_run_id")
