@@ -148,6 +148,31 @@ async def run_process(
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
 ):
+    """Process input data through a function.
+
+    This method handles the execution of a function with input data processing.
+    It supports both batch and non-batch processing modes, depending on the presence
+    and configuration of batch_input.
+
+    Args:
+        self: The activity instance.
+        f (Callable): The workflow function to execute.
+        get_dataframe_fn (Callable): Function to get a single dataframe.
+        get_batched_dataframe_fn (Callable): Function to get batched dataframes.
+        batch_input (Optional[Input]): Input handler for batch processing. If None,
+            the function will be called directly without batch processing.
+        args (Dict[str, Any]): Positional arguments for the workflow function.
+        inner_kwargs (Dict[str, Any]): Inner keyword arguments for the workflow function.
+        kwargs (Dict[str, Any]): Additional keyword arguments for the workflow function.
+
+    Returns:
+        Any: The result of the workflow function execution. For batch processing,
+            this will be a list of results from processing each batch.
+
+    Note:
+        If batch_input has a chunk_size attribute, the data will be processed in chunks.
+        Otherwise, all data will be processed in a single operation.
+    """
     state = None
     if hasattr(self, "_get_state"):
         state = await self._get_state(args[0])

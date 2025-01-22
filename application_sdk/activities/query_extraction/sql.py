@@ -22,6 +22,25 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class MinerArgs(BaseModel):
+    """Arguments for SQL query mining operations.
+
+    This class defines the configuration parameters needed for mining SQL queries
+    from a database, including time ranges, chunk sizes, and SQL replacements.
+
+    Attributes:
+        database_name_cleaned (str): Cleaned name of the target database.
+        schema_name_cleaned (str): Cleaned name of the target schema.
+        timestamp_column (str): Name of the column containing timestamps.
+        chunk_size (int): Number of records to process in each chunk.
+        current_marker (int): Current timestamp marker for processing.
+        sql_replace_from (str): Original SQL fragment to be replaced.
+        sql_replace_to (str): Replacement SQL fragment with placeholders.
+        ranged_sql_start_key (str): Placeholder for range start timestamp.
+        ranged_sql_end_key (str): Placeholder for range end timestamp.
+        miner_start_time_epoch (int): Start time for mining in epoch format.
+            Defaults to 14 days ago.
+    """
+
     database_name_cleaned: str
     schema_name_cleaned: str
     timestamp_column: str
@@ -37,6 +56,17 @@ class MinerArgs(BaseModel):
 
 
 class SQLQueryExtractionActivitiesState(BaseModel):
+    """State model for SQL query extraction activities.
+
+    This class holds the state required for SQL query extraction activities,
+    including the SQL client and handler instances.
+
+    Attributes:
+        sql_client (SQLClient): Client for SQL database operations.
+        handler (SQLHandler): Handler for SQL-specific operations.
+        workflow_args (Dict[str, Any]): Arguments passed to the workflow.
+    """
+
     model_config = {"arbitrary_types_allowed": True}
 
     sql_client: SQLClient
@@ -45,6 +75,18 @@ class SQLQueryExtractionActivitiesState(BaseModel):
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
+    """Activities for extracting SQL queries from databases.
+
+    This class provides activities for extracting and processing SQL queries
+    from databases, with support for chunking and parallel processing.
+
+    Attributes:
+        _state (Dict[str, StateModel]): Internal state storage.
+        sql_client_class (Type[SQLClient]): Class for SQL client operations.
+        handler_class (Type[SQLHandler]): Class for SQL handling operations.
+        fetch_queries_sql (str): SQL query template for fetching queries.
+    """
+
     _state: Dict[str, SQLQueryExtractionActivitiesState] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
@@ -57,12 +99,27 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_client_class: Type[SQLClient] = SQLClient,
         handler_class: Type[SQLHandler] = SQLHandler,
     ):
+        """Initialize the SQL query extraction activities.
+
+        Args:
+            sql_client_class (Type[SQLClient], optional): Class for SQL client operations.
+                Defaults to SQLClient.
+            handler_class (Type[SQLHandler], optional): Class for SQL handling operations.
+                Defaults to SQLHandler.
+        """
         self.sql_client_class = sql_client_class
         self.handler_class = handler_class
 
         super().__init__()
 
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
+        """Sets up the state for the workflow.
+
+        This method initializes the SQL client and handler based on the workflow arguments.
+
+        Args:
+            workflow_args (Dict[str, Any]): Arguments passed to the workflow.
+        """
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
             credentials = StateStore.extract_credentials(
@@ -259,7 +316,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     async def get_query_batches(
-        self, workflow_args: Dict[str, Any], **kwargs
+        self, workflow_args: Dict[str, Any], **kwargs: Any
     ) -> List[Dict[str, Any]]:
         """Gets batches of queries by parallelizing the main query.
 

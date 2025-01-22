@@ -1,3 +1,9 @@
+"""SQL metadata extraction workflow implementation.
+
+This module provides the workflow implementation for extracting metadata from SQL databases,
+including databases, schemas, tables, and columns.
+"""
+
 import asyncio
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
@@ -15,6 +21,21 @@ from application_sdk.workflows.metadata_extraction import MetadataExtractionWork
 
 @workflow.defn
 class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
+    """Workflow for extracting metadata from SQL databases.
+
+    This workflow orchestrates the extraction of metadata from SQL databases, including
+    databases, schemas, tables, and columns. It handles the fetching and transformation
+    of metadata in batches for efficient processing.
+
+    Attributes:
+        activities_cls (Type[SQLMetadataExtractionActivities]): The activities class
+            containing the implementation of metadata extraction operations.
+        application_name (str): Name of the application, set to "sql-connector".
+        batch_size (int): Size of each batch for processing, defaults to 100000.
+        max_transform_concurrency (int): Maximum number of concurrent transform
+            operations, defaults to 5.
+    """
+
     activities_cls: Type[SQLMetadataExtractionActivities] = (
         SQLMetadataExtractionActivities
     )
@@ -27,6 +48,17 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     def get_activities(
         activities: SQLMetadataExtractionActivities,
     ) -> Sequence[Callable[..., Any]]:
+        """Get the sequence of activities to be executed by the workflow.
+
+        Args:
+            activities (SQLMetadataExtractionActivities): The activities instance
+                containing the metadata extraction operations.
+
+        Returns:
+            Sequence[Callable[..., Any]]: A sequence of activity methods to be executed
+                in order, including preflight check, fetching databases, schemas,
+                tables, columns, and transforming data.
+        """
         return [
             activities.preflight_check,
             activities.fetch_databases,
@@ -44,6 +76,19 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
     ) -> None:
+        """Fetch and transform metadata using the provided fetch function.
+
+        This method executes a fetch operation and transforms the resulting data. It handles
+        chunking of data and parallel processing of transformations.
+
+        Args:
+            fetch_fn (Callable): The function to fetch metadata.
+            workflow_args (Dict[str, Any]): Arguments for the workflow execution.
+            retry_policy (RetryPolicy): The retry policy for activity execution.
+
+        Raises:
+            ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
+        """
         raw_stat = await workflow.execute_activity_method(
             fetch_fn,
             workflow_args,
@@ -132,6 +177,20 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         )
 
     def get_transform_batches(self, chunk_count: int, typename: str):
+        """Get batches for parallel transformation processing.
+
+        This method divides the total chunks into batches for parallel processing,
+        considering the maximum concurrency level.
+
+        Args:
+            chunk_count (int): Total number of chunks to process.
+            typename (str): Type name for the chunks.
+
+        Returns:
+            Tuple[List[List[str]], List[int]]: A tuple containing:
+                - List of batches, where each batch is a list of file paths
+                - List of starting chunk numbers for each batch
+        """
         # concurrency logic
         concurrency_level = min(
             self.max_transform_concurrency,
@@ -163,6 +222,22 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
+        """Run the SQL metadata extraction workflow.
+
+        This method orchestrates the entire metadata extraction process, including:
+        1. Setting up workflow configuration
+        2. Executing preflight checks
+        3. Fetching and transforming databases, schemas, tables, and columns
+        4. Writing metadata to storage
+
+        Args:
+            workflow_config (Dict[str, Any]): Configuration for the workflow execution,
+                including workflow_id and other parameters.
+
+        Note:
+            The workflow uses a retry policy with maximum 6 attempts and backoff
+            coefficient of 2.
+        """
         await super().run(workflow_config)
 
         workflow_id = workflow_config["workflow_id"]

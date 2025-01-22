@@ -37,7 +37,21 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
+    """Interceptor for tracking activity execution events.
+
+    This interceptor captures the start and end of activity executions,
+    creating events that can be used for monitoring and tracking.
+    """
+
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
+        """Execute an activity with event tracking.
+
+        Args:
+            input (ExecuteActivityInput): The activity execution input.
+
+        Returns:
+            Any: The result of the activity execution.
+        """
         EventStore.create_event(
             ActivityStartEvent(
                 activity_id=activity.info().activity_id,
@@ -57,7 +71,21 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
 
 
 class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
+    """Interceptor for tracking workflow execution events.
+
+    This interceptor captures the start and end of workflow executions,
+    creating events that can be used for monitoring and tracking.
+    """
+
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
+        """Execute a workflow with event tracking.
+
+        Args:
+            input (ExecuteWorkflowInput): The workflow execution input.
+
+        Returns:
+            Any: The result of the workflow execution.
+        """
         with workflow.unsafe.sandbox_unrestricted():
             EventStore.create_event(
                 WorkflowStartEvent(
@@ -82,23 +110,55 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
 
 class EventInterceptor(Interceptor):
-    """Temporal Interceptor class which will report workflow & activity exceptions to Sentry"""
+    """Temporal interceptor for event tracking.
+
+    This interceptor provides event tracking capabilities for both
+    workflow and activity executions.
+    """
 
     def intercept_activity(
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
-        """Implementation of
-        :py:meth:`temporalio.worker.Interceptor.intercept_activity`.
+        """Intercept activity executions.
+
+        Args:
+            next (ActivityInboundInterceptor): The next interceptor in the chain.
+
+        Returns:
+            ActivityInboundInterceptor: The activity interceptor.
         """
         return EventActivityInboundInterceptor(super().intercept_activity(next))
 
     def workflow_interceptor_class(
         self, input: WorkflowInterceptorClassInput
     ) -> Optional[Type[WorkflowInboundInterceptor]]:
+        """Get the workflow interceptor class.
+
+        Args:
+            input (WorkflowInterceptorClassInput): The interceptor input.
+
+        Returns:
+            Optional[Type[WorkflowInboundInterceptor]]: The workflow interceptor class.
+        """
         return EventWorkflowInboundInterceptor
 
 
 class TemporalClient(ClientInterface):
+    """Client for interacting with Temporal workflow service.
+
+    This class provides functionality for managing workflow executions,
+    including starting workflows, creating workers, and checking workflow status.
+
+    Attributes:
+        client: Temporal client instance.
+        worker: Temporal worker instance.
+        application_name (str): Name of the application.
+        worker_task_queue (str): Task queue for the worker.
+        host (str): Temporal server host.
+        port (str): Temporal server port.
+        namespace (str): Temporal namespace.
+    """
+
     def __init__(
         self,
         host: str | None = None,
@@ -106,6 +166,14 @@ class TemporalClient(ClientInterface):
         application_name: str | None = None,
         namespace: str | None = "default",
     ):
+        """Initialize the Temporal client.
+
+        Args:
+            host (str | None, optional): Temporal server host. Defaults to None.
+            port (str | None, optional): Temporal server port. Defaults to None.
+            application_name (str | None, optional): Application name. Defaults to None.
+            namespace (str | None, optional): Temporal namespace. Defaults to "default".
+        """
         self.client = None
         self.worker = None
         self.application_name = (
@@ -122,23 +190,57 @@ class TemporalClient(ClientInterface):
         activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
     def get_worker_task_queue(self) -> str:
+        """Get the worker task queue name.
+
+        Returns:
+            str: The task queue name.
+        """
         return self.application_name
 
     def get_connection_string(self) -> str:
+        """Get the Temporal server connection string.
+
+        Returns:
+            str: The connection string.
+        """
         return f"{self.host}:{self.port}"
 
-    async def load(self):
+    def get_namespace(self) -> str:
+        """Get the Temporal namespace.
+
+        Returns:
+            str: The namespace.
+        """
+        return self.namespace
+
+    async def load(self) -> None:
+        """Connect to the Temporal server."""
         self.client = await Client.connect(
             self.get_connection_string(),
             namespace=self.namespace,
         )
 
-    async def close(self):
+    async def close(self) -> None:
+        """Close the Temporal client connection."""
         return
 
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
     ) -> Dict[str, Any]:
+        """Start a workflow execution.
+
+        Args:
+            workflow_args (Dict[str, Any]): Arguments for the workflow.
+            workflow_class (Type[WorkflowInterface]): The workflow class to execute.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing:
+                - workflow_id (str): The ID of the started workflow
+                - run_id (str): The run ID of the workflow execution
+
+        Raises:
+            WorkflowFailureError: If the workflow fails to start.
+        """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
             workflow_args["credential_guid"] = StateStore.store_credentials(
@@ -194,6 +296,19 @@ class TemporalClient(ClientInterface):
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
     ) -> Worker:
+        """Create a Temporal worker.
+
+        Args:
+            activities (Sequence[CallableType]): Activity functions to register.
+            workflow_classes (Sequence[ClassType]): Workflow classes to register.
+            passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
+
+        Returns:
+            Worker: The created worker instance.
+
+        Raises:
+            ValueError: If the client is not loaded.
+        """
         if not self.client:
             raise ValueError("Client is not loaded")
 
@@ -213,6 +328,23 @@ class TemporalClient(ClientInterface):
     async def get_workflow_run_status(
         self, workflow_id: str, run_id: str
     ) -> Dict[str, Any]:
+        """Get the status of a workflow run.
+
+        Args:
+            workflow_id (str): The workflow ID.
+            run_id (str): The run ID.
+
+        Returns:
+            Dict[str, Any]: A dictionary containing:
+                - workflow_id (str): The workflow ID
+                - run_id (str): The run ID
+                - status (str): The workflow execution status
+                - execution_duration_seconds (int): Duration in seconds
+
+        Raises:
+            ValueError: If the client is not loaded.
+            Exception: If there's an error getting the workflow status.
+        """
         if not self.client:
             raise ValueError("Client is not loaded")
 
