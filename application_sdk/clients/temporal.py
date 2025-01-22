@@ -21,6 +21,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.constants import TemporalConstants
+from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.eventstore import (
@@ -110,7 +111,7 @@ class TemporalClient(ClientInterface):
         self.application_name = (
             application_name
             if application_name
-            else TemporalConstants.APPLICATION_NAME.value
+            else ApplicationConstants.APPLICATION_NAME.value
         )
         self.worker_task_queue = self.get_worker_task_queue()
         self.host = host if host else TemporalConstants.HOST.value

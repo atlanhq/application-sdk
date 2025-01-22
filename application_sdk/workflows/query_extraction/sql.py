@@ -9,6 +9,7 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
+from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
@@ -24,7 +25,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     sql_client: SQLClient | None = None
 
-    application_name: str = "sql-miner"
+    application_name: str = ApplicationConstants.APPLICATION_NAME.value
     batch_size: int = 100000
 
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
