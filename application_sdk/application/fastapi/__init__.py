@@ -2,6 +2,7 @@ import logging
 from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
@@ -19,7 +20,7 @@ from application_sdk.application.fastapi.models import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.application.fastapi.routers.health import get_health_router
+from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
@@ -81,7 +82,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.register_routes()
 
         # Then include all routers
-        self.app.include_router(get_health_router())
+        self.app.include_router(get_server_router())
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
@@ -157,6 +158,12 @@ class FastAPIApplication(AtlanApplicationInterface):
             response_model=WorkflowConfigResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/status/{workflow_id}/{run_id}",
+            self.get_workflow_run_status,
+            methods=["GET"],
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -229,6 +236,33 @@ class FastAPIApplication(AtlanApplicationInterface):
             success=True,
             message="Workflow configuration fetched successfully",
             data=config,
+        )
+
+    async def get_workflow_run_status(
+        self, workflow_id: str, run_id: str
+    ) -> JSONResponse:
+        """
+        Get the status of a workflow run
+        Args:
+            workflow_id: The ID of the workflow
+            run_id: The ID of the run
+        Returns:
+            JSONResponse containing the status of the workflow
+        """
+        if not self.temporal_client:
+            raise Exception("Temporal client not initialized")
+
+        workflow_status = await self.temporal_client.get_workflow_run_status(
+            workflow_id, run_id
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "message": "Workflow status fetched successfully",
+                "data": workflow_status,
+            },
         )
 
     def update_workflow_config(
