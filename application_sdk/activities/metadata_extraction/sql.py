@@ -127,7 +127,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         This method ensures proper cleanup of resources, particularly closing
         the SQL client connection.
         """
-        await self._state[get_workflow_id()].sql_client.close()
+        workflow_id = get_workflow_id()
+        if workflow_id in self._state:
+            await self._state[workflow_id].sql_client.close()
 
         await super()._clean_state()
 
