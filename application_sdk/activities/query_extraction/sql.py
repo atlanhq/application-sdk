@@ -22,25 +22,6 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class MinerArgs(BaseModel):
-    """Arguments for SQL query mining operations.
-
-    This class defines the configuration parameters needed for mining SQL queries
-    from a database, including time ranges, chunk sizes, and SQL replacements.
-
-    Attributes:
-        database_name_cleaned (str): Cleaned name of the target database.
-        schema_name_cleaned (str): Cleaned name of the target schema.
-        timestamp_column (str): Name of the column containing timestamps.
-        chunk_size (int): Number of records to process in each chunk.
-        current_marker (int): Current timestamp marker for processing.
-        sql_replace_from (str): Original SQL fragment to be replaced.
-        sql_replace_to (str): Replacement SQL fragment with placeholders.
-        ranged_sql_start_key (str): Placeholder for range start timestamp.
-        ranged_sql_end_key (str): Placeholder for range end timestamp.
-        miner_start_time_epoch (int): Start time for mining in epoch format.
-            Defaults to 14 days ago.
-    """
-
     database_name_cleaned: str
     schema_name_cleaned: str
     timestamp_column: str
@@ -56,17 +37,6 @@ class MinerArgs(BaseModel):
 
 
 class StateModel(BaseModel):
-    """State model for SQL query extraction activities.
-
-    This class holds the state required for SQL query extraction activities,
-    including the SQL client and handler instances.
-
-    Attributes:
-        sql_client (SQLClient): Client for SQL database operations.
-        handler (SQLHandler): Handler for SQL-specific operations.
-        workflow_args (Dict[str, Any]): Arguments passed to the workflow.
-    """
-
     model_config = {"arbitrary_types_allowed": True}
 
     sql_client: SQLClient
@@ -75,18 +45,6 @@ class StateModel(BaseModel):
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
-    """Activities for extracting SQL queries from databases.
-
-    This class provides activities for extracting and processing SQL queries
-    from databases, with support for chunking and parallel processing.
-
-    Attributes:
-        _state (Dict[str, StateModel]): Internal state storage.
-        sql_client_class (Type[SQLClient]): Class for SQL client operations.
-        handler_class (Type[SQLHandler]): Class for SQL handling operations.
-        fetch_queries_sql (str): SQL query template for fetching queries.
-    """
-
     _state: Dict[str, StateModel] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
@@ -99,27 +57,12 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_client_class: Type[SQLClient] = SQLClient,
         handler_class: Type[SQLHandler] = SQLHandler,
     ):
-        """Initialize the SQL query extraction activities.
-
-        Args:
-            sql_client_class (Type[SQLClient], optional): Class for SQL client operations.
-                Defaults to SQLClient.
-            handler_class (Type[SQLHandler], optional): Class for SQL handling operations.
-                Defaults to SQLHandler.
-        """
         self.sql_client_class = sql_client_class
         self.handler_class = handler_class
 
         super().__init__()
 
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
-        """Sets up the state for the workflow.
-
-        This method initializes the SQL client and handler based on the workflow arguments.
-
-        Args:
-            workflow_args (Dict[str, Any]): Arguments passed to the workflow.
-        """
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
         sql_client = self.sql_client_class()
@@ -150,14 +93,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         ),
     )
     async def fetch_queries(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs: Any
-    ) -> None:
-        """Fetches and processes queries from the database.
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
+        """
+        Fetch and process queries from the database.
 
-        Args:
-            batch_input (pd.DataFrame): Input data containing query information.
-            raw_output (JsonOutput): Output handler for raw data.
-            **kwargs: Additional keyword arguments.
+        :param workflow_args: The workflow arguments.
+        :return: The fetched queries.
         """
         await raw_output.write_df(batch_input)
 
@@ -172,28 +114,23 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         ranged_sql_start_key: str,
         ranged_sql_end_key: str,
         sql_client: SQLClient,
-    ) -> List[Dict[str, Any]]:
-        """Parallelizes a query by splitting it into time-based chunks.
-
-        This method processes a query by dividing it into smaller chunks based on
-        timestamp ranges, allowing for parallel processing of large datasets.
+    ):
+        """
+        Processes a single chunk of the query, collecting timestamp ranges.
 
         Args:
-            query (str): The SQL query to process.
-            timestamp_column (str): Column name containing the timestamp.
-            chunk_size (int): Number of records per chunk.
-            current_marker (str): Starting timestamp marker.
-            sql_ranged_replace_from (str): Original SQL fragment to replace.
-            sql_ranged_replace_to (str): SQL fragment with range placeholders.
-            ranged_sql_start_key (str): Placeholder for range start timestamp.
-            ranged_sql_end_key (str): Placeholder for range end timestamp.
-            sql_client (SQLClient): SQL client instance for executing queries.
+            query: The SQL query to process
+            timestamp_column: Column name containing the timestamp
+            chunk_size: Number of records per chunk
+            current_marker: Starting timestamp marker
+            sql_ranged_replace_from: Original SQL fragment to replace
+            sql_ranged_replace_to: SQL fragment with range placeholders
+            ranged_sql_start_key: Placeholder for range start timestamp
+            ranged_sql_end_key: Placeholder for range end timestamp
+            parallel_markers: List to store the chunked queries
 
         Returns:
-            List[Dict[str, Any]]: List of chunked queries with their metadata.
-
-        Raises:
-            ValueError: If chunk_size is less than or equal to 0.
+            Tuple of (final chunk count, records in last chunk)
         """
         if chunk_size <= 0:
             raise ValueError("Chunk size must be greater than 0")
@@ -270,18 +207,20 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         ranged_sql_start_key: str,
         ranged_sql_end_key: str,
     ) -> None:
-        """Creates a chunked query with the specified time range.
+        """
+        Creates a chunked query with the specified time range and adds it to parallel_markers.
 
         Args:
-            query (str): The base SQL query.
-            start_marker (str | None): Start timestamp for the chunk.
-            end_marker (str | None): End timestamp for the chunk.
-            parallel_markers (List[Dict[str, Any]]): List to store chunked queries.
-            record_count (int): Number of records in this chunk.
-            sql_ranged_replace_from (str): Original SQL fragment to replace.
-            sql_ranged_replace_to (str): SQL fragment with range placeholders.
-            ranged_sql_start_key (str): Placeholder for range start timestamp.
-            ranged_sql_end_key (str): Placeholder for range end timestamp.
+            query: The base SQL query
+            chunk_count: Current chunk number
+            start_marker: Start timestamp for the chunk
+            end_marker: End timestamp for the chunk
+            parallel_markers: List to store the chunked queries
+            record_count: Number of records in this chunk
+            sql_ranged_replace_from: Original SQL fragment to replace
+            sql_ranged_replace_to: SQL fragment with range placeholders
+            ranged_sql_start_key: Placeholder for range start timestamp
+            ranged_sql_end_key: Placeholder for range end timestamp
         """
         if not start_marker or not end_marker:
             return
@@ -311,23 +250,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     async def get_query_batches(
-        self, workflow_args: Dict[str, Any], **kwargs: Any
+        self, workflow_args: Dict[str, Any], **kwargs
     ) -> List[Dict[str, Any]]:
-        """Gets batches of queries based on workflow arguments.
-
-        This method processes the workflow arguments to generate batches of queries,
-        parallelizing them based on time ranges and chunk sizes.
-
-        Args:
-            workflow_args (Dict[str, Any]): Arguments passed to the workflow.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            List[Dict[str, Any]]: List of query batches with their metadata.
-
-        Raises:
-            Exception: If query parallelization fails.
-        """
         state = await self._get_state(workflow_args)
         sql_client = state.sql_client
 

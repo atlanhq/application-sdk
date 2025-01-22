@@ -22,19 +22,6 @@ class ObjectStore:
         download_file_prefix: str,
         file_path: str,
     ) -> None:
-        """Download a file from the object store to a local path.
-
-        This method downloads a file from the object store using Dapr bindings.
-        The relative path is calculated from the download_file_prefix and used
-        as the key in the object store.
-
-        Args:
-            download_file_prefix (str): Base path used to calculate relative path.
-            file_path (str): Local path where the file should be downloaded.
-
-        Raises:
-            Exception: If there's an error downloading the file or writing to local path.
-        """
         with DaprClient() as client:
             relative_path = os.path.relpath(file_path, download_file_prefix)
             metadata = {"key": relative_path, "fileName": relative_path}
@@ -60,20 +47,6 @@ class ObjectStore:
     async def push_file_to_object_store(
         cls, output_prefix: str, file_path: str
     ) -> None:
-        """Push a single file to the object store.
-
-        This method reads a file from the local filesystem and uploads it to
-        the object store using Dapr bindings. The relative path is calculated
-        from the output_prefix and used as the key in the object store.
-
-        Args:
-            output_prefix (str): Base path used to calculate relative path.
-            file_path (str): Path to the local file to be uploaded.
-
-        Raises:
-            IOError: If there's an error reading the local file.
-            Exception: If there's an error pushing the file to object store.
-        """
         with DaprClient() as client:
             try:
                 with open(file_path, "rb") as f:

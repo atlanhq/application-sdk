@@ -27,38 +27,27 @@ source:
 
 
 def get_workflow_id() -> str:
-    """Gets the current Temporal workflow ID.
-
-    Returns:
-        str: The workflow ID of the current activity.
-    """
     return activity.info().workflow_id
 
 
 def auto_heartbeater(fn: F) -> F:
-    """A decorator that automatically sends heartbeats for long-running activities.
+    """
+    Auto-heartbeater for activities.
 
-    This decorator ensures that long-running activities send periodic heartbeats to Temporal
-    to indicate they are still alive. If an activity fails (e.g., worker crash), the heartbeat
-    mechanism allows Temporal to detect the failure earlier and retry the activity.
+    :param fn: The activity function.
+    :return: The activity function.
 
-    Args:
-        fn (F): The activity function to decorate. Must be an async function.
-
-    Returns:
-        F: The decorated activity function that includes automatic heartbeating.
-
-    Example:
-        @activity.defn
-        @auto_heartbeater
-        async def my_activity():
-            pass
+    Usage:
+        >>> @activity.defn
+        >>> @auto_heartbeater
+        >>> async def my_activity():
+        >>>     pass
     """
 
     # We want to ensure that the type hints from the original callable are
     # available via our wrapper, so we use the functools wraps decorator
     @wraps(fn)
-    async def wrapper(*args: Any, **kwargs: Any):
+    async def wrapper(*args, **kwargs):
         heartbeat_timeout: Optional[timedelta] = None
 
         # Default to 2 minutes if no heartbeat timeout is set
@@ -92,15 +81,11 @@ def auto_heartbeater(fn: F) -> F:
 
 
 async def heartbeat_every(delay: float, *details: Any) -> None:
-    """Sends periodic heartbeats at specified intervals.
+    """
+    Heartbeat every so often while not cancelled
 
-    Args:
-        delay (float): The time in seconds between heartbeats.
-        *details (Any): Optional details to include in the heartbeat.
-
-    Note:
-        This function runs in an infinite loop until cancelled. It should typically
-        be run as a background task.
+    :param delay: The delay between heartbeats.
+    :param details: The details to heartbeat.
     """
     # Heartbeat every so often while not cancelled
     while True:
