@@ -13,41 +13,57 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
-"""
-Note:
-- We have activities that can run for a long time, in case of a failure (say: worker crash)
-  Temporal will not retry the activity until the configured timeout is reached.
-- We add auto_heartbeater to activities to ensure an failure is detected earlier
-  and the activity is retried.
-
-source:
-- https://temporal.io/blog/activity-timeouts
-- https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
-"""
-
 
 def get_workflow_id() -> str:
+    """Get the workflow ID from the current activity.
+
+    Returns:
+        str: The ID of the workflow that this activity is part of.
+
+    Example:
+        >>> workflow_id = get_workflow_id()
+        >>> print(workflow_id)  # e.g. "my-workflow-123"
+
+    Raises:
+        RuntimeError: If called outside of an activity context.
+    """
     return activity.info().workflow_id
 
 
 def auto_heartbeater(fn: F) -> F:
-    """
-    Auto-heartbeater for activities.
+    """Auto-heartbeater for activities.
 
-    :param fn: The activity function.
-    :return: The activity function.
+    Heartbeats are periodic signals sent from an activity to the Temporal server to indicate
+    that the activity is still making progress. They help detect activity failures earlier
+    by allowing the server to determine if an activity is stuck or has crashed, rather than
+    waiting for the entire activity timeout. The auto_heartbeater decorator automatically
+    sends these heartbeats at regular intervals.
 
-    Usage:
+    This timeout is set to 120 seconds by default.
+
+    Args:
+        fn (F): The activity function to be decorated.
+
+    Returns:
+        F: The decorated activity function.
+
+    Note:
+        * We have activities that can run for a long time, in case of a failure (say: worker crash)
+        Temporal will not retry the activity until the configured timeout is reached.
+        * We add auto_heartbeater to activities to ensure an failure is detected earlier
+        and the activity is retried.
+
+        - https://temporal.io/blog/activity-timeouts
+        - https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
+
+    Example:
         >>> @activity.defn
         >>> @auto_heartbeater
         >>> async def my_activity():
         >>>     pass
     """
-
-    # We want to ensure that the type hints from the original callable are
-    # available via our wrapper, so we use the functools wraps decorator
     @wraps(fn)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: Any, **kwargs: Any):
         heartbeat_timeout: Optional[timedelta] = None
 
         # Default to 2 minutes if no heartbeat timeout is set
@@ -81,11 +97,23 @@ def auto_heartbeater(fn: F) -> F:
 
 
 async def heartbeat_every(delay: float, *details: Any) -> None:
-    """
-    Heartbeat every so often while not cancelled
+    """Sends heartbeat signals at regular intervals until the task is cancelled.
 
-    :param delay: The delay between heartbeats.
-    :param details: The details to heartbeat.
+    This function runs in an infinite loop, sleeping for the specified delay between
+    heartbeats. The heartbeat signals help Temporal track the activity's progress and
+    detect failures.
+
+    Example:
+        >>> # Heartbeat every 30 seconds with a status message
+        >>> heartbeat_task = asyncio.create_task(
+        ...     heartbeat_every(30, "Processing items...")
+        ... )
+        >>> # Cancel when done
+        >>> heartbeat_task.cancel()
+
+    Args:
+        delay (float): The delay between heartbeats in seconds.
+        *details (Any): Variable length argument list of details to include in the heartbeat.
     """
     # Heartbeat every so often while not cancelled
     while True:

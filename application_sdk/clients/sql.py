@@ -50,16 +50,20 @@ class SQLClient(ClientInterface):
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
 
     async def run_query(self, query: str, batch_size: int = 100000):
-        """
-        Run a query in a batch mode with client-side cursor.
+        """Run a query in batch mode with client-side cursor.
 
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
+        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
         If yield_per is not supported by the database, the method will fall back to client-side cursor.
 
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
+        Args:
+            query: The query to run.
+            batch_size: The batch size.
+
+        Yields:
+            List of dictionaries containing query results.
+
+        Raises:
+            Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
 
@@ -109,16 +113,21 @@ class AsyncSQLClient(SQLClient):
         self.connection = await self.engine.connect()
 
     async def run_query(self, query: str, batch_size: int = 100000):
-        """
-        Run a query in a batch mode with client-side cursor.
+        """Run a query in batch mode with client-side cursor.
 
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
+        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
         If yield_per is not supported by the database, the method will fall back to client-side cursor.
 
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
+        Args:
+            query: The query to run.
+            batch_size: The batch size.
+
+        Yields:
+            List of dictionaries containing query results.
+
+        Raises:
+            ValueError: If connection is not established.
+            Exception: If the query fails.
         """
         if not self.connection:
             raise ValueError("Connection is not established")

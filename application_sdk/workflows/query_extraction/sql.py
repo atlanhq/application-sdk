@@ -41,10 +41,13 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):
-        """
-        Run the workflow.
+        """Run the workflow.
 
-        :param workflow_args: The workflow arguments.
+        Args:
+            workflow_config (Dict[str, Any]): The workflow configuration dictionary.
+
+        Returns:
+            None
         """
         await super().run(workflow_config)
 

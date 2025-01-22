@@ -11,9 +11,16 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
 def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
-    """
-    Method to prepare the query with the include and exclude filters.
+    """Prepares the query with the include and exclude filters.
+
     Only fetches all metadata when both include and exclude filters are empty.
+
+    Args:
+        query: The query string to prepare.
+        workflow_args: Dictionary containing workflow arguments and metadata.
+
+    Returns:
+        str: The prepared query string with filters applied.
     """
     try:
         metadata = workflow_args.get("metadata", {})
@@ -47,12 +54,16 @@ def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
 def prepare_filters(
     include_filter_str: str, exclude_filter_str: str
 ) -> Tuple[str, str]:
-    """
-    Prepare the filters for the SQL query.
+    """Prepares the filters for the SQL query.
 
-    :param include_filter_str: The include filter string.
-    :param exclude_filter_str: The exclude filter string.
-    :return: The normalized include regex, the normalized exclude regex, and the exclude table.
+    Args:
+        include_filter_str: The include filter string.
+        exclude_filter_str: The exclude filter string.
+
+    Returns:
+        tuple: A tuple containing:
+            - normalized include regex (str)
+            - normalized exclude regex (str)
     """
     include_filter = json.loads(include_filter_str)
     exclude_filter = json.loads(exclude_filter_str)
@@ -77,14 +88,16 @@ def prepare_filters(
 def normalize_filters(
     filter_dict: Dict[str, List[str] | str], is_include: bool
 ) -> List[str]:
-    """
-    Normalize the filters for the SQL query.
+    """Normalizes the filters for the SQL query.
 
-    :param filter_dict: The filter dictionary.
-    :param is_include: Whether the filter is an include filter.
-    :return: The normalized filter list.
+    Args:
+        filter_dict: The filter dictionary.
+        is_include: Whether the filter is an include filter.
 
-    Usage:
+    Returns:
+        list: The normalized filter list.
+
+    Examples:
         >>> normalize_filters({"db1": ["schema1", "schema2"], "db2": ["schema3"]}, True)
         ["db1.schema1", "db1.schema2", "db2.schema3"]
         >>> normalize_filters({"db1": "*"}, True)
@@ -116,15 +129,26 @@ def normalize_filters(
 
 
 def get_workflow_config(config_id: str) -> Dict[str, Any]:
-    """
-    Method to get the workflow configuration from the state store using config id
+    """Gets the workflow configuration from the state store using config id.
+
+    Args:
+        config_id: The configuration ID to retrieve.
+
+    Returns:
+        dict: The workflow configuration.
     """
     return StateStore.extract_configuration(config_id)
 
 
 def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Method to update the workflow config
+    """Updates the workflow configuration.
+
+    Args:
+        config_id: The configuration ID to update.
+        config: The new configuration dictionary.
+
+    Returns:
+        dict: The updated workflow configuration.
     """
     extracted_config = get_workflow_config(config_id)
 

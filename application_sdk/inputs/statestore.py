@@ -18,7 +18,15 @@ class StateStore:
 
     @classmethod
     def _save_state(cls, key: str, value: Dict[str, Any]) -> None:
-        """Private method to save state to the store."""
+        """Private method to save state to the store.
+
+        Args:
+            key: The key to store the state under.
+            value: The dictionary value to store.
+
+        Raises:
+            Exception: If there's an error with the Dapr client operations.
+        """
         client = DaprClient()
         try:
             client.save_state(
@@ -35,7 +43,18 @@ class StateStore:
 
     @classmethod
     def _get_state(cls, key: str) -> Dict[str, Any]:
-        """Private method to get state from the store."""
+        """Private method to get state from the store.
+
+        Args:
+            key: The key to retrieve the state for.
+
+        Returns:
+            Dict[str, Any]: The retrieved state data.
+
+        Raises:
+            ValueError: If no state is found for the given key.
+            Exception: If there's an error with the Dapr client operations.
+        """
         client = DaprClient()
         try:
             state = client.get_state(store_name=cls.STATE_STORE_NAME, key=key)
@@ -50,16 +69,20 @@ class StateStore:
 
     @classmethod
     def store_credentials(cls, config: Dict[str, Any]) -> str:
-        """
-        Store credentials in the state store.
-
-        :param config: The credentials to store.
-        :return: The generated credential GUID.
-        :raises Exception: If there's an error with the Dapr client operations.
+        """Store credentials in the state store.
 
         Note: this method will be moved to secretstore.py
 
-        Usage:
+        Args:
+            config: The credentials to store.
+
+        Returns:
+            str: The generated credential GUID.
+
+        Raises:
+            Exception: If there's an error with the Dapr client operations.
+
+        Examples:
             >>> StateStore.store_credentials({"username": "admin", "password": "password"})
             "credential_1234567890"
         """
@@ -69,17 +92,21 @@ class StateStore:
 
     @classmethod
     def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
-        """
-        Extract credentials from the state store using the credential GUID.
-
-        :param credential_guid: The unique identifier for the credentials.
-        :return: The credentials if found.
-        :raises ValueError: If the credential_guid is invalid or credentials are not found.
-        :raises Exception: If there's an error with the Dapr client operations.
+        """Extract credentials from the state store using the credential GUID.
 
         Note: this method will be moved to secretstore.py
 
-        Usage:
+        Args:
+            credential_guid: The unique identifier for the credentials.
+
+        Returns:
+            Dict[str, Any]: The credentials if found.
+
+        Raises:
+            ValueError: If the credential_guid is invalid or credentials are not found.
+            Exception: If there's an error with the Dapr client operations.
+
+        Examples:
             >>> StateStore.extract_credentials("1234567890")
             {"username": "admin", "password": "password"}
         """
@@ -89,26 +116,34 @@ class StateStore:
 
     @classmethod
     def store_configuration(cls, config_id: str, config: Dict[str, Any]) -> str:
-        """
-        Store configuration in the state store.
+        """Store configuration in the state store.
 
-        :param config: The configuration to store.
-        :param config_id: The unique identifier for the workflow.
-        :return: The generated configuration ID.
-        :raises Exception: If there's an error with the Dapr client operations.
+        Args:
+            config_id: The unique identifier for the workflow.
+            config: The configuration to store.
+
+        Returns:
+            str: The generated configuration ID.
+
+        Raises:
+            Exception: If there's an error with the Dapr client operations.
         """
         cls._save_state(f"config_{config_id}", config)
         return config_id
 
     @classmethod
     def extract_configuration(cls, config_id: str) -> Dict[str, Any]:
-        """
-        Extract configuration from the state store using the config ID.
+        """Extract configuration from the state store using the config ID.
 
-        :param config_id: The unique identifier for the configuration.
-        :return: The configuration if found.
-        :raises ValueError: If the config_id is invalid or configuration is not found.
-        :raises Exception: If there's an error with the Dapr client operations.
+        Args:
+            config_id: The unique identifier for the configuration.
+
+        Returns:
+            Dict[str, Any]: The configuration if found.
+
+        Raises:
+            ValueError: If the config_id is invalid or configuration is not found.
+            Exception: If there's an error with the Dapr client operations.
         """
         if not config_id:
             raise ValueError("Invalid configuration ID provided.")
