@@ -18,7 +18,6 @@ Note: This example is specific to Snowflake but can be adapted for other SQL dat
 import asyncio
 import logging
 import os
-import threading
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict
@@ -134,7 +133,7 @@ class SampleSnowflakeHandler(SQLHandler):
     metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
 
 
-async def application_sql_miner() -> Dict[str, Any]:
+async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
     print("Starting application_sql_miner")
 
     temporal_client = TemporalClient(
@@ -151,11 +150,6 @@ async def application_sql_miner() -> Dict[str, Any]:
         workflow_classes=[SQLQueryExtractionWorkflow],
         temporal_activities=SQLQueryExtractionWorkflow.get_activities(activities),
     )
-    # Start the worker in a separate thread
-    worker_thread = threading.Thread(
-        target=lambda: asyncio.run(worker.start()), daemon=True
-    )
-    worker_thread.start()
 
     # wait for the worker to start
     time.sleep(3)
@@ -198,9 +192,11 @@ async def application_sql_miner() -> Dict[str, Any]:
         workflow_class=SQLQueryExtractionWorkflow,
         workflow_args=workflow_args,
     )
+
+    await worker.start(daemon=daemon)
+
     return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_miner())
-    time.sleep(1000000)
+    asyncio.run(application_sql_miner(daemon=False))

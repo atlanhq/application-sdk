@@ -135,7 +135,9 @@ class SampleSQLHandler(SQLHandler):
     """
 
 
-async def application_sql_with_custom_transformer() -> Dict[str, Any]:
+async def application_sql_with_custom_transformer(
+    daemon: bool = True,
+) -> Dict[str, Any]:
     print("Starting application_sql_with_custom_transformer")
 
     temporal_client = TemporalClient(
@@ -154,9 +156,6 @@ async def application_sql_with_custom_transformer() -> Dict[str, Any]:
         workflow_classes=[SQLMetadataExtractionWorkflow],
         temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
-
-    # Start the worker in a separate thread
-    await worker.start(daemon=True)
 
     # wait for the worker to start
     time.sleep(3)
@@ -190,9 +189,13 @@ async def application_sql_with_custom_transformer() -> Dict[str, Any]:
     workflow_response = await temporal_client.start_workflow(
         workflow_args, SQLMetadataExtractionWorkflow
     )
+
+    # Start the worker in a separate thread
+    await worker.start(daemon=daemon)
+
     return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_with_custom_transformer())
+    asyncio.run(application_sql_with_custom_transformer(daemon=False))
     time.sleep(1000000)
