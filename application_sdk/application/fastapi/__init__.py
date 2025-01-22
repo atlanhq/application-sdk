@@ -20,7 +20,7 @@ from application_sdk.application.fastapi.models import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.application.fastapi.routers.system import get_system_router
+from application_sdk.application.fastapi.routers.server import get_system_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
