@@ -1,4 +1,7 @@
-"""Router for handling health-related API endpoints."""
+"""Router for handling health-related API endpoints.
+
+This module provides endpoints for system health checks and readiness probes.
+"""
 
 import logging
 import platform
@@ -22,10 +25,23 @@ router = APIRouter(
 
 @router.get("/health")
 async def health():
-    """
-    Check the health of the system.
+    """Get system health information.
 
-    :return: A dictionary containing system information.
+    This endpoint provides detailed information about the system's hardware
+    and software configuration, including platform details, network information,
+    and resource statistics.
+
+    Returns:
+        dict: A dictionary containing system information with the following keys:
+            - platform (str): Operating system name
+            - platform_release (str): Operating system release version
+            - platform_version (str): Operating system version details
+            - architecture (str): System architecture
+            - hostname (str): System hostname
+            - ip_address (str): System IP address
+            - mac_address (str): System MAC address
+            - processor (str): Processor information
+            - ram (str): Total RAM in GB
     """
     info = {
         "platform": platform.system(),
@@ -44,13 +60,22 @@ async def health():
 
 @router.get("/ready")
 async def ready():
-    """
-    Check if the system is ready.
+    """Check system readiness.
 
-    :return: A dictionary containing the status "ok".
+    This endpoint provides a simple readiness probe to verify if the system
+    is ready to handle requests.
+
+    Returns:
+        dict: A dictionary containing the system status:
+            - status (str): Always "ok" if the system is ready
     """
     return {"status": "ok"}
 
 
 def get_health_router() -> APIRouter:
+    """Get the health check router.
+
+    Returns:
+        APIRouter: FastAPI router containing health check endpoints.
+    """
     return router

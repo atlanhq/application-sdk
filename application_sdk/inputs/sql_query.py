@@ -17,6 +17,17 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLQueryInput(Input):
+    """Input handler for SQL queries with pandas DataFrame support.
+
+    This class provides functionality to execute SQL queries and return results
+    as pandas DataFrames, with support for both batch and single-shot processing.
+
+    Attributes:
+        query (str): The SQL query to execute.
+        engine (Union[Engine, str]): SQLAlchemy engine or connection string.
+        chunk_size (Optional[int]): Number of rows to fetch per batch.
+    """
+
     query: str
     engine: Union[Engine, str]
     chunk_size: Optional[int]
@@ -24,11 +35,28 @@ class SQLQueryInput(Input):
     def __init__(
         self, engine: Union[Engine, str], query: str, chunk_size: Optional[int] = 100000
     ):
+        """Initialize the SQL query input handler.
+
+        Args:
+            engine (Union[Engine, str]): SQLAlchemy engine or connection string.
+            query (str): The SQL query to execute.
+            chunk_size (Optional[int], optional): Number of rows per batch.
+                Defaults to 100000.
+        """
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
 
     async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+        """Get query results as batched pandas DataFrames.
+
+        Returns:
+            Iterator[pd.DataFrame]: Iterator yielding batches of query results.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+        """
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
@@ -48,6 +76,15 @@ class SQLQueryInput(Input):
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
     async def get_dataframe(self) -> pd.DataFrame:
+        """Get all query results as a single pandas DataFrame.
+
+        Returns:
+            pd.DataFrame: Query results as a DataFrame.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+        """
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
@@ -65,25 +102,49 @@ class SQLQueryInput(Input):
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
 
     async def get_daft_dataframe(self) -> daft.DataFrame:
-        """
-        Method to read data from SQL using daft and return as daft dataframe
+        """Get query results as a daft DataFrame.
+
+        This method uses ConnectorX to read data from SQL for supported connectors.
+        For unsupported connectors and direct engine usage, it falls back to SQLAlchemy.
+
+        Returns:
+            daft.DataFrame: Query results as a daft DataFrame.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+
+        Note:
+            For ConnectorX supported sources, see:
+            https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
             # Daft uses ConnectorX to read data from SQL by default for supported connectors
             # If a connection string is passed, it will use ConnectorX to read data
             # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-            # Refer here for ConnectorX supported sources: https://sfu-db.github.io/connector-x/intro.html#sources
             if isinstance(self.engine, str):
                 return daft.read_sql(self.query, self.engine)
             return daft.read_sql(self.query, lambda: self.engine.connect())
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 
-    async def get_batched_daft_dataframe(self) -> daft.DataFrame:
-        """
-        Method to read data from SQL using pandas in batches and return as daft dataframe
-        We get the data using pandas since daft does not support reading data in batches
-        This pandas data will then be converted to daft dataframe
+    async def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+        """Get query results as batched daft DataFrames.
+
+        This method reads data using pandas in batches since daft does not support
+        batch reading. Each pandas DataFrame is then converted to a daft DataFrame.
+
+        Returns:
+            Iterator[daft.DataFrame]: Iterator yielding batches of query results
+                as daft DataFrames.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+
+        Note:
+            This method uses pandas for batch reading since daft does not support
+            reading data in batches natively.
         """
         try:
             if isinstance(self.engine, str):
@@ -98,6 +159,18 @@ class SQLQueryInput(Input):
 
 
 class AsyncSQLQueryInput(Input):
+    """Asynchronous input handler for SQL queries.
+
+    This class provides asynchronous functionality to execute SQL queries and return
+    results as DataFrames, with support for both pandas and daft formats.
+
+    Attributes:
+        query (str): The SQL query to execute.
+        engine (Union[Engine, str]): SQLAlchemy engine or connection string.
+        chunk_size (Optional[int]): Number of rows to fetch per batch.
+        async_session: Async session maker for database operations.
+    """
+
     query: str
     engine: Union[Engine, str]
     chunk_size: Optional[int]
@@ -105,6 +178,14 @@ class AsyncSQLQueryInput(Input):
     def __init__(
         self, engine: Union[Engine, str], query: str, chunk_size: Optional[int] = 100000
     ):
+        """Initialize the async SQL query input handler.
+
+        Args:
+            engine (Union[Engine, str]): SQLAlchemy engine or connection string.
+            query (str): The SQL query to execute.
+            chunk_size (Optional[int], optional): Number of rows per batch.
+                Defaults to 100000.
+        """
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
@@ -113,10 +194,28 @@ class AsyncSQLQueryInput(Input):
         )
 
     def _read_sql_query(self, session):
+        """Execute SQL query using the provided session.
+
+        Args:
+            session: SQLAlchemy session for database operations.
+
+        Returns:
+            Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
+                or iterator of DataFrames if chunked.
+        """
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
     async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+        """Get query results as batched pandas DataFrames asynchronously.
+
+        Returns:
+            Iterator[pd.DataFrame]: Iterator yielding batches of query results.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+        """
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
@@ -127,6 +226,15 @@ class AsyncSQLQueryInput(Input):
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
     async def get_dataframe(self) -> pd.DataFrame:
+        """Get all query results as a single pandas DataFrame asynchronously.
+
+        Returns:
+            pd.DataFrame: Query results as a DataFrame.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+        """
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
@@ -137,8 +245,21 @@ class AsyncSQLQueryInput(Input):
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
 
     async def get_daft_dataframe(self) -> daft.DataFrame:
-        """
-        Method to read data from SQL using daft and return as daft dataframe
+        """Get query results as a daft DataFrame.
+
+        This method uses ConnectorX to read data from SQL for supported connectors.
+        For unsupported connectors and direct engine usage, it falls back to SQLAlchemy.
+
+        Returns:
+            daft.DataFrame: Query results as a daft DataFrame.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+
+        Note:
+            For ConnectorX supported sources, see:
+            https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
             # Daft uses ConnectorX to read data from SQL by default for supported connectors
@@ -151,10 +272,22 @@ class AsyncSQLQueryInput(Input):
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 
     async def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
-        """
-        Method to read data from SQL using pandas in batches and return as daft dataframe
-        We get the data using pandas since daft does not support reading data in batches
-        This pandas data will then be converted to daft dataframe
+        """Get query results as batched daft DataFrames.
+
+        This method reads data using pandas in batches since daft does not support
+        batch reading. Each pandas DataFrame is then converted to a daft DataFrame.
+
+        Returns:
+            Iterator[daft.DataFrame]: Iterator yielding batches of query results
+                as daft DataFrames.
+
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
+
+        Note:
+            This method uses pandas for batch reading since daft does not support
+            reading data in batches natively.
         """
         try:
             if isinstance(self.engine, str):

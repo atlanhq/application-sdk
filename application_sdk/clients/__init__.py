@@ -1,3 +1,10 @@
+"""Base client interfaces for Atlan applications.
+
+This module provides the abstract base class for all client implementations,
+defining the core interface that any client must implement for connecting
+to external services and data sources.
+"""
+
 from abc import ABC, abstractmethod
 
 
@@ -9,18 +16,22 @@ class ClientInterface(ABC):
     """
 
     @abstractmethod
-    async def load(self):
+    async def load(self) -> None:
         """Establish the client connection.
 
         This method should handle the initialization and connection setup
         for the specific client implementation.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
         """
         raise NotImplementedError("load method is not implemented")
 
-    async def close(self):
+    async def close(self) -> None:
         """Close the client connection.
 
         This method should properly terminate the connection and clean up
-        any resources used by the client.
+        any resources used by the client. By default, it does nothing.
+        Subclasses should override this method if cleanup is needed.
         """
         return
