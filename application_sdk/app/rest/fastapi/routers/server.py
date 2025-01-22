@@ -131,5 +131,5 @@ async def ready():
     return {"status": "ok"}
 
 
-def get_health_router() -> APIRouter:
+def get_system_router() -> APIRouter:
     return router

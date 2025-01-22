@@ -15,7 +15,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 router = APIRouter(
     prefix="/system",
-    tags=["health"],
+    tags=["system"],
     responses={404: {"description": "Not found"}},
 )
 
@@ -52,5 +52,5 @@ async def ready():
     return {"status": "ok"}
 
 
-def get_health_router() -> APIRouter:
+def get_system_router() -> APIRouter:
     return router
