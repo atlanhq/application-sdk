@@ -20,7 +20,7 @@ from application_sdk.application.fastapi.models import (
     WorkflowRequest,
     WorkflowResponse,
 )
-from application_sdk.application.fastapi.routers.server import get_system_router
+from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
@@ -82,7 +82,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.register_routes()
 
         # Then include all routers
-        self.app.include_router(get_system_router())
+        self.app.include_router(get_server_router())
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
