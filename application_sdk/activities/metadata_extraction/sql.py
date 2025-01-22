@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Type, Union
+from typing import Any, Dict, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -338,7 +338,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             total_record_count=workflow_args["record_count"],
         )
     )
-    
     async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
         """Write transformed metadata to output.
 

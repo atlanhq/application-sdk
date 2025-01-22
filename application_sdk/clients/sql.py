@@ -1,4 +1,5 @@
-"""SQL client implementation for database connections.
+"""
+SQL client implementation for database connections.
 
 This module provides SQL client classes for both synchronous and asynchronous
 database operations, supporting batch processing and server-side cursors.
@@ -7,7 +8,7 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, AsyncGenerator, Dict, Generator, List
+from typing import Any, Dict, List
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -49,7 +50,8 @@ class SQLClient(ClientInterface):
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
-        """Initialize the SQL client.
+        """
+        Initialize the SQL client.
 
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
@@ -82,10 +84,11 @@ class SQLClient(ClientInterface):
             self.connection.close()
 
     def get_sqlalchemy_connection_string(self) -> str:
-        """Get the SQLAlchemy connection string.
+        """Get the SQLAlchemy connection string."""
 
     async def run_query(self, query: str, batch_size: int = 100000):
-        """Run a query in batch mode with client-side cursor.
+        """
+        Run a query in batch mode with client-side cursor.
 
         This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
         If yield_per is not supported by the database, the method will fall back to client-side cursor.
@@ -163,9 +166,9 @@ class AsyncSQLClient(SQLClient):
         )
         self.connection = await self.engine.connect()
 
-
     async def run_query(self, query: str, batch_size: int = 100000):
-        """Run a query in batch mode with client-side cursor.
+        """
+        Run a query in batch mode with client-side cursor.
 
         This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
         If yield_per is not supported by the database, the method will fall back to client-side cursor.
