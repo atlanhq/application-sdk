@@ -84,32 +84,21 @@ class SQLClient(ClientInterface):
     def get_sqlalchemy_connection_string(self) -> str:
         """Get the SQLAlchemy connection string.
 
-        Returns:
-            str: Database connection string.
+    async def run_query(self, query: str, batch_size: int = 100000):
+        """Run a query in batch mode with client-side cursor.
 
-        Raises:
-            NotImplementedError: This method must be implemented by subclasses.
-        """
-        raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
-
-    async def run_query(
-        self, query: str, batch_size: int = 100000
-    ) -> Generator[List[Dict[str, Any]], None, None]:
-        """Run a SQL query in batch mode.
-
-        This method supports both client-side and server-side cursors for batch processing.
-        Server-side cursors are used if enabled and supported by the database.
+        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
+        If yield_per is not supported by the database, the method will fall back to client-side cursor.
 
         Args:
-            query (str): The SQL query to execute.
-            batch_size (int, optional): Number of records to fetch per batch.
-                Defaults to 100000.
+            query: The query to run.
+            batch_size: The batch size.
 
         Yields:
-            List[Dict[str, Any]]: Batches of query results as dictionaries.
+            List of dictionaries containing query results.
 
         Raises:
-            Exception: If the query execution fails.
+            Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
 
@@ -174,25 +163,23 @@ class AsyncSQLClient(SQLClient):
         )
         self.connection = await self.engine.connect()
 
-    async def run_query(
-        self, query: str, batch_size: int = 100000
-    ) -> AsyncGenerator[List[Dict[str, Any]], None]:
-        """Run a SQL query asynchronously in batch mode.
 
-        This method supports both client-side and server-side cursors for batch processing.
-        Server-side cursors are used if enabled and supported by the database.
+    async def run_query(self, query: str, batch_size: int = 100000):
+        """Run a query in batch mode with client-side cursor.
+
+        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
+        If yield_per is not supported by the database, the method will fall back to client-side cursor.
 
         Args:
-            query (str): The SQL query to execute.
-            batch_size (int, optional): Number of records to fetch per batch.
-                Defaults to 100000.
+            query: The query to run.
+            batch_size: The batch size.
 
         Yields:
-            List[Dict[str, Any]]: Batches of query results as dictionaries.
+            List of dictionaries containing query results.
 
         Raises:
-            ValueError: If the connection is not established.
-            Exception: If the query execution fails.
+            ValueError: If connection is not established.
+            Exception: If the query fails.
         """
         if not self.connection:
             raise ValueError("Connection is not established")

@@ -22,7 +22,7 @@ Specifies the Temporal namespace for the application.
 
 Default: `default`
 
-### `ATLAN_TEMPORAL_APPLICATION_NAME`
+### `ATLAN_APPLICATION_NAME`
 
 Specifies the application name for identifying the Temporal client.
 

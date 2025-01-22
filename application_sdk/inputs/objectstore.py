@@ -22,18 +22,14 @@ class ObjectStore:
         download_file_prefix: str,
         file_path: str,
     ) -> None:
-        """Download a file from the object store to a local path.
-
-        This method downloads a file from the object store using Dapr bindings.
-        The relative path is calculated from the download_file_prefix and used
-        as the key in the object store.
+        """Downloads a single file from the object store.
 
         Args:
-            download_file_prefix (str): Base path used to calculate relative path.
-            file_path (str): Local path where the file should be downloaded.
+            download_file_prefix (str): The base path to calculate relative paths from.
+            file_path (str): The full path to where the file should be downloaded.
 
         Raises:
-            Exception: If there's an error downloading the file or writing to local path.
+            Exception: If there's an error downloading the file from the object store.
         """
         with DaprClient() as client:
             relative_path = os.path.relpath(file_path, download_file_prefix)
@@ -60,19 +56,15 @@ class ObjectStore:
     async def push_file_to_object_store(
         cls, output_prefix: str, file_path: str
     ) -> None:
-        """Push a single file to the object store.
-
-        This method reads a file from the local filesystem and uploads it to
-        the object store using Dapr bindings. The relative path is calculated
-        from the output_prefix and used as the key in the object store.
+        """Pushes a single file to the object store.
 
         Args:
-            output_prefix (str): Base path used to calculate relative path.
-            file_path (str): Path to the local file to be uploaded.
+            output_prefix (str): The base path to calculate relative paths from.
+            file_path (str): The full path to the file to be pushed.
 
         Raises:
-            IOError: If there's an error reading the local file.
-            Exception: If there's an error pushing the file to object store.
+            IOError: If there's an error reading the file.
+            Exception: If there's an error pushing the file to the object store.
         """
         with DaprClient() as client:
             try:
@@ -103,16 +95,18 @@ class ObjectStore:
     async def push_to_object_store(
         cls, output_prefix: str, input_files_path: str
     ) -> None:
-        """
-        Push files from a directory to the object store.
+        """Pushes files from a directory to the object store.
 
-        :param output_prefix: The base path to calculate relative paths.
-        :param input_files_path: The path to the directory containing files to push.
-        :raises ValueError: If the output_path doesn't exist or is not a directory.
-        :raises IOError: If there's an error reading files.
-        :raises Exception: If there's an error with the Dapr client operations.
+        Args:
+            output_prefix (str): The base path to calculate relative paths from.
+            input_files_path (str): The path to the directory containing files to push.
 
-        Usage:
+        Raises:
+            ValueError: If the input_files_path doesn't exist or is not a directory.
+            IOError: If there's an error reading files.
+            Exception: If there's an error with the Dapr client operations.
+
+        Example:
             >>> ObjectStore.push_to_object_store("logs", "/tmp/logs")
         """
         if not os.path.isdir(input_files_path):

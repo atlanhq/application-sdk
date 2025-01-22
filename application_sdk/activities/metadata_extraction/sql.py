@@ -134,23 +134,30 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
-    ) -> pd.DataFrame:
-        """Transforms a batch of metadata results.
+    ) -> None:
+        """Transform a batch of results into metadata.
 
         Args:
-            results (pd.DataFrame): The batch of results to transform.
-            typename (str): The type of metadata being transformed.
-            workflow_id (str): The ID of the current workflow.
-            workflow_run_id (str): The run ID of the current workflow.
-            workflow_args (Dict[str, Any]): Arguments passed to the workflow.
+            results: The DataFrame containing the batch of results to transform.
+            typename: The type of data being transformed (e.g., 'database', 'schema', 'table').
+            workflow_id: The ID of the current workflow.
+            workflow_run_id: The run ID of the current workflow.
+            workflow_args: Dictionary containing workflow arguments and configuration.
 
         Returns:
-            pd.DataFrame: The transformed metadata.
+            None
 
         Raises:
-            ValueError: If the transformer is not set.
+            ValueError: If the transformer is not properly set.
         """
         state = await self._get_state(workflow_args)
+
+        connection_name = workflow_args.get("connection", {}).get(
+            "connection_name", None
+        )
+        connection_qualified_name = workflow_args.get("connection", {}).get(
+            "connection_qualified_name", None
+        )
 
         transformed_metadata_list = []
         # Replace NaN with None to avoid issues with JSON serialization
@@ -167,6 +174,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                         row,
                         workflow_id=workflow_id,
                         workflow_run_id=workflow_run_id,
+                        connection_name=connection_name,
+                        connection_qualified_name=connection_qualified_name,
                     )
                 )
                 if transformed_metadata is not None:
@@ -195,20 +204,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         ),
     )
     async def fetch_databases(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs: Any
-    ) -> Dict[str, Union[int, str]]:
-        """Fetches and processes databases from the SQL server.
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
+        """Fetch and process databases from the database.
 
         Args:
-            batch_input (pd.DataFrame): Input data containing database information.
-            raw_output (JsonOutput): Output handler for raw data.
+            batch_input: DataFrame containing the raw database data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict[str, Union[int, str]]: A dictionary containing:
-                - chunk_count: Number of chunks processed
-                - typename: Type of metadata ("database")
-                - total_record_count: Total number of records processed
+            Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_df(batch_input)
         return {
@@ -233,20 +239,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         ),
     )
     async def fetch_schemas(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs: Any
-    ) -> Dict[str, Union[int, str]]:
-        """Fetches and processes schemas from the SQL server.
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
+        """Fetch and process schemas.
 
         Args:
-            batch_input (pd.DataFrame): Input data containing schema information.
-            raw_output (JsonOutput): Output handler for raw data.
+            batch_input: DataFrame containing the raw schema data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict[str, Union[int, str]]: A dictionary containing:
-                - chunk_count: Number of chunks processed
-                - typename: Type of metadata ("schema")
-                - total_record_count: Total number of records processed
+            Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_df(batch_input)
         return {
@@ -271,20 +274,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         ),
     )
     async def fetch_tables(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs: Any
-    ) -> Dict[str, Union[int, str]]:
-        """Fetches and processes tables from the SQL server.
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
+        """Fetch and process tables.
 
         Args:
-            batch_input (pd.DataFrame): Input data containing table information.
-            raw_output (JsonOutput): Output handler for raw data.
+            batch_input: DataFrame containing the raw table data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict[str, Union[int, str]]: A dictionary containing:
-                - chunk_count: Number of chunks processed
-                - typename: Type of metadata ("table")
-                - total_record_count: Total number of records processed
+            Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_df(batch_input)
         return {
@@ -309,20 +309,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         ),
     )
     async def fetch_columns(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs: Any
-    ) -> Dict[str, Union[int, str]]:
-        """Fetches and processes columns from the SQL server.
+        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+    ):
+        """Fetch and process columns.
 
         Args:
-            batch_input (pd.DataFrame): Input data containing column information.
-            raw_output (JsonOutput): Output handler for raw data.
+            batch_input: DataFrame containing the raw column data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict[str, Union[int, str]]: A dictionary containing:
-                - chunk_count: Number of chunks processed
-                - typename: Type of metadata ("column")
-                - total_record_count: Total number of records processed
+            Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_df(batch_input)
         return {
@@ -341,17 +338,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             total_record_count=workflow_args["record_count"],
         )
     )
-    async def write_type_metadata(
-        self,
-        metadata_output: JsonOutput,
-        batch_input: Optional[Any] = None,
-        **kwargs: Any,
-    ) -> None:
-        """Writes transformed type metadata to output.
+    
+    async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
+        """Write transformed metadata to output.
 
         Args:
-            metadata_output (JsonOutput): Output handler for metadata.
-            batch_input (Optional[Any], optional): Input data. Defaults to None.
+            metadata_output: JsonOutput instance for writing metadata.
+            batch_input: Optional DataFrame containing input data.
             **kwargs: Additional keyword arguments.
         """
         await metadata_output.write_metadata()

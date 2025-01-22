@@ -68,11 +68,6 @@ class AtlasTransformer(TransformerInterface):
             "TAG_REF": TagAttachment,
         }
 
-        self.connection_qualified_name = kwargs.get(
-            "connection_qualified_name",
-            f"{tenant_id}/{self.connector_name}/{self.current_epoch}",
-        )
-
     def transform_metadata(
         self,
         typename: str,
@@ -108,9 +103,13 @@ class AtlasTransformer(TransformerInterface):
             entity_class_definitions or self.entity_class_definitions
         )
 
+        connection_qualified_name = kwargs.get("connection_qualified_name", None)
+        connection_name = kwargs.get("connection_name", None)
+
         data.update(
             {
-                "connection_qualified_name": self.connection_qualified_name,
+                "connection_qualified_name": connection_qualified_name,
+                "connection_name": connection_name,
             }
         )
 
@@ -156,6 +155,7 @@ class AtlasTransformer(TransformerInterface):
         entity.last_sync_workflow_name = workflow_id
         entity.last_sync_run = workflow_run_id
         entity.last_sync_run_at = datetime.now()
+        entity.connection_name = data.get("connection_name", "")
 
         if remarks := data.get("remarks", None) or data.get("comment", None):
             entity.description = process_text(remarks)

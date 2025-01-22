@@ -164,15 +164,14 @@ class EventStore:
 
     @classmethod
     def create_event(cls, event: Event, topic_name: str = TOPIC_NAME):
-        """Create and publish a new event.
+        """Create a new generic event.
 
         Args:
-            event (Event): Event data to publish.
-            topic_name (str, optional): Topic to publish the event to.
-                Defaults to TOPIC_NAME.
+            event (Event): Event data.
+            topic_name (str, optional): Topic name to publish the event to. Defaults to TOPIC_NAME.
 
         Example:
-            >>> EventStore.create_event(Event(event_type="test", data={"test": "test"}))
+            >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
         with clients.DaprClient() as client:
             client.publish_event(

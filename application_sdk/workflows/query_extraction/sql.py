@@ -69,22 +69,13 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]):
-        """Run the SQL query extraction workflow.
-
-        This method orchestrates the workflow execution by:
-        1. Extracting configuration from the state store
-        2. Setting up retry policies and timeouts
-        3. Getting query batches
-        4. Processing queries in parallel
-        5. Logging workflow progress
+        """Run the workflow.
 
         Args:
-            workflow_config (Dict[str, Any]): Configuration for the workflow,
-                including workflow_id and other parameters.
+            workflow_config (Dict[str, Any]): The workflow configuration dictionary.
 
-        Note:
-            The workflow uses a retry policy with exponential backoff and
-            processes queries in parallel using asyncio.gather.
+        Returns:
+            None
         """
         await super().run(workflow_config)
 
