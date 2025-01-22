@@ -2,6 +2,7 @@ import logging
 from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
@@ -157,6 +158,12 @@ class FastAPIApplication(AtlanApplicationInterface):
             response_model=WorkflowConfigResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/status/{workflow_id}/{run_id}",
+            self.get_workflow_run_status,
+            methods=["GET"],
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -229,6 +236,33 @@ class FastAPIApplication(AtlanApplicationInterface):
             success=True,
             message="Workflow configuration fetched successfully",
             data=config,
+        )
+
+    async def get_workflow_run_status(
+        self, workflow_id: str, run_id: str
+    ) -> JSONResponse:
+        """
+        Get the status of a workflow run
+        Args:
+            workflow_id: The ID of the workflow
+            run_id: The ID of the run
+        Returns:
+            JSONResponse containing the status of the workflow
+        """
+        if not self.temporal_client:
+            raise Exception("Temporal client not initialized")
+
+        workflow_status = await self.temporal_client.get_workflow_run_status(
+            workflow_id, run_id
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "message": "Workflow status fetched successfully",
+                "data": workflow_status,
+            },
         )
 
     def update_workflow_config(

@@ -7,14 +7,10 @@ on:
     branches:
       - main
       - develop
-      - APP-4477-sdk-restructuring
-      - feat/adding-unit-e2e-tests
   pull_request:
     branches:
       - main
       - develop
-      - APP-4477-sdk-restructuring
-      - feat/adding-unit-e2e-tests
 
 jobs:
   test:
@@ -71,7 +67,6 @@ jobs:
     # Start all services
     - name: Start Platform Services
       run: |
-        cd examples
         make start-all
         sleep 10  # Give services time to start up
 
