@@ -649,7 +649,7 @@ test = ["pytest"]
 name = "connectorx"
 version = "0.4.0"
 description = ""
-optional = false
+optional = true
 python-versions = ">=3.10"
 files = [
     {file = "connectorx-0.4.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:447bd065feb69b63e51a8a056b1de3ccb98a48108b52987dba1b67555f01a8d8"},
@@ -1214,7 +1214,7 @@ files = [
 name = "fsspec"
 version = "2024.12.0"
 description = "File-system specification"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "fsspec-2024.12.0-py3-none-any.whl", hash = "sha256:b520aed47ad9804237ff878b504267a3b0b441e97508bd6d2d8774e3db85cee2"},
@@ -1253,7 +1253,7 @@ tqdm = ["tqdm"]
 name = "getdaft"
 version = "0.3.15"
 description = "Distributed Dataframes for Multimodal Data"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "getdaft-0.3.15-cp38-abi3-macosx_10_12_x86_64.whl", hash = "sha256:7f85b0a4b5937419e8845b4718a473f097d900f1b43efa87140397fc7eff2e75"},
@@ -1842,13 +1842,13 @@ testing = ["Django", "attrs", "colorama", "docopt", "pytest (<9.0.0)"]
 
 [[package]]
 name = "jinja2"
-version = "3.1.4"
+version = "3.1.5"
 description = "A very fast and expressive template engine."
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "jinja2-3.1.4-py3-none-any.whl", hash = "sha256:bc5dd2abb727a5319567b7a813e6a2e7318c39f4f487cfe6c89c6f9c7d25197d"},
-    {file = "jinja2-3.1.4.tar.gz", hash = "sha256:4a3aee7acbbe7303aede8e9648d13b8bf88a429282aa6122a993f0ac800cb369"},
+    {file = "jinja2-3.1.5-py3-none-any.whl", hash = "sha256:aba0f4dc9ed8013c424088f68a5c226f7d6097ed89b246d7749c2ec4175c6adb"},
+    {file = "jinja2-3.1.5.tar.gz", hash = "sha256:8fefff8dc3034e27bb80d67c671eb8a9bc424c0ef4c0826edbff304cceff43bb"},
 ]
 
 [package.dependencies]
@@ -3257,17 +3257,17 @@ test = ["cffi", "hypothesis", "pandas", "pytest", "pytz"]
 
 [[package]]
 name = "pyatlan"
-version = "2.6.1"
+version = "4.0.0"
 description = "Atlan Python Client"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pyatlan-2.6.1-py3-none-any.whl", hash = "sha256:4be0f0419753d15c507f045df636a0e169d684bf3825bcd6d58b9a73555b8313"},
-    {file = "pyatlan-2.6.1.tar.gz", hash = "sha256:20b555a7e16702978234af4bcd1b7d081bb283c8b22fe41790f4f9e97181efa7"},
+    {file = "pyatlan-4.0.0-py3-none-any.whl", hash = "sha256:a8f1c9e6e05faf3158d4d1b7ef433074ae543b17e719d76530ffa93ff3dfa771"},
+    {file = "pyatlan-4.0.0.tar.gz", hash = "sha256:f07004bb484cd24d33c1f9847ea86d8dcf0c57448e794c85f306ffd068d74ac1"},
 ]
 
 [package.dependencies]
-jinja2 = "3.1.4"
+jinja2 = "3.1.5"
 lazy_loader = ">=0.4,<1.0"
 nanoid = "2.0.0"
 pydantic = ">=2.0.0,<3.0.0"
@@ -4300,7 +4300,7 @@ sqlcipher = ["sqlcipher3_binary"]
 name = "sqlglot"
 version = "26.2.1"
 description = "An easily customizable SQL parser and transpiler"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "sqlglot-26.2.1-py3-none-any.whl", hash = "sha256:f5177482cc00997f9b7af886af23fcae8de827795a075c27c20296bdfdb9a522"},
@@ -4425,7 +4425,7 @@ files = [
 name = "tqdm"
 version = "4.67.1"
 description = "Fast, Extensible Progress Meter"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "tqdm-4.67.1-py3-none-any.whl", hash = "sha256:26445eca388f82e72884e0d580d5464cd801a3ea01e63e5601bdff9ba6a48de2"},
@@ -5048,4 +5048,4 @@ workflows = ["dapr", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "e839a6fe7ab934bcad83bcbad68f563fbfa1f05dd9ce3a0c3d827c2388fdcdee"
+content-hash = "3fdec21dc8c098739ffaec80752940ca8a5e40a0cf2beea05ae0e29d92868c52"
