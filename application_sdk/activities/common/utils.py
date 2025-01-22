@@ -27,27 +27,38 @@ source:
 
 
 def get_workflow_id() -> str:
+    """Gets the current Temporal workflow ID.
+
+    Returns:
+        str: The workflow ID of the current activity.
+    """
     return activity.info().workflow_id
 
 
 def auto_heartbeater(fn: F) -> F:
-    """
-    Auto-heartbeater for activities.
+    """A decorator that automatically sends heartbeats for long-running activities.
 
-    :param fn: The activity function.
-    :return: The activity function.
+    This decorator ensures that long-running activities send periodic heartbeats to Temporal
+    to indicate they are still alive. If an activity fails (e.g., worker crash), the heartbeat
+    mechanism allows Temporal to detect the failure earlier and retry the activity.
 
-    Usage:
-        >>> @activity.defn
-        >>> @auto_heartbeater
-        >>> async def my_activity():
-        >>>     pass
+    Args:
+        fn (F): The activity function to decorate. Must be an async function.
+
+    Returns:
+        F: The decorated activity function that includes automatic heartbeating.
+
+    Example:
+        @activity.defn
+        @auto_heartbeater
+        async def my_activity():
+            pass
     """
 
     # We want to ensure that the type hints from the original callable are
     # available via our wrapper, so we use the functools wraps decorator
     @wraps(fn)
-    async def wrapper(*args, **kwargs):
+    async def wrapper(*args: Any, **kwargs: Any):
         heartbeat_timeout: Optional[timedelta] = None
 
         # Default to 2 minutes if no heartbeat timeout is set
@@ -81,11 +92,15 @@ def auto_heartbeater(fn: F) -> F:
 
 
 async def heartbeat_every(delay: float, *details: Any) -> None:
-    """
-    Heartbeat every so often while not cancelled
+    """Sends periodic heartbeats at specified intervals.
 
-    :param delay: The delay between heartbeats.
-    :param details: The details to heartbeat.
+    Args:
+        delay (float): The time in seconds between heartbeats.
+        *details (Any): Optional details to include in the heartbeat.
+
+    Note:
+        This function runs in an infinite loop until cancelled. It should typically
+        be run as a background task.
     """
     # Heartbeat every so often while not cancelled
     while True:

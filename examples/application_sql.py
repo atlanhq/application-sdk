@@ -125,12 +125,12 @@ async def application_sql() -> Dict[str, Any]:
         sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
-    worker: Worker = Worker(
+
+ worker: Worker = Worker(
         temporal_client=temporal_client,
         workflow_classes=[SQLMetadataExtractionWorkflow],
         temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
-
     # Start the worker in a separate thread
     await worker.start(daemon=True)
 

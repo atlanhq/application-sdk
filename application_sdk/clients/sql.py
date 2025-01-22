@@ -1,7 +1,13 @@
+"""SQL client implementation for database connections.
+
+This module provides SQL client classes for both synchronous and asynchronous
+database operations, supporting batch processing and server-side cursors.
+"""
+
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List
+from typing import Any, AsyncGenerator, Dict, Generator, List
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -16,6 +22,20 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLClient(ClientInterface):
+    """SQL client for database operations.
+
+    This class provides functionality for connecting to and querying SQL databases,
+    with support for batch processing and server-side cursors.
+
+    Attributes:
+        connection: Database connection instance.
+        engine: SQLAlchemy engine instance.
+        sql_input (SQLQueryInput): Input handler for SQL queries.
+        sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
+        credentials (Dict[str, Any]): Database credentials.
+        use_server_side_cursor (bool): Whether to use server-side cursors.
+    """
+
     connection = None
     engine = None
     sql_input = SQLQueryInput
@@ -29,11 +49,25 @@ class SQLClient(ClientInterface):
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
+        """Initialize the SQL client.
+
+        Args:
+            use_server_side_cursor (bool, optional): Whether to use server-side cursors.
+                Defaults to SQLConstants.USE_SERVER_SIDE_CURSOR.value.
+            credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
+            sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
+                connection arguments. Defaults to {}.
+        """
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
-    async def load(self, credentials: Dict[str, Any]):
+    async def load(self, credentials: Dict[str, Any]) -> None:
+        """Load and establish the database connection.
+
+        Args:
+            credentials (Dict[str, Any]): Database connection credentials.
+        """
         self.credentials = credentials
         self.engine = create_engine(
             self.get_sqlalchemy_connection_string(),
@@ -42,24 +76,40 @@ class SQLClient(ClientInterface):
         )
         self.connection = self.engine.connect()
 
-    async def close(self):
+    async def close(self) -> None:
+        """Close the database connection."""
         if self.connection:
             self.connection.close()
 
     def get_sqlalchemy_connection_string(self) -> str:
+        """Get the SQLAlchemy connection string.
+
+        Returns:
+            str: Database connection string.
+
+        Raises:
+            NotImplementedError: This method must be implemented by subclasses.
+        """
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
 
-    async def run_query(self, query: str, batch_size: int = 100000):
-        """
-        Run a query in a batch mode with client-side cursor.
+    async def run_query(
+        self, query: str, batch_size: int = 100000
+    ) -> Generator[List[Dict[str, Any]], None, None]:
+        """Run a SQL query in batch mode.
 
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
-        If yield_per is not supported by the database, the method will fall back to client-side cursor.
+        This method supports both client-side and server-side cursors for batch processing.
+        Server-side cursors are used if enabled and supported by the database.
 
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
+        Args:
+            query (str): The SQL query to execute.
+            batch_size (int, optional): Number of records to fetch per batch.
+                Defaults to 100000.
+
+        Yields:
+            List[Dict[str, Any]]: Batches of query results as dictionaries.
+
+        Raises:
+            Exception: If the query execution fails.
         """
         loop = asyncio.get_running_loop()
 
@@ -95,11 +145,27 @@ class SQLClient(ClientInterface):
 
 
 class AsyncSQLClient(SQLClient):
+    """Asynchronous SQL client for database operations.
+
+    This class extends SQLClient to provide asynchronous database operations,
+    with support for batch processing and server-side cursors.
+
+    Attributes:
+        connection (AsyncConnection | None): Async database connection instance.
+        engine (AsyncEngine | None): Async SQLAlchemy engine instance.
+        sql_input (AsyncSQLQueryInput): Input handler for async SQL queries.
+    """
+
     connection: AsyncConnection | None = None
     engine: AsyncEngine | None = None
     sql_input = AsyncSQLQueryInput
 
-    async def load(self, credentials: Dict[str, Any]):
+    async def load(self, credentials: Dict[str, Any]) -> None:
+        """Load and establish an asynchronous database connection.
+
+        Args:
+            credentials (Dict[str, Any]): Database connection credentials.
+        """
         self.credentials = credentials
         self.engine = create_async_engine(
             self.get_sqlalchemy_connection_string(),
@@ -108,17 +174,25 @@ class AsyncSQLClient(SQLClient):
         )
         self.connection = await self.engine.connect()
 
-    async def run_query(self, query: str, batch_size: int = 100000):
-        """
-        Run a query in a batch mode with client-side cursor.
+    async def run_query(
+        self, query: str, batch_size: int = 100000
+    ) -> AsyncGenerator[List[Dict[str, Any]], None]:
+        """Run a SQL query asynchronously in batch mode.
 
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size)
-        If yield_per is not supported by the database, the method will fall back to client-side cursor.
+        This method supports both client-side and server-side cursors for batch processing.
+        Server-side cursors are used if enabled and supported by the database.
 
-        :param query: The query to run.
-        :param batch_size: The batch size.
-        :return: The query results.
-        :raises Exception: If the query fails.
+        Args:
+            query (str): The SQL query to execute.
+            batch_size (int, optional): Number of records to fetch per batch.
+                Defaults to 100000.
+
+        Yields:
+            List[Dict[str, Any]]: Batches of query results as dictionaries.
+
+        Raises:
+            ValueError: If the connection is not established.
+            Exception: If the query execution fails.
         """
         if not self.connection:
             raise ValueError("Connection is not established")
