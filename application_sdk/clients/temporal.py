@@ -122,18 +122,15 @@ class TemporalClient(ClientInterface):
         activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
     def get_worker_task_queue(self) -> str:
-        return f"{self.application_name}"
+        return self.application_name
 
     def get_connection_string(self) -> str:
         return f"{self.host}:{self.port}"
 
-    def get_namespace(self) -> str:
-        return self.namespace
-
     async def load(self):
         self.client = await Client.connect(
             self.get_connection_string(),
-            namespace=self.get_namespace(),
+            namespace=self.namespace,
         )
 
     async def close(self):
