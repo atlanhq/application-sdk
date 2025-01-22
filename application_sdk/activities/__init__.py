@@ -81,7 +81,9 @@ class ActivitiesInterface(ABC):
 
     async def _clean_state(self):
         """Remove the state data for the current workflow."""
-        self._state.pop(get_workflow_id())
+        workflow_id = get_workflow_id()
+        if workflow_id in self._state:
+            self._state.pop(workflow_id)
 
     @activity.defn
     @auto_heartbeater
