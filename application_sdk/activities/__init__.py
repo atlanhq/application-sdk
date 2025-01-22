@@ -71,8 +71,8 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        state = await self._get_state(workflow_args)
-        handler: HandlerInterface = state.handler
+        state: ActivitiesState = await self._get_state(workflow_args)
+        handler = state.handler
 
         if not handler:
             raise ValueError("Preflight check handler not found")

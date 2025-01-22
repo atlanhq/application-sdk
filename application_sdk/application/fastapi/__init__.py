@@ -32,7 +32,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class WorkflowTrigger(BaseModel):
-    workflow_class: Type[WorkflowInterface]
+    workflow_class: Optional[Type[WorkflowInterface]] = None
     model_config = {"arbitrary_types_allowed": True}
 
 

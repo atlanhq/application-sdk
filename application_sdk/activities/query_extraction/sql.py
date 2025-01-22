@@ -36,7 +36,7 @@ class MinerArgs(BaseModel):
     )
 
 
-class StateModel(BaseModel):
+class SQLQueryExtractionActivitiesState(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
     sql_client: SQLClient
@@ -45,7 +45,7 @@ class StateModel(BaseModel):
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
-    _state: Dict[str, StateModel] = {}
+    _state: Dict[str, SQLQueryExtractionActivitiesState] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -70,7 +70,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = StateModel(
+        self._state[get_workflow_id()] = SQLQueryExtractionActivitiesState(
             sql_client=sql_client,
             handler=handler,
             workflow_args=workflow_args,
@@ -252,7 +252,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     async def get_query_batches(
         self, workflow_args: Dict[str, Any], **kwargs
     ) -> List[Dict[str, Any]]:
-        state = await self._get_state(workflow_args)
+        state: SQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))

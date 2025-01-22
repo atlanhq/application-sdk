@@ -95,7 +95,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         :param writer: The writer to use.
         :raises Exception: If the results cannot be processed.
         """
-        state = await self._get_state(workflow_args)
+        state: SQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
 
         transformed_metadata_list = []
         # Replace NaN with None to avoid issues with JSON serialization
