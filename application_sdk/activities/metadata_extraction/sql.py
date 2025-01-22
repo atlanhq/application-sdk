@@ -62,10 +62,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._set_state(workflow_args)
 
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
-
         sql_client = self.sql_client_class()
-        await sql_client.load(credentials)
+
+        if "credential_guid" in workflow_args:
+            credentials = StateStore.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+            await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
 
