@@ -84,6 +84,7 @@ class SQLClient(ClientInterface):
             self.connection.close()
 
     def get_sqlalchemy_connection_string(self) -> str:
+        raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
         """Get the SQLAlchemy connection string."""
 
     async def run_query(self, query: str, batch_size: int = 100000):
