@@ -135,7 +135,9 @@ class SampleSQLHandler(SQLHandler):
     """
 
 
-async def application_sql_with_custom_transformer() -> Dict[str, Any]:
+async def application_sql_with_custom_transformer(
+    daemon: bool = True,
+) -> Dict[str, Any]:
     print("Starting application_sql_with_custom_transformer")
 
     temporal_client = TemporalClient(
@@ -155,9 +157,6 @@ async def application_sql_with_custom_transformer() -> Dict[str, Any]:
         temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
 
-    # Start the worker in a separate thread
-    await worker.start(daemon=True)
-
     # wait for the worker to start
     time.sleep(3)
 
@@ -169,7 +168,10 @@ async def application_sql_with_custom_transformer() -> Dict[str, Any]:
             "password": os.getenv("POSTGRES_PASSWORD", "password"),
             "database": os.getenv("POSTGRES_DATABASE", "postgres"),
         },
-        "connection": {"connection": "dev"},
+        "connection": {
+            "connection_name": "test-connection",
+            "connection_qualified_name": "default/postgres/1728518400",
+        },
         "metadata": {
             "exclude_filter": "{}",
             "include_filter": "{}",
@@ -190,9 +192,13 @@ async def application_sql_with_custom_transformer() -> Dict[str, Any]:
     workflow_response = await temporal_client.start_workflow(
         workflow_args, SQLMetadataExtractionWorkflow
     )
+
+    # Start the worker in a separate thread
+    await worker.start(daemon=daemon)
+
     return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_with_custom_transformer())
+    asyncio.run(application_sql_with_custom_transformer(daemon=False))
     time.sleep(1000000)

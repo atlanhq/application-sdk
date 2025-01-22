@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
-from typing import Any, Dict
+from abc import ABC
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 from temporalio import activity
@@ -9,11 +9,23 @@ from application_sdk.handlers import HandlerInterface
 
 
 class ActivitiesState(BaseModel):
+    """Base state model for workflow activities.
+
+    This class provides the base state structure for workflow activities,
+    including handler configuration and workflow arguments.
+
+    Attributes:
+        handler (Optional[HandlerInterface]): Handler instance for activity-specific
+            operations. Defaults to None.
+        workflow_args (Optional[Dict[str, Any]]): Arguments passed to the workflow.
+            Defaults to None.
+    """
+
     model_config = {"arbitrary_types_allowed": True}
 
-    handler: HandlerInterface
+    handler: Optional[HandlerInterface] = None
 
-    workflow_args: Dict[str, Any]
+    workflow_args: Optional[Dict[str, Any]] = None
 
 
 class ActivitiesInterface(ABC):
@@ -25,22 +37,33 @@ class ActivitiesInterface(ABC):
 
     def __init__(self):
         """Initialize the activities interface with an empty state dictionary."""
-        self._state: Dict[str, Any] = {}
+        self._state: Dict[str, ActivitiesState] = {}
 
     # State methods
-    @abstractmethod
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
-        """Set the state for the current workflow.
+        """Initialize or update the state for the current workflow.
+
+        This method sets up the initial state for a workflow or updates an existing
+        state with new workflow arguments. The state is stored in a dictionary
+        keyed by workflow ID.
 
         Args:
-            workflow_args: Dictionary containing workflow arguments.
+            workflow_args (Dict[str, Any]): Arguments for the workflow, containing
+                configuration and runtime parameters.
 
-        Raises:
-            NotImplementedError: When not implemented by subclass.
+        Example:
+            >>> await activity._set_state({
+            ...     "workflow_id": "123",
+            ...     "metadata": {"key": "value"}
+            ... })
         """
-        raise NotImplementedError("_set_state not implemented")
+        workflow_id = get_workflow_id()
+        if not self._state.get(workflow_id):
+            self._state[workflow_id] = ActivitiesState()
 
-    async def _get_state(self, workflow_args: Dict[str, Any]) -> Any:
+        self._state[workflow_id].workflow_args = workflow_args
+
+    async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesState:
         """Retrieve the state for the current workflow.
 
         If state doesn't exist, it will be initialized using _set_state.
@@ -71,8 +94,8 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        state = await self._get_state(workflow_args)
-        handler: HandlerInterface = state.handler
+        state: ActivitiesState = await self._get_state(workflow_args)
+        handler = state.handler
 
         if not handler:
             raise ValueError("Preflight check handler not found")

@@ -55,7 +55,7 @@ class MinerArgs(BaseModel):
     )
 
 
-class StateModel(BaseModel):
+class SQLQueryExtractionActivitiesState(BaseModel):
     """State model for SQL query extraction activities.
 
     This class holds the state required for SQL query extraction activities,
@@ -87,7 +87,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
 
-    _state: Dict[str, StateModel] = {}
+    _state: Dict[str, SQLQueryExtractionActivitiesState] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -120,14 +120,16 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Args:
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
         """
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
-
         sql_client = self.sql_client_class()
-        await sql_client.load(credentials)
+        if "credential_guid" in workflow_args:
+            credentials = StateStore.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+            await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = StateModel(
+        self._state[get_workflow_id()] = SQLQueryExtractionActivitiesState(
             sql_client=sql_client,
             handler=handler,
             workflow_args=workflow_args,
@@ -328,7 +330,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If query parallelization fails
         """
-        state = await self._get_state(workflow_args)
+        state: SQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))

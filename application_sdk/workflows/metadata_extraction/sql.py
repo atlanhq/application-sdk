@@ -14,6 +14,7 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
+from application_sdk.common.constants import ApplicationConstants
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
@@ -39,7 +40,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         SQLMetadataExtractionActivities
     )
 
-    application_name: str = "sql-connector"
+    application_name: str = ApplicationConstants.APPLICATION_NAME.value
     batch_size: int = 100000
     max_transform_concurrency: int = 5
 

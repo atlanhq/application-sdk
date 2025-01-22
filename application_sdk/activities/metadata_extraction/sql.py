@@ -6,6 +6,7 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
+from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.utils import prepare_query
 from application_sdk.decorators import activity_pd
 from application_sdk.handlers.sql import SQLHandler
@@ -30,9 +31,9 @@ class SQLMetadataExtractionActivitiesState(ActivitiesState):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    sql_client: SQLClient
-    handler: SQLHandler
-    transformer: TransformerInterface
+    sql_client: Optional[SQLClient] = None
+    handler: Optional[SQLHandler] = None
+    transformer: Optional[TransformerInterface] = None
 
 
 class SQLMetadataExtractionActivities(ActivitiesInterface):
@@ -96,25 +97,28 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Args:
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
         """
-        credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
+        workflow_id = get_workflow_id()
+        if not self._state.get(workflow_id):
+            self._state[workflow_id] = SQLMetadataExtractionActivitiesState()
+
+        await super()._set_state(workflow_args)
 
         sql_client = self.sql_client_class()
-        await sql_client.load(credentials)
+
+        if "credential_guid" in workflow_args:
+            credentials = StateStore.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+            await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = SQLMetadataExtractionActivitiesState(
-            # Client
-            sql_client=sql_client,
-            # Handlers
-            handler=handler,
-            # Transformer
-            transformer=self.transformer_class(
-                connector_name=workflow_args["application_name"],
-                connector_type="sql",
-                tenant_id=workflow_args["tenant_id"],
-            ),
-            workflow_args=workflow_args,
+        self._state[workflow_id].sql_client = sql_client
+        self._state[workflow_id].handler = handler
+        self._state[workflow_id].transformer = self.transformer_class(
+            connector_name=ApplicationConstants.APPLICATION_NAME.value,
+            connector_type="sql",
+            tenant_id=ApplicationConstants.TENANT_ID.value,
         )
 
     async def _clean_state(self):
@@ -150,7 +154,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Raises:
             ValueError: If the transformer is not properly set.
         """
-        state = await self._get_state(workflow_args)
+        state: SQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
 
         connection_name = workflow_args.get("connection", {}).get(
             "connection_name", None

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import time
 from typing import Any, Callable, Dict, Sequence
 
 from temporalio import workflow
@@ -35,7 +34,7 @@ class HelloWorldActivities(ActivitiesInterface):
         return
 
 
-async def application_hello_world() -> Dict[str, Any]:
+async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
     print("Starting application_hello_world")
 
     temporal_client = TemporalClient(
@@ -51,16 +50,13 @@ async def application_hello_world() -> Dict[str, Any]:
         temporal_activities=HelloWorldWorkflow.get_activities(activities),
     )
 
-    # Start the worker in a separate thread
-    await worker.start(daemon=True)
-
-    # wait for the worker to start
-    time.sleep(3)
-
     workflow_response = await temporal_client.start_workflow({}, HelloWorldWorkflow)
+
+    # Start the worker in a separate thread
+    await worker.start(daemon=daemon)
+
     return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(application_hello_world())
-    time.sleep(1000000)
+    asyncio.run(application_hello_world(daemon=False))

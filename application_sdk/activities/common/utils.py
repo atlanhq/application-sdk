@@ -27,7 +27,11 @@ def get_workflow_id() -> str:
         RuntimeError: If called outside of an activity context.
 
     """
-    return activity.info().workflow_id
+    try:
+        return activity.info().workflow_id
+    except Exception as e:
+        logger.error("Failed to get workflow id", exc_info=e)
+        raise Exception("Failed to get workflow id")
 
 
 def auto_heartbeater(fn: F) -> F:
