@@ -19,9 +19,9 @@ from application_sdk.transformers.atlas import AtlasTransformer
 class SQLMetadataExtractionActivitiesState(ActivitiesState):
     model_config = {"arbitrary_types_allowed": True}
 
-    sql_client: SQLClient
-    handler: SQLHandler
-    transformer: TransformerInterface
+    sql_client: Optional[SQLClient] = None
+    handler: Optional[SQLHandler] = None
+    transformer: Optional[TransformerInterface] = None
 
 
 class SQLMetadataExtractionActivities(ActivitiesInterface):
@@ -49,10 +49,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         super().__init__()
 
     # State methods
-    async def _get_state(self, workflow_args: Dict[str, Any]):
+    async def _get_state(
+        self, workflow_args: Dict[str, Any]
+    ) -> SQLMetadataExtractionActivitiesState:
         return await super()._get_state(workflow_args)
 
     async def _set_state(self, workflow_args: Dict[str, Any]):
+        if not self._state.get(get_workflow_id()):
+            self._state[get_workflow_id()] = SQLMetadataExtractionActivitiesState()
+
+        await super()._set_state(workflow_args)
+
         credentials = StateStore.extract_credentials(workflow_args["credential_guid"])
 
         sql_client = self.sql_client_class()
@@ -60,18 +67,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = SQLMetadataExtractionActivitiesState(
-            # Client
-            sql_client=sql_client,
-            # Handlers
-            handler=handler,
-            # Transformer
-            transformer=self.transformer_class(
-                connector_name=workflow_args["application_name"],
-                connector_type="sql",
-                tenant_id=workflow_args["tenant_id"],
-            ),
-            workflow_args=workflow_args,
+        self._state[get_workflow_id()].sql_client = sql_client
+        self._state[get_workflow_id()].handler = handler
+        self._state[get_workflow_id()].transformer = self.transformer_class(
+            connector_name=workflow_args["application_name"],
+            connector_type="sql",
+            tenant_id=workflow_args["tenant_id"],
         )
 
     async def _clean_state(self):

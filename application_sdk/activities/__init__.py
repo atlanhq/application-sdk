@@ -1,5 +1,5 @@
-from abc import ABC, abstractmethod
-from typing import Any, Dict
+from abc import ABC
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 from temporalio import activity
@@ -11,9 +11,9 @@ from application_sdk.handlers import HandlerInterface
 class ActivitiesState(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
-    handler: HandlerInterface
+    handler: Optional[HandlerInterface] = None
 
-    workflow_args: Dict[str, Any]
+    workflow_args: Optional[Dict[str, Any]] = None
 
 
 class ActivitiesInterface(ABC):
@@ -25,22 +25,16 @@ class ActivitiesInterface(ABC):
 
     def __init__(self):
         """Initialize the activities interface with an empty state dictionary."""
-        self._state: Dict[str, Any] = {}
+        self._state: Dict[str, ActivitiesState] = {}
 
     # State methods
-    @abstractmethod
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
-        """Set the state for the current workflow.
+        if not self._state.get(get_workflow_id()):
+            self._state[get_workflow_id()] = ActivitiesState()
 
-        Args:
-            workflow_args: Dictionary containing workflow arguments.
+        self._state[get_workflow_id()].workflow_args = workflow_args
 
-        Raises:
-            NotImplementedError: When not implemented by subclass.
-        """
-        raise NotImplementedError("_set_state not implemented")
-
-    async def _get_state(self, workflow_args: Dict[str, Any]) -> Any:
+    async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesState:
         """Retrieve the state for the current workflow.
 
         If state doesn't exist, it will be initialized using _set_state.

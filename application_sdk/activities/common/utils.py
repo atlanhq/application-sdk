@@ -27,7 +27,11 @@ source:
 
 
 def get_workflow_id() -> str:
-    return activity.info().workflow_id
+    try:
+        return activity.info().workflow_id
+    except Exception as e:
+        logger.error("Failed to get workflow id", exc_info=e)
+        return "unknown"
 
 
 def auto_heartbeater(fn: F) -> F:
