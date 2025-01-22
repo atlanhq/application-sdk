@@ -152,7 +152,7 @@ class AtlanEvent(BaseModel):
 class EventStore:
     """Event store for publishing application events.
 
-    This class provides functionality to publish events to a Dapr pub/sub system.
+    This class provides functionality to publish events to a pub/sub system.
 
     Attributes:
         EVENT_STORE_NAME (str): Name of the event store binding.
