@@ -148,9 +148,9 @@ async def run_process(
     inner_kwargs: Dict[str, Any],
     kwargs: Dict[str, Any],
 ):
-    """Process input data through a workflow function.
+    """Process input data through a function.
 
-    This method handles the execution of a workflow function with input data processing.
+    This method handles the execution of a function with input data processing.
     It supports both batch and non-batch processing modes, depending on the presence
     and configuration of batch_input.
 
