@@ -394,7 +394,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def transform_data(
         self, batch_input: Any, transformed_output: JsonOutput, **kwargs: Any
-    ) -> Dict[str, Any]:
+    ):
         """Transforms raw data into the required format.
 
         Args:
