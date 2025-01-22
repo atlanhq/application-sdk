@@ -11,7 +11,7 @@ start-temporal-dev:
 
 # Run Dapr locally
 start-dapr:
-	dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path ../components
+	dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components
 
 # Start all services in detached mode
 start-all:
