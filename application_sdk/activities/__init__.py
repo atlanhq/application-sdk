@@ -9,6 +9,18 @@ from application_sdk.handlers import HandlerInterface
 
 
 class ActivitiesState(BaseModel):
+    """Base state model for workflow activities.
+
+    This class provides the base state structure for workflow activities,
+    including handler configuration and workflow arguments.
+
+    Attributes:
+        handler (Optional[HandlerInterface]): Handler instance for activity-specific
+            operations. Defaults to None.
+        workflow_args (Optional[Dict[str, Any]]): Arguments passed to the workflow.
+            Defaults to None.
+    """
+
     model_config = {"arbitrary_types_allowed": True}
 
     handler: Optional[HandlerInterface] = None
@@ -29,6 +41,22 @@ class ActivitiesInterface(ABC):
 
     # State methods
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
+        """Initialize or update the state for the current workflow.
+
+        This method sets up the initial state for a workflow or updates an existing
+        state with new workflow arguments. The state is stored in a dictionary
+        keyed by workflow ID.
+
+        Args:
+            workflow_args (Dict[str, Any]): Arguments for the workflow, containing
+                configuration and runtime parameters.
+
+        Example:
+            >>> await activity._set_state({
+            ...     "workflow_id": "123",
+            ...     "metadata": {"key": "value"}
+            ... })
+        """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
             self._state[workflow_id] = ActivitiesState()
