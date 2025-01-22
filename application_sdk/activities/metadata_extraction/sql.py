@@ -97,6 +97,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         """
         state = await self._get_state(workflow_args)
 
+        connection_name = workflow_args.get("connection", {}).get(
+            "connection_name", None
+        )
+        connection_qualified_name = workflow_args.get("connection", {}).get(
+            "connection_qualified_name", None
+        )
+
         transformed_metadata_list = []
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
@@ -112,6 +119,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                         row,
                         workflow_id=workflow_id,
                         workflow_run_id=workflow_run_id,
+                        connection_name=connection_name,
+                        connection_qualified_name=connection_qualified_name,
                     )
                 )
                 if transformed_metadata is not None:
