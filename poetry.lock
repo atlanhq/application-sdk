@@ -5043,9 +5043,9 @@ type = ["pytest-mypy"]
 daft = ["getdaft"]
 iceberg = ["pyiceberg"]
 scale-data-generator = ["duckdb", "duckdb-engine", "faker", "numpy", "pandas", "pyarrow", "pyyaml"]
-workflows = ["dapr", "temporalio"]
+workflows = ["dapr", "pandas", "temporalio"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "3fdec21dc8c098739ffaec80752940ca8a5e40a0cf2beea05ae0e29d92868c52"
+content-hash = "39ffdc41f8345c83fff980fa4f029674b143bc984f23173d9105c4891f95d249"
