@@ -1,5 +1,7 @@
 import logging
+import os
 import uuid
+from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -20,7 +22,6 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients import ClientInterface
-from application_sdk.clients.constants import TemporalConstants
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
@@ -34,6 +35,13 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+class TemporalConstants(Enum):
+    HOST = os.getenv("ATLAN_TEMPORAL_HOST", "localhost")
+    PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
+    NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE", "default")
+    APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):

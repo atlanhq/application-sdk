@@ -32,10 +32,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Build Docker image
-      - name: Build Docker Image
-        run: docker build -t application-sdk-image -f ./Dockerfile .
-
       - name: Set up Python 3.11
         id: setup-python
         uses: actions/setup-python@v1
