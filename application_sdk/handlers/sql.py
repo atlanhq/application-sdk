@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -11,9 +12,19 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.common.utils import prepare_query
 from application_sdk.decorators import activity_pd
 from application_sdk.handlers import HandlerInterface
-from application_sdk.handlers.common.constants import SQLConstants
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+class SQLConstants(Enum):
+    """
+    Constants for SQL handler
+    """
+
+    DATABASE_ALIAS_KEY = "catalog_name"
+    SCHEMA_ALIAS_KEY = "schema_name"
+    DATABASE_RESULT_KEY = "TABLE_CATALOG"
+    SCHEMA_RESULT_KEY = "TABLE_SCHEMA"
 
 
 class SQLHandler(HandlerInterface):
