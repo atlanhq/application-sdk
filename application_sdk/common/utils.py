@@ -28,7 +28,7 @@ def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
         # using "or" instead of default correct defaults are set in case of empty string
         include_filter = metadata.get("include_filter") or "{}"
         exclude_filter = metadata.get("exclude_filter") or "{}"
-        temp_table_regex = metadata.get("temp_table_regex") or ""
+        temp_table_regex = metadata.get("temp_table_regex") or "^$"
 
         normalized_include_regex, normalized_exclude_regex = prepare_filters(
             include_filter, exclude_filter
