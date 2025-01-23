@@ -376,7 +376,11 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         batch_input: Optional[Any] = None,
         **kwargs: Any,
     ) -> None:
-        """Writes raw type metadata to output.
+        """Write raw metadata to the specified output destination.
+
+        This activity writes the metadata of raw entities to the configured output path.
+        It is typically used to store raw data fetched from the source database before
+        any transformations are applied.
 
         Args:
             metadata_output (JsonOutput): Output handler for metadata.
@@ -413,14 +417,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        typename = kwargs.get("typename")
-        workflow_id = kwargs.get("workflow_id")
-        workflow_run_id = kwargs.get("workflow_run_id")
+
         transformed_chunk = await self._transform_batch(
             batch_input,
-            typename,
-            workflow_id,
-            workflow_run_id,
+            kwargs.get("typename"),
+            kwargs.get("workflow_id"),
+            kwargs.get("workflow_run_id"),
             kwargs,
         )
         await transformed_output.write_df(transformed_chunk)
