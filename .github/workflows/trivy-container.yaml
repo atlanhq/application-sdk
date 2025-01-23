@@ -4,16 +4,10 @@ name: Atlan Application Trivy container scan
 
 on:
   workflow_call:
-  push:
-    branches:
-      - main
-      - develop
-  pull_request:
-    branches:
-      - main
-      - develop
-  schedule:
-    - cron: '35 21 * * 3'
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+
 
 permissions:
   contents: read
