@@ -8,7 +8,7 @@ import pandas as pd
 from pydantic import BaseModel, Field
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
@@ -55,7 +55,7 @@ class MinerArgs(BaseModel):
     )
 
 
-class SQLQueryExtractionActivitiesState(BaseModel):
+class SQLQueryExtractionActivitiesState(ActivitiesState):
     """State model for SQL query extraction activities.
 
     This class holds the state required for SQL query extraction activities,
@@ -66,8 +66,6 @@ class SQLQueryExtractionActivitiesState(BaseModel):
         handler (SQLHandler): Handler for SQL-specific operations.
         workflow_args (Dict[str, Any]): Arguments passed to the workflow.
     """
-
-    model_config = {"arbitrary_types_allowed": True}
 
     sql_client: SQLClient
     handler: SQLHandler

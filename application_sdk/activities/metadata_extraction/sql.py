@@ -29,8 +29,6 @@ class SQLMetadataExtractionActivitiesState(ActivitiesState):
         transformer (TransformerInterface): Transformer for metadata conversion.
     """
 
-    model_config = {"arbitrary_types_allowed": True}
-
     sql_client: Optional[SQLClient] = None
     handler: Optional[SQLHandler] = None
     transformer: Optional[TransformerInterface] = None
@@ -130,9 +128,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         This method ensures proper cleanup of resources, particularly closing
         the SQL client connection.
         """
-        workflow_id = get_workflow_id()
-        if workflow_id in self._state:
-            await self._state[workflow_id].sql_client.close()
+        try:
+            workflow_id = get_workflow_id()
+            if workflow_id in self._state:
+                await self._state[workflow_id].sql_client.close()
+        except Exception as e:
+            activity.logger.warning("Failed to close SQL client", exc_info=e)
 
         await super()._clean_state()
 
@@ -217,7 +218,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     async def fetch_databases(
         self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
     ):
-        """Fetch and process databases from the database.
+        """Fetch databases from the source database.
 
         Args:
             batch_input: DataFrame containing the raw database data.
@@ -252,7 +253,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     async def fetch_schemas(
         self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
     ):
-        """Fetch and process schemas.
+        """Fetch schemas from the source database.
 
         Args:
             batch_input: DataFrame containing the raw schema data.
@@ -287,7 +288,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     async def fetch_tables(
         self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
     ):
-        """Fetch and process tables.
+        """Fetch tables from the source database.
 
         Args:
             batch_input: DataFrame containing the raw table data.
@@ -322,7 +323,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     async def fetch_columns(
         self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
     ):
-        """Fetch and process columns.
+        """Fetch columns from the source database.
 
         Args:
             batch_input: DataFrame containing the raw column data.

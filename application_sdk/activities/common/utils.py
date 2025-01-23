@@ -85,7 +85,7 @@ def auto_heartbeater(fn: F) -> F:
 
         # Heartbeat thrice as often as the timeout
         heartbeat_task = asyncio.create_task(
-            heartbeat_every(heartbeat_timeout.total_seconds() / 3)
+            send_periodic_heartbeat(heartbeat_timeout.total_seconds() / 3)
         )
         try:
             return await fn(*args, **kwargs)
@@ -101,7 +101,7 @@ def auto_heartbeater(fn: F) -> F:
     return cast(F, wrapper)
 
 
-async def heartbeat_every(delay: float, *details: Any) -> None:
+async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
     """Sends heartbeat signals at regular intervals until the task is cancelled.
 
     This function runs in an infinite loop, sleeping for the specified delay between
@@ -111,7 +111,7 @@ async def heartbeat_every(delay: float, *details: Any) -> None:
     Example:
         >>> # Heartbeat every 30 seconds with a status message
         >>> heartbeat_task = asyncio.create_task(
-        ...     heartbeat_every(30, "Processing items...")
+        ...     send_periodic_heartbeat(30, "Processing items...")
         ... )
         >>> # Cancel when done
         >>> heartbeat_task.cancel()
