@@ -7,6 +7,9 @@ name: Trivy
 
 on:
   workflow_call:
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
   push:
     branches:
       - main
