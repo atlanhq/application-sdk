@@ -4,16 +4,9 @@ name: Atlan Application Trivy container scan
 
 on:
   workflow_call:
-  push:
-    branches:
-      - main
-      - develop
-  pull_request:
-    branches:
-      - main
-      - develop
-  schedule:
-    - cron: '35 21 * * 3'
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
 
 permissions:
   contents: read
@@ -35,6 +28,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        # with:
+        #   token: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Build and push docker image
         uses: docker/build-push-action@v5
