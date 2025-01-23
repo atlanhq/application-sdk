@@ -45,6 +45,7 @@ class AtlasTransformer(TransformerInterface):
             "TABLE": Table,
             "VIEW": Table,
             "COLUMN": Column,
+            "MATERIALIZED VIEW": Table,
             "FUNCTION": Function,
             "TAG_REF": TagAttachment,
         }
