@@ -222,6 +222,4 @@ class AsyncSQLClient(SQLClient):
             logger.error(f"Error executing query: {e}", exc_info=True)
             raise
 
-        logger.info("Query execution completed.")
-
         activity.logger.info("Query execution completed")
