@@ -24,7 +24,7 @@
     "table_catalog": "TEST_DB",
     "table_schema": "TEST_SCHEMA",
     "table_type": "VIEW",
-    "VIEW_DEFINITION": "SELECT * FROM TEST_TABLE",
+    "view_definition": "SELECT * FROM TEST_TABLE",
     "column_count": 5,
     "is_secure": "YES"
   },
@@ -33,7 +33,7 @@
     "table_catalog": "TEST_DB",
     "table_schema": "TEST_SCHEMA",
     "table_type": "MATERIALIZED VIEW",
-    "VIEW_DEFINITION": "SELECT sum(amount) FROM transactions",
+    "view_definition": "SELECT sum(amount) FROM transactions",
     "column_count": 3,
     "row_count": 100,
     "size_bytes": 512,
