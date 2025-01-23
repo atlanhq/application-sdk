@@ -112,8 +112,8 @@ class PostgresDatabase(Database):
 
 
 class CustomTransformer(AtlasTransformer):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
+        super().__init__(connector_name, tenant_id, **kwargs)
 
         self.entity_class_definitions["DATABASE"] = PostgresDatabase
 
