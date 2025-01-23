@@ -7,6 +7,16 @@ on:
     secrets:
       ORG_PAT_GITHUB:
         required: true
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+  schedule:
+    - cron: '35 21 * * 3'
 
 permissions:
   contents: read
