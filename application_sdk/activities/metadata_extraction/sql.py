@@ -66,13 +66,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     def __init__(
         self,
-        sql_client_class: Type[SQLClient] = SQLClient,
-        handler_class: Type[SQLHandler] = SQLHandler,
-        transformer_class: Type[TransformerInterface] = AtlasTransformer,
+        sql_client_class: Optional[Type[SQLClient]] = None,
+        handler_class: Optional[Type[SQLHandler]] = None,
+        transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
-        self.sql_client_class = sql_client_class
-        self.handler_class = handler_class
-        self.transformer_class = transformer_class
+        if sql_client_class:
+            self.sql_client_class = sql_client_class
+        if handler_class:
+            self.handler_class = handler_class
+        if transformer_class:
+            self.transformer_class = transformer_class
 
         super().__init__()
 
