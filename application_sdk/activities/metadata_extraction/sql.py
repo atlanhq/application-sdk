@@ -7,7 +7,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.decorators import activity_pd
+from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -202,7 +202,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
+    @transform(
         batch_input=SQLQueryInput(query="fetch_database_sql"),
         raw_output=JsonOutput(output_suffix="/raw/database"),
     )
@@ -227,7 +227,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
+    @transform(
         batch_input=SQLQueryInput(query="fetch_schema_sql"),
         raw_output=JsonOutput(output_suffix="/raw/schema"),
     )
@@ -252,7 +252,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
+    @transform(
         batch_input=SQLQueryInput(query="fetch_table_sql"),
         raw_output=JsonOutput(output_suffix="/raw/table"),
     )
@@ -277,7 +277,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
+    @transform(
         batch_input=SQLQueryInput(query="fetch_column_sql"),
         raw_output=JsonOutput(output_suffix="/raw/column"),
     )
@@ -302,7 +302,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(metadata_output=JsonOutput(output_suffix="/transformed"))
+    @transform(metadata_output=JsonOutput(output_suffix="/transformed"))
     async def write_type_metadata(
         self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
     ):
@@ -317,7 +317,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(metadata_output=JsonOutput(output_suffix="/raw"))
+    @transform(metadata_output=JsonOutput(output_suffix="/raw"))
     async def write_raw_type_metadata(
         self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
     ):
@@ -336,8 +336,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        raw_input=JsonInput(path_suffix="/raw/"),
+    @transform(
+        raw_input=JsonInput(path="/raw/"),
         transformed_output=JsonOutput(output_suffix="/transformed/"),
     )
     async def transform_data(

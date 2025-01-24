@@ -11,7 +11,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.activities.common.models import MetadataModel
+from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
@@ -96,7 +96,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
         )
-        raw_stat = MetadataModel.model_validate(raw_stat)
+        raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
 
         if raw_stat is None or raw_stat.chunk_count == 0:
@@ -144,7 +144,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         total_record_count = 0
         chunk_count = 0
         for record_count in record_counts:
-            metadata_model = MetadataModel.model_validate(record_count)
+            metadata_model = ActivityStatistics.model_validate(record_count)
             total_record_count += metadata_model.total_record_count
             chunk_count += metadata_model.chunk_count
 

@@ -6,7 +6,7 @@ import daft
 import sqlalchemy
 from sqlalchemy.sql import text
 
-from application_sdk.decorators import activity_daft
+from application_sdk.decorators import transform_daft
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
@@ -53,7 +53,7 @@ class TestDaftDecorators:
         """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, state: SQLQueryInput(engine, "SELECT 1 as value")
         )
         async def func(self, batch_input: daft.DataFrame, **kwargs):
@@ -81,7 +81,7 @@ class TestDaftDecorators:
             )
             conn.commit()
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, state: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=None
             )
@@ -112,7 +112,7 @@ class TestDaftDecorators:
 
         expected_row_count = [3, 3, 3, 1]
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, state: SQLQueryInput(
                 engine, "SELECT * FROM numbers", chunk_size=3
             )
@@ -142,7 +142,7 @@ class TestDaftDecorators:
             )
             conn.commit()
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, state: SQLQueryInput(
                 sqlite_db_url, "SELECT * FROM numbers", chunk_size=None
             )
@@ -159,7 +159,7 @@ class TestDaftDecorators:
         with open(input_file_path, "w") as f:
             f.write('{"value":1}\n{"value":2}\n')
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, arg, **kwargs: JsonInput(
                 path="/tmp/tests/test_daft_decorator/raw/",
                 file_suffixes=["schema/1.json"],

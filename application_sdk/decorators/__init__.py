@@ -59,25 +59,31 @@ async def prepare_fn_kwargs(
         class_args: Dict[str, Any] = {}
         class_args["state"] = state
         class_args["parent_class"] = self
+        class_args.update(kwarg.__dict__)
         class_args.update(fn_args[1])
-        kwarg.re_init(**class_args)
-        if isinstance(kwarg, Input) or issubclass(kwarg.__class__, Input):
+        class_instance = kwarg.re_init(**class_args)
+        if isinstance(class_instance, Input) or issubclass(
+            class_instance.__class__, Input
+        ):
             # In case of Input classes, we'll return the dataframe from the get_dataframe method
             # we'll decide whether to read the data in chunks or not based on the chunk_size attribute
             # If chunk_size is None, we'll read the data in one go
-            if not hasattr(kwarg, "chunk_size") or not kwarg.chunk_size:
+            if (
+                not hasattr(class_instance, "chunk_size")
+                or not class_instance.chunk_size
+            ):
                 fn_kwargs[name] = await _get_dataframe(
-                    input_obj=kwarg, get_dataframe_fn=get_dataframe_fn
+                    input_obj=class_instance, get_dataframe_fn=get_dataframe_fn
                 )
             else:
                 # if chunk_size is set, we'll get the data in chunks and write it to the outputs provided
                 fn_kwargs[name] = await _get_dataframe(
-                    input_obj=kwarg, get_dataframe_fn=get_batched_dataframe_fn
+                    input_obj=class_instance, get_dataframe_fn=get_batched_dataframe_fn
                 )
 
         else:
             # In case of output classes, we'll return the output class itself
-            fn_kwargs[name] = kwarg
+            fn_kwargs[name] = class_instance
     fn_kwargs.update(fn_args[1])
     return fn_kwargs
 
@@ -117,7 +123,6 @@ async def run_process(
         Otherwise, all data will be processed in a single operation.
     """
     state: Optional[ActivitiesState] = None
-    # TODO: Add checks in case of not self i.e decorator not called in a class method
     fn_self = fn_args[0]
     if hasattr(fn_self, "_get_state"):
         state = await fn_self._get_state(fn_args[1])
@@ -136,7 +141,7 @@ async def run_process(
     return await fn(fn_self, **fn_kwargs)
 
 
-def activity_pd(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
+def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
     """
     Decorator to be used for activity functions that read data from a source and write to a sink
     It uses pandas dataframes as input and output
@@ -160,7 +165,7 @@ def activity_pd(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
     return wrapper
 
 
-def activity_daft(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
+def transform_daft(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
     """
     Decorator to be used for activity functions that read data from a source and write to a sink
     It uses daft dataframes as input and output

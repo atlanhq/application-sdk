@@ -1,7 +1,7 @@
 import asyncio
 import concurrent
 import logging
-from typing import Any, Iterator, Optional, Union
+from typing import Any, Dict, Iterator, Optional, Union
 
 import daft
 import pandas as pd
@@ -9,7 +9,9 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm.session import Session
 
+from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
@@ -33,14 +35,14 @@ class SQLQueryInput(Input):
     query: str
     engine: Optional[Union[Engine, str]]
     chunk_size: Optional[int]
-    state: Any
+    state: ActivitiesState
 
     def __init__(
         self,
         query: str,
         engine: Optional[Union[Engine, str]] = None,
         chunk_size: Optional[int] = 100000,
-        **kwargs: Any,
+        **kwargs: Dict[str, Any],
     ):
         """Initialize the async SQL query input handler.
 
@@ -53,21 +55,37 @@ class SQLQueryInput(Input):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
-
-    def re_init(self, state: Any, parent_class: Any, **kwargs: Any):
-        if state:
-            self.engine = state.sql_client.engine
-        else:
-            self.engine = parent_class.sql_client.engine
-        if isinstance(self.engine, AsyncEngine):
+        if self.engine and isinstance(self.engine, AsyncEngine):
             self.async_session = sessionmaker(
                 self.engine, expire_on_commit=False, class_=AsyncSession
             )
 
-        if hasattr(parent_class, self.query):
-            self.query = prepare_query(getattr(parent_class, self.query), kwargs)
+    @classmethod
+    def re_init(
+        cls,
+        query: str,
+        state: ActivitiesState,
+        parent_class: Any,
+        **kwargs: Dict[str, Any],
+    ):
+        """Re-initialize the input class with given keyword arguments.
 
-    def _read_sql_query(self, session):
+        Args:
+            query (str): The SQL query attribute to fetch the query from parent class.
+            state (ActivitiesState): State object for the activity.
+            parent_class (Any): Parent class object.
+            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
+        """
+        engine = state.sql_client.engine if state else parent_class.sql_client.engine
+        if hasattr(parent_class, query):
+            query = prepare_query(getattr(parent_class, query), kwargs)
+        kwargs["engine"] = engine
+        kwargs["query"] = query
+        return cls(**kwargs)
+
+    def _read_sql_query(
+        self, session: Session
+    ) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
         """Execute SQL query using the provided session.
 
         Args:
@@ -80,7 +98,7 @@ class SQLQueryInput(Input):
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    def _execute_query(self):
+    def _execute_query(self) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
         with self.engine.connect() as conn:
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 

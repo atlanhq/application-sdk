@@ -7,7 +7,7 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
-from application_sdk.activities.common.models import MetadataModel
+from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.outputs import Output, is_empty_dataframe
@@ -97,30 +97,46 @@ class JsonOutput(Output):
         self.path_gen = path_gen
         self.state = state
 
+    @classmethod
     def re_init(
-        self,
+        cls,
         output_path: str,
         typename: Optional[str] = None,
         chunk_count: int = 0,
         total_record_count: int = 0,
         chunk_start: Optional[int] = None,
+        output_suffix: str = None,
         **kwargs: Dict[str, Any],
     ):
-        self.total_record_count = 0
-        self.chunk_count = 0
-        self.chunk_start = None
-        self.output_path = output_path
-        self.output_path = f"{self.output_path}{self.output_suffix}"
+        """Re-initialize the output class with given keyword arguments.
+
+        Args:
+            output_path (str): Path where JSON files will be written.
+            typename (str, optional): Type name of the entity e.g database, schema, table.
+                Defaults to None.
+            chunk_count (int, optional): Initial chunk count.
+                Defaults to 0.
+            total_record_count (int, optional): Initial total record count.
+                Defaults to 0.
+            chunk_start (Optional[int], optional): Starting index for chunk numbering.
+                Defaults to None.
+            output_suffix (str, optional): Suffix for output files.
+                Defaults to None.
+            kwargs (Dict[str, Any]): Additional keyword arguments.
+        """
+        output_path = f"{output_path}{output_suffix}"
         if typename:
-            self.typename = typename
-            self.output_path = f"{self.output_path}/{self.typename}"
-        if chunk_count:
-            self.chunk_count = chunk_count
-        if total_record_count:
-            self.total_record_count = total_record_count
-        if chunk_start is not None:
-            self.chunk_start = chunk_start
-        os.makedirs(f"{self.output_path}", exist_ok=True)
+            output_path = f"{output_path}/{typename}"
+        os.makedirs(f"{output_path}", exist_ok=True)
+        return cls(
+            output_suffix=output_suffix,
+            output_path=output_path,
+            typename=typename,
+            chunk_count=chunk_count,
+            total_record_count=total_record_count,
+            chunk_start=chunk_start,
+            **kwargs,
+        )
 
     async def write_batched_df(self, batched_df: Iterator[pd.DataFrame]):
         """Write a batched pandas DataFrame to JSON files.
@@ -241,15 +257,15 @@ class JsonOutput(Output):
         self.buffer.clear()
         self.current_buffer_size = 0
 
-    def get_metadata(self, typename: Optional[str] = None) -> MetadataModel:
+    def get_metadata(self, typename: Optional[str] = None) -> ActivityStatistics:
         """Get metadata about the output.
 
-        This method returns a MetadataModel object with total record count and chunk count.
+        This method returns a ActivityStatistics object with total record count and chunk count.
 
         Args:
             typename (str): Type name of the entity e.g database, schema, table.
         """
-        return MetadataModel(
+        return ActivityStatistics(
             total_record_count=self.total_record_count,
             chunk_count=self.chunk_count,
             typename=typename,

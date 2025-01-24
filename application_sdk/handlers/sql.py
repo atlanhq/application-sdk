@@ -9,7 +9,7 @@ import pandas as pd
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.decorators import activity_pd
+from application_sdk.decorators import transform
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
@@ -54,7 +54,7 @@ class SQLHandler(HandlerInterface):
         """
         await self.sql_client.load(credentials)
 
-    @activity_pd(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
+    @transform(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
     async def prepare_metadata(
         self,
         sql_input: pd.DataFrame,
@@ -77,7 +77,7 @@ class SQLHandler(HandlerInterface):
             raise exc
         return result
 
-    @activity_pd(
+    @transform(
         sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
     )
     async def test_auth(
@@ -276,7 +276,7 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @activity_pd(sql_input=SQLQueryInput(query="tables_check_sql", chunk_size=None))
+    @transform(sql_input=SQLQueryInput(query="tables_check_sql", chunk_size=None))
     async def tables_check(
         self, sql_input: pd.DataFrame, **kwargs: Dict[str, Any]
     ) -> Dict[str, Any]:

@@ -48,6 +48,15 @@ class Output(ABC):
     chunk_count: int
     state: Optional[ActivitiesState] = None
 
+    @classmethod
+    async def re_init(cls, **kwargs: Dict[str, Any]):
+        """Re-initialize the output class with given keyword arguments.
+
+        Args:
+            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
+        """
+        return cls(**kwargs)
+
     @abstractmethod
     async def write_batched_df(self, df: Iterator[pd.DataFrame]):
         """Write a batched pandas DataFrame to the output destination.
@@ -82,9 +91,6 @@ class Output(ABC):
         Args:
             df (daft.DataFrame): The DataFrame to write.
         """
-        pass
-
-    async def re_init(self, **kwargs: Dict[str, Any]):
         pass
 
     def get_metadata(self) -> Any:

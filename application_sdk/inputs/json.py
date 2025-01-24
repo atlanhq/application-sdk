@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional
 
 import daft
 import pandas as pd
@@ -20,19 +20,34 @@ class JsonInput(Input):
 
     def __init__(
         self,
-        path_suffix: Optional[str],
         path: Optional[str] = None,
         file_suffixes: Optional[List[str]] = None,
         chunk_size: Optional[int] = 100000,
+        **kwargs: Dict[str, Any],
     ):
         self.path = path
         self.chunk_size = chunk_size
         self.file_suffixes = file_suffixes
-        self.path_suffix = path_suffix
 
-    def re_init(self, output_path, batch, **kwargs):
-        self.path = f"{output_path}{self.path_suffix}"
-        self.file_suffixes = batch
+    @classmethod
+    def re_init(
+        cls,
+        output_path: str,
+        path: str,
+        batch: Optional[List[str]],
+        **kwargs: Dict[str, Any],
+    ):
+        """Re-initialize the input class with given keyword arguments.
+
+        Args:
+            output_path (str): The base path to the output directory.
+            path (str): The additional path to the output directory.
+            batch (Optional[List[str]]): The list of file suffixes.
+            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
+        """
+        kwargs["path"] = f"{output_path}{path}"
+        kwargs["file_suffixes"] = batch
+        return cls(**kwargs)
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """

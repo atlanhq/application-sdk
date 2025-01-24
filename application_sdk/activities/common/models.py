@@ -3,8 +3,8 @@ from typing import Optional
 from pydantic import BaseModel
 
 
-class MetadataModel(BaseModel):
-    """Model to store metadata for activities."""
+class ActivityStatistics(BaseModel):
+    """Activity Statistics model to store the statistics returned by the activity execution."""
 
     total_record_count: int = 0
     chunk_count: int = 0

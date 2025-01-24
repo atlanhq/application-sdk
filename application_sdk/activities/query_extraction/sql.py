@@ -12,7 +12,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.decorators import activity_pd
+from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.statestore import StateStore
@@ -137,7 +137,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
+    @transform(
         batch_input=lambda self,
         workflow_args,
         state,

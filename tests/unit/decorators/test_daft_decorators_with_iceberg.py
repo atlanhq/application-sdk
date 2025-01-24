@@ -7,7 +7,7 @@ import sqlalchemy
 from pyiceberg.catalog.sql import SqlCatalog
 from sqlalchemy.sql import text
 
-from application_sdk.decorators import activity_daft
+from application_sdk.decorators import transform_daft
 from application_sdk.inputs.iceberg import IcebergInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.iceberg import IcebergOutput
@@ -91,7 +91,7 @@ class TestDaftDecoratorsIceberg:
         Basic test to read the SQL data
         """
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, arg, **kwargs: SQLQueryInput(
                 self.engine, "SELECT 1 as value"
             ),
@@ -123,7 +123,7 @@ class TestDaftDecoratorsIceberg:
 
         self._create_test_clients(query=INSERT_QUERY)
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, arg, **kwargs: SQLQueryInput(
                 self.engine, "SELECT * FROM numbers", chunk_size=None
             ),
@@ -156,7 +156,7 @@ class TestDaftDecoratorsIceberg:
         self._create_test_clients(query=INSERT_QUERY)
         expected_row_count = [3, 3, 3, 1]
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, arg, **kwargs: SQLQueryInput(
                 self.engine, "SELECT * FROM numbers", chunk_size=3
             ),
@@ -184,7 +184,7 @@ class TestDaftDecoratorsIceberg:
         """
         table_two = self.catalog.load_table("default.test_table_two")
 
-        @activity_daft(
+        @transform_daft(
             batch_input=lambda self, arg, **kwargs: IcebergInput(
                 table=table_two,
                 chunk_size=None,
