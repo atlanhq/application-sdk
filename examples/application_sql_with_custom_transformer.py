@@ -48,7 +48,7 @@ from application_sdk.workflows.metadata_extraction.sql import (
     SQLMetadataExtractionWorkflow,
 )
 
-APPLICATION_NAME = "postgres"
+APPLICATION_NAME = "postgres-custom-transformer"
 DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
