@@ -6,14 +6,27 @@ in the application, including file outputs and object store interactions.
 
 import logging
 from abc import ABC, abstractmethod
+from typing import Any, Dict, Iterator, Optional, Union
 
 import daft
 import pandas as pd
 
+from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+def is_empty_dataframe(df: Union[pd.DataFrame, daft.DataFrame]) -> bool:
+    """
+    Helper method to check if the dataframe has any rows
+    """
+    if isinstance(df, pd.DataFrame):
+        return df.empty
+    if isinstance(df, daft.DataFrame):
+        return df.count_rows() == 0
+    return True
 
 
 class Output(ABC):
@@ -30,9 +43,19 @@ class Output(ABC):
     """
 
     output_path: str
-    upload_file_prefix: str
+    output_prefix: str
     total_record_count: int
     chunk_count: int
+    state: Optional[ActivitiesState] = None
+
+    @abstractmethod
+    async def write_batched_df(self, df: Iterator[pd.DataFrame]):
+        """Write a batched pandas DataFrame to the output destination.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to write.
+        """
+        pass
 
     @abstractmethod
     async def write_df(self, df: pd.DataFrame):
@@ -44,12 +67,28 @@ class Output(ABC):
         pass
 
     @abstractmethod
+    async def write_batched_daft_df(self, df: Iterator[daft.DataFrame]):
+        """Write a batched daft DataFrame to the output destination.
+
+        Args:
+            df (daft.DataFrame): The DataFrame to write.
+        """
+        pass
+
+    @abstractmethod
     async def write_daft_df(self, df: daft.DataFrame):
         """Write a daft DataFrame to the output destination.
 
         Args:
             df (daft.DataFrame): The DataFrame to write.
         """
+        pass
+
+    async def re_init(self, **kwargs: Dict[str, Any]):
+        pass
+
+    def get_metadata(self) -> Any:
+        """Get metadata about the output."""
         pass
 
     async def write_metadata(self):
@@ -75,7 +114,7 @@ class Output(ABC):
 
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(
-                self.upload_file_prefix, output_file_name
+                self.output_prefix, output_file_name
             )
         except Exception as e:
             logger.error(f"Error writing metadata: {str(e)}")

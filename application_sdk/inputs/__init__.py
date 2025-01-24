@@ -1,7 +1,6 @@
-import abc
 import logging
-from abc import abstractmethod
-from typing import Iterator
+from abc import ABC, abstractmethod
+from typing import Any, Dict, Iterator
 
 import daft
 import pandas as pd
@@ -11,7 +10,10 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-class Input(abc.ABC):
+class Input(ABC):
+    async def re_init(self, **kwargs: Dict[str, Any]):
+        pass
+
     @abstractmethod
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         raise NotImplementedError

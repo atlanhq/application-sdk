@@ -1,5 +1,5 @@
 import logging
-from typing import Union
+from typing import Any, Dict, Union
 
 import daft
 import pandas as pd
@@ -26,6 +26,7 @@ class IcebergOutput(Output):
         mode: str = "append",
         total_record_count: int = 0,
         chunk_count: int = 0,
+        **kwargs: Dict[str, Any],
     ):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
@@ -33,6 +34,19 @@ class IcebergOutput(Output):
         self.iceberg_namespace = iceberg_namespace
         self.iceberg_table = iceberg_table
         self.mode = mode
+
+    def re_init(
+        self,
+        chunk_count: int = 0,
+        total_record_count: int = 0,
+        **kwargs: Dict[str, Any],
+    ):
+        self.total_record_count = 0
+        self.chunk_count = 0
+        if chunk_count:
+            self.chunk_count = chunk_count
+        if total_record_count:
+            self.total_record_count = total_record_count
 
     async def write_df(self, df: pd.DataFrame):
         """

@@ -11,6 +11,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
+from application_sdk.activities.common.models import MetadataModel
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
@@ -95,50 +96,39 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
         )
+        raw_stat = MetadataModel.model_validate(raw_stat)
         transform_activities: List[Any] = []
 
-        if raw_stat is None or len(raw_stat) == 0:
-            # to handle the case where the fetch_fn returns None or []
+        if raw_stat is None or raw_stat.chunk_count == 0:
+            # to handle the case where the fetch_fn returns None or no chunks
             return
 
-        chunk_count = max(value.get("chunk_count", 0) for value in raw_stat)
-        if chunk_count is None:
-            raise ValueError("Invalid chunk_count")
-
-        raw_total_record_count = max(
-            value.get("total_record_count", 0) for value in raw_stat
-        )
-        if raw_total_record_count is None:
-            raise ValueError("Invalid raw_total_record_count")
-
-        if chunk_count == 0:
-            return
-
-        typename = raw_stat[0].get("typename")
-        if typename is None:
+        if raw_stat.typename is None:
             raise ValueError("Invalid typename")
 
         # Write the raw metadata
         await workflow.execute_activity_method(
             self.activities_cls.write_raw_type_metadata,
             {
-                "record_count": raw_total_record_count,
-                "chunk_count": chunk_count,
-                "typename": typename,
+                "total_record_count": raw_stat.total_record_count,
+                "chunk_count": raw_stat.chunk_count,
+                "typename": raw_stat.typename,
                 **workflow_args,
             },
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
         )
 
-        batches, chunk_starts = self.get_transform_batches(chunk_count, typename)
+        batches, chunk_starts = self.get_transform_batches(
+            raw_stat.chunk_count, raw_stat.typename
+        )
 
         for i in range(len(batches)):
             transform_activities.append(
                 workflow.execute_activity_method(
                     self.activities_cls.transform_data,
                     {
-                        "typename": typename,
+                        "typename": raw_stat.typename,
                         "batch": batches[i],
                         "chunk_start": chunk_starts[i],
                         **workflow_args,
@@ -151,25 +141,20 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         record_counts = await asyncio.gather(*transform_activities)
 
         # Calculate the parameters necessary for writing metadata
-        total_record_count = sum(
-            max(
-                record_output.get("total_record_count", 0)
-                for record_output in record_count
-            )
-            for record_count in record_counts
-        )
-        chunk_count = sum(
-            max(record_output.get("chunk_count", 0) for record_output in record_count)
-            for record_count in record_counts
-        )
+        total_record_count = 0
+        chunk_count = 0
+        for record_count in record_counts:
+            metadata_model = MetadataModel.model_validate(record_count)
+            total_record_count += metadata_model.total_record_count
+            chunk_count += metadata_model.chunk_count
 
         # Write the transformed metadata
         await workflow.execute_activity_method(
             self.activities_cls.write_type_metadata,
             {
-                "record_count": total_record_count,
+                "total_record_count": total_record_count,
                 "chunk_count": chunk_count,
-                "typename": typename,
+                "typename": raw_stat.typename,
                 **workflow_args,
             },
             retry_policy=retry_policy,

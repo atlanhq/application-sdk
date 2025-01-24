@@ -1,14 +1,16 @@
 import logging
 import os
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional
 
 import daft
 import pandas as pd
 from temporalio import activity
 
+from application_sdk.activities import ActivitiesState
+from application_sdk.activities.common.models import MetadataModel
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
-from application_sdk.outputs import Output
+from application_sdk.outputs import Output, is_empty_dataframe
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -50,14 +52,18 @@ class JsonOutput(Output):
 
     def __init__(
         self,
-        output_path: str,
-        upload_file_prefix: str,
+        output_suffix: str,
+        output_path: Optional[str] = None,
+        output_prefix: Optional[str] = None,
+        typename: Optional[str] = None,
+        state: Optional[ActivitiesState] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 1024 * 1024 * 10,
-        chunk_size: int = 100000,
+        chunk_size: int = 100,
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
+        **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
 
@@ -78,7 +84,9 @@ class JsonOutput(Output):
                 Defaults to path_gen function.
         """
         self.output_path = output_path
-        self.upload_file_prefix = upload_file_prefix
+        self.output_suffix = output_suffix
+        self.output_prefix = output_prefix
+        self.typename = typename
         self.chunk_start = chunk_start
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
@@ -87,7 +95,51 @@ class JsonOutput(Output):
         self.buffer: List[pd.DataFrame] = []
         self.current_buffer_size = 0
         self.path_gen = path_gen
-        os.makedirs(f"{output_path}", exist_ok=True)
+        self.state = state
+
+    def re_init(
+        self,
+        output_path: str,
+        typename: Optional[str] = None,
+        chunk_count: int = 0,
+        total_record_count: int = 0,
+        chunk_start: Optional[int] = None,
+        **kwargs: Dict[str, Any],
+    ):
+        self.total_record_count = 0
+        self.chunk_count = 0
+        self.chunk_start = None
+        self.output_path = output_path
+        self.output_path = f"{self.output_path}{self.output_suffix}"
+        if typename:
+            self.typename = typename
+            self.output_path = f"{self.output_path}/{self.typename}"
+        if chunk_count:
+            self.chunk_count = chunk_count
+        if total_record_count:
+            self.total_record_count = total_record_count
+        if chunk_start is not None:
+            self.chunk_start = chunk_start
+        os.makedirs(f"{self.output_path}", exist_ok=True)
+
+    async def write_batched_df(self, batched_df: Iterator[pd.DataFrame]):
+        """Write a batched pandas DataFrame to JSON files.
+
+        This method writes the DataFrame to JSON files, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
+        """
+        try:
+            for df in batched_df:
+                if not is_empty_dataframe(df):
+                    await self.write_df(df)
+        except Exception as e:
+            activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     async def write_df(self, df: pd.DataFrame):
         """Write a pandas DataFrame to JSON files.
@@ -124,6 +176,27 @@ class JsonOutput(Output):
 
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+
+    async def write_batched_daft_df(self, batched_df: Iterator[daft.DataFrame]):
+        """Write a batched daft DataFrame to JSON files.
+
+        This method writes the DataFrame to JSON files, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
+
+        Args:
+            df (daft.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
+        """
+        try:
+            for df in batched_df:
+                if not is_empty_dataframe(df):
+                    await self.write_daft_df(df)
+        except Exception as e:
+            activity.logger.error(
+                f"Error writing batched daft dataframe to json: {str(e)}"
+            )
 
     async def write_daft_df(self, df: daft.DataFrame):
         """Write a daft DataFrame to JSON files.
@@ -162,8 +235,22 @@ class JsonOutput(Output):
 
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(
-                self.upload_file_prefix, output_file_name
+                self.output_prefix, output_file_name
             )
 
         self.buffer.clear()
         self.current_buffer_size = 0
+
+    def get_metadata(self, typename: Optional[str] = None) -> MetadataModel:
+        """Get metadata about the output.
+
+        This method returns a MetadataModel object with total record count and chunk count.
+
+        Args:
+            typename (str): Type name of the entity e.g database, schema, table.
+        """
+        return MetadataModel(
+            total_record_count=self.total_record_count,
+            chunk_count=self.chunk_count,
+            typename=typename,
+        )

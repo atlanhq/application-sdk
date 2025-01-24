@@ -12,16 +12,27 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class JsonInput(Input):
-    path: str
+    path: Optional[str]
+    path_suffix: Optional[str]
     chunk_size: Optional[int]
-    file_suffixes: List[str]
+    file_suffixes: Optional[List[str]] = None
+    test: int = 0
 
     def __init__(
-        self, path: str, file_suffixes: List[str], chunk_size: Optional[int] = 100000
+        self,
+        path_suffix: Optional[str],
+        path: Optional[str] = None,
+        file_suffixes: Optional[List[str]] = None,
+        chunk_size: Optional[int] = 100000,
     ):
         self.path = path
         self.chunk_size = chunk_size
         self.file_suffixes = file_suffixes
+        self.path_suffix = path_suffix
+
+    def re_init(self, output_path, batch, **kwargs):
+        self.path = f"{output_path}{self.path_suffix}"
+        self.file_suffixes = batch
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """

@@ -1,5 +1,5 @@
 import logging
-from typing import Iterator, Optional
+from typing import Any, Dict, Iterator, Optional
 
 import daft
 import pandas as pd
@@ -22,6 +22,10 @@ class IcebergInput(Input):
     def __init__(self, table: Table, chunk_size: Optional[int] = 100000):
         self.table = table
         self.chunk_size = chunk_size
+
+    def re_init(self, table: Table, **kwargs: Dict[str, Any]):
+        if table:
+            self.table = table
 
     def get_dataframe(self) -> pd.DataFrame:
         """

@@ -9,9 +9,9 @@ import pandas as pd
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.common.utils import prepare_query
 from application_sdk.decorators import activity_pd
 from application_sdk.handlers import HandlerInterface
+from application_sdk.inputs.sql_query import SQLQueryInput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -32,7 +32,7 @@ class SQLHandler(HandlerInterface):
     Handler class for SQL workflows
     """
 
-    sql_client: SQLClient | None
+    sql_client: SQLClient
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
     # Variables for fetching metadata
@@ -54,24 +54,18 @@ class SQLHandler(HandlerInterface):
         """
         await self.sql_client.load(credentials)
 
-    @activity_pd(
-        batch_input=lambda self, args, **kwargs: self.sql_client.sql_input(
-            engine=self.sql_client.engine,
-            query=self.metadata_sql,
-            chunk_size=None,
-        )
-    )
+    @activity_pd(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
     async def prepare_metadata(
         self,
-        batch_input: pd.DataFrame,
-        **kwargs,
+        sql_input: pd.DataFrame,
+        **kwargs: Dict[str, Any],
     ) -> List[Dict[Any, Any]]:
         """
         Method to fetch and prepare the databases and schemas metadata
         """
         result: List[Dict[Any, Any]] = []
         try:
-            for row in batch_input.to_dict(orient="records"):
+            for row in sql_input.to_dict(orient="records"):
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -84,13 +78,11 @@ class SQLHandler(HandlerInterface):
         return result
 
     @activity_pd(
-        batch_input=lambda self,
-        workflow_args=None,
-        **kwargs: self.sql_client.sql_input(
-            self.sql_client.engine, self.test_authentication_sql, chunk_size=None
-        )
+        sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
     )
-    async def test_auth(self, batch_input: pd.DataFrame, **kwargs) -> bool:
+    async def test_auth(
+        self, sql_input: pd.DataFrame, **kwargs: Dict[str, Any]
+    ) -> bool:
         """
         Test the authentication credentials.
 
@@ -98,7 +90,7 @@ class SQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            batch_input.to_dict(orient="records")
+            sql_input.to_dict(orient="records")
             return True
         except Exception as exc:
             logger.error(
@@ -284,23 +276,17 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @activity_pd(
-        batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
-            engine=self.sql_client.engine,
-            query=prepare_query(
-                query=self.tables_check_sql, workflow_args=workflow_args
-            ),
-            chunk_size=None,
-        )
-    )
-    async def tables_check(self, batch_input, **kwargs) -> Dict[str, Any]:
+    @activity_pd(sql_input=SQLQueryInput(query="tables_check_sql", chunk_size=None))
+    async def tables_check(
+        self, sql_input: pd.DataFrame, **kwargs: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
         logger.info("Starting tables check")
         try:
             result = 0
-            for row in batch_input.to_dict(orient="records"):
+            for row in sql_input.to_dict(orient="records"):
                 result += row["count"]
 
             return {

@@ -1,164 +1,23 @@
 import asyncio
 import concurrent
 import logging
-from typing import Iterator, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import daft
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLQueryInput(Input):
-    """Input handler for SQL queries with pandas DataFrame support.
-
-    This class provides functionality to execute SQL queries and return results
-    as pandas DataFrames, with support for both batch and single-shot processing.
-
-    Attributes:
-        query (str): The SQL query to execute.
-        engine (Union[Engine, str]): SQLAlchemy engine or connection string.
-        chunk_size (Optional[int]): Number of rows to fetch per batch.
-    """
-
-    query: str
-    engine: Union[Engine, str]
-    chunk_size: Optional[int]
-
-    def __init__(
-        self, engine: Union[Engine, str], query: str, chunk_size: Optional[int] = 100000
-    ):
-        """Initialize the SQL query input handler.
-
-        Args:
-            engine (Union[Engine, str]): SQLAlchemy engine or connection string.
-            query (str): The SQL query to execute.
-            chunk_size (Optional[int], optional): Number of rows per batch.
-                Defaults to 100000.
-        """
-        self.query = query
-        self.engine = engine
-        self.chunk_size = chunk_size
-
-    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
-        """Get query results as batched pandas DataFrames.
-
-        Returns:
-            Iterator[pd.DataFrame]: Iterator yielding batches of query results.
-
-        Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
-        """
-        try:
-            if isinstance(self.engine, str):
-                raise ValueError("Engine should be an SQLAlchemy engine object")
-
-            def _execute_query():
-                with self.engine.connect() as conn:
-                    return pd.read_sql_query(
-                        text(self.query), conn, chunksize=self.chunk_size
-                    )
-
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_event_loop().run_in_executor(
-                    executor, _execute_query
-                )
-        except Exception as e:
-            logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
-
-    async def get_dataframe(self) -> pd.DataFrame:
-        """Get all query results as a single pandas DataFrame.
-
-        Returns:
-            pd.DataFrame: Query results as a DataFrame.
-
-        Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
-        """
-        try:
-            if isinstance(self.engine, str):
-                raise ValueError("Engine should be an SQLAlchemy engine object")
-
-            def _execute_query():
-                with self.engine.connect() as conn:
-                    return pd.read_sql_query(text(self.query), conn)
-
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_event_loop().run_in_executor(
-                    executor, _execute_query
-                )
-        except Exception as e:
-            logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-
-    async def get_daft_dataframe(self) -> daft.DataFrame:
-        """Get query results as a daft DataFrame.
-
-        This method uses ConnectorX to read data from SQL for supported connectors.
-        For unsupported connectors and direct engine usage, it falls back to SQLAlchemy.
-
-        Returns:
-            daft.DataFrame: Query results as a daft DataFrame.
-
-        Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
-
-        Note:
-            For ConnectorX supported sources, see:
-            https://sfu-db.github.io/connector-x/intro.html#sources
-        """
-        try:
-            # Daft uses ConnectorX to read data from SQL by default for supported connectors
-            # If a connection string is passed, it will use ConnectorX to read data
-            # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-            if isinstance(self.engine, str):
-                return daft.read_sql(self.query, self.engine)
-            return daft.read_sql(self.query, lambda: self.engine.connect())
-        except Exception as e:
-            logger.error(f"Error reading data(daft) from SQL: {str(e)}")
-
-    async def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
-        """Get query results as batched daft DataFrames.
-
-        This method reads data using pandas in batches since daft does not support
-        batch reading. Each pandas DataFrame is then converted to a daft DataFrame.
-
-        Returns:
-            Iterator[daft.DataFrame]: Iterator yielding batches of query results
-                as daft DataFrames.
-
-        Raises:
-            ValueError: If engine is a string instead of SQLAlchemy engine.
-            Exception: If there's an error executing the query.
-
-        Note:
-            This method uses pandas for batch reading since daft does not support
-            reading data in batches natively.
-        """
-        try:
-            if isinstance(self.engine, str):
-                raise ValueError("Engine should be an SQLAlchemy engine object")
-
-            batched_df = await self.get_batched_dataframe()
-            for df in batched_df:
-                daft_df = daft.from_pandas(df)
-                yield daft_df
-        except Exception as e:
-            logger.error(f"Error reading batched data(daft) from SQL: {str(e)}")
-
-
-class AsyncSQLQueryInput(Input):
     """Asynchronous input handler for SQL queries.
 
     This class provides asynchronous functionality to execute SQL queries and return
@@ -172,11 +31,16 @@ class AsyncSQLQueryInput(Input):
     """
 
     query: str
-    engine: Union[Engine, str]
+    engine: Optional[Union[Engine, str]]
     chunk_size: Optional[int]
+    state: Any
 
     def __init__(
-        self, engine: Union[Engine, str], query: str, chunk_size: Optional[int] = 100000
+        self,
+        query: str,
+        engine: Optional[Union[Engine, str]] = None,
+        chunk_size: Optional[int] = 100000,
+        **kwargs: Any,
     ):
         """Initialize the async SQL query input handler.
 
@@ -189,9 +53,19 @@ class AsyncSQLQueryInput(Input):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
-        self.async_session = sessionmaker(
-            self.engine, expire_on_commit=False, class_=AsyncSession
-        )
+
+    def re_init(self, state: Any, parent_class: Any, **kwargs: Any):
+        if state:
+            self.engine = state.sql_client.engine
+        else:
+            self.engine = parent_class.sql_client.engine
+        if isinstance(self.engine, AsyncEngine):
+            self.async_session = sessionmaker(
+                self.engine, expire_on_commit=False, class_=AsyncSession
+            )
+
+        if hasattr(parent_class, self.query):
+            self.query = prepare_query(getattr(parent_class, self.query), kwargs)
 
     def _read_sql_query(self, session):
         """Execute SQL query using the provided session.
@@ -205,6 +79,10 @@ class AsyncSQLQueryInput(Input):
         """
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+
+    def _execute_query(self):
+        with self.engine.connect() as conn:
+            return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
     async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """Get query results as batched pandas DataFrames asynchronously.
@@ -220,8 +98,15 @@ class AsyncSQLQueryInput(Input):
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 
-            async with self.async_session() as session:
-                return await session.run_sync(self._read_sql_query)
+            if self.async_session:
+                async with self.async_session() as session:
+                    return await session.run_sync(self._read_sql_query)
+            else:
+                # Run the blocking operation in a thread pool
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    return await asyncio.get_event_loop().run_in_executor(
+                        executor, self._execute_query
+                    )
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
@@ -239,8 +124,15 @@ class AsyncSQLQueryInput(Input):
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 
-            async with self.async_session() as session:
-                return await session.run_sync(self._read_sql_query)
+            if self.async_session:
+                async with self.async_session() as session:
+                    return await session.run_sync(self._read_sql_query)
+            else:
+                # Run the blocking operation in a thread pool
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    return await asyncio.get_event_loop().run_in_executor(
+                        executor, self._execute_query
+                    )
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
 
