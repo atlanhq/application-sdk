@@ -1,3 +1,9 @@
+"""Output module for handling data output operations.
+
+This module provides base classes and utilities for handling various types of data outputs
+in the application, including file outputs and object store interactions.
+"""
+
 import logging
 from abc import ABC, abstractmethod
 
@@ -11,6 +17,18 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class Output(ABC):
+    """Abstract base class for output handlers.
+
+    This class defines the interface for output handlers that can write data
+    to various destinations in different formats.
+
+    Attributes:
+        output_path (str): Path where the output will be written.
+        upload_file_prefix (str): Prefix for files when uploading to object store.
+        total_record_count (int): Total number of records processed.
+        chunk_count (int): Number of chunks the output was split into.
+    """
+
     output_path: str
     upload_file_prefix: str
     total_record_count: int
@@ -18,15 +36,30 @@ class Output(ABC):
 
     @abstractmethod
     async def write_df(self, df: pd.DataFrame):
+        """Write a pandas DataFrame to the output destination.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to write.
+        """
         pass
 
     @abstractmethod
     async def write_daft_df(self, df: daft.DataFrame):
+        """Write a daft DataFrame to the output destination.
+
+        Args:
+            df (daft.DataFrame): The DataFrame to write.
+        """
         pass
 
     async def write_metadata(self):
-        """
-        Method to write the metadata to a json file and push it to the object store
+        """Write metadata about the output to a JSON file.
+
+        This method writes metadata including total record count and chunk count
+        to a JSON file and uploads it to the object store.
+
+        Raises:
+            Exception: If there's an error writing or uploading the metadata.
         """
         try:
             # prepare the metadata

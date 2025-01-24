@@ -1,34 +1,24 @@
 import asyncio
-import uuid
 from typing import Any, Dict, List
 
-from application_sdk.app.rest.fastapi import FastAPIApplication
-from application_sdk.workflows.controllers import (
-    WorkflowAuthControllerInterface,
-    WorkflowMetadataControllerInterface,
-    WorkflowPreflightCheckControllerInterface,
-)
-from application_sdk.workflows.workflow import WorkflowInterface
+from application_sdk.application.fastapi import FastAPIApplication, HttpWorkflowTrigger
+from application_sdk.handlers.sql import SQLHandler
+from application_sdk.workflows import WorkflowInterface
 
 
-class WorkflowAuthController(WorkflowAuthControllerInterface):
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
+class SampleSQLHandler(SQLHandler):
+    async def prepare(self, credentials: Dict[str, Any], **kwargs) -> None:
         pass
 
-    async def test_auth(self) -> bool:
+    async def test_auth(self, **kwargs) -> bool:
         return True
 
-
-class WorkflowMetadataController(WorkflowMetadataControllerInterface):
-    async def prepare(self, credentials: Dict[str, Any]) -> None:
-        pass
-
-    async def fetch_metadata(self) -> List[Dict[str, str]]:
+    async def fetch_metadata(self, **kwargs) -> List[Dict[str, str]]:
         return [{"database": "test", "schema": "test"}]
 
-
-class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface):
-    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(
+        self, payload: Dict[str, Any], **kwargs
+    ) -> Dict[str, Any]:
         return {
             "success": True,
             "data": {
@@ -47,21 +37,23 @@ class WorkflowPreflightCheckController(WorkflowPreflightCheckControllerInterface
 
 
 class SampleWorkflow(WorkflowInterface):
-    async def start(self, workflow_args: Dict[str, Any], workflow_class: Any) -> None:
-        return {
-            "workflow_id": str(uuid.uuid4()),
-            "run_id": str(uuid.uuid4()),
-        }
-
     async def run(self, workflow_config: Dict[str, Any]) -> None:
         pass
 
 
 async def application_fastapi():
     fast_api_app = FastAPIApplication(
-        auth_controller=WorkflowAuthController(),
-        metadata_controller=WorkflowMetadataController(),
-        preflight_check_controller=WorkflowPreflightCheckController(),
+        handler=SampleSQLHandler(),
+    )
+    fast_api_app.register_workflow(
+        SampleWorkflow,
+        [
+            HttpWorkflowTrigger(
+                endpoint="/sample",
+                methods=["POST"],
+                workflow_class=SampleWorkflow,
+            )
+        ],
     )
 
     await fast_api_app.start()

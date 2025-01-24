@@ -16,7 +16,7 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 ## Running examples
 
 1. Configure poetry to use the virtual environment `poetry config virtualenvs.in-project true`
-2. Install the dependencies using `poetry install --extras "workflows dashboard"`
+2. Install the dependencies using `poetry install --extras "workflows"`
 3. Activate the virtual environment using `source .venv/bin/activate`
 4. Run `make start-all` to start the Dapr runtime and Temporal server
 5. Run the example using `python application_sql.py` or using the VSCode launch configuration provided in the next section.
