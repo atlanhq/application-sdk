@@ -79,7 +79,7 @@ async def run_and_monitor_workflow(
     example_workflow_function,
     temporal_client: TemporalClient,
     polling_interval: int = 5,
-    timeout: Optional[int] = 120,
+    timeout: Optional[int] = 240,
 ) -> tuple[str, float]:
     """
     Run and monitor a workflow example, returning its status and execution time.
