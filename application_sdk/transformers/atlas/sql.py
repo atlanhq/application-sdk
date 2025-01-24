@@ -169,7 +169,7 @@ class Table(assets.Table):
             )
 
             if table_type in [assets.View, assets.MaterialisedView]:
-                sql_table.attributes.definition = obj.get("VIEW_DEFINITION", "")
+                sql_table.attributes.definition = obj.get("view_definition", "")
 
             sql_table.attributes.column_count = obj.get("column_count", 0)
             sql_table.attributes.row_count = obj.get("row_count", 0)

@@ -2,7 +2,7 @@ import json
 import logging
 import os
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Type
+from typing import Any, Dict, List, Optional, Type
 
 import pandas as pd
 from pydantic import BaseModel, Field
@@ -94,8 +94,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     def __init__(
         self,
-        sql_client_class: Type[SQLClient] = SQLClient,
-        handler_class: Type[SQLHandler] = SQLHandler,
+        sql_client_class: Optional[Type[SQLClient]] = None,
+        handler_class: Optional[Type[SQLHandler]] = None,
     ):
         """Initialize the SQL query extraction activities.
 
@@ -105,8 +105,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             handler_class (Type[SQLHandler], optional): Class for SQL handling operations.
                 Defaults to SQLHandler.
         """
-        self.sql_client_class = sql_client_class
-        self.handler_class = handler_class
+        if sql_client_class:
+            self.sql_client_class = sql_client_class
+        if handler_class:
+            self.handler_class = handler_class
 
         super().__init__()
 
