@@ -1,6 +1,7 @@
+import os
+
 from boto3 import client
 from botocore.exceptions import ClientError
-import os
 
 
 def generate_aws_rds_token_with_iam_role(
