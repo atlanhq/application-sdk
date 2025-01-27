@@ -215,7 +215,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             query=prepare_query(
                 self.fetch_database_sql,
                 workflow_args,
-                temp_table_regex_sql=self.temp_table_regex_sql,
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -254,7 +253,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             query=prepare_query(
                 self.fetch_schema_sql,
                 workflow_args,
-                temp_table_regex_sql=self.temp_table_regex_sql,
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
