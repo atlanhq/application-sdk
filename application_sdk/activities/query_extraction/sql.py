@@ -14,6 +14,7 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
 
@@ -137,22 +138,12 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @transform(
-        batch_input=lambda self,
-        workflow_args,
-        state,
-        **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine, query=workflow_args["sql_query"]
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/query",
-            upload_file_prefix=workflow_args["output_prefix"],
-            path_gen=lambda chunk_start,
-            chunk_count: f"{workflow_args['start_marker']}_{workflow_args['end_marker']}.json",
-        ),
+        batch_input=SQLQueryInput(query="fetch_queries_sql"),
+        raw_output=JsonOutput(output_suffix="/raw/query"),
     )
     async def fetch_queries(
         self,
-        batch_input: "pd.DataFrame",  # noqa: F821
+        batch_input,
         raw_output: JsonOutput,
         **kwargs,
     ):

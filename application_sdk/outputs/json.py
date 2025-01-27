@@ -127,6 +127,14 @@ class JsonOutput(Output):
         if typename:
             output_path = f"{output_path}/{typename}"
         os.makedirs(f"{output_path}", exist_ok=True)
+
+        # For Query Extraction
+        start_marker = kwargs.get("start_marker")
+        end_marker = kwargs.get("end_marker")
+        if start_marker and end_marker:
+            kwargs["path_gen"] = (
+                lambda chunk_start, chunk_count: f"{start_marker}_{end_marker}.json"
+            )
         return cls(
             output_suffix=output_suffix,
             output_path=output_path,
