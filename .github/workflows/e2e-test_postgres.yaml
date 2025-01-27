@@ -160,7 +160,8 @@ jobs:
     - name: Get scalene metrics and output
       run: |
         export PATH="$HOME/.temporalio/bin:$PATH"
-
+        cd phoenix-postgres-app
+        
         # Check if scalene.json exists in the main branch
         if git show origin/main:scalene.json > main_scalene.json 2>/dev/null; then
           # Calculate metrics for the main branch
