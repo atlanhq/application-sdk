@@ -9,19 +9,25 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class JsonInput(Input):
-    path: Optional[str]
-    path_suffix: Optional[str]
+    path: str
     chunk_size: Optional[int]
     file_suffixes: Optional[List[str]] = None
-    test: int = 0
 
     def __init__(
         self,
-        path: Optional[str] = None,
+        path: str,
         file_suffixes: Optional[List[str]] = None,
         chunk_size: Optional[int] = 100000,
         **kwargs: Dict[str, Any],
     ):
+        """Initialize the JsonInput class.
+
+        Args:
+            path (str): The path to the input directory.
+            file_suffixes (Optional[List[str]]): The file suffixes to read.
+            chunk_size (Optional[int]): The chunk size to read the data.
+            **kwargs (Dict[str, Any]): Keyword arguments for initialization.
+        """
         self.path = path
         self.chunk_size = chunk_size
         self.file_suffixes = file_suffixes
@@ -29,21 +35,17 @@ class JsonInput(Input):
     @classmethod
     def re_init(
         cls,
-        output_path: str,
         path: str,
-        batch: Optional[List[str]],
         **kwargs: Dict[str, Any],
     ):
         """Re-initialize the input class with given keyword arguments.
 
         Args:
-            output_path (str): The base path to the output directory.
-            path (str): The additional path to the output directory.
-            batch (Optional[List[str]]): The list of file suffixes.
+            path (str): The additional path to the input directory.
             **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
         """
+        output_path = kwargs.get("output_path", "")
         kwargs["path"] = f"{output_path}{path}"
-        kwargs["file_suffixes"] = batch
         return cls(**kwargs)
 
     def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
@@ -54,7 +56,7 @@ class JsonInput(Input):
         try:
             import pandas as pd
 
-            for file_suffix in self.file_suffixes:
+            for file_suffix in self.file_suffixes or []:
                 json_reader_obj = pd.read_json(
                     os.path.join(self.path, file_suffix),
                     chunksize=self.chunk_size,

@@ -26,25 +26,23 @@ class IcebergOutput(Output):
         chunk_count: int = 0,
         **kwargs: Dict[str, Any],
     ):
+        """Initialize the Iceberg output class.
+
+        Args:
+            iceberg_catalog (Catalog): Iceberg catalog object.
+            iceberg_namespace (str): Iceberg namespace.
+            iceberg_table (Union[str, Table]): Iceberg table object or table name.
+            mode (str, optional): Write mode for the iceberg table. Defaults to "append".
+            total_record_count (int, optional): Total record count written to the iceberg table. Defaults to 0.
+            chunk_count (int, optional): Number of chunks written to the iceberg table. Defaults to 0.
+            kwargs (Dict[str, Any]): Keyword arguments for initialization.
+        """
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.iceberg_catalog = iceberg_catalog
         self.iceberg_namespace = iceberg_namespace
         self.iceberg_table = iceberg_table
         self.mode = mode
-
-    def re_init(
-        self,
-        chunk_count: int = 0,
-        total_record_count: int = 0,
-        **kwargs: Dict[str, Any],
-    ):
-        self.total_record_count = 0
-        self.chunk_count = 0
-        if chunk_count:
-            self.chunk_count = chunk_count
-        if total_record_count:
-            self.total_record_count = total_record_count
 
     async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
         """

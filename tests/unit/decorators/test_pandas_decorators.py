@@ -41,11 +41,11 @@ class TestPandasDecorators:
         """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
-        @transform(batch_input=SQLQueryInput(engine, "SELECT 1 as value"))
-        async def func(self, batch_input: pd.DataFrame, **kwargs):
-            assert len(batch_input) == 1
+        @transform(batch_input=SQLQueryInput(engine=engine, query="SELECT 1 as value"))
+        async def func(batch_input: pd.DataFrame, **kwargs):
+            assert len(list(batch_input)) == 1
 
-        await func(self)
+        await func()
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -67,14 +67,14 @@ class TestPandasDecorators:
             conn.commit()
 
         @transform(
-            batch_input=lambda self, state: SQLQueryInput(
-                engine, "SELECT * FROM numbers", chunk_size=None
+            batch_input=SQLQueryInput(
+                engine=engine, query="SELECT * FROM numbers", chunk_size=None
             )
         )
-        async def func(self, batch_input: pd.DataFrame, **kwargs):
+        async def func(batch_input: pd.DataFrame, **kwargs):
             assert len(batch_input) == 10
 
-        await func(self)
+        await func()
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -98,14 +98,15 @@ class TestPandasDecorators:
         expected_row_count = [3, 3, 3, 1]
 
         @transform(
-            batch_input=lambda self, state: SQLQueryInput(
-                engine, "SELECT * FROM numbers", chunk_size=3
+            batch_input=SQLQueryInput(
+                engine=engine, query="SELECT * FROM numbers", chunk_size=3
             )
         )
-        async def func(self, batch_input: pd.DataFrame, **kwargs):
-            assert len(batch_input) == expected_row_count.pop(0)
+        async def func(batch_input: pd.DataFrame, **kwargs):
+            for chunk in batch_input:
+                assert len(chunk) == expected_row_count.pop(0)
 
-        await func(self)
+        await func()
 
     async def test_json_input(self):
         # Create a sample JSON file for input
@@ -115,21 +116,20 @@ class TestPandasDecorators:
             f.write('{"value":1}\n{"value":2}\n')
 
         @transform(
-            batch_input=lambda self, arg, **kwargs: JsonInput(
+            batch_input=JsonInput(
                 path="/tmp/tests/test_pandas_decorator/raw/",
                 file_suffixes=["schema/1.json"],
             ),
-            out1=lambda self, arg, **kwargs: JsonOutput(
-                output_path="/tmp/tests/test_pandas_decorator/transformed/schema",
-                upload_file_prefix="transformed",
+            out1=JsonOutput(
+                output_path="/tmp/tests/test_pandas_decorator/",
+                output_suffix="transformed/schema",
             ),
         )
-        async def func(self, batch_input, out1, **kwargs):
-            await out1.write_df(batch_input.map(lambda x: x + 1))
-            return batch_input
+        async def func(batch_input, out1, **kwargs):
+            for chunk in batch_input:
+                await out1.write_df(chunk.map(lambda x: x + 1))
 
-        arg = {}
-        await func(self, arg)
+        await func()
         # Check files generated
         with open("/tmp/tests/test_pandas_decorator/raw/schema/1.json") as f:
             assert f.read().strip() == '{"value":1}\n{"value":2}'

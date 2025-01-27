@@ -4,15 +4,18 @@ This module provides base classes and utilities for handling various types of da
 in the application, including file outputs and object store interactions.
 """
 
+import inspect
 import logging
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
+
+from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 def is_empty_dataframe(df: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
@@ -49,7 +52,7 @@ class Output(ABC):
     state: Optional[ActivitiesState] = None
 
     @classmethod
-    async def re_init(cls, **kwargs: Dict[str, Any]):
+    def re_init(cls, **kwargs: Dict[str, Any]):
         """Re-initialize the output class with given keyword arguments.
 
         Args:
@@ -57,14 +60,34 @@ class Output(ABC):
         """
         return cls(**kwargs)
 
-    @abstractmethod
-    async def write_batched_df(self, df: Iterator["pd.DataFrame"]):  # noqa: F821
-        """Write a batched pandas DataFrame to the output destination.
+    async def write_batched_df(
+        self,
+        batched_df: Union[
+            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]  # noqa: F821
+        ],
+    ):  # noqa: F821
+        """Write a batched pandas DataFrame to Output.
+
+        This method writes the DataFrame to Output provided, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
 
         Args:
             df (pd.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
         """
-        pass
+        try:
+            if inspect.isasyncgen(batched_df):
+                async for df in batched_df:
+                    if not is_empty_dataframe(df):
+                        await self.write_df(df)
+            else:
+                for df in batched_df:
+                    if not is_empty_dataframe(df):
+                        await self.write_df(df)
+        except Exception as e:
+            activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     @abstractmethod
     async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
@@ -75,14 +98,37 @@ class Output(ABC):
         """
         pass
 
-    @abstractmethod
-    async def write_batched_daft_df(self, df: Iterator["daft.DataFrame"]):  # noqa: F821
-        """Write a batched daft DataFrame to the output destination.
+    async def write_batched_daft_df(
+        self,
+        batched_df: Union[
+            AsyncGenerator["daft.DataFrame", None],  # noqa: F821
+            Generator["daft.DataFrame", None, None],  # noqa: F821
+        ],
+    ):  # noqa: F821
+        """Write a batched daft DataFrame to JSON files.
+
+        This method writes the DataFrame to JSON files, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
 
         Args:
             df (daft.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
         """
-        pass
+        try:
+            if inspect.isasyncgen(batched_df):
+                async for df in batched_df:
+                    if not is_empty_dataframe(df):
+                        await self.write_daft_df(df)
+            else:
+                for df in batched_df:
+                    if not is_empty_dataframe(df):
+                        await self.write_daft_df(df)
+        except Exception as e:
+            activity.logger.error(
+                f"Error writing batched daft dataframe to json: {str(e)}"
+            )
 
     @abstractmethod
     async def write_daft_df(self, df: "daft.DataFrame"):  # noqa: F821
@@ -125,4 +171,4 @@ class Output(ABC):
                 self.output_prefix, output_file_name
             )
         except Exception as e:
-            logger.error(f"Error writing metadata: {str(e)}")
+            activity.logger.error(f"Error writing metadata: {str(e)}")

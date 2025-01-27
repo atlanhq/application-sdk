@@ -17,13 +17,19 @@ class IcebergInput(Input):
     table: Table
     chunk_size: Optional[int]
 
-    def __init__(self, table: Table, chunk_size: Optional[int] = 100000):
+    def __init__(
+        self, table: Table, chunk_size: Optional[int] = 100000, **kwargs: Dict[str, Any]
+    ):
+        """Initialize the Iceberg input class.
+
+        Args:
+            table (Table): Iceberg table object.
+            chunk_size (Optional[int], optional): Number of rows per batch.
+                Defaults to 100000.
+            kwargs (Dict[str, Any]): Keyword arguments for initialization.
+        """
         self.table = table
         self.chunk_size = chunk_size
-
-    def re_init(self, table: Table, **kwargs: Dict[str, Any]):
-        if table:
-            self.table = table
 
     def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
         """

@@ -92,21 +92,17 @@ class TestDaftDecoratorsIceberg:
         """
 
         @transform_daft(
-            batch_input=lambda self, arg, **kwargs: SQLQueryInput(
-                self.engine, "SELECT 1 as value"
-            ),
-            output=lambda self, *arg, **kwargs: IcebergOutput(
+            batch_input=SQLQueryInput(engine=self.engine, query="SELECT 1 as value"),
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table",
             ),
         )
-        async def func(self, batch_input: daft.DataFrame, output, **kwargs):
-            assert batch_input.count_rows() == 1
-            await output.write_daft_df(batch_input)
+        async def func(batch_input: daft.DataFrame, output, **kwargs):
+            await output.write_batched_daft_df(batch_input)
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table")
         data_scan = table.scan().to_arrow()
@@ -124,21 +120,20 @@ class TestDaftDecoratorsIceberg:
         self._create_test_clients(query=INSERT_QUERY)
 
         @transform_daft(
-            batch_input=lambda self, arg, **kwargs: SQLQueryInput(
-                self.engine, "SELECT * FROM numbers", chunk_size=None
+            batch_input=SQLQueryInput(
+                engine=self.engine, query="SELECT * FROM numbers", chunk_size=None
             ),
-            output=lambda self, arg, **kwargs: IcebergOutput(
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table_two",
             ),
         )
-        async def func(self, batch_input: daft.DataFrame, output, **kwargs):
+        async def func(batch_input: daft.DataFrame, output, **kwargs):
             assert batch_input.count_rows() == 10
             await output.write_daft_df(batch_input)
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table_two")
         data_scan = table.scan().to_arrow()
@@ -157,21 +152,21 @@ class TestDaftDecoratorsIceberg:
         expected_row_count = [3, 3, 3, 1]
 
         @transform_daft(
-            batch_input=lambda self, arg, **kwargs: SQLQueryInput(
-                self.engine, "SELECT * FROM numbers", chunk_size=3
+            batch_input=SQLQueryInput(
+                engine=self.engine, query="SELECT * FROM numbers", chunk_size=3
             ),
-            output=lambda self, arg, **kwargs: IcebergOutput(
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table_three",
             ),
         )
-        async def func(self, batch_input: daft.DataFrame, output, **kwargs):
-            assert batch_input.count_rows() == expected_row_count.pop(0)
-            await output.write_daft_df(batch_input)
+        async def func(batch_input: daft.DataFrame, output, **kwargs):
+            async for chunk in batch_input:
+                assert chunk.count_rows() == expected_row_count.pop(0)
+                await output.write_daft_df(chunk)
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table_three")
         data_scan = table.scan().to_arrow()
@@ -185,22 +180,21 @@ class TestDaftDecoratorsIceberg:
         table_two = self.catalog.load_table("default.test_table_two")
 
         @transform_daft(
-            batch_input=lambda self, arg, **kwargs: IcebergInput(
+            batch_input=IcebergInput(
                 table=table_two,
                 chunk_size=None,
             ),
-            output=lambda self, arg, **kwargs: IcebergOutput(
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table_four",
             ),
         )
-        async def func(self, batch_input, output, **kwargs):
+        async def func(batch_input, output, **kwargs):
             await output.write_daft_df(batch_input.transform(add_1))
             return batch_input
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table_four")
         data_scan = table.scan().to_arrow()

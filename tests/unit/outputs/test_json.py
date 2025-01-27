@@ -10,13 +10,16 @@ from application_sdk.outputs.json import JsonOutput
 @pytest.fixture
 def json_output(tmp_path):
     output_path = str(tmp_path / "test_output")
-    return JsonOutput(output_path=output_path, upload_file_prefix="test_prefix")
+    json_output = JsonOutput
+    return json_output.re_init(
+        output_suffix="/tests/raw", output_path=output_path, output_prefix="test_prefix"
+    )
 
 
 @pytest.mark.asyncio
 async def test_init(json_output):
-    assert json_output.output_path.endswith("test_output")
-    assert json_output.upload_file_prefix == "test_prefix"
+    assert json_output.output_path.endswith("/tests/raw")
+    assert json_output.output_prefix == "test_prefix"
     assert json_output.chunk_size == 100000
     assert os.path.exists(json_output.output_path)
 

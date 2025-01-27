@@ -13,7 +13,7 @@ class Input(ABC):
     """
 
     @classmethod
-    async def re_init(cls, **kwargs: Dict[str, Any]):
+    def re_init(cls, **kwargs: Dict[str, Any]):
         """
         Re-initialize the input class with given keyword arguments.
 

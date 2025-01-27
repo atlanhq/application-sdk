@@ -1,5 +1,6 @@
 import os
 from concurrent.futures import Future
+from typing import Iterator
 from unittest.mock import patch
 
 import daft
@@ -54,12 +55,13 @@ class TestDaftDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @transform_daft(
-            batch_input=lambda self, state: SQLQueryInput(engine, "SELECT 1 as value")
+            batch_input=SQLQueryInput(engine=engine, query="SELECT 1 as value")
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
-            assert batch_input.count_rows() == 1
+        async def func(batch_input, **kwargs):
+            async for chunk in batch_input:
+                assert chunk.count_rows() == 1
 
-        await func(self)
+        await func()
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -82,14 +84,14 @@ class TestDaftDecorators:
             conn.commit()
 
         @transform_daft(
-            batch_input=lambda self, state: SQLQueryInput(
-                engine, "SELECT * FROM numbers", chunk_size=None
+            batch_input=SQLQueryInput(
+                engine=engine, query="SELECT * FROM numbers", chunk_size=None
             )
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
+        async def func(batch_input: daft.DataFrame, **kwargs):
             assert batch_input.count_rows() == 10
 
-        await func(self)
+        await func()
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -113,14 +115,15 @@ class TestDaftDecorators:
         expected_row_count = [3, 3, 3, 1]
 
         @transform_daft(
-            batch_input=lambda self, state: SQLQueryInput(
-                engine, "SELECT * FROM numbers", chunk_size=3
+            batch_input=SQLQueryInput(
+                engine=engine, query="SELECT * FROM numbers", chunk_size=3
             )
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
-            assert batch_input.count_rows() == expected_row_count.pop(0)
+        async def func(batch_input: Iterator[daft.DataFrame], **kwargs):
+            async for chunk in batch_input:
+                assert chunk.count_rows() == expected_row_count.pop(0)
 
-        await func(self)
+        await func()
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -143,14 +146,14 @@ class TestDaftDecorators:
             conn.commit()
 
         @transform_daft(
-            batch_input=lambda self, state: SQLQueryInput(
-                sqlite_db_url, "SELECT * FROM numbers", chunk_size=None
+            batch_input=SQLQueryInput(
+                engine=sqlite_db_url, query="SELECT * FROM numbers", chunk_size=None
             )
         )
-        async def func(self, batch_input: daft.DataFrame, **kwargs):
+        async def func(batch_input: daft.DataFrame, **kwargs):
             assert batch_input.count_rows() == 10
 
-        await func(self)
+        await func()
 
     async def test_json_input(self):
         # Create a sample JSON file for input
@@ -160,21 +163,20 @@ class TestDaftDecorators:
             f.write('{"value":1}\n{"value":2}\n')
 
         @transform_daft(
-            batch_input=lambda self, arg, **kwargs: JsonInput(
+            batch_input=JsonInput(
                 path="/tmp/tests/test_daft_decorator/raw/",
                 file_suffixes=["schema/1.json"],
             ),
-            out1=lambda self, arg, **kwargs: JsonOutput(
-                output_path="/tmp/tests/test_daft_decorator/transformed/schema",
-                upload_file_prefix="transformed",
+            out1=JsonOutput(
+                output_path="/tmp/tests/test_daft_decorator/",
+                output_suffix="transformed/schema",
             ),
         )
-        async def func(self, batch_input, out1, **kwargs):
-            await out1.write_daft_df(batch_input.transform(add_1))
-            return batch_input
+        async def func(batch_input, out1, **kwargs):
+            for chunk in batch_input:
+                await out1.write_daft_df(chunk.transform(add_1))
 
-        arg = {}
-        await func(self, arg)
+        await func()
         # Check files generated
         with open("/tmp/tests/test_daft_decorator/raw/schema/1.json") as f:
             assert f.read().strip() == '{"value":1}\n{"value":2}'

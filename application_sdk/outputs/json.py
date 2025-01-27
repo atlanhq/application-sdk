@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Any, Callable, Dict, Iterator, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from temporalio import activity
 
@@ -8,7 +8,7 @@ from application_sdk.activities import ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
-from application_sdk.outputs import Output, is_empty_dataframe
+from application_sdk.outputs import Output
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -67,7 +67,8 @@ class JsonOutput(Output):
 
         Args:
             output_path (str): Path where JSON files will be written.
-            upload_file_prefix (str): Prefix for files when uploading to object store.
+            output_suffix (str): Prefix for files when uploading to object store.
+            output_prefix (Optional[str], optional): Prefix for files where the files will be written and uploaded.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
             buffer_size (int, optional): Size of the buffer in bytes.
@@ -136,25 +137,6 @@ class JsonOutput(Output):
             **kwargs,
         )
 
-    async def write_batched_df(self, batched_df: Iterator["pd.DataFrame"]):  # noqa: F821
-        """Write a batched pandas DataFrame to JSON files.
-
-        This method writes the DataFrame to JSON files, potentially splitting it
-        into chunks based on chunk_size and buffer_size settings.
-
-        Args:
-            df (pd.DataFrame): The DataFrame to write.
-
-        Note:
-            If the DataFrame is empty, the method returns without writing.
-        """
-        try:
-            for df in batched_df:
-                if not is_empty_dataframe(df):
-                    await self.write_df(df)
-        except Exception as e:
-            activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
-
     async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
         """Write a pandas DataFrame to JSON files.
 
@@ -190,27 +172,6 @@ class JsonOutput(Output):
 
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
-
-    async def write_batched_daft_df(self, batched_df: Iterator["daft.DataFrame"]):  # noqa: F821
-        """Write a batched daft DataFrame to JSON files.
-
-        This method writes the DataFrame to JSON files, potentially splitting it
-        into chunks based on chunk_size and buffer_size settings.
-
-        Args:
-            df (daft.DataFrame): The DataFrame to write.
-
-        Note:
-            If the DataFrame is empty, the method returns without writing.
-        """
-        try:
-            for df in batched_df:
-                if not is_empty_dataframe(df):
-                    await self.write_daft_df(df)
-        except Exception as e:
-            activity.logger.error(
-                f"Error writing batched daft dataframe to json: {str(e)}"
-            )
 
     async def write_daft_df(self, df: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to JSON files.

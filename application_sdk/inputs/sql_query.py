@@ -18,7 +18,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLQueryInput(Input):
-    """Asynchronous input handler for SQL queries.
+    """Input handler for SQL queries.
 
     This class provides asynchronous functionality to execute SQL queries and return
     results as DataFrames, with support for both pandas and daft formats.
@@ -27,13 +27,15 @@ class SQLQueryInput(Input):
         query (str): The SQL query to execute.
         engine (Union[Engine, str]): SQLAlchemy engine or connection string.
         chunk_size (Optional[int]): Number of rows to fetch per batch.
+        state (Optional[ActivitiesState]): State object for the activity.
         async_session: Async session maker for database operations.
     """
 
     query: str
     engine: Optional[Union[Engine, str]]
     chunk_size: Optional[int]
-    state: ActivitiesState
+    state: Optional[ActivitiesState] = None
+    async_session: Optional[AsyncSession] = None
 
     def __init__(
         self,
@@ -74,7 +76,11 @@ class SQLQueryInput(Input):
             parent_class (Any): Parent class object.
             **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
         """
-        engine = state.sql_client.engine if state else parent_class.sql_client.engine
+        engine = kwargs.get("engine")
+        if not engine:
+            engine = (
+                state.sql_client.engine if state else parent_class.sql_client.engine
+            )
         if hasattr(parent_class, query):
             query = prepare_query(getattr(parent_class, query), kwargs)
         kwargs["engine"] = engine

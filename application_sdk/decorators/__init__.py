@@ -57,7 +57,8 @@ async def prepare_fn_kwargs(
         class_args["state"] = state
         class_args["parent_class"] = self
         class_args.update(kwarg.__dict__)
-        class_args.update(fn_args[1])
+        if fn_args:
+            class_args.update(fn_args[-1])
         class_instance = kwarg.re_init(**class_args)
         if isinstance(class_instance, Input) or issubclass(
             class_instance.__class__, Input
@@ -81,7 +82,8 @@ async def prepare_fn_kwargs(
         else:
             # In case of output classes, we'll return the output class itself
             fn_kwargs[name] = class_instance
-    fn_kwargs.update(fn_args[1])
+    if fn_args:
+        fn_kwargs.update(fn_args[-1])
     return fn_kwargs
 
 
@@ -120,8 +122,8 @@ async def run_process(
         Otherwise, all data will be processed in a single operation.
     """
     state: Optional[ActivitiesState] = None
-    fn_self = fn_args[0]
-    if hasattr(fn_self, "_get_state"):
+    fn_self = fn_args[0] if fn_args else None
+    if fn_self and hasattr(fn_self, "_get_state"):
         state = await fn_self._get_state(fn_args[1])
 
     fn_kwargs = await prepare_fn_kwargs(
@@ -134,8 +136,10 @@ async def run_process(
         fn_args=fn_args,
         fn_kwargs=fn_kwargs,
     )
-
-    return await fn(fn_self, **fn_kwargs)
+    if fn_self:
+        return await fn(fn_self, **fn_kwargs)
+    else:
+        return await fn(**fn_kwargs)
 
 
 def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
@@ -174,7 +178,7 @@ def transform_daft(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
             return await run_process(
                 fn=fn,
                 get_dataframe_fn=Input.get_daft_dataframe,
-                get_batched_dataframe_fn=Input.get_batched_dataframe,
+                get_batched_dataframe_fn=Input.get_batched_daft_dataframe,
                 args=args,
                 kwargs=kwargs,
                 fn_args=fn_args,
