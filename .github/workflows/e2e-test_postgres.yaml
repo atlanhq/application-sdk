@@ -5,6 +5,9 @@ on:
       - main
       - develop
   pull_request:
+    branches: 
+      - main
+      - develop
     types: [labeled, reopened, synchronize, opened]
 
 jobs:
