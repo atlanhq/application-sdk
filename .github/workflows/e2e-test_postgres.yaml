@@ -1,4 +1,4 @@
-name: E2E Application Test
+name: E2E Application Test Postgres
 on:
   push:
     branches:
