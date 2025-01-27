@@ -13,16 +13,35 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 def prepare_query(
     query: str, workflow_args: Dict[str, Any], temp_table_regex_sql: str = ""
 ) -> str:
-    """Prepares the query with the include and exclude filters.
+    """
+    Prepares a SQL query by applying include and exclude filters, and optional
+    configurations for temporary table regex, empty tables, and views.
 
-    Only fetches all metadata when both include and exclude filters are empty.
+    This function modifies the provided SQL query using filters and settings
+    defined in the `workflow_args` dictionary. The include and exclude filters
+    determine which data should be included or excluded from the query. If no
+    filters are specified, it fetches all metadata. Temporary table exclusion
+    logic is also applied if a regex is provided.
 
     Args:
-        query: The query string to prepare.
-        workflow_args: Dictionary containing workflow arguments and metadata.
+        query (str): The base SQL query string to modify with filters.
+        workflow_args (Dict[str, Any]): A dictionary containing metadata and
+            workflow-related arguments. Expected keys include:
+            - "metadata": A dictionary with the following keys:
+                - "include_filter" (str): Regex pattern to include tables/data.
+                - "exclude_filter" (str): Regex pattern to exclude tables/data.
+                - "temp_table_regex" (str): Regex for temporary tables.
+                - "exclude_empty_tables" (bool): Whether to exclude empty tables.
+                - "exclude_views" (bool): Whether to exclude views.
+        temp_table_regex_sql (str, optional): SQL snippet for excluding temporary
+            tables. Defaults to an empty string.
 
     Returns:
-        str: The prepared query string with filters applied.
+        str: The prepared SQL query with filters applied, or `None` if an error
+        occurs during preparation.
+
+    Raises:
+        Exception: Logs the error message and returns `None` if query preparation fails.
     """
     try:
         metadata = workflow_args.get("metadata", {})

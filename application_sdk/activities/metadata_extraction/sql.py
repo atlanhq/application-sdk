@@ -49,6 +49,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client_class (Type[SQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
+        temp_table_regex_sql (str): SQL snippet for excluding temporary tables.
+            Defaults to an empty string.
     """
 
     _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
