@@ -58,6 +58,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     fetch_table_sql = None
     fetch_column_sql = None
 
+    temp_table_regex_sql = ""
+
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
     transformer_class: Type[TransformerInterface] = AtlasTransformer
@@ -208,7 +210,11 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         state,
         **kwargs: self.sql_client_class.sql_input(
             engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_database_sql, workflow_args),
+            query=prepare_query(
+                self.fetch_database_sql,
+                workflow_args,
+                temp_table_regex_sql=self.temp_table_regex_sql,
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/database",
@@ -243,7 +249,11 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         state,
         **kwargs: self.sql_client_class.sql_input(
             engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_schema_sql, workflow_args),
+            query=prepare_query(
+                self.fetch_schema_sql,
+                workflow_args,
+                temp_table_regex_sql=self.temp_table_regex_sql,
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/schema",
@@ -278,7 +288,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         state,
         **kwargs: self.sql_client_class.sql_input(
             engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_table_sql, workflow_args),
+            query=prepare_query(
+                self.fetch_table_sql, workflow_args, self.temp_table_regex_sql
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/table",
@@ -313,7 +325,11 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         state,
         **kwargs: self.sql_client_class.sql_input(
             engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_column_sql, workflow_args),
+            query=prepare_query(
+                self.fetch_column_sql,
+                workflow_args,
+                temp_table_regex_sql=self.temp_table_regex_sql,
+            ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
             output_path=f"{workflow_args['output_path']}/raw/column",

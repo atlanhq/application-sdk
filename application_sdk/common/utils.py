@@ -10,7 +10,9 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
-def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
+def prepare_query(
+    query: str, workflow_args: Dict[str, Any], temp_table_regex_sql: str = ""
+) -> str:
     """Prepares the query with the include and exclude filters.
 
     Only fetches all metadata when both include and exclude filters are empty.
@@ -28,7 +30,12 @@ def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
         # using "or" instead of default correct defaults are set in case of empty string
         include_filter = metadata.get("include_filter") or "{}"
         exclude_filter = metadata.get("exclude_filter") or "{}"
-        temp_table_regex = metadata.get("temp_table_regex") or "^$"
+        if metadata.get("temp_table_regex"):
+            temp_table_regex_sql = temp_table_regex_sql.format(
+                exclude_table_regex=metadata.get("temp_table_regex")
+            )
+        else:
+            temp_table_regex_sql = ""
 
         normalized_include_regex, normalized_exclude_regex = prepare_filters(
             include_filter, exclude_filter
@@ -42,7 +49,7 @@ def prepare_query(query: str, workflow_args: Dict[str, Any]) -> str:
         return query.format(
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
-            exclude_table=temp_table_regex,
+            temp_table_regex_sql=temp_table_regex_sql,
             exclude_empty_tables=exclude_empty_tables,
             exclude_views=exclude_views,
         )

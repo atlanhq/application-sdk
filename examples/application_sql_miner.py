@@ -124,13 +124,15 @@ class SnowflakeSQLClient(SQLClient):
 
 class SampleSnowflakeHandler(SQLHandler):
     tables_check_sql = """
-        SELECT count(*) as "count"
-            FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
-                AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}';
-        """
-    metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
+    SELECT count(*)
+        FROM INFORMATION_SCHEMA.TABLES
+        WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
+            AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
+            {temp_table_regex_sql};
+    """
+
+    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
 
 
 async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:

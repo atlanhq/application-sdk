@@ -45,6 +45,8 @@ class SQLHandler(HandlerInterface):
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
+    temp_table_regex_sql: str = ""
+
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client
 
@@ -288,7 +290,9 @@ class SQLHandler(HandlerInterface):
         batch_input=lambda self, workflow_args, **kwargs: self.sql_client.sql_input(
             engine=self.sql_client.engine,
             query=prepare_query(
-                query=self.tables_check_sql, workflow_args=workflow_args
+                query=self.tables_check_sql,
+                workflow_args=workflow_args,
+                temp_table_regex_sql=self.temp_table_regex_sql,
             ),
             chunk_size=None,
         )
