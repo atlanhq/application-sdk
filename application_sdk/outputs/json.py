@@ -1,9 +1,7 @@
 import logging
 import os
-from typing import Any, Callable, Dict, Iterator, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
-import daft
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -92,7 +90,7 @@ class JsonOutput(Output):
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
         self.chunk_size = chunk_size
-        self.buffer: List[pd.DataFrame] = []
+        self.buffer: List[Union["pd.DataFrame, daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
         self.state = state
@@ -138,7 +136,7 @@ class JsonOutput(Output):
             **kwargs,
         )
 
-    async def write_batched_df(self, batched_df: Iterator[pd.DataFrame]):
+    async def write_batched_df(self, batched_df: Iterator["pd.DataFrame"]):  # noqa: F821
         """Write a batched pandas DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it
@@ -157,7 +155,7 @@ class JsonOutput(Output):
         except Exception as e:
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
-    async def write_df(self, df: pd.DataFrame):
+    async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
         """Write a pandas DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it
@@ -193,7 +191,7 @@ class JsonOutput(Output):
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def write_batched_daft_df(self, batched_df: Iterator[daft.DataFrame]):
+    async def write_batched_daft_df(self, batched_df: Iterator["daft.DataFrame"]):  # noqa: F821
         """Write a batched daft DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it
@@ -214,7 +212,7 @@ class JsonOutput(Output):
                 f"Error writing batched daft dataframe to json: {str(e)}"
             )
 
-    async def write_daft_df(self, df: daft.DataFrame):
+    async def write_daft_df(self, df: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
@@ -238,6 +236,8 @@ class JsonOutput(Output):
         Note:
             If the buffer is empty or has no records, the method returns without writing.
         """
+        import pandas as pd
+
         if not self.buffer or not self.current_buffer_size:
             return
         combined_df = pd.concat(self.buffer)

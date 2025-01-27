@@ -1,6 +1,5 @@
-from typing import Any, Dict, Iterator, Optional, Type
+from typing import Any, Dict, Optional, Type
 
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -139,12 +138,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     async def _transform_batch(
         self,
-        results: pd.DataFrame,
+        results,
         typename: str,
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
-    ) -> pd.DataFrame:
+    ):
         """Transform a batch of results into metadata.
 
         Args:
@@ -160,6 +159,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Raises:
             ValueError: If the transformer is not properly set.
         """
+        import pandas as pd
+
         state: SQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
@@ -208,7 +209,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_databases(
         self,
-        batch_input: Iterator[pd.DataFrame],
+        batch_input,
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -233,7 +234,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_schemas(
         self,
-        batch_input: Iterator[pd.DataFrame],
+        batch_input,
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -258,7 +259,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_tables(
         self,
-        batch_input: Iterator[pd.DataFrame],
+        batch_input,
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -283,7 +284,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_columns(
         self,
-        batch_input: Iterator[pd.DataFrame],
+        batch_input,
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -342,7 +343,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def transform_data(
         self,
-        raw_input: Iterator[pd.DataFrame],
+        raw_input,
         transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):

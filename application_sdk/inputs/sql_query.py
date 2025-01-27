@@ -3,8 +3,6 @@ import concurrent
 import logging
 from typing import Any, Dict, Iterator, Optional, Union
 
-import daft
-import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -85,7 +83,7 @@ class SQLQueryInput(Input):
 
     def _read_sql_query(
         self, session: Session
-    ) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
+    ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:  # type: ignore # noqa: F821
         """Execute SQL query using the provided session.
 
         Args:
@@ -95,14 +93,18 @@ class SQLQueryInput(Input):
             Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
+        import pandas as pd
+
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    def _execute_query(self) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
+    def _execute_query(self) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:  # type: ignore # noqa: F821
+        import pandas as pd
+
         with self.engine.connect() as conn:
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
@@ -128,7 +130,7 @@ class SQLQueryInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
-    async def get_dataframe(self) -> pd.DataFrame:
+    async def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
         """Get all query results as a single pandas DataFrame asynchronously.
 
         Returns:
@@ -154,7 +156,7 @@ class SQLQueryInput(Input):
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
 
-    async def get_daft_dataframe(self) -> daft.DataFrame:
+    async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.
 
         This method uses ConnectorX to read data from SQL for supported connectors.
@@ -175,13 +177,15 @@ class SQLQueryInput(Input):
             # Daft uses ConnectorX to read data from SQL by default for supported connectors
             # If a connection string is passed, it will use ConnectorX to read data
             # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
+            import daft
+
             if isinstance(self.engine, str):
                 return daft.read_sql(self.query, self.engine)
             return daft.read_sql(self.query, lambda: self.engine.connect())
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 
-    async def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+    async def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
         """Get query results as batched daft DataFrames.
 
         This method reads data using pandas in batches since daft does not support
@@ -200,6 +204,8 @@ class SQLQueryInput(Input):
             reading data in batches natively.
         """
         try:
+            import daft
+
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 

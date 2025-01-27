@@ -2,9 +2,6 @@ import logging
 import os
 from typing import Any, Dict, Iterator, List, Optional
 
-import daft
-import pandas as pd
-
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
 
@@ -49,12 +46,14 @@ class JsonInput(Input):
         kwargs["file_suffixes"] = batch
         return cls(**kwargs)
 
-    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
         """
         try:
+            import pandas as pd
+
             for file_suffix in self.file_suffixes:
                 json_reader_obj = pd.read_json(
                     os.path.join(self.path, file_suffix),
@@ -65,12 +64,14 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data from JSON: {str(e)}")
 
-    def get_dataframe(self) -> pd.DataFrame:
+    def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
         """
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
         """
         try:
+            import pandas as pd
+
             dataframes = []
             for file_suffix in self.file_suffixes:
                 dataframes.append(
@@ -83,12 +84,14 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading data from JSON: {str(e)}")
 
-    def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+    def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
         """
         Method to read the data from the json files in the path
         and return as a batched daft dataframe
         """
         try:
+            import daft
+
             for file_suffix in self.file_suffixes:
                 json_reader_obj = daft.read_json(
                     path=os.path.join(self.path, file_suffix),
@@ -98,12 +101,15 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data from JSON: {str(e)}")
 
-    def get_daft_dataframe(self) -> daft.DataFrame:
+    def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
         Method to read the data from the json files in the path
         and return as a single combined daft dataframe
         """
         try:
+            import daft
+            import pandas as pd
+
             dataframes = []
             for file_suffix in self.file_suffixes:
                 daft.read_json(path=os.path.join(self.path, file_suffix))

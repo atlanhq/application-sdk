@@ -2,9 +2,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterator
 
-import daft
-import pandas as pd
-
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -29,7 +26,7 @@ class Input(ABC):
         return cls(**kwargs)
 
     @abstractmethod
-    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
         """
         Get an iterator of batched pandas DataFrames.
 
@@ -42,7 +39,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_dataframe(self) -> pd.DataFrame:
+    def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
         """
         Get a single pandas DataFrame.
 
@@ -55,7 +52,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_batched_daft_dataframe(self) -> Iterator[daft.DataFrame]:
+    def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
         """
         Get an iterator of batched daft DataFrames.
 
@@ -68,7 +65,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_daft_dataframe(self) -> daft.DataFrame:
+    def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
         Get a single daft DataFrame.
 

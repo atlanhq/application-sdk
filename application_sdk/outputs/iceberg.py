@@ -1,8 +1,6 @@
 import logging
 from typing import Any, Dict, Union
 
-import daft
-import pandas as pd
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
@@ -48,11 +46,13 @@ class IcebergOutput(Output):
         if total_record_count:
             self.total_record_count = total_record_count
 
-    async def write_df(self, df: pd.DataFrame):
+    async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
         """
         Method to write the pandas dataframe to an iceberg table
         """
         try:
+            import daft
+
             if len(df) == 0:
                 return
             # convert the pandas dataframe to a daft dataframe
@@ -63,7 +63,7 @@ class IcebergOutput(Output):
                 f"Error writing pandas dataframe to iceberg table: {str(e)}"
             )
 
-    async def write_daft_df(self, df: daft.DataFrame):
+    async def write_daft_df(self, df: "daft.DataFrame"):  # noqa: F821
         """
         Method to write the daft dataframe to an iceberg table
         """

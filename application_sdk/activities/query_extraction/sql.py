@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
-import pandas as pd
 from pydantic import BaseModel, Field
 from temporalio import activity
 
@@ -152,7 +151,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         ),
     )
     async def fetch_queries(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+        self,
+        batch_input: "pd.DataFrame",  # noqa: F821
+        raw_output: JsonOutput,
+        **kwargs,
     ):
         """Fetch and process queries from the database.
 

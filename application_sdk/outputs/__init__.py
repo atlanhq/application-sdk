@@ -8,9 +8,6 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterator, Optional, Union
 
-import daft
-import pandas as pd
-
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
@@ -18,10 +15,13 @@ from application_sdk.inputs.objectstore import ObjectStore
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-def is_empty_dataframe(df: Union[pd.DataFrame, daft.DataFrame]) -> bool:
+def is_empty_dataframe(df: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
     """
     Helper method to check if the dataframe has any rows
     """
+    import daft
+    import pandas as pd
+
     if isinstance(df, pd.DataFrame):
         return df.empty
     if isinstance(df, daft.DataFrame):
@@ -58,7 +58,7 @@ class Output(ABC):
         return cls(**kwargs)
 
     @abstractmethod
-    async def write_batched_df(self, df: Iterator[pd.DataFrame]):
+    async def write_batched_df(self, df: Iterator["pd.DataFrame"]):  # noqa: F821
         """Write a batched pandas DataFrame to the output destination.
 
         Args:
@@ -67,7 +67,7 @@ class Output(ABC):
         pass
 
     @abstractmethod
-    async def write_df(self, df: pd.DataFrame):
+    async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
         """Write a pandas DataFrame to the output destination.
 
         Args:
@@ -76,7 +76,7 @@ class Output(ABC):
         pass
 
     @abstractmethod
-    async def write_batched_daft_df(self, df: Iterator[daft.DataFrame]):
+    async def write_batched_daft_df(self, df: Iterator["daft.DataFrame"]):  # noqa: F821
         """Write a batched daft DataFrame to the output destination.
 
         Args:
@@ -85,7 +85,7 @@ class Output(ABC):
         pass
 
     @abstractmethod
-    async def write_daft_df(self, df: daft.DataFrame):
+    async def write_daft_df(self, df: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to the output destination.
 
         Args:
@@ -107,6 +107,8 @@ class Output(ABC):
             Exception: If there's an error writing or uploading the metadata.
         """
         try:
+            import pandas as pd
+
             # prepare the metadata
             metadata = {
                 "total_record_count": [self.total_record_count],
