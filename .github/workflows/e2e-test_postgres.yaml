@@ -1,0 +1,300 @@
+name: E2E Application Test
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    types: [labeled, reopened, synchronize, opened]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    timeout-minutes: 10
+    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' || contains(github.event.pull_request.labels.*.name, 'e2e-test') }}
+
+    steps:
+    - uses: actions/checkout@v3
+      
+    - name: Checkout postgres Repository
+      uses: actions/checkout@v4
+      with:
+        repository: atlanhq/phoenix-postgres-app
+        token: ${{ secrets.ORG_PAT_GITHUB }} # `GH_PAT` is a secret that contains your PAT
+        path: phoenix-postgres-app
+  
+    # Install Dapr
+    - name: Install Dapr CLI
+      run: |
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
+        dapr init --runtime-version 1.13.6 --slim
+
+    # Install Temporal
+    - name: Install Temporal CLI and Start Server
+      run: |
+        curl -sSf https://temporal.download/cli.sh | sh
+        export PATH="$HOME/.temporalio/bin:$PATH"
+        temporal server start-dev --db-filename /tmp/temporal.db &
+        sleep 5
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v1
+      with:
+        python-version: "3.11"
+
+      #----------------------------------------------
+      #  -----  install & configure poetry  -----
+      #----------------------------------------------
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: 1.8.5
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        virtualenvs-path: .venv
+        installer-parallel: true
+
+      #----------------------------------------------
+      #       set up system git client for poetry
+      #       known to be available only in poetry 1.8.5
+      #----------------------------------------------
+    - name: Set up system git client for poetry
+      run: |
+        poetry config experimental.system-git-client true
+
+    - name: Install Dependencies
+      run: |
+        git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
+        # Configure poetry to use project-specific virtualenv
+        poetry config virtualenvs.in-project true
+        # Install the dependencies
+        cd phoenix-postgres-app
+        poetry install -vv
+        poetry update application-sdk --dry-run
+
+    # Start dapr and temporal services
+    - name: Start Platform Services
+      run: |
+        cd phoenix-postgres-app
+        make start-deps
+        # Wait for Dapr sidecar to be ready
+        sleep 5
+
+    # Start the application
+    - name: Start the application
+      id: start_app
+      run: |
+        cd phoenix-postgres-app
+        make run-app &
+        sleep 20
+
+    - name: Start the workflow
+      id: workflow_info
+      run: |
+        # Start the curl request in the background and capture its PID
+        curl -X POST \
+          -H "Content-Type: application/json" \
+          -d '{
+            "credentials": {
+              "host": "${{ secrets.POSTGRES_DB_HOST }}",
+              "port": 5432,
+              "user": "postgres",
+              "password": "${{ secrets.POSTGRES_DB_PASSWORD }}",
+              "database": "assets_100k"
+            },
+            "connection": {
+              "connection": "development"
+            },
+            "metadata": {
+              "exclude_filter": "{}",
+              "include_filter": "{}",
+              "temp_table_regex": "",
+              "advanced_config_strategy": "default",
+              "use_source_schema_filtering": "false",
+              "use_jdbc_internal_methods": "true",
+              "authentication": "BASIC",
+              "extraction_method": "direct"
+            }
+          }' \
+          http://0.0.0.0:8000/workflows/v1/start > response.json &
+        CURL_PID=$!
+
+        # Wait for the curl request to complete
+        wait $CURL_PID
+
+        # Parse the response
+        RESPONSE=$(cat response.json)
+        # Extract workflow_id and run_id
+        WORKFLOW_ID=$(echo $RESPONSE | jq -r '.data.workflow_id')
+        RUN_ID=$(echo $RESPONSE | jq -r '.data.run_id')
+
+        echo "workflow_id=$WORKFLOW_ID" >> $GITHUB_OUTPUT
+        echo "run_id=$RUN_ID" >> $GITHUB_OUTPUT
+
+    - name: Check workflow status and collect performance metrics
+      run: |
+        export PATH="$HOME/.temporalio/bin:$PATH"
+        # Poll workflow status with timeout
+        MAX_ATTEMPTS=300
+        ATTEMPT=0
+        while [ $ATTEMPT -lt $MAX_ATTEMPTS ]; do
+          WORKFLOW_DETAILS=$(temporal workflow describe \
+            --workflow-id=${{ steps.workflow_info.outputs.workflow_id }} \
+            --run-id=${{ steps.workflow_info.outputs.run_id }} \
+            --output=json)
+          STATUS=$(echo $WORKFLOW_DETAILS | jq -r '.workflowExecutionInfo.status')
+          if [ "$STATUS" != "WORKFLOW_EXECUTION_STATUS_RUNNING" ]; then
+            break
+          fi
+          echo "Workflow still running... (Attempt $((ATTEMPT+1))/$MAX_ATTEMPTS)"
+          sleep 1
+          ATTEMPT=$((ATTEMPT+1))
+        done
+
+    - name: Get scalene metrics and output
+      run: |
+        export PATH="$HOME/.temporalio/bin:$PATH"
+
+        # Check if scalene.json exists in the main branch
+        if git show origin/main:scalene.json > main_scalene.json 2>/dev/null; then
+          # Calculate metrics for the main branch
+          MAIN_AVG_CPU=$(jq -r '
+            [
+              .files |
+              to_entries[] |
+              .value.functions[] |
+              select(.n_cpu_percent_c != null and .n_cpu_percent_python != null and .n_sys_percent != null) |
+              (.n_cpu_percent_c + .n_cpu_percent_python + .n_sys_percent)
+            ] |
+            add / length
+          ' main_scalene.json)
+
+          MAIN_MAX_CPU=$(jq -r '
+            .files |
+            to_entries[] |
+            .value.functions[] |
+            select(.n_cpu_percent_c != null and .n_cpu_percent_python != null and .n_sys_percent != null) |
+            (.n_cpu_percent_c + .n_cpu_percent_python + .n_sys_percent)
+          ' main_scalene.json | sort -rn | head -n1)
+
+          MAIN_MEMORY_USAGE=$(jq -r '
+            .max_footprint_mb
+          ' main_scalene.json)
+        else
+          echo "scalene.json does not exist in the main branch"
+          MAIN_AVG_CPU="N/A"
+          MAIN_MAX_CPU="N/A"
+          MAIN_MEMORY_USAGE="N/A"
+        fi
+
+        # Get final workflow details and status
+        WORKFLOW_DETAILS=$(temporal workflow describe \
+          --workflow-id=${{ steps.workflow_info.outputs.workflow_id }} \
+          --run-id=${{ steps.workflow_info.outputs.run_id }} \
+          --output=json)
+        STATUS=$(echo $WORKFLOW_DETAILS | jq -r '.workflowExecutionInfo.status')
+        DURATION=$(echo $WORKFLOW_DETAILS | jq -r '.workflowExecutionInfo.executionDuration | rtrimstr("s") | tonumber | (. * 100 | round | . / 100) | tostring + "s"')
+        case $STATUS in
+          "WORKFLOW_EXECUTION_STATUS_COMPLETED")
+            DISPLAY_STATUS="🟢 Completed"
+            EXIT_CODE=0
+            ;;
+          "WORKFLOW_EXECUTION_STATUS_FAILED")
+            DISPLAY_STATUS="🔴 Failed"
+            EXIT_CODE=1
+            ;;
+          "WORKFLOW_EXECUTION_STATUS_RUNNING")
+            DISPLAY_STATUS="🟠 Running"
+            EXIT_CODE=1
+            ;;
+          *)
+            DISPLAY_STATUS="❓ ${STATUS}"
+            EXIT_CODE=1
+            ;;
+        esac
+
+        kill $(lsof -t -i :8000)
+
+        sleep 10
+
+        # Check if scalene.json exists
+        if [ -f scalene.json ]; then
+          echo "scalene.json exists"
+        else
+          echo "scalene.json does not exist"
+        fi
+
+        # Calculate Average CPU Usage upto 2 decimal places
+        AVG_CPU=$(jq -r '
+          [
+            .files |
+            to_entries[] |
+            .value.functions[] |
+            select(.n_cpu_percent_c != null and .n_cpu_percent_python != null and .n_sys_percent != null) |
+            (.n_cpu_percent_c + .n_cpu_percent_python + .n_sys_percent)
+          ] |
+          add / length
+        ' scalene.json | awk '{printf "%.2f\n", $1}')
+
+        # Max CPU Usage upto 2 decimal places
+        MAX_CPU=$(jq -r '
+          .files |
+          to_entries[] |
+          .value.functions[] |
+          select(.n_cpu_percent_c != null and .n_cpu_percent_python != null and .n_sys_percent != null) |
+          (.n_cpu_percent_c + .n_cpu_percent_python + .n_sys_percent)
+        ' scalene.json | sort -rn | head -n1 | awk '{printf "%.2f\n", $1}')
+
+        MEMORY_USAGE=$(jq -r '
+          .max_footprint_mb
+        ' scalene.json | awk '{printf "%.2f\n", $1}')
+
+        echo "Finished Calculating Metrics"
+
+
+        # Generate comprehensive report
+        echo "## 📊 Postgres App E2E Test Results and Performance Metrics" >> metrics.md
+        echo "### Runner Environment Details" >> metrics.md
+        echo "$(mpstat 1 1 | awk 'NR == 1')" >> metrics.md
+        echo "Total Memory: $(free -m | awk 'NR == 2 {print $2}')" MB >> metrics.md
+
+        echo "### 🎯 Test Summary" >> metrics.md
+        echo "| Metric | Value |" >> metrics.md
+        echo "|--------|-------|" >> metrics.md
+        echo "| Database | assets_100k |" >> metrics.md
+        echo "| Status | $DISPLAY_STATUS |" >> metrics.md
+        echo "| Workflow Duration | $DURATION |" >> metrics.md
+
+        # Update metrics report to include both current and main branch summaries
+        echo "## 📊 Usage Summary" >> metrics.md
+        echo "| Metric | Current Branch | Main Branch |" >> metrics.md
+        echo "|--------|----------------|-------------|" >> metrics.md
+        echo "| Average CPU Usage | $AVG_CPU% | $MAIN_AVG_CPU% |" >> metrics.md
+        echo "| Max CPU Usage | $MAX_CPU% | $MAIN_MAX_CPU% |" >> metrics.md
+        echo "| Memory Usage | $MEMORY_USAGE MB | $MAIN_MEMORY_USAGE MB |" >> metrics.md
+
+        echo "---" >> metrics.md
+
+        cat metrics.md
+        exit $EXIT_CODE
+
+    - name: Comment workflow status on Pull Request
+      if: ${{ github.event_name == 'pull_request' }}
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: 'workflow_status'
+        message-path: metrics.md
+      continue-on-error: true
+
+    # Stop all services
+    - name: Stop all services and monitoring
+      if: always()
+      run: |
+        # Kill monitoring process first
+        pkill -f "mpstat" || true
+
+        # Stop the application and services gracefully
+        make stop-all || true
