@@ -1,7 +1,7 @@
 import boto3
 from botocore.exceptions import ClientError
 
-def get_aws_role_credentials(role_arn: str, external_id: str = None, session_name: str = "temp-session") -> dict:
+def get_aws_role_rds_token(role_arn: str, external_id: str = None, session_name: str = "temp-session", region: str = "ap-south-1", host: str, port: int = 5432, user: str) -> str:
     """
     Get temporary AWS credentials by assuming a role.
     
@@ -22,16 +22,21 @@ def get_aws_role_credentials(role_arn: str, external_id: str = None, session_nam
         )
         
         credentials = assumed_role['Credentials']
-        return {
-            'aws_access_key_id': credentials['AccessKeyId'],
-            'aws_secret_access_key': credentials['SecretAccessKey'],
-            'aws_session_token': credentials['SessionToken'],
-            'expiration': credentials['Expiration']
-        }
+        aws_client = boto3.client(
+                "rds",
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=region,
+            )
+        token = aws_client.generate_db_auth_token(
+                DBHostname=host, Port=port, DBUsername=user
+            )
+        return token
+        
     except ClientError as e:
         raise Exception(f"Failed to assume role: {str(e)}")
 
-def get_aws_user_credentials(aws_access_key_id: str, aws_secret_access_key: str, region: str = "us-east-1") -> dict:
+def get_aws_user_rds_token(aws_access_key_id: str, aws_secret_access_key: str, region: str = "ap-south-1", host: str, port: int = 5432, user: str) -> str:
     """
     Get AWS credentials using IAM user credentials.
     
@@ -44,17 +49,15 @@ def get_aws_user_credentials(aws_access_key_id: str, aws_secret_access_key: str,
         dict: Dictionary containing AWS credentials
     """
     try:
-        session = boto3.Session(
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            region_name=region
-        )
-        
-        credentials = session.get_credentials()
-        return {
-            'aws_access_key_id': credentials.access_key,
-            'aws_secret_access_key': credentials.secret_key,
-            'region': region
-        }
+        aws_client = boto3.client(
+                "rds",
+                aws_access_key_id=aws_access_key_id,
+                aws_secret_access_key=aws_secret_access_key,
+                region_name=region,
+            )
+        token = aws_client.generate_db_auth_token(
+                DBHostname=host, Port=port, DBUsername=user
+            )
+        return token
     except Exception as e:
         raise Exception(f"Failed to get user credentials: {str(e)}")
