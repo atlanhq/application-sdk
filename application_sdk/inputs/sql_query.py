@@ -17,6 +17,26 @@ from application_sdk.inputs import Input
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
+def _get_sql_query(
+    query_attribute: str, workflow_args: Dict[str, Any], parent_class: Optional[Any]
+) -> str:
+    """Get the SQL query to execute.
+
+    Returns:
+        str: The SQL query to execute.
+    """
+    # Check if the parent class has the query defined and process the same
+    if parent_class and hasattr(parent_class, query_attribute):
+        return prepare_query(getattr(parent_class, query_attribute), workflow_args)
+
+    # Check if the workflow_args have the query defined and process the same
+    # This is applicable in case of query miner workflow
+    if workflow_args.get(query_attribute):
+        return workflow_args.get(query_attribute)
+
+    return query_attribute
+
+
 class SQLQueryInput(Input):
     """Input handler for SQL queries.
 
@@ -81,10 +101,9 @@ class SQLQueryInput(Input):
             engine = (
                 state.sql_client.engine if state else parent_class.sql_client.engine
             )
-        if hasattr(parent_class, query):
-            query = prepare_query(getattr(parent_class, query), kwargs)
+
         kwargs["engine"] = engine
-        kwargs["query"] = query
+        kwargs["query"] = _get_sql_query(query, kwargs, parent_class)
         return cls(**kwargs)
 
     def _read_sql_query(

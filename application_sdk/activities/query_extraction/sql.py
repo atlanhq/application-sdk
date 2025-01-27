@@ -138,7 +138,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @transform(
-        batch_input=SQLQueryInput(query="fetch_queries_sql"),
+        batch_input=SQLQueryInput(query="sql_query"),
         raw_output=JsonOutput(output_suffix="/raw/query"),
     )
     async def fetch_queries(
@@ -157,7 +157,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Returns:
             None
         """
-        await raw_output.write_df(batch_input)
+        await raw_output.write_batched_df(batch_input)
 
     async def parallelize_query(
         self,
