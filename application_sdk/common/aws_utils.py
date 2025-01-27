@@ -1,4 +1,4 @@
-from boto3 import client  # type: ignore
+from boto3 import client
 from botocore.exceptions import ClientError
 
 

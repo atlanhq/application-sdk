@@ -33,8 +33,6 @@ duckdb-engine = {version = "^0.14.0", optional = true}
 pyiceberg = {version = "^0.8.1", optional = true}
 boto3 = "^1.31.3"
 boto3-stubs = "^1.31.3"
-mypy-boto3-rds = "^1.31.3"         # Stub for RDS
-mypy-boto3-sts = "^1.31.3"         # Stub for STS
 
 [tool.poetry.extras]
 workflows = [

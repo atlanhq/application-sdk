@@ -2794,34 +2794,6 @@ files = [
 ]
 
 [[package]]
-name = "mypy-boto3-rds"
-version = "1.36.0"
-description = "Type annotations for boto3 RDS 1.36.0 service generated with mypy-boto3-builder 8.8.0"
-optional = false
-python-versions = ">=3.8"
-files = [
-    {file = "mypy_boto3_rds-1.36.0-py3-none-any.whl", hash = "sha256:47d6df5dc70f83d91139755675cefa95d2107e9d82efe51f70679b7c42b6d73e"},
-    {file = "mypy_boto3_rds-1.36.0.tar.gz", hash = "sha256:3d4ed0f364233b0315bbe2e42bcd373277c7a489687dfae5593238f26a6bfb53"},
-]
-
-[package.dependencies]
-typing-extensions = {version = "*", markers = "python_version < \"3.12\""}
-
-[[package]]
-name = "mypy-boto3-sts"
-version = "1.36.0"
-description = "Type annotations for boto3 STS 1.36.0 service generated with mypy-boto3-builder 8.8.0"
-optional = false
-python-versions = ">=3.8"
-files = [
-    {file = "mypy_boto3_sts-1.36.0-py3-none-any.whl", hash = "sha256:3a25dcbfd2df122c2d97e2a697e04d6a9636be52214a89b8dde7ae6aa1473c51"},
-    {file = "mypy_boto3_sts-1.36.0.tar.gz", hash = "sha256:5220351b91f89ffcf93f5799dc80e2764d5019995cef4041a6e2b453eb4bd6b3"},
-]
-
-[package.dependencies]
-typing-extensions = {version = "*", markers = "python_version < \"3.12\""}
-
-[[package]]
 name = "myst-parser"
 version = "4.0.0"
 description = "An extended [CommonMark](https://spec.commonmark.org/) compliant parser,"
@@ -5588,4 +5560,4 @@ workflows = ["dapr", "pandas", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "1d4abe69f3711efe789500d75eac8fef8be8ab80ae7586754606d5bc59d7e1f3"
+content-hash = "a1a8f6c4ef8fb23ed6d183d1ac9a0b3ad10efc516995a921b00ea2676b5bb44e"
