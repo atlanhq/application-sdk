@@ -49,7 +49,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client_class (Type[SQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
-        temp_table_regex_sql (str): SQL snippet for excluding temporary tables.
+        tables_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during tables extraction.
+            Defaults to an empty string.
+        column_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during column extraction.
             Defaults to an empty string.
     """
 
@@ -60,7 +62,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     fetch_table_sql = None
     fetch_column_sql = None
 
-    temp_table_regex_sql = ""
+    tables_extraction_temp_table_regex_sql = ""
+    column_extraction_temp_table_regex_sql = ""
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -289,7 +292,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         **kwargs: self.sql_client_class.sql_input(
             engine=state.sql_client.engine,
             query=prepare_query(
-                self.fetch_table_sql, workflow_args, self.temp_table_regex_sql
+                self.fetch_table_sql,
+                workflow_args,
+                self.tables_extraction_temp_table_regex_sql,
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(
@@ -328,7 +333,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             query=prepare_query(
                 self.fetch_column_sql,
                 workflow_args,
-                temp_table_regex_sql=self.temp_table_regex_sql,
+                temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
             ),
         ),
         raw_output=lambda self, workflow_args: JsonOutput(

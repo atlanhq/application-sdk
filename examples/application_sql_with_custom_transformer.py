@@ -88,7 +88,12 @@ class SampleSQLActivities(SQLMetadataExtractionActivities):
         {temp_table_regex_sql};
     """
 
-    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    tables_extraction_temp_table_regex_sql = (
+        "AND t.table_name !~ '{exclude_table_regex}'"
+    )
+    column_extraction_temp_table_regex_sql = (
+        "AND c.table_name !~ '{exclude_table_regex}'"
+    )
 
     fetch_column_sql = """
     SELECT
