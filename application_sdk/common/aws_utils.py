@@ -1,13 +1,14 @@
 from boto3 import client
 from botocore.exceptions import ClientError
+import os
 
 
-def get_aws_role_rds_token(
+def generate_aws_rds_token_with_iam_role(
     role_arn: str,
     host: str,
     user: str,
     external_id: str | None = None,
-    session_name: str = "temp-session",
+    session_name: str = os.getenv("SESSION_NAME", "temp-session"),
     region: str = "ap-south-1",
     port: int = 5432,
 ) -> str:
@@ -49,7 +50,7 @@ def get_aws_role_rds_token(
         raise Exception(f"Failed to assume role: {str(e)}")
 
 
-def get_aws_user_rds_token(
+def generate_aws_rds_token_with_iam_user(
     aws_access_key_id: str,
     aws_secret_access_key: str,
     host: str,
