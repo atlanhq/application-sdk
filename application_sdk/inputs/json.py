@@ -56,8 +56,6 @@ class JsonInput(Input):
         and return as a batched pandas dataframe
         """
         try:
-            import pandas as pd
-
             for file_suffix in self.file_suffixes or []:
                 json_reader_obj = pd.read_json(
                     os.path.join(self.path, file_suffix),
@@ -74,8 +72,6 @@ class JsonInput(Input):
         and return as a single combined pandas dataframe
         """
         try:
-            import pandas as pd
-
             dataframes = []
             for file_suffix in self.file_suffixes or []:
                 dataframes.append(
@@ -112,7 +108,6 @@ class JsonInput(Input):
         """
         try:
             import daft
-            import pandas as pd
 
             dataframes = []
             for file_suffix in self.file_suffixes or []:

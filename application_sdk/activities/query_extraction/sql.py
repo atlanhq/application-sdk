@@ -157,7 +157,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Returns:
             None
         """
-        await raw_output.write_batched_df(batch_input)
+        await raw_output.write_batched_dataframe(batch_input)
 
     async def parallelize_query(
         self,

@@ -237,9 +237,9 @@ class SQLQueryInput(Input):
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 
-            batched_df = await self.get_batched_dataframe()
-            for df in batched_df:
-                daft_df = daft.from_pandas(df)
-                yield daft_df
+            batched_dataframe = await self.get_batched_dataframe()
+            for dataframe in batched_dataframe:
+                daft_dataframe = daft.from_pandas(dataframe)
+                yield daft_dataframe
         except Exception as e:
             logger.error(f"Error reading batched data(daft) from SQL: {str(e)}")

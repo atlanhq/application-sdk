@@ -146,19 +146,19 @@ class JsonOutput(Output):
             **kwargs,
         )
 
-    async def write_df(self, df: pd.DataFrame):
+    async def write_dataframe(self, dataframe: pd.DataFrame):
         """Write a pandas DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it
         into chunks based on chunk_size and buffer_size settings.
 
         Args:
-            df (pd.DataFrame): The DataFrame to write.
+            dataframe (pd.DataFrame): The DataFrame to write.
 
         Note:
             If the DataFrame is empty, the method returns without writing.
         """
-        if len(df) == 0:
+        if len(dataframe) == 0:
             return
 
         try:
@@ -168,7 +168,10 @@ class JsonOutput(Output):
                 if self.chunk_start is None
                 else min(self.chunk_size, self.buffer_size)
             )
-            chunks = [df[i : i + partition] for i in range(0, len(df), partition)]
+            chunks = [
+                dataframe[i : i + partition]
+                for i in range(0, len(dataframe), partition)
+            ]
 
             for chunk in chunks:
                 self.buffer.append(chunk)
@@ -182,20 +185,20 @@ class JsonOutput(Output):
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def write_daft_df(self, df: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
 
         Args:
-            df (daft.DataFrame): The DataFrame to write.
+            dataframe (daft.DataFrame): The DataFrame to write.
 
         Note:
             Daft does not have built-in JSON writing support, so we convert to pandas.
         """
         # Daft does not have a built in method to write the daft dataframe to json
         # So we convert it to pandas dataframe and write it to json
-        await self.write_df(df.to_pandas())
+        await self.write_dataframe(dataframe.to_pandas())
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
@@ -206,18 +209,16 @@ class JsonOutput(Output):
         Note:
             If the buffer is empty or has no records, the method returns without writing.
         """
-        import pandas as pd
-
         if not self.buffer or not self.current_buffer_size:
             return
-        combined_df = pd.concat(self.buffer)
+        combined_dataframe = pd.concat(self.buffer)
 
         # Write DataFrame to JSON file
-        if not combined_df.empty:
+        if not combined_dataframe.empty:
             self.chunk_count += 1
-            self.total_record_count += len(combined_df)
+            self.total_record_count += len(combined_dataframe)
             output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-            combined_df.to_json(output_file_name, orient="records", lines=True)
+            combined_dataframe.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(

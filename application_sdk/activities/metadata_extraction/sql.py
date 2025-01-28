@@ -223,7 +223,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_df(batch_input)
+        await raw_output.write_batched_dataframe(batch_input)
         return raw_output.get_metadata(typename="database")
 
     @activity.defn
@@ -248,7 +248,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_df(batch_input)
+        await raw_output.write_batched_dataframe(batch_input)
         return raw_output.get_metadata(typename="schema")
 
     @activity.defn
@@ -273,7 +273,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_df(batch_input)
+        await raw_output.write_batched_dataframe(batch_input)
         return raw_output.get_metadata(typename="table")
 
     @activity.defn
@@ -298,7 +298,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_df(batch_input)
+        await raw_output.write_batched_dataframe(batch_input)
         return raw_output.get_metadata(typename="column")
 
     @activity.defn
@@ -367,5 +367,5 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 kwargs.get("workflow_run_id"),
                 kwargs,
             )
-            await transformed_output.write_df(transformed_chunk)
+            await transformed_output.write_dataframe(transformed_chunk)
         return transformed_output.get_metadata()

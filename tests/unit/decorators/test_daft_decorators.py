@@ -13,9 +13,9 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 
 
-def add_1(df):
-    df = df.select(daft.col("value") + 1)
-    return df
+def add_1(dataframe):
+    dataframe = dataframe.select(daft.col("value") + 1)
+    return dataframe
 
 
 class MockSingleThreadExecutor:
@@ -174,7 +174,7 @@ class TestDaftDecorators:
         )
         async def func(batch_input, out1, **kwargs):
             for chunk in batch_input:
-                await out1.write_daft_df(chunk.transform(add_1))
+                await out1.write_daft_dataframe(chunk.transform(add_1))
 
         await func()
         # Check files generated

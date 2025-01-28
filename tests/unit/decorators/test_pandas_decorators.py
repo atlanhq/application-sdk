@@ -127,7 +127,7 @@ class TestPandasDecorators:
         )
         async def func(batch_input, out1, **kwargs):
             for chunk in batch_input:
-                await out1.write_df(chunk.map(lambda x: x + 1))
+                await out1.write_dataframe(chunk.map(lambda x: x + 1))
 
         await func()
         # Check files generated

@@ -15,12 +15,12 @@ from application_sdk.outputs.iceberg import IcebergOutput
 INSERT_QUERY = "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
 
 
-def add_1(df):
+def add_1(dataframe):
     """
     Similar to a transformation function that adds 1 to the value column
     """
-    df = df.select(daft.col("value") + 1)
-    return df
+    dataframe = dataframe.select(daft.col("value") + 1)
+    return dataframe
 
 
 class MockSingleThreadExecutor:
@@ -100,7 +100,7 @@ class TestDaftDecoratorsIceberg:
             ),
         )
         async def func(batch_input: daft.DataFrame, output, **kwargs):
-            await output.write_batched_daft_df(batch_input)
+            await output.write_batched_daft_dataframe(batch_input)
 
         await func()
 
@@ -131,7 +131,7 @@ class TestDaftDecoratorsIceberg:
         )
         async def func(batch_input: daft.DataFrame, output, **kwargs):
             assert batch_input.count_rows() == 10
-            await output.write_daft_df(batch_input)
+            await output.write_daft_dataframe(batch_input)
 
         await func()
 
@@ -164,7 +164,7 @@ class TestDaftDecoratorsIceberg:
         async def func(batch_input: daft.DataFrame, output, **kwargs):
             async for chunk in batch_input:
                 assert chunk.count_rows() == expected_row_count.pop(0)
-                await output.write_daft_df(chunk)
+                await output.write_daft_dataframe(chunk)
 
         await func()
 
@@ -191,7 +191,7 @@ class TestDaftDecoratorsIceberg:
             ),
         )
         async def func(batch_input, output, **kwargs):
-            await output.write_daft_df(batch_input.transform(add_1))
+            await output.write_daft_dataframe(batch_input.transform(add_1))
             return batch_input
 
         await func()
