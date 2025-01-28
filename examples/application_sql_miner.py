@@ -169,7 +169,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
             "ranged_sql_end_key": "[END_MARKER]",
         },
         "credentials": {
-            "authType":"basic",
+            "authType": "basic",
             "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
             "username": os.getenv("SNOWFLAKE_USER", "snowflake"),
             "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),

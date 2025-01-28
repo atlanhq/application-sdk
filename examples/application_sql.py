@@ -132,7 +132,7 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
 
     workflow_args = {
         "credentials": {
-            "authType":"basic",
+            "authType": "basic",
             "host": os.getenv("POSTGRES_HOST", "localhost"),
             "port": os.getenv("POSTGRES_PORT", "5432"),
             "username": os.getenv("POSTGRES_USER", "postgres"),
