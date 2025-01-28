@@ -10,7 +10,6 @@ def generate_aws_rds_token_with_iam_role(
     user: str,
     external_id: str | None = None,
     session_name: str = os.getenv("SESSION_NAME", "temp-session"),
-    region: str = "ap-south-1",
     port: int = 5432,
 ) -> str:
     """
@@ -22,7 +21,6 @@ def generate_aws_rds_token_with_iam_role(
         user (str): The database username
         external_id (str, optional): The external ID to use for the session
         session_name (str, optional): Name of the temporary session
-        region (str, optional): AWS region
         port (int, optional): Database port
 
     Returns:
@@ -40,7 +38,6 @@ def generate_aws_rds_token_with_iam_role(
             aws_access_key_id=credentials["AccessKeyId"],
             aws_secret_access_key=credentials["SecretAccessKey"],
             aws_session_token=credentials["SessionToken"],
-            region_name=region,
         )
         token: str = aws_client.generate_db_auth_token(
             DBHostname=host, Port=port, DBUsername=user
@@ -56,7 +53,6 @@ def generate_aws_rds_token_with_iam_user(
     aws_secret_access_key: str,
     host: str,
     user: str,
-    region: str = "ap-south-1",
     port: int = 5432,
 ) -> str:
     """
@@ -67,7 +63,6 @@ def generate_aws_rds_token_with_iam_user(
         aws_secret_access_key (str): AWS secret access key
         host (str): The RDS host endpoint
         user (str): The database username
-        region (str, optional): AWS region
         port (int, optional): Database port
 
     Returns:
@@ -78,7 +73,6 @@ def generate_aws_rds_token_with_iam_user(
             "rds",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=region,
         )
         token = aws_client.generate_db_auth_token(
             DBHostname=host, Port=port, DBUsername=user
