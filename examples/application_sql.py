@@ -52,7 +52,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+        return f"postgresql+psycopg://{self.credentials['username']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
 class SampleSQLActivities(SQLMetadataExtractionActivities):
@@ -140,9 +140,10 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
 
     workflow_args = {
         "credentials": {
+            "authType": "basic",
             "host": os.getenv("POSTGRES_HOST", "localhost"),
             "port": os.getenv("POSTGRES_PORT", "5432"),
-            "user": os.getenv("POSTGRES_USER", "postgres"),
+            "username": os.getenv("POSTGRES_USER", "postgres"),
             "password": os.getenv("POSTGRES_PASSWORD", "password"),
             "database": os.getenv("POSTGRES_DATABASE", "postgres"),
         },
@@ -155,9 +156,6 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
             "include_filter": "{}",
             "temp_table_regex": "",
             "advanced_config_strategy": "default",
-            "use_source_schema_filtering": "false",
-            "use_jdbc_internal_methods": "true",
-            "authentication": "BASIC",
             "extraction-method": "direct",
             "exclude_views": "true",
             "exclude_empty_tables": "false",
