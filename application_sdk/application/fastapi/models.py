@@ -47,9 +47,10 @@ class PreflightCheckRequest(BaseModel):
         schema_extra = {
             "example": {
                 "credentials": {
+                    "authType":"basic",
                     "host": "host",
                     "port": 5432,
-                    "user": "username",
+                    "username": "username",
                     "password": "password",
                     "database": "databasename",
                 },
@@ -90,9 +91,10 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
             "example": {
                 "miner_args": {},
                 "credentials": {
+                    "authType":"basic",
                     "host": "",
                     "port": 5432,
-                    "user": "username",
+                    "username": "username",
                     "password": "password",
                     "database": "databasename",
                 },
@@ -101,10 +103,7 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
                     "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
                     "exclude_filter": "{}",
                     "temp_table_regex": "",
-                    "advanced_config_strategy": "default",
-                    "use_source_schema_filtering": "false",
-                    "use_jdbc_internal_methods": "true",
-                    "authentication": "BASIC",
+                    "advanced_config_strategy": "default",    
                 },
             }
         }
@@ -173,9 +172,7 @@ class WorkflowConfigResponse(BaseModel):
                         "exclude_filter": "{}",
                         "temp_table_regex": "",
                         "advanced_config_strategy": "default",
-                        "use_source_schema_filtering": "false",
-                        "use_jdbc_internal_methods": "true",
-                        "authentication": "BASIC",
+                        
                     },
                 },
             }

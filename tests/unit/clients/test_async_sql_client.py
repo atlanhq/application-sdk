@@ -31,7 +31,7 @@ def test_load(create_async_engine: Any, async_sql_client: AsyncSQLClient):
     mock_connection = MagicMock()
     create_async_engine.return_value = mock_engine
     mock_engine.connect.return_value = mock_connection
-    credentials = {"user": "test_user", "password": "test_password"}
+    credentials = {"username": "test_user", "password": "test_password"}
 
     # Run the load function
     asyncio.run(async_sql_client.load(credentials))

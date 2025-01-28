@@ -29,7 +29,7 @@ def test_load(mock_create_engine: Any, sql_client: SQLClient):
     # Mock the engine and connection
     mock_engine = MagicMock()
     mock_connection = MagicMock()
-    credentials = {"user": "test_user", "password": "test_password"}
+    credentials = {"username": "test_user", "password": "test_password"}
     mock_create_engine.return_value = mock_engine
     mock_engine.connect.return_value = mock_connection
 

@@ -38,6 +38,7 @@ class TestFastAPIApplication:
     def sample_payload(self) -> Dict[str, Any]:
         return {
             "credentials": {
+                "authType":"basic",
                 "account_id": "qdgrryr-uv65759",
                 "port": 443,
                 "role": "ACCOUNTADMIN",
