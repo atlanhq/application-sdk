@@ -49,6 +49,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client_class (Type[SQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
+        tables_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during tables extraction.
+            Defaults to an empty string.
+        column_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during column extraction.
+            Defaults to an empty string.
     """
 
     _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
@@ -57,6 +61,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     fetch_schema_sql = None
     fetch_table_sql = None
     fetch_column_sql = None
+
+    tables_extraction_temp_table_regex_sql = ""
+    column_extraction_temp_table_regex_sql = ""
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -254,7 +261,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @transform(
-        batch_input=SQLQueryInput(query="fetch_table_sql"),
+        batch_input=SQLQueryInput(
+            query="fetch_table_sql",
+            temp_table_sql_query="tables_extraction_temp_table_regex_sql",
+        ),
         raw_output=JsonOutput(output_suffix="/raw/table"),
     )
     async def fetch_tables(
@@ -279,7 +289,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @transform(
-        batch_input=SQLQueryInput(query="fetch_column_sql"),
+        batch_input=SQLQueryInput(
+            query="fetch_column_sql",
+            temp_table_sql_query="column_extraction_temp_table_regex_sql",
+        ),
         raw_output=JsonOutput(output_suffix="/raw/column"),
     )
     async def fetch_columns(

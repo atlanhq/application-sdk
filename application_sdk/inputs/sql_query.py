@@ -19,7 +19,10 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 def _get_sql_query(
-    query_attribute: str, workflow_args: Dict[str, Any], parent_class: Optional[Any]
+    query_attribute: str,
+    workflow_args: Dict[str, Any],
+    parent_class: Optional[Any],
+    temp_table_sql_query: str | None = None,
 ) -> str:
     """Get the SQL query to execute.
 
@@ -28,7 +31,14 @@ def _get_sql_query(
     """
     # Check if the parent class has the query defined and process the same
     if parent_class and hasattr(parent_class, query_attribute):
-        return prepare_query(getattr(parent_class, query_attribute), workflow_args)
+        if temp_table_sql_query and hasattr(parent_class, temp_table_sql_query):
+            return prepare_query(
+                getattr(parent_class, query_attribute),
+                workflow_args,
+                getattr(parent_class, temp_table_sql_query),
+            )
+        else:
+            return prepare_query(getattr(parent_class, query_attribute), workflow_args)
 
     # Check if the workflow_args have the query defined and process the same
     # This is applicable in case of query miner workflow
@@ -57,12 +67,14 @@ class SQLQueryInput(Input):
     chunk_size: Optional[int]
     state: Optional[ActivitiesState] = None
     async_session: Optional[AsyncSession] = None
+    temp_table_sql_query: Optional[str] = None
 
     def __init__(
         self,
         query: str,
         engine: Optional[Union[Engine, str]] = None,
         chunk_size: Optional[int] = 100000,
+        temp_table_sql_query: Optional[str] = None,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the async SQL query input handler.
@@ -76,6 +88,7 @@ class SQLQueryInput(Input):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
+        self.temp_table_sql_query = temp_table_sql_query
         if self.engine and isinstance(self.engine, AsyncEngine):
             self.async_session = sessionmaker(
                 self.engine, expire_on_commit=False, class_=AsyncSession
@@ -104,7 +117,9 @@ class SQLQueryInput(Input):
             )
 
         kwargs["engine"] = engine
-        kwargs["query"] = _get_sql_query(query, kwargs, parent_class)
+        kwargs["query"] = _get_sql_query(
+            query, kwargs, parent_class, kwargs.get("temp_table_sql_query")
+        )
         return cls(**kwargs)
 
     def _read_sql_query(

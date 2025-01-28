@@ -45,6 +45,8 @@ class SQLHandler(HandlerInterface):
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
+    temp_table_regex_sql: str = ""
+
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client
 
@@ -277,7 +279,13 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @transform(sql_input=SQLQueryInput(query="tables_check_sql", chunk_size=None))
+    @transform(
+        sql_input=SQLQueryInput(
+            query="tables_check_sql",
+            chunk_size=None,
+            temp_table_sql_query="temp_table_regex_sql",
+        )
+    )
     async def tables_check(
         self,
         sql_input: pd.DataFrame,

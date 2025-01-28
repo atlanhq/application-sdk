@@ -124,12 +124,15 @@ class SnowflakeSQLClient(SQLClient):
 
 class SampleSnowflakeHandler(SQLHandler):
     tables_check_sql = """
-        SELECT count(*) as "count"
-            FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-            WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
-                AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
-                AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}';
-        """
+    SELECT count(*) as "count"
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+    WHERE NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
+        AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
+        {temp_table_regex_sql};
+    """
+
+    temp_table_regex_sql = "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
+
     metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
 
 
@@ -153,7 +156,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(hours=5)).timestamp())
 
     workflow_args = {
         "miner_args": {

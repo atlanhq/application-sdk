@@ -21,12 +21,13 @@ def handler(mock_sql_client: Any) -> SQLHandler:
     handler.prepare_metadata = AsyncMock()
     handler.tables_check = AsyncMock()
     handler.tables_check_sql = """
-        SELECT count(*) as "count"
+    SELECT count(*) as "count"
         FROM ACCOUNT_USAGE.TABLES
-        WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
-            AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
+        WHERE NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
             AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
+            {temp_table_regex_sql}
     """
+    handler.temp_table_regex_sql = "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
     return handler
 
 

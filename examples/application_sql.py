@@ -77,11 +77,17 @@ class SampleSQLActivities(SQLMetadataExtractionActivities):
         t.*
     FROM
         information_schema.tables t
-    WHERE
-        concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}'
+    WHERE concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}'
         AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}'
-        AND t.table_name !~ '{exclude_table}';
+        {temp_table_regex_sql};
     """
+
+    tables_extraction_temp_table_regex_sql = (
+        "AND t.table_name !~ '{exclude_table_regex}'"
+    )
+    column_extraction_temp_table_regex_sql = (
+        "AND c.table_name !~ '{exclude_table_regex}'"
+    )
 
     fetch_column_sql = """
     SELECT
@@ -91,7 +97,7 @@ class SampleSQLActivities(SQLMetadataExtractionActivities):
     WHERE
         concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}'
         AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
-        AND c.table_name !~ '{exclude_table}';
+        {temp_table_regex_sql};
     """
 
 
@@ -99,11 +105,13 @@ class SampleSQLWorkflowHandler(SQLHandler):
     tables_check_sql = """
     SELECT count(*)
         FROM INFORMATION_SCHEMA.TABLES
-        WHERE TABLE_NAME !~ '{exclude_table}'
-            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
+        WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
             AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
             AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
+            {temp_table_regex_sql};
     """
+
+    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
 
     metadata_sql = """
     SELECT schema_name, catalog_name
