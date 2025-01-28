@@ -132,7 +132,7 @@ class SampleSnowflakeHandler(SQLHandler):
     """
 
     temp_table_regex_sql = "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
-    
+
     metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
 
 
