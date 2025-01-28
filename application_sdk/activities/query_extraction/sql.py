@@ -4,7 +4,6 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
-import pandas as pd
 from pydantic import BaseModel, Field
 from temporalio import activity
 
@@ -12,9 +11,10 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.decorators import activity_pd
+from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
 
@@ -137,22 +137,15 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self,
-        workflow_args,
-        state,
-        **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine, query=workflow_args["sql_query"]
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/query",
-            upload_file_prefix=workflow_args["output_prefix"],
-            path_gen=lambda chunk_start,
-            chunk_count: f"{workflow_args['start_marker']}_{workflow_args['end_marker']}.json",
-        ),
+    @transform(
+        batch_input=SQLQueryInput(query="sql_query"),
+        raw_output=JsonOutput(output_suffix="/raw/query"),
     )
     async def fetch_queries(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+        self,
+        batch_input,
+        raw_output: JsonOutput,
+        **kwargs,
     ):
         """Fetch and process queries from the database.
 
@@ -164,7 +157,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Returns:
             None
         """
-        await raw_output.write_df(batch_input)
+        await raw_output.write_batched_dataframe(batch_input)
 
     async def parallelize_query(
         self,

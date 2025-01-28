@@ -7,7 +7,7 @@ import sqlalchemy
 from pyiceberg.catalog.sql import SqlCatalog
 from sqlalchemy.sql import text
 
-from application_sdk.decorators import activity_daft
+from application_sdk.decorators import transform_daft
 from application_sdk.inputs.iceberg import IcebergInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.iceberg import IcebergOutput
@@ -15,12 +15,12 @@ from application_sdk.outputs.iceberg import IcebergOutput
 INSERT_QUERY = "INSERT INTO numbers (value) VALUES (0), (1), (2), (3), (4), (5), (6), (7), (8), (9)"
 
 
-def add_1(df):
+def add_1(dataframe):
     """
     Similar to a transformation function that adds 1 to the value column
     """
-    df = df.select(daft.col("value") + 1)
-    return df
+    dataframe = dataframe.select(daft.col("value") + 1)
+    return dataframe
 
 
 class MockSingleThreadExecutor:
@@ -91,22 +91,18 @@ class TestDaftDecoratorsIceberg:
         Basic test to read the SQL data
         """
 
-        @activity_daft(
-            batch_input=lambda self, arg, **kwargs: SQLQueryInput(
-                self.engine, "SELECT 1 as value"
-            ),
-            output=lambda self, *arg, **kwargs: IcebergOutput(
+        @transform_daft(
+            batch_input=SQLQueryInput(engine=self.engine, query="SELECT 1 as value"),
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table",
             ),
         )
-        async def func(self, batch_input: daft.DataFrame, output, **kwargs):
-            assert batch_input.count_rows() == 1
-            await output.write_daft_df(batch_input)
+        async def func(batch_input: daft.DataFrame, output, **kwargs):
+            await output.write_batched_daft_dataframe(batch_input)
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table")
         data_scan = table.scan().to_arrow()
@@ -123,22 +119,21 @@ class TestDaftDecoratorsIceberg:
 
         self._create_test_clients(query=INSERT_QUERY)
 
-        @activity_daft(
-            batch_input=lambda self, arg, **kwargs: SQLQueryInput(
-                self.engine, "SELECT * FROM numbers", chunk_size=None
+        @transform_daft(
+            batch_input=SQLQueryInput(
+                engine=self.engine, query="SELECT * FROM numbers", chunk_size=None
             ),
-            output=lambda self, arg, **kwargs: IcebergOutput(
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table_two",
             ),
         )
-        async def func(self, batch_input: daft.DataFrame, output, **kwargs):
+        async def func(batch_input: daft.DataFrame, output, **kwargs):
             assert batch_input.count_rows() == 10
-            await output.write_daft_df(batch_input)
+            await output.write_daft_dataframe(batch_input)
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table_two")
         data_scan = table.scan().to_arrow()
@@ -156,22 +151,22 @@ class TestDaftDecoratorsIceberg:
         self._create_test_clients(query=INSERT_QUERY)
         expected_row_count = [3, 3, 3, 1]
 
-        @activity_daft(
-            batch_input=lambda self, arg, **kwargs: SQLQueryInput(
-                self.engine, "SELECT * FROM numbers", chunk_size=3
+        @transform_daft(
+            batch_input=SQLQueryInput(
+                engine=self.engine, query="SELECT * FROM numbers", chunk_size=3
             ),
-            output=lambda self, arg, **kwargs: IcebergOutput(
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table_three",
             ),
         )
-        async def func(self, batch_input: daft.DataFrame, output, **kwargs):
-            assert batch_input.count_rows() == expected_row_count.pop(0)
-            await output.write_daft_df(batch_input)
+        async def func(batch_input: daft.DataFrame, output, **kwargs):
+            async for chunk in batch_input:
+                assert chunk.count_rows() == expected_row_count.pop(0)
+                await output.write_daft_dataframe(chunk)
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table_three")
         data_scan = table.scan().to_arrow()
@@ -184,23 +179,22 @@ class TestDaftDecoratorsIceberg:
         """
         table_two = self.catalog.load_table("default.test_table_two")
 
-        @activity_daft(
-            batch_input=lambda self, arg, **kwargs: IcebergInput(
+        @transform_daft(
+            batch_input=IcebergInput(
                 table=table_two,
                 chunk_size=None,
             ),
-            output=lambda self, arg, **kwargs: IcebergOutput(
+            output=IcebergOutput(
                 iceberg_catalog=self.catalog,
                 iceberg_namespace=self.namespace,
                 iceberg_table="test_table_four",
             ),
         )
-        async def func(self, batch_input, output, **kwargs):
-            await output.write_daft_df(batch_input.transform(add_1))
+        async def func(batch_input, output, **kwargs):
+            await output.write_daft_dataframe(batch_input.transform(add_1))
             return batch_input
 
-        arg = {}
-        await func(self, arg)
+        await func()
 
         table = self.catalog.load_table("default.test_table_four")
         data_scan = table.scan().to_arrow()
