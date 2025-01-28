@@ -58,7 +58,7 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg://{self.credentials['user']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+        return f"postgresql+psycopg://{self.credentials['username']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
 class SampleSQLActivities(SQLMetadataExtractionActivities):
