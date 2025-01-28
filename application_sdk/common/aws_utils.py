@@ -1,0 +1,82 @@
+import os
+
+from boto3 import client
+from botocore.exceptions import ClientError
+
+
+def generate_aws_rds_token_with_iam_role(
+    role_arn: str,
+    host: str,
+    user: str,
+    external_id: str | None = None,
+    session_name: str = os.getenv("SESSION_NAME", "temp-session"),
+    port: int = 5432,
+) -> str:
+    """
+    Get temporary AWS credentials by assuming a role and generate RDS auth token.
+
+    Args:
+        role_arn (str): The ARN of the role to assume
+        host (str): The RDS host endpoint
+        user (str): The database username
+        external_id (str, optional): The external ID to use for the session
+        session_name (str, optional): Name of the temporary session
+        port (int, optional): Database port
+
+    Returns:
+        str: RDS authentication token
+    """
+    try:
+        sts_client = client("sts")
+        assumed_role = sts_client.assume_role(
+            RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id or ""
+        )
+
+        credentials = assumed_role["Credentials"]
+        aws_client = client(
+            "rds",
+            aws_access_key_id=credentials["AccessKeyId"],
+            aws_secret_access_key=credentials["SecretAccessKey"],
+            aws_session_token=credentials["SessionToken"],
+        )
+        token: str = aws_client.generate_db_auth_token(
+            DBHostname=host, Port=port, DBUsername=user
+        )
+        return token
+
+    except ClientError as e:
+        raise Exception(f"Failed to assume role: {str(e)}")
+
+
+def generate_aws_rds_token_with_iam_user(
+    aws_access_key_id: str,
+    aws_secret_access_key: str,
+    host: str,
+    user: str,
+    port: int = 5432,
+) -> str:
+    """
+    Generate RDS auth token using IAM user credentials.
+
+    Args:
+        aws_access_key_id (str): AWS access key ID
+        aws_secret_access_key (str): AWS secret access key
+        host (str): The RDS host endpoint
+        user (str): The database username
+        port (int, optional): Database port
+
+    Returns:
+        str: RDS authentication token
+    """
+    try:
+        aws_client = client(
+            "rds",
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+        )
+        token = aws_client.generate_db_auth_token(
+            DBHostname=host, Port=port, DBUsername=user
+        )
+        return token
+    except Exception as e:
+        raise Exception(f"Failed to get user credentials: {str(e)}")
