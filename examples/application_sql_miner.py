@@ -155,7 +155,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(days=2)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(hours=5)).timestamp())
 
     workflow_args = {
         "miner_args": {
