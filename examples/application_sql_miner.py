@@ -108,7 +108,7 @@ class SampleSQLMinerActivities(SQLQueryExtractionActivities):
 class SnowflakeSQLClient(SQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.credentials["password"])
-        base_url = f"snowflake://{self.credentials['user']}:{encoded_password}@{self.credentials['account_id']}"
+        base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"
 
         # FIXME: add more params
         if self.credentials.get("warehouse"):
@@ -169,8 +169,9 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
             "ranged_sql_end_key": "[END_MARKER]",
         },
         "credentials": {
+            "authType": "basic",
             "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-            "user": os.getenv("SNOWFLAKE_USER", "snowflake"),
+            "username": os.getenv("SNOWFLAKE_USER", "snowflake"),
             "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
             "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
             "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
@@ -184,9 +185,6 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
             "include_filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
             "temp_table_regex": "",
             "advanced_config_strategy": "default",
-            "use_source_schema_filtering": "false",
-            "use_jdbc_internal_methods": "true",
-            "authentication": "BASIC",
             "extraction-method": "direct",
         },
     }
