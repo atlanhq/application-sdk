@@ -121,8 +121,7 @@ class SQLHandler(HandlerInterface):
 
         if metadata_type == MetadataType.ALL:
             # Use flat mode for backward compatibility
-            args = {}
-            result = await self.prepare_metadata(args)
+            result = await self.prepare_metadata()
             return result
 
         else:
@@ -206,7 +205,7 @@ class SQLHandler(HandlerInterface):
         Method to check the schemas and databases
         """
         try:
-            schemas_results: List[Dict[str, str]] = await self.prepare_metadata({})
+            schemas_results: List[Dict[str, str]] = await self.prepare_metadata()
 
             include_filter = json.loads(
                 payload.get("metadata", {}).get("include_filter", "{}")

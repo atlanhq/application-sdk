@@ -54,12 +54,13 @@ async def prepare_fn_kwargs(
     """
     Helper method to prepare the kwargs for the function
     """
+    check_fn_args = fn_args and isinstance(fn_args[-1], Dict)
     for name, kwarg in kwargs.items():
         class_args: Dict[str, Any] = {}
         class_args["state"] = state
         class_args["parent_class"] = self
         class_args.update(kwarg.__dict__)
-        if fn_args:
+        if check_fn_args:
             class_args.update(fn_args[-1])
         class_instance = kwarg.re_init(**class_args)
         if isinstance(class_instance, Input) or issubclass(
@@ -84,7 +85,7 @@ async def prepare_fn_kwargs(
         else:
             # In case of output classes, we'll return the output class itself
             fn_kwargs[name] = class_instance
-    if fn_args:
+    if check_fn_args:
         fn_kwargs.update(fn_args[-1])
     return fn_kwargs
 
