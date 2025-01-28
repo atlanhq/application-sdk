@@ -9,6 +9,7 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
 
+import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -18,17 +19,20 @@ from application_sdk.inputs.objectstore import ObjectStore
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
-def is_empty_dataframe(df: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
+def is_empty_dataframe(df: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821
     """
     Helper method to check if the dataframe has any rows
     """
-    import daft
-    import pandas as pd
-
     if isinstance(df, pd.DataFrame):
         return df.empty
-    if isinstance(df, daft.DataFrame):
-        return df.count_rows() == 0
+
+    try:
+        import daft
+
+        if isinstance(df, daft.DataFrame):
+            return df.count_rows() == 0
+    except Exception:
+        activity.logger.warning("Module daft not found")
     return True
 
 
@@ -63,9 +67,9 @@ class Output(ABC):
     async def write_batched_df(
         self,
         batched_df: Union[
-            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]  # noqa: F821
+            AsyncGenerator[pd.DataFrame, None], Generator[pd.DataFrame, None, None]
         ],
-    ):  # noqa: F821
+    ):
         """Write a batched pandas DataFrame to Output.
 
         This method writes the DataFrame to Output provided, potentially splitting it
@@ -90,7 +94,7 @@ class Output(ABC):
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     @abstractmethod
-    async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
+    async def write_df(self, df: pd.DataFrame):
         """Write a pandas DataFrame to the output destination.
 
         Args:
@@ -104,7 +108,7 @@ class Output(ABC):
             AsyncGenerator["daft.DataFrame", None],  # noqa: F821
             Generator["daft.DataFrame", None, None],  # noqa: F821
         ],
-    ):  # noqa: F821
+    ):
         """Write a batched daft DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it
@@ -153,8 +157,6 @@ class Output(ABC):
             Exception: If there's an error writing or uploading the metadata.
         """
         try:
-            import pandas as pd
-
             # prepare the metadata
             metadata = {
                 "total_record_count": [self.total_record_count],

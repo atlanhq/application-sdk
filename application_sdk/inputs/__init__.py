@@ -2,6 +2,8 @@ import logging
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterator
 
+import pandas as pd
+
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -26,7 +28,7 @@ class Input(ABC):
         return cls(**kwargs)
 
     @abstractmethod
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
+    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """
         Get an iterator of batched pandas DataFrames.
 
@@ -39,7 +41,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
+    def get_dataframe(self) -> pd.DataFrame:
         """
         Get a single pandas DataFrame.
 

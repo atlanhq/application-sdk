@@ -2,6 +2,8 @@ import logging
 import os
 from typing import Any, Dict, Iterator, List, Optional
 
+import pandas as pd
+
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
 
@@ -48,7 +50,7 @@ class JsonInput(Input):
         kwargs["path"] = f"{output_path}{path}"
         return cls(**kwargs)
 
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
+    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
@@ -66,7 +68,7 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data from JSON: {str(e)}")
 
-    def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
+    def get_dataframe(self) -> pd.DataFrame:
         """
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
@@ -75,7 +77,7 @@ class JsonInput(Input):
             import pandas as pd
 
             dataframes = []
-            for file_suffix in self.file_suffixes:
+            for file_suffix in self.file_suffixes or []:
                 dataframes.append(
                     pd.read_json(
                         os.path.join(self.path, file_suffix),
@@ -94,7 +96,7 @@ class JsonInput(Input):
         try:
             import daft
 
-            for file_suffix in self.file_suffixes:
+            for file_suffix in self.file_suffixes or []:
                 json_reader_obj = daft.read_json(
                     path=os.path.join(self.path, file_suffix),
                     _chunk_size=self.chunk_size,
@@ -113,7 +115,7 @@ class JsonInput(Input):
             import pandas as pd
 
             dataframes = []
-            for file_suffix in self.file_suffixes:
+            for file_suffix in self.file_suffixes or []:
                 daft.read_json(path=os.path.join(self.path, file_suffix))
             return pd.concat(dataframes, ignore_index=True)
         except Exception as e:

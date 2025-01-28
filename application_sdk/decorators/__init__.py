@@ -5,6 +5,8 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Any, Callable, Dict, Iterator, Optional, Union
 
+import pandas as pd
+
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
@@ -17,7 +19,7 @@ executor = ThreadPoolExecutor()
 
 async def to_async(
     func: Callable[..., Any], *args: Dict[str, Any], **kwargs: Dict[str, Any]
-) -> Iterator[Union["pd.DataFrame", "daft.DataFrame"]]:  # noqa: F821
+) -> Iterator[Union[pd.DataFrame, "daft.DataFrame"]]:  # noqa: F821
     """
     Wrapper method to convert a sync method to async
     Used to convert the input method that are sync to async and keep the logic consistent
@@ -31,7 +33,7 @@ async def to_async(
 
 async def _get_dataframe(
     input_obj: Input, get_dataframe_fn: Callable[..., Any]
-) -> Union["pd.DataFrame", "daft.DataFrame"]:  # noqa: F821
+) -> Union[pd.DataFrame, "daft.DataFrame"]:  # noqa: F821
     """
     Helper method to call the get_dataframe method of the input object
     """

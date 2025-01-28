@@ -1,5 +1,6 @@
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Generator, Optional, Type
 
+import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -159,7 +160,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Raises:
             ValueError: If the transformer is not properly set.
         """
-        import pandas as pd
 
         state: SQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
@@ -209,7 +209,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_databases(
         self,
-        batch_input,
+        batch_input: Generator[pd.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -234,7 +234,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_schemas(
         self,
-        batch_input,
+        batch_input: Generator[pd.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -259,7 +259,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_tables(
         self,
-        batch_input,
+        batch_input: Generator[pd.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -284,7 +284,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def fetch_columns(
         self,
-        batch_input,
+        batch_input: Generator[pd.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -343,7 +343,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def transform_data(
         self,
-        raw_input,
+        raw_input: Generator[pd.DataFrame, None, None],
         transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):

@@ -2,6 +2,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -91,7 +92,7 @@ class JsonOutput(Output):
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
         self.chunk_size = chunk_size
-        self.buffer: List[Union["pd.DataFrame, daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: List[Union[pd.DataFrame, "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
         self.state = state
@@ -145,7 +146,7 @@ class JsonOutput(Output):
             **kwargs,
         )
 
-    async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
+    async def write_df(self, df: pd.DataFrame):
         """Write a pandas DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it

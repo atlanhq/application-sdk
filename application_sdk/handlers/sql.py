@@ -4,6 +4,8 @@ import logging
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import pandas as pd
+
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
@@ -55,7 +57,7 @@ class SQLHandler(HandlerInterface):
     @transform(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
     async def prepare_metadata(
         self,
-        sql_input: "pd.DataFrame",  # noqa: F821
+        sql_input: pd.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> List[Dict[Any, Any]]:
         """
@@ -80,7 +82,7 @@ class SQLHandler(HandlerInterface):
     )
     async def test_auth(
         self,
-        sql_input: "pd.DataFrame",  # noqa: F821
+        sql_input: pd.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> bool:
         """
@@ -279,7 +281,7 @@ class SQLHandler(HandlerInterface):
     @transform(sql_input=SQLQueryInput(query="tables_check_sql", chunk_size=None))
     async def tables_check(
         self,
-        sql_input: "pd.DataFrame",  # noqa: F821
+        sql_input: pd.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
         """

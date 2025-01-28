@@ -3,6 +3,7 @@ import concurrent
 import logging
 from typing import Any, Dict, Iterator, Optional, Union
 
+import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -108,7 +109,7 @@ class SQLQueryInput(Input):
 
     def _read_sql_query(
         self, session: Session
-    ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:  # type: ignore # noqa: F821
+    ) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
         """Execute SQL query using the provided session.
 
         Args:
@@ -118,18 +119,20 @@ class SQLQueryInput(Input):
             Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
-        import pandas as pd
-
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    def _execute_query(self) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:  # type: ignore # noqa: F821
-        import pandas as pd
+    def _execute_query(self) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
+        """Execute SQL query using the provided engine and pandas.
 
+        Returns:
+            Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
+                or iterator of DataFrames if chunked.
+        """
         with self.engine.connect() as conn:
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:  # noqa: F821
+    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
@@ -155,7 +158,7 @@ class SQLQueryInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
-    async def get_dataframe(self) -> "pd.DataFrame":  # noqa: F821
+    async def get_dataframe(self) -> pd.DataFrame:
         """Get all query results as a single pandas DataFrame asynchronously.
 
         Returns:

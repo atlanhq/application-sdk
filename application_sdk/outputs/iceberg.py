@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Dict, Union
 
+import pandas as pd
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
@@ -44,7 +45,7 @@ class IcebergOutput(Output):
         self.iceberg_table = iceberg_table
         self.mode = mode
 
-    async def write_df(self, df: "pd.DataFrame"):  # noqa: F821
+    async def write_df(self, df: pd.DataFrame):
         """
         Method to write the pandas dataframe to an iceberg table
         """
