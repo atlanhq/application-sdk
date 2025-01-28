@@ -18,7 +18,6 @@ from temporalio import activity
 
 from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.sql_query import AsyncSQLQueryInput, SQLQueryInput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -36,7 +35,6 @@ class SQLClient(ClientInterface):
     Attributes:
         connection: Database connection instance.
         engine: SQLAlchemy engine instance.
-        sql_input (SQLQueryInput): Input handler for SQL queries.
         sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
         credentials (Dict[str, Any]): Database credentials.
         use_server_side_cursor (bool): Whether to use server-side cursors.
@@ -44,7 +42,6 @@ class SQLClient(ClientInterface):
 
     connection = None
     engine = None
-    sql_input = SQLQueryInput
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
@@ -151,12 +148,10 @@ class AsyncSQLClient(SQLClient):
     Attributes:
         connection (AsyncConnection | None): Async database connection instance.
         engine (AsyncEngine | None): Async SQLAlchemy engine instance.
-        sql_input (AsyncSQLQueryInput): Input handler for async SQL queries.
     """
 
     connection: AsyncConnection | None = None
     engine: AsyncEngine | None = None
-    sql_input = AsyncSQLQueryInput
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish an asynchronous database connection.

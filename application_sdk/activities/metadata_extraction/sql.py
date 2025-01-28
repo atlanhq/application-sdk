@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Generator, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -7,10 +7,10 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.common.utils import prepare_query
-from application_sdk.decorators import activity_pd
+from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers import TransformerInterface
@@ -139,12 +139,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     async def _transform_batch(
         self,
-        results: pd.DataFrame,
+        results,
         typename: str,
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
-    ) -> None:
+    ):
         """Transform a batch of results into metadata.
 
         Args:
@@ -160,6 +160,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Raises:
             ValueError: If the transformer is not properly set.
         """
+
         state: SQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
@@ -202,21 +203,15 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self,
-        workflow_args,
-        state,
-        **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_database_sql, workflow_args),
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/database",
-            upload_file_prefix=workflow_args["output_prefix"],
-        ),
+    @transform(
+        batch_input=SQLQueryInput(query="fetch_database_sql"),
+        raw_output=JsonOutput(output_suffix="/raw/database"),
     )
     async def fetch_databases(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+        self,
+        batch_input: Generator[pd.DataFrame, None, None],
+        raw_output: JsonOutput,
+        **kwargs: Dict[str, Any],
     ):
         """Fetch databases from the source database.
 
@@ -228,30 +223,20 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_df(batch_input)
-        return {
-            "chunk_count": raw_output.chunk_count,
-            "typename": "database",
-            "total_record_count": raw_output.total_record_count,
-        }
+        await raw_output.write_batched_dataframe(batch_input)
+        return raw_output.get_metadata(typename="database")
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self,
-        workflow_args,
-        state,
-        **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_schema_sql, workflow_args),
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/schema",
-            upload_file_prefix=workflow_args["output_prefix"],
-        ),
+    @transform(
+        batch_input=SQLQueryInput(query="fetch_schema_sql"),
+        raw_output=JsonOutput(output_suffix="/raw/schema"),
     )
     async def fetch_schemas(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+        self,
+        batch_input: Generator[pd.DataFrame, None, None],
+        raw_output: JsonOutput,
+        **kwargs: Dict[str, Any],
     ):
         """Fetch schemas from the source database.
 
@@ -263,30 +248,20 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_df(batch_input)
-        return {
-            "chunk_count": raw_output.chunk_count,
-            "typename": "schema",
-            "total_record_count": raw_output.total_record_count,
-        }
+        await raw_output.write_batched_dataframe(batch_input)
+        return raw_output.get_metadata(typename="schema")
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self,
-        workflow_args,
-        state,
-        **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_table_sql, workflow_args),
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/table",
-            upload_file_prefix=workflow_args["output_prefix"],
-        ),
+    @transform(
+        batch_input=SQLQueryInput(query="fetch_table_sql"),
+        raw_output=JsonOutput(output_suffix="/raw/table"),
     )
     async def fetch_tables(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+        self,
+        batch_input: Generator[pd.DataFrame, None, None],
+        raw_output: JsonOutput,
+        **kwargs: Dict[str, Any],
     ):
         """Fetch tables from the source database.
 
@@ -298,30 +273,20 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_df(batch_input)
-        return {
-            "chunk_count": raw_output.chunk_count,
-            "typename": "table",
-            "total_record_count": raw_output.total_record_count,
-        }
+        await raw_output.write_batched_dataframe(batch_input)
+        return raw_output.get_metadata(typename="table")
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self,
-        workflow_args,
-        state,
-        **kwargs: self.sql_client_class.sql_input(
-            engine=state.sql_client.engine,
-            query=prepare_query(self.fetch_column_sql, workflow_args),
-        ),
-        raw_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/column",
-            upload_file_prefix=workflow_args["output_prefix"],
-        ),
+    @transform(
+        batch_input=SQLQueryInput(query="fetch_column_sql"),
+        raw_output=JsonOutput(output_suffix="/raw/column"),
     )
     async def fetch_columns(
-        self, batch_input: pd.DataFrame, raw_output: JsonOutput, **kwargs
+        self,
+        batch_input: Generator[pd.DataFrame, None, None],
+        raw_output: JsonOutput,
+        **kwargs: Dict[str, Any],
     ):
         """Fetch columns from the source database.
 
@@ -333,24 +298,15 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_df(batch_input)
-        return {
-            "chunk_count": raw_output.chunk_count,
-            "typename": "column",
-            "total_record_count": raw_output.total_record_count,
-        }
+        await raw_output.write_batched_dataframe(batch_input)
+        return raw_output.get_metadata(typename="column")
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        metadata_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
-            upload_file_prefix=workflow_args["output_prefix"],
-            chunk_count=workflow_args["chunk_count"],
-            total_record_count=workflow_args["record_count"],
-        )
-    )
-    async def write_type_metadata(self, metadata_output, batch_input=None, **kwargs):
+    @transform(metadata_output=JsonOutput(output_suffix="/transformed"))
+    async def write_type_metadata(
+        self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
+    ):
         """Write transformed metadata to output.
 
         Args:
@@ -362,20 +318,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        metadata_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/raw/{workflow_args['typename']}",
-            upload_file_prefix=workflow_args["output_prefix"],
-            chunk_count=workflow_args["chunk_count"],
-            total_record_count=workflow_args["record_count"],
-        )
-    )
+    @transform(metadata_output=JsonOutput(output_suffix="/raw"))
     async def write_raw_type_metadata(
-        self,
-        metadata_output: JsonOutput,
-        batch_input: Optional[Any] = None,
-        **kwargs: Any,
-    ) -> None:
+        self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
+    ):
         """Write raw metadata to the specified output destination.
 
         This activity writes the metadata of raw entities to the configured output path.
@@ -391,24 +337,20 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @activity_pd(
-        batch_input=lambda self, workflow_args, **kwargs: JsonInput(
-            path=f"{workflow_args['output_path']}/raw/",
-            file_suffixes=workflow_args["batch"],
-        ),
-        transformed_output=lambda self, workflow_args: JsonOutput(
-            output_path=f"{workflow_args['output_path']}/transformed/{workflow_args['typename']}",
-            upload_file_prefix=workflow_args["output_prefix"],
-            chunk_start=workflow_args["chunk_start"],
-        ),
+    @transform(
+        raw_input=JsonInput(path="/raw/"),
+        transformed_output=JsonOutput(output_suffix="/transformed/"),
     )
     async def transform_data(
-        self, batch_input: Any, transformed_output: JsonOutput, **kwargs: Any
+        self,
+        raw_input: Generator[pd.DataFrame, None, None],
+        transformed_output: JsonOutput,
+        **kwargs: Dict[str, Any],
     ):
         """Transforms raw data into the required format.
 
         Args:
-            batch_input (Any): Input data to transform.
+            raw_input (Any): Input data to transform.
             transformed_output (JsonOutput): Output handler for transformed data.
             **kwargs: Additional keyword arguments.
 
@@ -417,16 +359,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-
-        transformed_chunk = await self._transform_batch(
-            batch_input,
-            kwargs.get("typename"),
-            kwargs.get("workflow_id"),
-            kwargs.get("workflow_run_id"),
-            kwargs,
-        )
-        await transformed_output.write_df(transformed_chunk)
-        return {
-            "total_record_count": transformed_output.total_record_count,
-            "chunk_count": transformed_output.chunk_count,
-        }
+        for input in raw_input:
+            transformed_chunk = await self._transform_batch(
+                input,
+                kwargs.get("typename"),
+                kwargs.get("workflow_id"),
+                kwargs.get("workflow_run_id"),
+                kwargs,
+            )
+            await transformed_output.write_dataframe(transformed_chunk)
+        return transformed_output.get_metadata()

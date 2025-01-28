@@ -4,16 +4,36 @@ This module provides base classes and utilities for handling various types of da
 in the application, including file outputs and object store interactions.
 """
 
+import inspect
 import logging
 from abc import ABC, abstractmethod
+from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
 
-import daft
 import pandas as pd
+from temporalio import activity
 
+from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821
+    """
+    Helper method to check if the dataframe has any rows
+    """
+    if isinstance(dataframe, pd.DataFrame):
+        return dataframe.empty
+
+    try:
+        import daft
+
+        if isinstance(dataframe, daft.DataFrame):
+            return dataframe.count_rows() == 0
+    except Exception:
+        activity.logger.warning("Module daft not found")
+    return True
 
 
 class Output(ABC):
@@ -30,26 +50,101 @@ class Output(ABC):
     """
 
     output_path: str
-    upload_file_prefix: str
+    output_prefix: str
     total_record_count: int
     chunk_count: int
+    state: Optional[ActivitiesState] = None
+
+    @classmethod
+    def re_init(cls, **kwargs: Dict[str, Any]):
+        """Re-initialize the output class with given keyword arguments.
+
+        Args:
+            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
+        """
+        return cls(**kwargs)
+
+    async def write_batched_dataframe(
+        self,
+        batched_dataframe: Union[
+            AsyncGenerator[pd.DataFrame, None], Generator[pd.DataFrame, None, None]
+        ],
+    ):
+        """Write a batched pandas DataFrame to Output.
+
+        This method writes the DataFrame to Output provided, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
+
+        Args:
+            dataframe (pd.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
+        """
+        try:
+            if inspect.isasyncgen(batched_dataframe):
+                async for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self.write_dataframe(dataframe)
+            else:
+                for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self.write_dataframe(dataframe)
+        except Exception as e:
+            activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     @abstractmethod
-    async def write_df(self, df: pd.DataFrame):
+    async def write_dataframe(self, dataframe: pd.DataFrame):
         """Write a pandas DataFrame to the output destination.
 
         Args:
-            df (pd.DataFrame): The DataFrame to write.
+            dataframe (pd.DataFrame): The DataFrame to write.
         """
         pass
 
+    async def write_batched_daft_dataframe(
+        self,
+        batched_dataframe: Union[
+            AsyncGenerator["daft.DataFrame", None],  # noqa: F821
+            Generator["daft.DataFrame", None, None],  # noqa: F821
+        ],
+    ):
+        """Write a batched daft DataFrame to JSON files.
+
+        This method writes the DataFrame to JSON files, potentially splitting it
+        into chunks based on chunk_size and buffer_size settings.
+
+        Args:
+            dataframe (daft.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
+        """
+        try:
+            if inspect.isasyncgen(batched_dataframe):
+                async for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self.write_daft_dataframe(dataframe)
+            else:
+                for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self.write_daft_dataframe(dataframe)
+        except Exception as e:
+            activity.logger.error(
+                f"Error writing batched daft dataframe to json: {str(e)}"
+            )
+
     @abstractmethod
-    async def write_daft_df(self, df: daft.DataFrame):
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to the output destination.
 
         Args:
-            df (daft.DataFrame): The DataFrame to write.
+            dataframe (daft.DataFrame): The DataFrame to write.
         """
+        pass
+
+    def get_metadata(self) -> Any:
+        """Get metadata about the output."""
         pass
 
     async def write_metadata(self):
@@ -70,12 +165,12 @@ class Output(ABC):
 
             # Write the metadata to a json file
             output_file_name = f"{self.output_path}/metadata.json.ignore"
-            df = pd.DataFrame(metadata)
-            df.to_json(output_file_name, orient="records", lines=True)
+            dataframe = pd.DataFrame(metadata)
+            dataframe.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(
-                self.upload_file_prefix, output_file_name
+                self.output_prefix, output_file_name
             )
         except Exception as e:
-            logger.error(f"Error writing metadata: {str(e)}")
+            activity.logger.error(f"Error writing metadata: {str(e)}")
