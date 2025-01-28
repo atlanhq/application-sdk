@@ -5,7 +5,7 @@ on:
       - main
       - develop
   pull_request:
-    branches: 
+    branches:
       - main
       - develop
     types: [labeled, reopened, synchronize, opened]
@@ -21,14 +21,14 @@ jobs:
 
     steps:
     - uses: actions/checkout@v3
-      
+
     - name: Checkout postgres Repository
       uses: actions/checkout@v4
       with:
         repository: atlanhq/phoenix-postgres-app
         token: ${{ secrets.ORG_PAT_GITHUB }} # `GH_PAT` is a secret that contains your PAT
         path: phoenix-postgres-app
-  
+
     # Install Dapr
     - name: Install Dapr CLI
       run: |
@@ -161,7 +161,7 @@ jobs:
       run: |
         export PATH="$HOME/.temporalio/bin:$PATH"
         cd phoenix-postgres-app
-        
+
         # Check if scalene.json exists in the main branch
         if git show origin/main:scalene.json > main_scalene.json 2>/dev/null; then
           # Calculate metrics for the main branch
