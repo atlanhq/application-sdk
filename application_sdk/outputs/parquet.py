@@ -235,7 +235,7 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         await self.close_current_file()
 
         # Write number of chunks
-        with open(f"{self.local_file_prefix}-metadata.json", mode="w") as f:
+        with open(f"{self.local_file_prefix}-metadata.json.ignore", mode="w") as f:
             f.write(
                 orjson.dumps(
                     {
@@ -245,7 +245,7 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                     option=orjson.OPT_APPEND_NEWLINE,
                 ).decode("utf-8")
             )
-        await self.upload_file(f"{self.local_file_prefix}-metadata.json")
+        await self.upload_file(f"{self.local_file_prefix}-metadata.json.ignore")
 
     async def _create_new_file(self):
         """Create a new Parquet file for writing.

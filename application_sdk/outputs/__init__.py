@@ -69,7 +69,7 @@ class Output(ABC):
             }
 
             # Write the metadata to a json file
-            output_file_name = f"{self.output_path}/metadata.json"
+            output_file_name = f"{self.output_path}/metadata.json.ignore"
             df = pd.DataFrame(metadata)
             df.to_json(output_file_name, orient="records", lines=True)
 
