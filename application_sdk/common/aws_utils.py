@@ -5,8 +5,22 @@ from botocore.exceptions import ClientError
 
 
 
-def get_region_name(host: str) -> str:
-    return host.split(".")[1]
+def get_region_name(hostname: str) -> str:
+    """
+    Extract region name from AWS RDS endpoint.
+    Example: database-1.abc123xyz.us-east-1.rds.amazonaws.com -> us-east-1
+    
+    Args:
+        hostname (str): The RDS host endpoint
+
+    Returns:
+        str: AWS region name
+    """
+    parts = hostname.split(".")
+    for part in parts:
+        if part.startswith(("us-", "eu-", "ap-", "ca-", "me-", "sa-", "af-")):
+            return part
+    raise ValueError(f"Could not find valid AWS region in hostname: {hostname}")
 
 
 def generate_aws_rds_token_with_iam_role(
@@ -43,6 +57,7 @@ def generate_aws_rds_token_with_iam_role(
             aws_access_key_id=credentials["AccessKeyId"],
             aws_secret_access_key=credentials["SecretAccessKey"],
             aws_session_token=credentials["SessionToken"],
+            region_name=get_region_name(host),
         )
         token: str = aws_client.generate_db_auth_token(
             DBHostname=host, Port=port, DBUsername=user
