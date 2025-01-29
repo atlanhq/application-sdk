@@ -3,12 +3,33 @@ import os
 import threading
 from typing import Any, MutableMapping, Tuple
 
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
+from opentelemetry.sdk.resources import Resource
+
 from temporalio import activity, workflow
+
+SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "unknown")
+SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "unknown")
+OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
 
 
 class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter."""
+        try:
+            logger_provider = LoggerProvider(Resource.create({
+                "service.name": SERVICE_NAME,
+                "service.version": SERVICE_VERSION,
+                "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
+            }))
+            exporter = OTLPLogExporter(endpoint=OTEL_EXPORTER_OTLP_ENDPOINT)
+            logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
+            handler = LoggingHandler(level=logging.DEBUG, logger_provider=logger_provider)
+            logger.addHandler(handler)
+        except Exception as e:
+            logger.error(e)
 
         super().__init__(logger, {})
 
