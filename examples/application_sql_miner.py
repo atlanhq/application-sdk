@@ -18,26 +18,18 @@ Note: This example is specific to Snowflake but can be adapted for other SQL dat
 import asyncio
 import logging
 import os
-import threading
 import time
 from datetime import datetime, timedelta
+from typing import Any, Dict
 from urllib.parse import quote_plus
 
+from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
+from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.workflows.resources.temporal_resource import (
-    TemporalConfig,
-    TemporalResource,
-)
-from application_sdk.workflows.sql.builders.builder import SQLMinerBuilder
-from application_sdk.workflows.sql.controllers.preflight_check import (
-    SQLWorkflowPreflightCheckController,
-)
-from application_sdk.workflows.sql.resources.sql_resource import (
-    SQLResource,
-    SQLResourceConfig,
-)
-from application_sdk.workflows.sql.workflows.miner import SQLMinerWorkflow
-from application_sdk.workflows.workers.worker import WorkflowWorker
+from application_sdk.handlers.sql import SQLHandler
+from application_sdk.worker import Worker
+from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -109,126 +101,106 @@ WITH qs AS (
 """
 
 
-class SampleSQLMinerWorkflow(SQLMinerWorkflow):
+class SampleSQLMinerActivities(SQLQueryExtractionActivities):
     fetch_queries_sql = FETCH_QUERIES_SQL
 
 
-class SampleSQLMinerWorkflowBuilder(SQLMinerBuilder):
-    def build(self, miner: SQLMinerWorkflow | None = None) -> SQLMinerWorkflow:
-        return super().build(miner=miner or SampleSQLMinerWorkflow())
-
-
-class SnowflakeSQLResource(SQLResource):
+class SnowflakeSQLClient(SQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password = quote_plus(self.config.credentials["password"])
-        base_url = f"snowflake://{self.config.credentials['user']}:{encoded_password}@{self.config.credentials['account_id']}"
+        encoded_password = quote_plus(self.credentials["password"])
+        base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"
 
         # FIXME: add more params
-        if self.config.credentials.get("warehouse"):
-            base_url = f"{base_url}?warehouse={self.config.credentials['warehouse']}"
-        if self.config.credentials.get("role"):
+        if self.credentials.get("warehouse"):
+            base_url = f"{base_url}?warehouse={self.credentials['warehouse']}"
+        if self.credentials.get("role"):
             if "?" in base_url:
-                base_url = f"{base_url}&role={self.config.credentials['role']}"
+                base_url = f"{base_url}&role={self.credentials['role']}"
             else:
-                base_url = f"{base_url}?role={self.config.credentials['role']}"
+                base_url = f"{base_url}?role={self.credentials['role']}"
 
         return base_url
 
 
-class SnowflakeResource(SQLResource):
-    default_database_alias_key = "database_name"
-    default_schema_alias_key = "name"
-
-
-class SampleSnowflakeWorkflowPreflightCheckController(
-    SQLWorkflowPreflightCheckController
-):
-    TABLES_CHECK_SQL = """
-        SELECT count(*) as "count"
-        FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
-        WHERE NOT TABLE_NAME RLIKE '{exclude_table}'
-            AND NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
-            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}';
+class SampleSnowflakeHandler(SQLHandler):
+    tables_check_sql = """
+    SELECT count(*) as "count"
+    FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+    WHERE NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
+        AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
+        {temp_table_regex_sql};
     """
 
-    METADATA_SQL = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
+    temp_table_regex_sql = "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
+
+    metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
 
 
-async def application_sql_miner():
+async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
     print("Starting application_sql_miner")
 
-    temporal_resource = TemporalResource(
-        TemporalConfig(
-            application_name=APPLICATION_NAME,
-        )
+    temporal_client = TemporalClient(
+        application_name=APPLICATION_NAME,
     )
-    await temporal_resource.load()
+    await temporal_client.load()
 
-    sql_resource = SnowflakeSQLResource(SQLResourceConfig())
-
-    miner_workflow: SQLMinerWorkflow = (
-        SampleSQLMinerWorkflowBuilder()
-        .set_temporal_resource(temporal_resource)
-        .set_sql_resource(sql_resource)
-        .set_preflight_check_controller(
-            SampleSnowflakeWorkflowPreflightCheckController(sql_resource)
-        )
-        .build()
+    activities = SampleSQLMinerActivities(
+        sql_client_class=SnowflakeSQLClient, handler_class=SampleSnowflakeHandler
     )
 
-    worker: WorkflowWorker = WorkflowWorker(
-        temporal_resource=temporal_resource,
-        temporal_activities=miner_workflow.get_activities(),
-        workflow_classes=[SQLMinerWorkflow],
+    worker: Worker = Worker(
+        temporal_client=temporal_client,
+        workflow_classes=[SQLQueryExtractionWorkflow],
+        temporal_activities=SQLQueryExtractionWorkflow.get_activities(activities),
     )
-
-    # Start the worker in a separate thread
-    worker_thread = threading.Thread(
-        target=lambda: asyncio.run(worker.start()), daemon=True
-    )
-    worker_thread.start()
 
     # wait for the worker to start
     time.sleep(3)
-    start_time_epoch = int((datetime.now() - timedelta(hours=2)).timestamp())
+    start_time_epoch = int((datetime.now() - timedelta(hours=5)).timestamp())
 
-    workflow_response = await miner_workflow.start(
-        {
-            "miner_args": {
-                "database_name_cleaned": "SNOWFLAKE",
-                "schema_name_cleaned": "ACCOUNT_USAGE",
-                "miner_start_time_epoch": start_time_epoch,
-                "chunk_size": 5000,
-                "current_marker": start_time_epoch,
-                "timestamp_column": "START_TIME",
-                "sql_replace_from": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
-                "sql_replace_to": "ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
-                "ranged_sql_start_key": "[START_MARKER]",
-                "ranged_sql_end_key": "[END_MARKER]",
-            },
-            "credentials": {
-                "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-                "user": os.getenv("SNOWFLAKE_USER", "snowflake"),
-                "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
-                "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
-                "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
-            },
-            "connection": {"connection": "dev"},
-            "metadata": {
-                "exclude_filter": "{}",
-                "include_filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
-                "temp_table_regex": "",
-                "advanced_config_strategy": "default",
-                "use_source_schema_filtering": "false",
-                "use_jdbc_internal_methods": "true",
-                "authentication": "BASIC",
-                "extraction-method": "direct",
-            },
-        }
+    workflow_args = {
+        "miner_args": {
+            "database_name_cleaned": "SNOWFLAKE",
+            "schema_name_cleaned": "ACCOUNT_USAGE",
+            "miner_start_time_epoch": start_time_epoch,
+            "chunk_size": 5000,
+            "current_marker": start_time_epoch,
+            "timestamp_column": "START_TIME",
+            "sql_replace_from": "ss.SESSION_CREATED_ON > TO_TIMESTAMP_TZ([START_MARKER], 3)",
+            "sql_replace_to": "ss.SESSION_CREATED_ON >= TO_TIMESTAMP_TZ([START_MARKER], 3) AND ss.SESSION_CREATED_ON <= TO_TIMESTAMP_TZ([END_MARKER], 3)",
+            "ranged_sql_start_key": "[START_MARKER]",
+            "ranged_sql_end_key": "[END_MARKER]",
+        },
+        "credentials": {
+            "authType": "basic",
+            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
+            "username": os.getenv("SNOWFLAKE_USER", "snowflake"),
+            "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
+            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
+            "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
+        },
+        "connection": {
+            "connection_name": "test-connection",
+            "connection_qualified_name": "default/postgres/1728518400",
+        },
+        "metadata": {
+            "exclude_filter": "{}",
+            "include_filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
+            "temp_table_regex": "",
+            "advanced_config_strategy": "default",
+            "extraction-method": "direct",
+        },
+    }
+
+    workflow_response = await temporal_client.start_workflow(
+        workflow_class=SQLQueryExtractionWorkflow,
+        workflow_args=workflow_args,
     )
+
+    await worker.start(daemon=daemon)
 
     return workflow_response
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_miner())
+    asyncio.run(application_sql_miner(daemon=False))

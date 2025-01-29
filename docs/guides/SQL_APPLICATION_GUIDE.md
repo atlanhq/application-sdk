@@ -195,7 +195,7 @@ Let's create a class that inherits from `SQLWorkflowBuilder` to define our custo
 class MyWorkflowBuilder(SQLWorkflowBuilder):
     def get_sqlalchemy_connection_string(self, credentials: Dict[str, Any]) -> str:
         encoded_password = quote_plus(credentials["password"])
-        user = credentials['user']
+        username = credentials['username']
         host = credentials['host']
         port = credentials['port']
         database = credentials['database']

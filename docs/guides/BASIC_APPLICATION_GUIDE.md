@@ -8,7 +8,6 @@ Simplest way to integrate the Application builder to your micro-service is by ad
 ```python
 import logging
 import uvicorn
-from application_sdk.app.rest import FastAPIApplicationBuilder
 from fastapi import FastAPI
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 

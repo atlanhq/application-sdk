@@ -22,6 +22,15 @@ class ObjectStore:
         download_file_prefix: str,
         file_path: str,
     ) -> None:
+        """Downloads a single file from the object store.
+
+        Args:
+            download_file_prefix (str): The base path to calculate relative paths from.
+            file_path (str): The full path to where the file should be downloaded.
+
+        Raises:
+            Exception: If there's an error downloading the file from the object store.
+        """
         with DaprClient() as client:
             relative_path = os.path.relpath(file_path, download_file_prefix)
             metadata = {"key": relative_path, "fileName": relative_path}
@@ -47,6 +56,16 @@ class ObjectStore:
     async def push_file_to_object_store(
         cls, output_prefix: str, file_path: str
     ) -> None:
+        """Pushes a single file to the object store.
+
+        Args:
+            output_prefix (str): The base path to calculate relative paths from.
+            file_path (str): The full path to the file to be pushed.
+
+        Raises:
+            IOError: If there's an error reading the file.
+            Exception: If there's an error pushing the file to the object store.
+        """
         with DaprClient() as client:
             try:
                 with open(file_path, "rb") as f:
@@ -76,16 +95,18 @@ class ObjectStore:
     async def push_to_object_store(
         cls, output_prefix: str, input_files_path: str
     ) -> None:
-        """
-        Push files from a directory to the object store.
+        """Pushes files from a directory to the object store.
 
-        :param output_prefix: The base path to calculate relative paths.
-        :param input_files_path: The path to the directory containing files to push.
-        :raises ValueError: If the output_path doesn't exist or is not a directory.
-        :raises IOError: If there's an error reading files.
-        :raises Exception: If there's an error with the Dapr client operations.
+        Args:
+            output_prefix (str): The base path to calculate relative paths from.
+            input_files_path (str): The path to the directory containing files to push.
 
-        Usage:
+        Raises:
+            ValueError: If the input_files_path doesn't exist or is not a directory.
+            IOError: If there's an error reading files.
+            Exception: If there's an error with the Dapr client operations.
+
+        Example:
             >>> ObjectStore.push_to_object_store("logs", "/tmp/logs")
         """
         if not os.path.isdir(input_files_path):

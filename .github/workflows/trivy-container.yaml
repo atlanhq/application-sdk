@@ -4,6 +4,10 @@ name: Atlan Application Trivy container scan
 
 on:
   workflow_call:
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+
 
 permissions:
   contents: read
