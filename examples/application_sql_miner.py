@@ -184,10 +184,9 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
             "connection_qualified_name": "default/postgres/1728518400",
         },
         "metadata": {
-            "exclude_filter": "{}",
-            "include_filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
-            "temp_table_regex": "",
-            "advanced_config_strategy": "default",
+            "exclude-filter": "{}",
+            "include-filter": '{"^E2E_TEST_DB$":["^HIERARCHY_OFFER75$"]}',
+            "temp-table-regex": "",
             "extraction-method": "direct",
         },
     }

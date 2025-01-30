@@ -28,9 +28,9 @@ def prepare_query(
         workflow_args (Dict[str, Any]): A dictionary containing metadata and
             workflow-related arguments. Expected keys include:
             - "metadata": A dictionary with the following keys:
-                - "include_filter" (str): Regex pattern to include tables/data.
-                - "exclude_filter" (str): Regex pattern to exclude tables/data.
-                - "temp_table_regex" (str): Regex for temporary tables.
+                - "include-filter" (str): Regex pattern to include tables/data.
+                - "exclude-filter" (str): Regex pattern to exclude tables/data.
+                - "temp-table-regex" (str): Regex for temporary tables.
                 - "exclude_empty_tables" (bool): Whether to exclude empty tables.
                 - "exclude_views" (bool): Whether to exclude views.
         temp_table_regex_sql (str, optional): SQL snippet for excluding temporary
@@ -47,11 +47,11 @@ def prepare_query(
         metadata = workflow_args.get("metadata", {})
 
         # using "or" instead of default correct defaults are set in case of empty string
-        include_filter = metadata.get("include_filter") or "{}"
-        exclude_filter = metadata.get("exclude_filter") or "{}"
-        if metadata.get("temp_table_regex"):
+        include_filter = metadata.get("include-filter") or "{}"
+        exclude_filter = metadata.get("exclude-filter") or "{}"
+        if metadata.get("temp-table-regex"):
             temp_table_regex_sql = temp_table_regex_sql.format(
-                exclude_table_regex=metadata.get("temp_table_regex")
+                exclude_table_regex=metadata.get("temp-table-regex")
             )
         else:
             temp_table_regex_sql = ""
