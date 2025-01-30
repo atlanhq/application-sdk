@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
+from application_sdk.application.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -73,7 +74,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
         self.handler = handler
         self.temporal_client = temporal_client
-
+        self.app.add_middleware(LogMiddleware)
         self.register_routers()
         super().__init__(handler)
 
