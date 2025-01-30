@@ -48,50 +48,56 @@ class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
                 },
             )
 
-            logger_provider = LoggerProvider(
-                resource=Resource.create(
-                    {
-                        "service.name": os.getenv(
-                            "OTEL_SERVICE_NAME", "postgresql-application"
-                        ),
-                        "service.version": os.getenv("OTEL_SERVICE_VERSION", "1.0.0"),
-                        "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
-                        "k8s.log.type": "service-logs",
-                    }
+            # Check if we're in a development environment
+            is_development = (
+                os.getenv("ENVIRONMENT", "development").lower() == "development"
+            )
+
+            if is_development:
+                # In development, only use console handler
+                console_handler = logging.StreamHandler()
+                console_handler.setLevel(logging.INFO)
+                console_handler.setFormatter(formatter)
+                logger.addHandler(console_handler)
+            else:
+                # In production, use OTLP handler
+                logger_provider = LoggerProvider(
+                    resource=Resource.create(
+                        {
+                            "service.name": os.getenv(
+                                "OTEL_SERVICE_NAME", "postgresql-application"
+                            ),
+                            "service.version": os.getenv(
+                                "OTEL_SERVICE_VERSION", "1.0.0"
+                            ),
+                            "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
+                            "k8s.log.type": "service-logs",
+                        }
+                    )
                 )
-            )
 
-            # Configure OTLP exporter with retry and timeout
-            exporter = OTLPLogExporter(
-                endpoint=os.getenv(
-                    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/logs"
-                ),
-                timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
-            )
+                exporter = OTLPLogExporter(
+                    endpoint=os.getenv(
+                        "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/logs"
+                    ),
+                    timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                )
 
-            # Configure batch processor with more options
-            batch_processor = BatchLogRecordProcessor(
-                exporter,
-                schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
-                max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-                max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
-            )
+                batch_processor = BatchLogRecordProcessor(
+                    exporter,
+                    schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
+                    max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
+                    max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                )
 
-            logger_provider.add_log_record_processor(batch_processor)
+                logger_provider.add_log_record_processor(batch_processor)
 
-            # Add OTLP handler
-            otlp_handler = LoggingHandler(
-                level=logging.INFO,
-                logger_provider=logger_provider,
-            )
-            otlp_handler.setFormatter(formatter)
-            logger.addHandler(otlp_handler)
-
-            # Add console handler with the same formatter
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-            console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
+                otlp_handler = LoggingHandler(
+                    level=logging.INFO,
+                    logger_provider=logger_provider,
+                )
+                otlp_handler.setFormatter(formatter)
+                logger.addHandler(otlp_handler)
 
         except Exception as e:
             print(f"Failed to setup OTLP logging: {str(e)}")
