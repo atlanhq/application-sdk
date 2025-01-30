@@ -4,12 +4,11 @@ from boto3 import client
 from botocore.exceptions import ClientError
 
 
-
 def get_region_name_from_hostname(hostname: str) -> str:
     """
     Extract region name from AWS RDS endpoint.
     Example: database-1.abc123xyz.us-east-1.rds.amazonaws.com -> us-east-1
-    
+
     Args:
         hostname (str): The RDS host endpoint
 
