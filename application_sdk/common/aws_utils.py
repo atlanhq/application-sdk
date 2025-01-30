@@ -5,7 +5,7 @@ from botocore.exceptions import ClientError
 
 
 
-def get_region_name(hostname: str) -> str:
+def get_region_name_from_hostname(hostname: str) -> str:
     """
     Extract region name from AWS RDS endpoint.
     Example: database-1.abc123xyz.us-east-1.rds.amazonaws.com -> us-east-1
@@ -30,6 +30,7 @@ def generate_aws_rds_token_with_iam_role(
     external_id: str | None = None,
     session_name: str = os.getenv("SESSION_NAME", "temp-session"),
     port: int = 5432,
+    region: str | None = None,
 ) -> str:
     """
     Get temporary AWS credentials by assuming a role and generate RDS auth token.
@@ -41,12 +42,12 @@ def generate_aws_rds_token_with_iam_role(
         external_id (str, optional): The external ID to use for the session
         session_name (str, optional): Name of the temporary session
         port (int, optional): Database port
-
+        region (str, optional): AWS region name
     Returns:
         str: RDS authentication token
     """
     try:
-        sts_client = client("sts", region_name=get_region_name(host))
+        sts_client = client("sts", region_name=get_region_name_from_hostname(host))
         assumed_role = sts_client.assume_role(
             RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id or ""
         )
@@ -57,7 +58,7 @@ def generate_aws_rds_token_with_iam_role(
             aws_access_key_id=credentials["AccessKeyId"],
             aws_secret_access_key=credentials["SecretAccessKey"],
             aws_session_token=credentials["SessionToken"],
-            region_name=get_region_name(host),
+            region_name=region or get_region_name_from_hostname(host),
         )
         token: str = aws_client.generate_db_auth_token(
             DBHostname=host, Port=port, DBUsername=user
@@ -74,6 +75,7 @@ def generate_aws_rds_token_with_iam_user(
     host: str,
     user: str,
     port: int = 5432,
+    region: str | None = None,
 ) -> str:
     """
     Generate RDS auth token using IAM user credentials.
@@ -84,7 +86,7 @@ def generate_aws_rds_token_with_iam_user(
         host (str): The RDS host endpoint
         user (str): The database username
         port (int, optional): Database port
-
+        region (str, optional): AWS region name
     Returns:
         str: RDS authentication token
     """
@@ -93,7 +95,7 @@ def generate_aws_rds_token_with_iam_user(
             "rds",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            region_name=get_region_name(host),
+            region_name=region or get_region_name_from_hostname(host),
         )
         token = aws_client.generate_db_auth_token(
             DBHostname=host, Port=port, DBUsername=user
