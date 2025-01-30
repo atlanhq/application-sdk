@@ -46,7 +46,9 @@ def generate_aws_rds_token_with_iam_role(
         str: RDS authentication token
     """
     try:
-        sts_client = client("sts", region_name=region or get_region_name_from_hostname(host))
+        sts_client = client(
+            "sts", region_name=region or get_region_name_from_hostname(host)
+        )
         assumed_role = sts_client.assume_role(
             RoleArn=role_arn, RoleSessionName=session_name, ExternalId=external_id or ""
         )
