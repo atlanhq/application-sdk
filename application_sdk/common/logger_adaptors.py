@@ -11,25 +11,53 @@ from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "unknown")
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "unknown")
-OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318")
+SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
+OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/logs")
 
 
 class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter."""
+        logger.setLevel(logging.INFO)
+        
         try:
-            logger_provider = LoggerProvider(Resource.create({
-                "service.name": SERVICE_NAME,
-                "service.version": SERVICE_VERSION,
-                "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
-            }))
-            exporter = OTLPLogExporter(endpoint=OTEL_EXPORTER_OTLP_ENDPOINT)
-            logger_provider.add_log_record_processor(BatchLogRecordProcessor(exporter))
-            handler = LoggingHandler(level=logging.DEBUG, logger_provider=logger_provider)
+            logger_provider = LoggerProvider(
+                resource=Resource.create({
+                    "service.name": os.getenv("OTEL_SERVICE_NAME", "postgresql-application"),
+                    "service.version": "1.0.0",
+                    "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
+                    "k8s.log.type": "service-logs",
+                })
+            )
+            
+            exporter = OTLPLogExporter(
+                endpoint=os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/logs")
+            )
+            
+            batch_processor = BatchLogRecordProcessor(
+                exporter,
+                schedule_delay_millis=5000,
+                max_export_batch_size=512,
+                max_queue_size=2048,
+            )
+            
+            logger_provider.add_log_record_processor(batch_processor)
+            
+            handler = LoggingHandler(
+                level=logging.INFO,
+                logger_provider=logger_provider,
+            )
             logger.addHandler(handler)
+            
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            logger.addHandler(console_handler)
+            
         except Exception as e:
-            logger.error(e)
+            print(f"Failed to setup OTLP logging: {str(e)}")
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            logger.addHandler(console_handler)
 
         super().__init__(logger, {})
 
