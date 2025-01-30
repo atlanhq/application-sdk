@@ -47,7 +47,7 @@ async def test_prepare_query():
                         and concat(CATALOG_NAME, concat('.', SCHEMA_NAME)) NOT REGEXP '{normalized_exclude_regex}'
                         and concat(CATALOG_NAME, concat('.', SCHEMA_NAME)) REGEXP '{normalized_include_regex}';""",
             "workflow_args": {
-                "metadata": {"include_filter": "{}", "exclude_filter": "{}"}
+                "metadata": {"include-filter": "{}", "exclude-filter": "{}"}
             },
             "expected": """SELECT
                             S.COMMENT AS REMARKS, S.*, IFNULL(T.TABLE_COUNT, 0) AS TABLE_COUNT, IFNULL(V.VIEW_COUNT, 0) AS VIEW_COUNT

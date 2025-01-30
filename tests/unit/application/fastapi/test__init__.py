@@ -45,9 +45,9 @@ class TestFastAPIApplication:
                 "warehouse": "COMPUTE_WH",
             },
             "metadata": {
-                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
-                "exclude_filter": "{}",
-                "temp_table_regex": "",
+                "include-filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
+                "exclude-filter": "{}",
+                "temp-table-regex": "",
             },
         }
 
