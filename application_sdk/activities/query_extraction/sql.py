@@ -17,6 +17,7 @@ from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
+from application_sdk.common.logging_constants import LogEventType
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -136,6 +137,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
     @activity.defn
+    @log_activity
     @auto_heartbeater
     @transform(
         batch_input=SQLQueryInput(query="sql_query"),
@@ -147,17 +149,34 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         raw_output: JsonOutput,
         **kwargs,
     ):
-        """Fetch and process queries from the database.
-
-        Args:
-            batch_input: Input DataFrame containing the queries
-            raw_output: JsonOutput object for writing results
-            **kwargs: Additional keyword arguments
-
-        Returns:
-            None
-        """
-        await raw_output.write_batched_dataframe(batch_input)
+        logger.info(
+            "Starting query fetch",
+            extra={
+                "event_type": LogEventType.DATA_PROCESSING_START.value,
+                "batch_size": len(batch_input) if batch_input else 0
+            }
+        )
+        
+        try:
+            await raw_output.write_batched_dataframe(batch_input)
+            
+            logger.info(
+                "Query fetch completed",
+                extra={
+                    "event_type": LogEventType.DATA_PROCESSING_END.value,
+                    "records_processed": raw_output.total_record_count
+                }
+            )
+        except Exception as e:
+            logger.error(
+                "Query fetch failed",
+                extra={
+                    "event_type": LogEventType.DATA_PROCESSING_ERROR.value,
+                    "error": str(e)
+                },
+                exc_info=True
+            )
+            raise
 
     async def parallelize_query(
         self,
