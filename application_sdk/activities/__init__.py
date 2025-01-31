@@ -1,17 +1,18 @@
-from abc import ABC
-from typing import Any, Dict, Optional, Callable
-from functools import wraps
 import logging
+from abc import ABC
+from functools import wraps
+from typing import Any, Callable, Dict, Optional
 
 from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.handlers import HandlerInterface
-from application_sdk.common.logging_constants import LogEventType
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logging_constants import LogEventType
+from application_sdk.handlers import HandlerInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
 
 def log_activity(func: Callable) -> Callable:
     @wraps(func)
@@ -26,10 +27,10 @@ def log_activity(func: Callable) -> Callable:
                 "workflow_id": activity_info.workflow_id,
                 "workflow_run_id": activity_info.workflow_run_id,
                 "args": str(args),
-                "kwargs": str(kwargs)
-            }
+                "kwargs": str(kwargs),
+            },
         )
-        
+
         try:
             result = await func(self, *args, **kwargs)
             logger.info(
@@ -38,8 +39,8 @@ def log_activity(func: Callable) -> Callable:
                     "event_type": LogEventType.ACTIVITY_END.value,
                     "activity_id": activity_info.activity_id,
                     "activity_type": activity_info.activity_type,
-                    "result": str(result)
-                }
+                    "result": str(result),
+                },
             )
             return result
         except Exception as e:
@@ -49,13 +50,14 @@ def log_activity(func: Callable) -> Callable:
                     "event_type": LogEventType.ACTIVITY_ERROR.value,
                     "activity_id": activity_info.activity_id,
                     "activity_type": activity_info.activity_type,
-                    "error": str(e)
+                    "error": str(e),
                 },
-                exc_info=True
+                exc_info=True,
             )
             raise
-    
+
     return wrapper
+
 
 class ActivitiesState(BaseModel):
     """Base state model for workflow activities.

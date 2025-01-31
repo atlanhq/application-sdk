@@ -4,18 +4,18 @@ This module provides the base workflow interface and common functionality for
 all workflow implementations in the application SDK.
 """
 
+import logging
 from abc import ABC
 from datetime import timedelta
 from typing import Any, Callable, Dict, Sequence, Type
-import logging
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.inputs.statestore import StateStore
-from application_sdk.common.logging_constants import LogEventType
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logging_constants import LogEventType
+from application_sdk.inputs.statestore import StateStore
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -66,7 +66,7 @@ class WorkflowInterface(ABC):
                 including workflow_id and other parameters.
         """
         workflow_info = workflow.info()
-        
+
         logger.info(
             "Starting workflow execution",
             extra={
@@ -74,13 +74,15 @@ class WorkflowInterface(ABC):
                 "workflow_id": workflow_info.workflow_id,
                 "workflow_type": workflow_info.workflow_type,
                 "run_id": workflow_info.run_id,
-                "workflow_config": workflow_config
-            }
+                "workflow_config": workflow_config,
+            },
         )
-        
+
         try:
             workflow_id = workflow_config["workflow_id"]
-            workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
+            workflow_args: Dict[str, Any] = StateStore.extract_configuration(
+                workflow_id
+            )
 
             workflow_run_id = workflow_info.run_id
             workflow_args["workflow_run_id"] = workflow_run_id
@@ -96,7 +98,7 @@ class WorkflowInterface(ABC):
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
             )
-            
+
             logger.info(
                 "Workflow completed successfully",
                 extra={
@@ -104,10 +106,10 @@ class WorkflowInterface(ABC):
                     "workflow_id": workflow_info.workflow_id,
                     "workflow_type": workflow_info.workflow_type,
                     "run_id": workflow_info.run_id,
-                    "result": str(result)
-                }
+                    "result": str(result),
+                },
             )
-            
+
             return result
         except Exception as e:
             logger.error(
@@ -117,8 +119,8 @@ class WorkflowInterface(ABC):
                     "workflow_id": workflow_info.workflow_id,
                     "workflow_type": workflow_info.workflow_type,
                     "run_id": workflow_info.run_id,
-                    "error": str(e)
+                    "error": str(e),
                 },
-                exc_info=True
+                exc_info=True,
             )
             raise

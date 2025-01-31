@@ -11,13 +11,13 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logging_constants import LogEventType
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
-from application_sdk.common.logging_constants import LogEventType
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -153,28 +153,28 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             "Starting query fetch",
             extra={
                 "event_type": LogEventType.DATA_PROCESSING_START.value,
-                "batch_size": len(batch_input) if batch_input else 0
-            }
+                "batch_size": len(batch_input) if batch_input else 0,
+            },
         )
-        
+
         try:
             await raw_output.write_batched_dataframe(batch_input)
-            
+
             logger.info(
                 "Query fetch completed",
                 extra={
                     "event_type": LogEventType.DATA_PROCESSING_END.value,
-                    "records_processed": raw_output.total_record_count
-                }
+                    "records_processed": raw_output.total_record_count,
+                },
             )
         except Exception as e:
             logger.error(
                 "Query fetch failed",
                 extra={
                     "event_type": LogEventType.DATA_PROCESSING_ERROR.value,
-                    "error": str(e)
+                    "error": str(e),
                 },
-                exc_info=True
+                exc_info=True,
             )
             raise
 
