@@ -334,7 +334,10 @@ class TemporalClient(ClientInterface):
         )
 
     async def get_workflow_run_status(
-        self, workflow_id: str, run_id: str
+        self,
+        workflow_id: str,
+        run_id: Optional[str] = None,
+        include_last_executed_run_id: bool = False,
     ) -> Dict[str, Any]:
         """Get the status of a workflow run.
 
@@ -372,4 +375,6 @@ class TemporalClient(ClientInterface):
             "status": WorkflowExecutionStatus(execution_info.status).name,
             "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
         }
+        if include_last_executed_run_id:
+            workflow_info["last_executed_run_id"] = execution_info.root_execution.run_id
         return workflow_info

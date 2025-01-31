@@ -159,6 +159,12 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
 
         self.workflow_router.add_api_route(
+            "/status/{workflow_id}",
+            self.get_workflow_status,
+            methods=["GET"],
+        )
+
+        self.workflow_router.add_api_route(
             "/status/{workflow_id}/{run_id}",
             self.get_workflow_run_status,
             methods=["GET"],
@@ -254,6 +260,31 @@ class FastAPIApplication(AtlanApplicationInterface):
 
         workflow_status = await self.temporal_client.get_workflow_run_status(
             workflow_id, run_id
+        )
+
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "success": True,
+                "message": "Workflow status fetched successfully",
+                "data": workflow_status,
+            },
+        )
+
+    async def get_workflow_status(self, workflow_id: str) -> JSONResponse:
+        """
+        Get the status of a workflow
+        Args:
+            workflow_id: The ID of the workflow
+        Returns:
+            JSONResponse containing the status of the workflow
+        """
+        if not self.temporal_client:
+            raise Exception("Temporal client not initialized")
+
+        workflow_status = await self.temporal_client.get_workflow_run_status(
+            workflow_id,
+            include_last_executed_run_id=True,
         )
 
         return JSONResponse(
