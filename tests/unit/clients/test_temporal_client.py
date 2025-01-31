@@ -34,7 +34,7 @@ async def test_load(mock_connect: AsyncMock, temporal_client: TemporalClient):
     assert temporal_client.client == mock_client
 
 
-@patch("application_sdk.clients.temporal.StateStore")
+@patch("application_sdk.clients.temporal.StateStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
@@ -75,7 +75,7 @@ async def test_start_workflow(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.clients.temporal.StateStore")
+@patch("application_sdk.clients.temporal.StateStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
@@ -125,7 +125,7 @@ async def test_start_workflow_with_workflow_id(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.clients.temporal.StateStore")
+@patch("application_sdk.clients.temporal.StateStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,

@@ -3,119 +3,126 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.outputs.statestore import StateStoreOutput
 
 
 @pytest.fixture
-def mock_dapr_client():
+def mock_dapr_input_client():
     with patch("application_sdk.inputs.statestore.DaprClient") as mock_client:
         yield mock_client.return_value
 
 
+@pytest.fixture
+def mock_dapr_output_client():
+    with patch("application_sdk.outputs.statestore.DaprClient") as mock_client:
+        yield mock_client.return_value
+
+
 def test_state_store_name():
-    assert StateStore.STATE_STORE_NAME == "statestore"
+    assert StateStoreInput.STATE_STORE_NAME == "statestore"
 
 
-def test_store_credentials_success(mock_dapr_client):
+def test_store_credentials_success(mock_dapr_output_client):
     config = {"username": "test", "password": "password"}
 
     with patch("uuid.uuid4", return_value="test-uuid"):
-        result = StateStore.store_credentials(config)
+        result = StateStoreOutput.store_credentials(config)
 
     assert result == "test-uuid"
-    mock_dapr_client.save_state.assert_called_once_with(
+    mock_dapr_output_client.save_state.assert_called_once_with(
         store_name="statestore", key="credential_test-uuid", value=json.dumps(config)
     )
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_output_client.close.assert_called_once()
 
 
-def test_store_credentials_failure(mock_dapr_client):
+def test_store_credentials_failure(mock_dapr_output_client):
     config = {"username": "test", "password": "password"}
-    mock_dapr_client.save_state.side_effect = Exception("Dapr error")
+    mock_dapr_output_client.save_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        StateStore.store_credentials(config)
+        StateStoreOutput.store_credentials(config)
 
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_output_client.close.assert_called_once()
 
 
-def test_extract_credentials_success(mock_dapr_client):
+def test_extract_credentials_success(mock_dapr_input_client):
     config = {"username": "test", "password": "password"}
     mock_state = MagicMock()
     mock_state.data = json.dumps(config)
-    mock_dapr_client.get_state.return_value = mock_state
+    mock_dapr_input_client.get_state.return_value = mock_state
 
-    result = StateStore.extract_credentials("test-uuid")
+    result = StateStoreInput.extract_credentials("test-uuid")
 
     assert result == config
-    mock_dapr_client.get_state.assert_called_once_with(
+    mock_dapr_input_client.get_state.assert_called_once_with(
         store_name="statestore", key="credential_test-uuid"
     )
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_input_client.close.assert_called_once()
 
 
-def test_extract_credentials_not_found(mock_dapr_client):
+def test_extract_credentials_not_found(mock_dapr_input_client):
     mock_state = MagicMock()
     mock_state.data = None
-    mock_dapr_client.get_state.return_value = mock_state
+    mock_dapr_input_client.get_state.return_value = mock_state
 
     with pytest.raises(ValueError):
-        StateStore.extract_credentials("test-uuid")
+        StateStoreInput.extract_credentials("test-uuid")
 
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_input_client.close.assert_called_once()
 
 
-def test_extract_credentials_failure(mock_dapr_client):
-    mock_dapr_client.get_state.side_effect = Exception("Dapr error")
+def test_extract_credentials_failure(mock_dapr_input_client):
+    mock_dapr_input_client.get_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        StateStore.extract_credentials("test-uuid")
+        StateStoreInput.extract_credentials("test-uuid")
 
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_input_client.close.assert_called_once()
 
 
-def test_store_configuration_success(mock_dapr_client):
+def test_store_configuration_success(mock_dapr_output_client):
     config = {"username": "test", "password": "password"}
     with patch("uuid.uuid4", return_value="test-uuid"):
-        result = StateStore.store_configuration("test-uuid", config)
+        result = StateStoreOutput.store_configuration("test-uuid", config)
 
     assert result == "test-uuid"
-    mock_dapr_client.save_state.assert_called_once_with(
+    mock_dapr_output_client.save_state.assert_called_once_with(
         store_name="statestore", key="config_test-uuid", value=json.dumps(config)
     )
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_output_client.close.assert_called_once()
 
 
-def test_extract_configuration_success(mock_dapr_client):
+def test_extract_configuration_success(mock_dapr_input_client):
     config = {"username": "test", "password": "password"}
     mock_state = MagicMock()
     mock_state.data = json.dumps(config)
-    mock_dapr_client.get_state.return_value = mock_state
+    mock_dapr_input_client.get_state.return_value = mock_state
 
-    result = StateStore.extract_configuration("test-uuid")
+    result = StateStoreInput.extract_configuration("test-uuid")
 
     assert result == config
-    mock_dapr_client.get_state.assert_called_once_with(
+    mock_dapr_input_client.get_state.assert_called_once_with(
         store_name="statestore", key="config_test-uuid"
     )
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_input_client.close.assert_called_once()
 
 
-def test_extract_configuration_not_found(mock_dapr_client):
+def test_extract_configuration_not_found(mock_dapr_input_client):
     mock_state = MagicMock()
     mock_state.data = None
-    mock_dapr_client.get_state.return_value = mock_state
+    mock_dapr_input_client.get_state.return_value = mock_state
 
     with pytest.raises(ValueError):
-        StateStore.extract_configuration("test-uuid")
+        StateStoreInput.extract_configuration("test-uuid")
 
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_input_client.close.assert_called_once()
 
 
-def test_extract_configuration_failure(mock_dapr_client):
-    mock_dapr_client.get_state.side_effect = Exception("Dapr error")
+def test_extract_configuration_failure(mock_dapr_input_client):
+    mock_dapr_input_client.get_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        StateStore.extract_configuration("test-uuid")
+        StateStoreInput.extract_configuration("test-uuid")
 
-    mock_dapr_client.close.assert_called_once()
+    mock_dapr_input_client.close.assert_called_once()

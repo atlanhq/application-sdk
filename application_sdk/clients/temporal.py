@@ -24,7 +24,6 @@ from temporalio.worker.workflow_sandbox import (
 from application_sdk.clients import ClientInterface
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -32,6 +31,7 @@ from application_sdk.outputs.eventstore import (
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
+from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -251,7 +251,7 @@ class TemporalClient(ClientInterface):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = StateStore.store_credentials(
+            workflow_args["credential_guid"] = StateStoreOutput.store_credentials(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
@@ -269,7 +269,7 @@ class TemporalClient(ClientInterface):
                 }
             )
 
-            StateStore.store_configuration(workflow_id, workflow_args)
+            StateStoreOutput.store_configuration(workflow_id, workflow_args)
 
             logger.info(f"Created workflow config with ID: {workflow_id}")
 
