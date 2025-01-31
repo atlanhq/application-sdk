@@ -39,13 +39,21 @@ class JsonInput(Input):
         self.download_file_prefix = download_file_prefix
 
     def download_files(self):
+        if not self.file_names:
+            logger.debug("No files to download")
+            return
+
         """Download the files from the object store to the local path"""
         for file_name in self.file_names or []:
-            if not os.path.exists(os.path.join(self.path, file_name)):
-                ObjectStore.download_file_from_object_store(
-                    os.path.join(self.download_file_prefix, file_name),
-                    os.path.join(self.path, file_name),
-                )
+            try:
+                if not os.path.exists(os.path.join(self.path, file_name)):
+                    ObjectStore.download_file_from_object_store(
+                        os.path.join(self.download_file_prefix, file_name),
+                        os.path.join(self.path, file_name),
+                    )
+            except Exception as e:
+                logger.error(f"Error downloading file {file_name}: {str(e)}")
+                raise e
 
     @classmethod
     def re_init(
@@ -127,12 +135,15 @@ class JsonInput(Input):
         try:
             import daft
 
-            dataframes = []
+            dataframe_concat = None
             self.download_files()
             for file_name in self.file_names or []:
-                dataframes.append(
-                    daft.read_json(path=os.path.join(self.path, file_name))
+                json_dataframe = daft.read_json(path=os.path.join(self.path, file_name))
+                dataframe_concat = (
+                    json_dataframe
+                    if dataframe_concat is None
+                    else dataframe_concat.concat(json_dataframe)
                 )
-            return pd.concat(dataframes, ignore_index=True)
+            return dataframe_concat
         except Exception as e:
             logger.error(f"Error reading data from JSON using daft: {str(e)}")
