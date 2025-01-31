@@ -26,8 +26,8 @@ def log_activity(func: Callable) -> Callable:
                 "activity_type": activity_info.activity_type,
                 "workflow_id": activity_info.workflow_id,
                 "workflow_run_id": activity_info.workflow_run_id,
-                "args": str(args),
-                "kwargs": str(kwargs),
+                "activity_args": str(args),
+                "activity_kwargs": str(kwargs),
             },
         )
 
@@ -39,7 +39,7 @@ def log_activity(func: Callable) -> Callable:
                     "event_type": LogEventType.ACTIVITY_END.value,
                     "activity_id": activity_info.activity_id,
                     "activity_type": activity_info.activity_type,
-                    "result": str(result),
+                    "activity_result": str(result),
                 },
             )
             return result
@@ -50,7 +50,7 @@ def log_activity(func: Callable) -> Callable:
                     "event_type": LogEventType.ACTIVITY_ERROR.value,
                     "activity_id": activity_info.activity_id,
                     "activity_type": activity_info.activity_type,
-                    "error": str(e),
+                    "error_message": str(e),
                 },
                 exc_info=True,
             )
