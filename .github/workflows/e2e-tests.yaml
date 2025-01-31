@@ -67,7 +67,6 @@ jobs:
     # Start all services
     - name: Start Platform Services
       run: |
-        cd examples
         make start-all
         sleep 10  # Give services time to start up
 
