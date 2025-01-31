@@ -350,11 +350,7 @@ class Column(assets.Column):
                 obj.get("ordinal_position") is not None
             ), "Ordinal position cannot be None"
             assert obj.get("data_type") is not None, "Data type cannot be None"
-            assert (
-                obj.get("belongs_to_partition") is not None
-            ), "Belongs to partition cannot be None"
 
-            # TODO: This should ideally work, check in all situations
             parent_type = None
             if obj.get("table_type") in ["VIEW"]:
                 parent_type = assets.View
