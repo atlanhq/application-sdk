@@ -416,6 +416,9 @@ class Column(assets.Column):
             sql_column.attributes.max_length = obj.get("character_maximum_length", 0)
             sql_column.attributes.numeric_scale = obj.get("numeric_scale", 0)
 
+            if obj.get("decimal_digits", "") != "":
+                sql_column.attributes.precision = obj.get("decimal_digits")
+
             if not sql_column.custom_attributes:
                 sql_column.custom_attributes = {}
 
