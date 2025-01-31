@@ -20,7 +20,9 @@
     "table_schema_id": "schema123",
     "table_id": "table123",
     "is_autoincrement": "YES",
-    "is_generatedcolumn": "NO"
+    "is_generatedcolumn": "NO",
+    "belongs_to_partition": "NO",
+    "decimal_digits": 2
   },
   "view_columns": {
     "column_name": "AMOUNT",
@@ -33,7 +35,8 @@
     "table_type": "VIEW",
     "is_nullable": "YES",
     "numeric_precision": 10,
-    "numeric_scale": 2
+    "numeric_scale": 2,
+    "belongs_to_partition": "NO"
   },
   "materialized_view_columns": {
     "column_name": "TOTAL_AMOUNT",
@@ -46,7 +49,8 @@
     "table_type": "MATERIALIZED VIEW",
     "is_nullable": "YES",
     "numeric_precision": 15,
-    "numeric_scale": 2
+    "numeric_scale": 2,
+    "belongs_to_partition": "NO"
   },
   "columns_with_custom_attrs": {
     "column_name": "PARENT_ID",
@@ -64,6 +68,8 @@
     "is_generatedcolumn": "NO",
     "character_octet_length": 0,
     "buffer_length": 0,
-    "column_size": 38
+    "column_size": 38,
+    "belongs_to_partition": "NO",
+    "numeric_precision": 10
   }
 }
