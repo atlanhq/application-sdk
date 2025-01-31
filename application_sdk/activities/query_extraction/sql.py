@@ -7,7 +7,11 @@ from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesInterface, ActivitiesState
+from application_sdk.activities import (
+    ActivitiesInterface,
+    ActivitiesState,
+    log_activity,
+)
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
