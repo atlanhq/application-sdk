@@ -14,16 +14,14 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 class JsonInput(Input):
     path: str
     chunk_size: Optional[int]
-    file_names: List[str]
-    # file_suffixes: Optional[List[str]] = None
+    file_names: Optional[List[str]]
+    download_file_prefix: Optional[str]
 
     def __init__(
         self,
         path: str,
-        file_names: List[str],
-        download_file_prefix: str,
-        # chunk_size: Optional[int] = 100000,
-        # file_suffixes: Optional[List[str]] = None,
+        file_names: Optional[List[str]] = None,
+        download_file_prefix: Optional[str] = None,
         chunk_size: Optional[int] = 100000,
         **kwargs: Dict[str, Any],
     ):
@@ -41,7 +39,8 @@ class JsonInput(Input):
         self.download_file_prefix = download_file_prefix
 
     def download_files(self):
-        for file_name in self.file_names:
+        """Download the files from the object store to the local path"""
+        for file_name in self.file_names or []:
             if not os.path.exists(os.path.join(self.path, file_name)):
                 ObjectStore.download_file_from_object_store(
                     os.path.join(self.download_file_prefix, file_name),
@@ -62,6 +61,7 @@ class JsonInput(Input):
         """
         output_path = kwargs.get("output_path", "")
         kwargs["path"] = f"{output_path}{path}"
+        kwargs["download_file_prefix"] = kwargs.get("output_prefix", "")
         return cls(**kwargs)
 
     def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
@@ -90,7 +90,7 @@ class JsonInput(Input):
         try:
             dataframes = []
             self.download_files()
-            for file_name in self.file_names:
+            for file_name in self.file_names or []:
                 dataframes.append(
                     pd.read_json(
                         os.path.join(self.path, file_name),
@@ -110,7 +110,7 @@ class JsonInput(Input):
             import daft
 
             self.download_files()
-            for file_name in self.file_names:
+            for file_name in self.file_names or []:
                 json_reader_obj = daft.read_json(
                     path=os.path.join(self.path, file_name),
                     _chunk_size=self.chunk_size,
@@ -129,7 +129,7 @@ class JsonInput(Input):
 
             dataframes = []
             self.download_files()
-            for file_name in self.file_names:
+            for file_name in self.file_names or []:
                 dataframes.append(
                     daft.read_json(path=os.path.join(self.path, file_name))
                 )

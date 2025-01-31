@@ -129,7 +129,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     self.activities_cls.transform_data,
                     {
                         "typename": raw_stat.typename,
-                        "file_suffixes": batches[i],
+                        "file_names": batches[i],
                         "chunk_start": chunk_starts[i],
                         **workflow_args,
                     },
