@@ -16,6 +16,7 @@ from application_sdk.transformers.atlas.sql import (
     Column,
     Database,
     Function,
+    Procedure,
     Schema,
     Table,
     TagAttachment,
@@ -67,6 +68,7 @@ class AtlasTransformer(TransformerInterface):
             "MATERIALIZED VIEW": Table,
             "FUNCTION": Function,
             "TAG_REF": TagAttachment,
+            "PROCEDURE": Procedure,
         }
 
     def transform_metadata(
