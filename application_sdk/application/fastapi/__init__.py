@@ -159,14 +159,9 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
 
         self.workflow_router.add_api_route(
-            "/status/{workflow_id}",
-            self.get_workflow_status,
-            methods=["GET"],
-        )
-
-        self.workflow_router.add_api_route(
-            "/status/{workflow_id}/{run_id}",
+            "/status/{workflow_id}/{run_id:path}",
             self.get_workflow_run_status,
+            description="Get the status of the current or last workflow run",
             methods=["GET"],
         )
 
@@ -251,31 +246,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         Get the status of a workflow run
         Args:
             workflow_id: The ID of the workflow
-            run_id: The ID of the run
-        Returns:
-            JSONResponse containing the status of the workflow
-        """
-        if not self.temporal_client:
-            raise Exception("Temporal client not initialized")
-
-        workflow_status = await self.temporal_client.get_workflow_run_status(
-            workflow_id, run_id
-        )
-
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "success": True,
-                "message": "Workflow status fetched successfully",
-                "data": workflow_status,
-            },
-        )
-
-    async def get_workflow_status(self, workflow_id: str) -> JSONResponse:
-        """
-        Get the status of a workflow
-        Args:
-            workflow_id: The ID of the workflow
+            run_id: The ID of the run (optional, if not provided, the status of the current or last run will be returned)
         Returns:
             JSONResponse containing the status of the workflow
         """
@@ -284,6 +255,7 @@ class FastAPIApplication(AtlanApplicationInterface):
 
         workflow_status = await self.temporal_client.get_workflow_run_status(
             workflow_id,
+            run_id,
             include_last_executed_run_id=True,
         )
 
