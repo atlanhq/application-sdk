@@ -259,7 +259,7 @@ class TemporalClient(ClientInterface):
         workflow_id = workflow_args.get("workflow_id")
         if not workflow_id:
             # if workflow_id is not provided, create a new one
-            workflow_id = str(uuid.uuid4())
+            workflow_id = workflow_args.get("argo_workflow_name", str(uuid.uuid4()))
 
             workflow_args.update(
                 {
