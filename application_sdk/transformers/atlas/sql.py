@@ -199,12 +199,12 @@ class Table(assets.Table):
 
             # Determine the type of table based on metadata
             is_partition = bool(obj.get("is_partition", False))
-            table_type_value = obj.get("table_type")
+            table_type_value = obj.get("table_type", "TABLE")
             is_dynamic = obj.get("is_dynamic") == "YES"
 
-            if is_partition:
+            if is_partition or table_type_value == "PARTITIONED TABLE":
                 table_type = assets.TablePartition
-            elif table_type_value in ["TABLE", "BASE TABLE"]:
+            elif table_type_value in ["TABLE", "BASE TABLE", "FOREIGN TABLE"]:
                 table_type = assets.Table
             elif table_type_value == "MATERIALIZED VIEW":
                 table_type = assets.MaterialisedView
@@ -263,6 +263,7 @@ class Table(assets.Table):
             # Applicable only for Materialised Views
             if not sql_table.custom_attributes:
                 sql_table.custom_attributes = {}
+                sql_table.custom_attributes["table_type"] = table_type_value
 
             if obj.get("is_transient", "") != "":
                 sql_table.custom_attributes["is_transient"] = obj.get("is_transient")
@@ -363,9 +364,10 @@ class Column(assets.Column):
                 parent_type = assets.SnowflakeDynamicTable
             elif (
                 obj.get("belongs_to_partition") == "YES"
-            ):  # TODO: Check if the field belongs to partition exists, and if its YES/NO
+                or obj.get("table_type") == "PARTITIONED TABLE"
+            ):
                 parent_type = assets.TablePartition
-            elif obj.get("table_type") in ["TABLE", "BASE TABLE"]:
+            elif obj.get("table_type") in ["TABLE", "BASE TABLE", "FOREIGN TABLE"]:
                 parent_type = assets.Table
             else:
                 parent_type = assets.View
