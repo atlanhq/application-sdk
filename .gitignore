@@ -169,3 +169,6 @@ workflow_status.md
 output
 docs/reference/*.rst
 .DS_Store
+
+# Interrogate coverage report
+docstring-cov.md

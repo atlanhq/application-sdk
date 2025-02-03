@@ -9,6 +9,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional, Type
 
 from pyatlan.model.assets import Asset
+from pyatlan.model.enums import EntityStatus
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.transformers import TransformerInterface
@@ -16,6 +17,7 @@ from application_sdk.transformers.atlas.sql import (
     Column,
     Database,
     Function,
+    Procedure,
     Schema,
     Table,
     TagAttachment,
@@ -67,6 +69,7 @@ class AtlasTransformer(TransformerInterface):
             "MATERIALIZED VIEW": Table,
             "FUNCTION": Function,
             "TAG_REF": TagAttachment,
+            "PROCEDURE": Procedure,
         }
 
     def transform_metadata(
@@ -152,6 +155,7 @@ class AtlasTransformer(TransformerInterface):
         Returns:
             Any: The enriched entity.
         """
+        entity.status = EntityStatus.ACTIVE
         entity.tenant_id = self.tenant_id
         entity.last_sync_workflow_name = workflow_id
         entity.last_sync_run = workflow_run_id
