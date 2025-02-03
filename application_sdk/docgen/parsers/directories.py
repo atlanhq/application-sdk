@@ -4,9 +4,11 @@ import logging
 import os
 from typing import Callable, List, Tuple
 
+import pydantic
+
 
 class DocsSubDirectory(enum.Enum):
-    """Enumeration of documentation subdirectories.
+    """Enumeration of subdirectories in the documentation directory.
 
     Attributes:
         IMAGES: Directory containing image assets.
@@ -23,6 +25,26 @@ class DocsSubDirectory(enum.Enum):
     OPENAPI = "openapi"
 
 
+class DirectoryParsingResult(pydantic.BaseModel):
+    """Model representing the results of directory parsing validation.
+
+    Each attribute corresponds to a subdirectory's validation status.
+
+    Attributes:
+        images_valid: Whether the images subdirectory passes validation.
+        videos_valid: Whether the videos subdirectory passes validation.
+        walkthroughs_valid: Whether the walkthroughs subdirectory passes validation.
+        content_valid: Whether the content subdirectory passes validation.
+        openapi_valid: Whether the OpenAPI subdirectory passes validation.
+    """
+
+    images_valid: bool = False
+    videos_valid: bool = False
+    walkthroughs_valid: bool = False
+    content_valid: bool = False
+    openapi_valid: bool = False
+
+
 class DirectoryParser:
     """Parser for documentation directory structure and content validation.
 
@@ -31,91 +53,57 @@ class DirectoryParser:
     compliance.
 
     Args:
-        directory_path(str): Base path to the documentation directory.
+        docs_directory(str): Base path to the docs directory.
 
     Attributes:
-        directory_path: Base path to the documentation directory.
-        docs_manifest_file_name: Name of the main manifest file.
-        docs_internal_manifest_file_name: Name of the internal manifest file.
-        VALID_IMAGE_EXTENSIONS: Tuple of allowed image file extensions.
-        VALID_VIDEO_EXTENSIONS: Tuple of allowed video file extensions.
-        VALID_WALKTHROUGH_EXTENSIONS: Tuple of allowed walkthrough file extensions.
-        VALID_CONTENT_EXTENSIONS: Tuple of allowed content file extensions.
+        docs_directory: Base path to the documentation directory.
+        valid_image_extensions: Tuple of allowed image file extensions.
+        valid_video_extensions: Tuple of allowed video file extensions.
+        valid_walkthrough_extensions: Tuple of allowed walkthrough file extensions.
+        valid_content_extensions: Tuple of allowed content file extensions.
     """
 
-    def __init__(self, directory_path: str):
-        self.directory_path = directory_path
+    def __init__(self, docs_directory: str):
+        self.logger = logging.getLogger(__name__)
 
-        self.docs_manifest_file_name: str = "docs.customer.manifest.yaml"
-        self.docs_internal_manifest_file_name: str = "docs.internal.manifest.yaml"
+        self.docs_directory = docs_directory
 
-        self.VALID_IMAGE_EXTENSIONS = (
+        self.valid_image_extensions = (
             ".png",
             ".jpg",
             ".jpeg",
             ".gif",
         )
-        self.VALID_VIDEO_EXTENSIONS = (
+        self.valid_video_extensions = (
             ".mp4",
             ".mov",
             ".avi",
             ".mkv",
         )
-        self.VALID_WALKTHROUGH_EXTENSIONS = (".html",)
-        self.VALID_CONTENT_EXTENSIONS = (".md",)
-        self.VALID_OPENAPI_EXTENSIONS = (".json",)
+        self.valid_walkthrough_extensions = (".html",)
+        self.valid_content_extensions = (".md",)
+        self.valid_openapi_extensions = (".json",)
 
-        self.logger = logging.getLogger(__name__)
-
-    def parse(self) -> bool:
+    def parse(self) -> DirectoryParsingResult:
         """Parse and validate the entire documentation directory structure.
 
         Performs all validation checks including manifest files and subdirectory contents.
 
         Returns:
-            bool: True if all validation checks pass, False if any check fails.
+            DirectoryParsingResult: A model containing the validation results for each subdirectory.
         """
-        # Check manifest files
-        manifest_valid = self.check_manifest_file()
-        internal_manifest_valid = self.check_internal_manifest_file()
-
-        # Check subdirectory contents
         images_valid = self.check_images_sub_directory()
         videos_valid = self.check_videos_sub_directory()
         content_valid = self.check_content_sub_directory()
-        # TODO: add checks for walkthroughs and openapi
+        walkthroughs_valid = self.check_walkthroughs_sub_directory()
+        openapi_valid = self.check_openapi_sub_directory()
 
-        # Return True only if all checks pass
-
-        return all(
-            [
-                manifest_valid,
-                internal_manifest_valid,
-                images_valid,
-                videos_valid,
-                content_valid,
-            ]
-        )
-
-    # Manifest file checks
-    def check_manifest_file(self) -> bool:
-        """Check if the main manifest file exists.
-
-        Returns:
-            bool: True if the manifest file exists, False otherwise.
-        """
-        return os.path.exists(
-            os.path.join(self.directory_path, self.docs_manifest_file_name)
-        )
-
-    def check_internal_manifest_file(self) -> bool:
-        """Check if the internal manifest file exists.
-
-        Returns:
-            bool: True if the internal manifest file exists, False otherwise.
-        """
-        return os.path.exists(
-            os.path.join(self.directory_path, self.docs_internal_manifest_file_name)
+        return DirectoryParsingResult(
+            images_valid=images_valid,
+            videos_valid=videos_valid,
+            content_valid=content_valid,
+            walkthroughs_valid=walkthroughs_valid,
+            openapi_valid=openapi_valid,
         )
 
     # Directory content checks
@@ -129,7 +117,7 @@ class DirectoryParser:
         """
         return self._validate_directory_contents(
             subdir=DocsSubDirectory.IMAGES,
-            validators=[self._validate_file_extension(self.VALID_IMAGE_EXTENSIONS)],
+            validators=[self._validate_file_extension(self.valid_image_extensions)],
         )
 
     def check_videos_sub_directory(self) -> bool:
@@ -142,7 +130,7 @@ class DirectoryParser:
         """
         return self._validate_directory_contents(
             subdir=DocsSubDirectory.VIDEOS,
-            validators=[self._validate_file_extension(self.VALID_VIDEO_EXTENSIONS)],
+            validators=[self._validate_file_extension(self.valid_video_extensions)],
         )
 
     def check_content_sub_directory(self) -> bool:
@@ -155,7 +143,7 @@ class DirectoryParser:
         """
         return self._validate_directory_contents(
             subdir=DocsSubDirectory.CONTENT,
-            validators=[self._validate_file_extension(self.VALID_CONTENT_EXTENSIONS)],
+            validators=[self._validate_file_extension(self.valid_content_extensions)],
         )
 
     def check_walkthroughs_sub_directory(self) -> bool:
@@ -169,25 +157,23 @@ class DirectoryParser:
         return self._validate_directory_contents(
             subdir=DocsSubDirectory.WALKTHROUGHS,
             validators=[
-                self._validate_file_extension(self.VALID_WALKTHROUGH_EXTENSIONS)
+                self._validate_file_extension(self.valid_walkthrough_extensions)
             ],
         )
 
     def check_openapi_sub_directory(self) -> bool:
         """Validate all files in the OpenAPI directory.
 
-        TODO: Implement OpenAPI validation.
+        Ensures all files have valid OpenAPI extensions as defined in VALID_OPENAPI_EXTENSIONS.
 
         Returns:
-            None: Currently not implemented.
+            bool: True if all files are valid OpenAPI files, False otherwise.
         """
-        # TODO: Implement OpenAPI validation
         return self._validate_directory_contents(
             subdir=DocsSubDirectory.OPENAPI,
-            validators=[self._validate_file_extension(self.VALID_OPENAPI_EXTENSIONS)],
+            validators=[self._validate_file_extension(self.valid_openapi_extensions)],
         )
 
-    # Helper methods
     def _validate_directory_contents(
         self, subdir: DocsSubDirectory, validators: List[Callable[[str], bool]]
     ) -> bool:
@@ -203,13 +189,16 @@ class DirectoryParser:
         files = [
             f
             for f in glob.glob(
-                os.path.join(self.directory_path, subdir.value, "**", "*"),
+                os.path.join(self.docs_directory, subdir.value, "**", "*"),
                 recursive=True,
             )
             if os.path.isfile(f)
         ]
 
         if not files:
+            self.logger.debug(
+                f"No files found in {subdir.value} directory at {os.path.join(self.docs_directory, subdir.value)}"
+            )
             return True
 
         results: List[bool] = []
