@@ -11,6 +11,7 @@ from application_sdk.handlers import HandlerInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
+
 class ActivitiesState(BaseModel):
     """Base state model for workflow activities.
 
@@ -27,6 +28,7 @@ class ActivitiesState(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
     handler: Optional[HandlerInterface] = None
     workflow_args: Optional[Dict[str, Any]] = None
+
 
 class ActivitiesInterface(ABC):
     """Abstract base class defining the interface for workflow activities.
@@ -99,8 +101,8 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        logger.info(f"Starting preflight check")
-        
+        logger.info("Starting preflight check")
+
         try:
             state: ActivitiesState = await self._get_state(workflow_args)
             handler = state.handler
@@ -108,14 +110,16 @@ class ActivitiesInterface(ABC):
             if not handler:
                 raise ValueError("Preflight check handler not found")
 
-            result = await handler.preflight_check({"metadata": workflow_args["metadata"]})
-            
+            result = await handler.preflight_check(
+                {"metadata": workflow_args["metadata"]}
+            )
+
             if not result or "error" in result:
                 raise ValueError("Preflight check failed")
 
             logger.info("Preflight check completed successfully")
             return result
-            
+
         except Exception as e:
             logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
             raise

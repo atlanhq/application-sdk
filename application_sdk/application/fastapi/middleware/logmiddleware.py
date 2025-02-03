@@ -20,7 +20,9 @@ class LogMiddleware(BaseHTTPMiddleware):
     # Define fields to omit from response logging
     OMITTED_FIELDS: list[str] = ["response", "items", "data", "password", "token"]
 
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
         request_id = str(uuid4())
 
         # Set the request_id in context
@@ -35,13 +37,13 @@ class LogMiddleware(BaseHTTPMiddleware):
                 "request_id": request_id,
                 "url": str(request.url),
                 "client_host": request.client.host if request.client else None,
-            }
+            },
         )
 
         try:
             response = await call_next(request)
             duration = time.time() - start_time
-            
+
             logger.info(
                 "Request completed",
                 extra={
@@ -50,7 +52,7 @@ class LogMiddleware(BaseHTTPMiddleware):
                     "status_code": response.status_code,
                     "duration_ms": round(duration * 1000, 2),
                     "request_id": request_id,
-                }
+                },
             )
             return response
 
@@ -65,7 +67,7 @@ class LogMiddleware(BaseHTTPMiddleware):
                     "duration_ms": round(duration * 1000, 2),
                     "request_id": request_id,
                 },
-                exc_info=True
+                exc_info=True,
             )
             raise
         finally:

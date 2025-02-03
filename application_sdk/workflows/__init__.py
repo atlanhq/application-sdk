@@ -14,7 +14,6 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.common.logging_constants import LogEventType
 from application_sdk.inputs.statestore import StateStore
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -92,10 +91,11 @@ class WorkflowInterface(ABC):
                 start_to_close_timeout=timedelta(seconds=1000),
             )
 
-            logger.info("Workflow completed successfully", extra={"result": str(result)})
+            logger.info(
+                "Workflow completed successfully", extra={"result": str(result)}
+            )
             return result
 
         except Exception as e:
             logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
             raise
-

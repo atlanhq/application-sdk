@@ -18,11 +18,12 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
 
+
 class AtlanLoggerAdapter(logging.LoggerAdapter):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter with enhanced configuration."""
         logger.setLevel(logging.INFO)
-        
+
         formatter = logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s - %(message)s "
             "[workflow_id=%(workflow_id)s] "
@@ -31,15 +32,17 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             "[workflow_type=%(workflow_type)s] ",
             defaults={
                 "workflow_id": "N/A",
-                "run_id": "N/A", 
+                "run_id": "N/A",
                 "activity_id": "N/A",
                 "workflow_type": "N/A",
-            }
+            },
         )
 
         # Setup handlers based on environment
-        is_development = os.getenv("ENVIRONMENT", "development").lower() == "development"
-        
+        is_development = (
+            os.getenv("ENVIRONMENT", "development").lower() == "development"
+        )
+
         try:
             if is_development:
                 # In development, only use console handler
@@ -82,7 +85,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 )
                 otlp_handler.setFormatter(formatter)
                 logger.addHandler(otlp_handler)
-                
+
         except Exception as e:
             print(f"Failed to setup OTLP logging: {str(e)}")
             # Fallback to basic console logging with the same formatter
@@ -93,31 +96,37 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
 
         super().__init__(logger, {})
 
-    def process(self, msg: Any, kwargs: MutableMapping[str, Any]) -> Tuple[Any, MutableMapping[str, Any]]:
+    def process(
+        self, msg: Any, kwargs: MutableMapping[str, Any]
+    ) -> Tuple[Any, MutableMapping[str, Any]]:
         """Process the log message with temporal context."""
         if "extra" not in kwargs:
             kwargs["extra"] = {}
-        
+
         # Get temporal context
         try:
             workflow_info = workflow.info()
             if workflow_info:
-                kwargs["extra"].update({
-                    "workflow_id": workflow_info.workflow_id,
-                    "run_id": workflow_info.run_id,
-                    "workflow_type": workflow_info.workflow_type,
-                })
+                kwargs["extra"].update(
+                    {
+                        "workflow_id": workflow_info.workflow_id,
+                        "run_id": workflow_info.run_id,
+                        "workflow_type": workflow_info.workflow_type,
+                    }
+                )
         except Exception:
             pass
 
         try:
             activity_info = activity.info()
             if activity_info:
-                kwargs["extra"].update({
-                    "workflow_id": activity_info.workflow_id,
-                    "run_id": activity_info.workflow_run_id,
-                    "activity_id": activity_info.activity_id,
-                })
+                kwargs["extra"].update(
+                    {
+                        "workflow_id": activity_info.workflow_id,
+                        "run_id": activity_info.workflow_run_id,
+                        "activity_id": activity_info.activity_id,
+                    }
+                )
         except Exception:
             pass
 
