@@ -11,8 +11,8 @@ from temporalio import activity, workflow
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
-OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
-    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/logs"
+OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
+    "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
 )
 
 # Create a context variable for request_id
@@ -57,9 +57,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             )
 
             exporter = OTLPLogExporter(
-                endpoint=os.getenv(
-                    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318/v1/logs"
-                ),
+                endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
                 timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
             )
 
