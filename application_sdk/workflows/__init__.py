@@ -69,13 +69,6 @@ class WorkflowInterface(ABC):
 
         logger.info(
             "Starting workflow execution",
-            extra={
-                "event_type": LogEventType.WORKFLOW_START.value,
-                "workflow_id": workflow_info.workflow_id,
-                "workflow_type": workflow_info.workflow_type,
-                "run_id": workflow_info.run_id,
-                "workflow_config": workflow_config,
-            },
         )
 
         try:
@@ -99,28 +92,10 @@ class WorkflowInterface(ABC):
                 start_to_close_timeout=timedelta(seconds=1000),
             )
 
-            logger.info(
-                "Workflow completed successfully",
-                extra={
-                    "event_type": LogEventType.WORKFLOW_END.value,
-                    "workflow_id": workflow_info.workflow_id,
-                    "workflow_type": workflow_info.workflow_type,
-                    "run_id": workflow_info.run_id,
-                    "result": str(result),
-                },
-            )
-
+            logger.info("Workflow completed successfully", extra={"result": str(result)})
             return result
+
         except Exception as e:
-            logger.error(
-                "Workflow execution failed",
-                extra={
-                    "event_type": LogEventType.WORKFLOW_ERROR.value,
-                    "workflow_id": workflow_info.workflow_id,
-                    "workflow_type": workflow_info.workflow_type,
-                    "run_id": workflow_info.run_id,
-                    "error": str(e),
-                },
-                exc_info=True,
-            )
+            logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
             raise
+

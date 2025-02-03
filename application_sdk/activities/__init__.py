@@ -1,63 +1,15 @@
 import logging
 from abc import ABC
-from functools import wraps
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.common.logging_constants import LogEventType
 from application_sdk.handlers import HandlerInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-
-
-def log_activity(func: Callable) -> Callable:
-    @wraps(func)
-    async def wrapper(self, *args: Any, **kwargs: Any) -> Any:
-        activity_info = activity.info()
-        logger.info(
-            f"Starting activity: {func.__name__}",
-            extra={
-                "event_type": LogEventType.ACTIVITY_START.value,
-                "activity_id": activity_info.activity_id,
-                "activity_type": activity_info.activity_type,
-                "workflow_id": activity_info.workflow_id,
-                "workflow_run_id": activity_info.workflow_run_id,
-                "activity_args": str(args),
-                "activity_kwargs": str(kwargs),
-            },
-        )
-
-        try:
-            result = await func(self, *args, **kwargs)
-            logger.info(
-                f"Activity completed: {func.__name__}",
-                extra={
-                    "event_type": LogEventType.ACTIVITY_END.value,
-                    "activity_id": activity_info.activity_id,
-                    "activity_type": activity_info.activity_type,
-                    "activity_result": str(result),
-                },
-            )
-            return result
-        except Exception as e:
-            logger.error(
-                f"Activity failed: {func.__name__}",
-                extra={
-                    "event_type": LogEventType.ACTIVITY_ERROR.value,
-                    "activity_id": activity_info.activity_id,
-                    "activity_type": activity_info.activity_type,
-                    "error_message": str(e),
-                },
-                exc_info=True,
-            )
-            raise
-
-    return wrapper
-
 
 class ActivitiesState(BaseModel):
     """Base state model for workflow activities.
@@ -73,11 +25,8 @@ class ActivitiesState(BaseModel):
     """
 
     model_config = {"arbitrary_types_allowed": True}
-
     handler: Optional[HandlerInterface] = None
-
     workflow_args: Optional[Dict[str, Any]] = None
-
 
 class ActivitiesInterface(ABC):
     """Abstract base class defining the interface for workflow activities.
@@ -141,7 +90,6 @@ class ActivitiesInterface(ABC):
 
     @activity.defn
     @auto_heartbeater
-    @log_activity
     async def preflight_check(self, workflow_args: Dict[str, Any]):
         """Perform preflight checks before workflow execution.
 
@@ -151,16 +99,23 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        state: ActivitiesState = await self._get_state(workflow_args)
-        handler = state.handler
+        logger.info(f"Starting preflight check")
+        
+        try:
+            state: ActivitiesState = await self._get_state(workflow_args)
+            handler = state.handler
 
-        if not handler:
-            raise ValueError("Preflight check handler not found")
+            if not handler:
+                raise ValueError("Preflight check handler not found")
 
-        result: Any = await handler.preflight_check(
-            {
-                "metadata": workflow_args["metadata"],
-            }
-        )
-        if not result or "error" in result:
-            raise ValueError("Preflight check failed")
+            result = await handler.preflight_check({"metadata": workflow_args["metadata"]})
+            
+            if not result or "error" in result:
+                raise ValueError("Preflight check failed")
+
+            logger.info("Preflight check completed successfully")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
+            raise

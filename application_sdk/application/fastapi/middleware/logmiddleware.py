@@ -20,95 +20,55 @@ class LogMiddleware(BaseHTTPMiddleware):
     # Define fields to omit from response logging
     OMITTED_FIELDS: list[str] = ["response", "items", "data", "password", "token"]
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         request_id = str(uuid4())
 
         # Set the request_id in context
         token = request_context.set({"request_id": request_id})
-
         start_time = time.time()
 
-        # Extract relevant request details
-        request_details: Dict[str, Any] = {
-            "request_id": request_id,
-            "method": request.method,
-            "url": str(request.url),
-            "client_host": request.client.host if request.client else None,
-            "path": request.url.path,
-            "query_params": dict(request.query_params),
-        }
-
-        # Log request start
         logger.info(
             "Request started",
             extra={
-                "request_details": json.dumps(request_details),
-                "event_type": "request_start",
-            },
+                "method": request.method,
+                "path": request.url.path,
+                "request_id": request_id,
+                "url": str(request.url),
+                "client_host": request.client.host if request.client else None,
+            }
         )
 
         try:
-            # Get request body if it exists
-            if request.method in ["POST", "PUT", "PATCH"]:
-                try:
-                    body: Dict[str, Any] = await request.json()
-                    # Mask sensitive data in logs
-                    masked_body = self._mask_sensitive_data(body)
-                    request_details["body"] = masked_body
-                except Exception:
-                    request_details["body"] = "<unparseable body>"
-
             response = await call_next(request)
-
-            # Calculate duration
             duration = time.time() - start_time
-
-            # Log response details
-            response_details = {
-                **request_details,
-                "status_code": response.status_code,
-                "duration_ms": round(duration * 1000, 2),
-            }
-
-            log_level = (
-                "error"
-                if response.status_code >= 500
-                else ("warning" if response.status_code >= 400 else "info")
-            )
-
-            getattr(logger, log_level)(
+            
+            logger.info(
                 "Request completed",
                 extra={
-                    "response_details": json.dumps(response_details),
-                    "event_type": "request_end",
-                },
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_ms": round(duration * 1000, 2),
+                    "request_id": request_id,
+                }
             )
-
             return response
 
         except Exception as e:
-            # Log error details
             duration = time.time() - start_time
-            error_details = {
-                **request_details,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "duration_ms": round(duration * 1000, 2),
-            }
-
             logger.error(
                 "Request failed",
                 extra={
-                    "error_details": json.dumps(error_details),
-                    "event_type": "request_error",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "error": str(e),
+                    "duration_ms": round(duration * 1000, 2),
+                    "request_id": request_id,
                 },
-                exc_info=True,
+                exc_info=True
             )
             raise
         finally:
-            # Reset the context
             request_context.reset(token)
 
     def _mask_sensitive_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
