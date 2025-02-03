@@ -88,7 +88,7 @@ class ActivitiesInterface(ABC):
             if workflow_id in self._state:
                 self._state.pop(workflow_id)
         except Exception as e:
-            activity.logger.warning("Failed to clean state", exc_info=e)
+            logger.warning("Failed to clean state", exc_info=e)
 
     @activity.defn
     @auto_heartbeater

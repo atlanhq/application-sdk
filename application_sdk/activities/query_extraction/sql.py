@@ -7,15 +7,10 @@ from typing import Any, Dict, List, Optional, Type
 from pydantic import BaseModel, Field
 from temporalio import activity
 
-from application_sdk.activities import (
-    ActivitiesInterface,
-    ActivitiesState,
-    log_activity,
-)
+from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.common.logging_constants import LogEventType
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.objectstore import ObjectStore
@@ -141,7 +136,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
     @activity.defn
-    @log_activity
     @auto_heartbeater
     @transform(
         batch_input=SQLQueryInput(query="sql_query"),
@@ -156,7 +150,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         logger.info(
             "Starting query fetch",
             extra={
-                "event_type": LogEventType.DATA_PROCESSING_START.value,
+                "event_type": "DATA_PROCESSING_START",
                 "batch_size": len(batch_input) if batch_input else 0,
             },
         )
@@ -167,7 +161,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             logger.info(
                 "Query fetch completed",
                 extra={
-                    "event_type": LogEventType.DATA_PROCESSING_END.value,
+                    "event_type": "DATA_PROCESSING_END",
                     "records_processed": raw_output.total_record_count,
                 },
             )
@@ -175,7 +169,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             logger.error(
                 "Query fetch failed",
                 extra={
-                    "event_type": LogEventType.DATA_PROCESSING_ERROR.value,
+                    "event_type": "DATA_PROCESSING_ERROR",
                     "error": str(e),
                 },
                 exc_info=True,
