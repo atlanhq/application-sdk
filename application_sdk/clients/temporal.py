@@ -36,6 +36,10 @@ from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
+TEMPORAL_NOT_FOUND_FAILURE = (
+    "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
+)
+
 
 class TemporalConstants(Enum):
     HOST = os.getenv("ATLAN_TEMPORAL_HOST", "localhost")
@@ -364,6 +368,14 @@ class TemporalClient(ClientInterface):
             workflow_execution = await workflow_handle.describe()
             execution_info = workflow_execution.raw_description.workflow_execution_info
         except Exception as e:
+            # if the workflow is not found, return the status as not found
+            if e.grpc_status.details[0].type_url == TEMPORAL_NOT_FOUND_FAILURE:
+                return {
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "status": "NOT_FOUND",
+                    "execution_duration_seconds": 0,
+                }
             logger.error(f"Error getting workflow status: {e}")
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
