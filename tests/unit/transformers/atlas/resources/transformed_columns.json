@@ -10,7 +10,7 @@
       "isPrimary": true,
       "isForeign": false,
       "maxLength": 0,
-      "precision": 38,
+      "precision": 2,
       "numericScale": 0,
       "table": {
         "typeName": "Table",
@@ -103,7 +103,8 @@
       "is_self_referencing": "YES",
       "source_id": "col124",
       "is_auto_increment": "NO",
-      "is_generated": "NO"
+      "is_generated": "NO",
+      "numeric_precision": 10
     }
   }
 }

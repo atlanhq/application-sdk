@@ -55,9 +55,9 @@ class PreflightCheckRequest(BaseModel):
                     "database": "databasename",
                 },
                 "metadata": {
-                    "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
-                    "exclude_filter": "{}",
-                    "temp_table_regex": "",
+                    "include-filter": '{"^dbengine$":["^public$","^airflow$"]}',
+                    "exclude-filter": "{}",
+                    "temp-table-regex": "",
                 },
             }
         }
@@ -100,10 +100,9 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
                 },
                 "connection": {"connection": "dev"},
                 "metadata": {
-                    "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
-                    "exclude_filter": "{}",
-                    "temp_table_regex": "",
-                    "advanced_config_strategy": "default",
+                    "include-filter": '{"^dbengine$":["^public$","^airflow$"]}',
+                    "exclude-filter": "{}",
+                    "temp-table-regex": "",
                 },
             }
         }
@@ -168,10 +167,9 @@ class WorkflowConfigResponse(BaseModel):
                     "credential_guid": "credential_test-uuid",
                     "connection": {"connection": "dev"},
                     "metadata": {
-                        "include_filter": '{"^dbengine$":["^public$","^airflow$"]}',
-                        "exclude_filter": "{}",
-                        "temp_table_regex": "",
-                        "advanced_config_strategy": "default",
+                        "include-filter": '{"^dbengine$":["^public$","^airflow$"]}',
+                        "exclude-filter": "{}",
+                        "temp-table-regex": "",
                     },
                 },
             }

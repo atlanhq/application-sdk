@@ -100,7 +100,7 @@ def test_view_column_transformation(
     assert transformed_data is not None
     expected_column = expected_data["view_columns"]
 
-    standard_attributes = ["name", "dataType", "precision", "numericScale"]
+    standard_attributes = ["name", "dataType", "numericScale"]
     assert_attributes(transformed_data, expected_column, standard_attributes)
 
     # Test view relationship
@@ -130,7 +130,7 @@ def test_materialized_view_column_transformation(
     assert transformed_data is not None
     expected_column = expected_data["materialized_view_columns"]
 
-    standard_attributes = ["name", "dataType", "precision", "numericScale"]
+    standard_attributes = ["name", "dataType", "numericScale"]
     assert_attributes(transformed_data, expected_column, standard_attributes)
 
     # Test materialized view relationship
@@ -169,6 +169,7 @@ def test_column_with_custom_attributes(
         "source_id",
         "is_auto_increment",
         "is_generated",
+        "numeric_precision",
     ]
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
