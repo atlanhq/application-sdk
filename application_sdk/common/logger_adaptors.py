@@ -32,9 +32,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             console_handler.setLevel(logging.INFO)
             console_handler.setFormatter(formatter)
 
-            # Main logger setup
-            if not logger.handlers:
-                logger.addHandler(console_handler)
+            logger.addHandler(console_handler)
 
             # Temporal workflow and activity loggers
             workflow_logger = workflow.logger
@@ -48,12 +46,9 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             workflow_logger.setLevel(logging.INFO)
             activity_logger.setLevel(logging.INFO)
 
-            # Avoid duplicate handlers
-            if not workflow_logger.handlers:
-                workflow_logger.addHandler(console_handler)
-
-            if not activity_logger.handlers:
-                activity_logger.addHandler(console_handler)
+            # Add handlers to the loggers
+            workflow_logger.addHandler(console_handler)
+            activity_logger.addHandler(console_handler)
 
         except Exception as e:
             print(f"Failed to setup logging: {str(e)}")
