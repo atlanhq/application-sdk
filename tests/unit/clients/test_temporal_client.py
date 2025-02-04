@@ -67,7 +67,6 @@ async def test_start_workflow(
     mock_client.start_workflow.return_value = mock_handle
 
     # Mock the state store
-    mock_secret_store = MagicMock()
     mock_secret_store.store_credentials.return_value = "test_credentials"
 
     # Sample workflow arguments
@@ -112,7 +111,6 @@ async def test_start_workflow_with_workflow_id(
     mock_client.start_workflow.side_effect = start_workflow_side_effect
 
     # Mock the state store
-    mock_secret_store = MagicMock()
     mock_secret_store.store_credentials.return_value = "test_credentials"
 
     # Sample workflow arguments
