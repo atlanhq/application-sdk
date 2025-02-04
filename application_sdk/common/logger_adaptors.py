@@ -43,12 +43,19 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             activity_logger.parent = logger
 
             # Set levels to match the main logger
-            workflow_logger.setLevel(logging.INFO)
-            activity_logger.setLevel(logging.INFO)
+            if isinstance(workflow_logger, logging.LoggerAdapter):
+                workflow_logger.logger.setLevel(logging.INFO)
+                workflow_logger.logger.addHandler(console_handler)
+            else:
+                workflow_logger.setLevel(logging.INFO)
+                workflow_logger.addHandler(console_handler)
 
-            # Add handlers to the loggers
-            workflow_logger.addHandler(console_handler)
-            activity_logger.addHandler(console_handler)
+            if isinstance(activity_logger, logging.LoggerAdapter):
+                activity_logger.logger.setLevel(logging.INFO)
+                activity_logger.logger.addHandler(console_handler)
+            else:
+                activity_logger.setLevel(logging.INFO)
+                activity_logger.addHandler(console_handler)
 
         except Exception as e:
             print(f"Failed to setup logging: {str(e)}")
