@@ -1,3 +1,4 @@
+import logging
 from typing import Any, Dict, Generator, Optional, Type
 
 import pandas as pd
@@ -7,6 +8,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
@@ -15,6 +17,8 @@ from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
+
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState):

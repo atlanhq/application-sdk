@@ -5,6 +5,7 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
+import logging
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
@@ -16,8 +17,11 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.constants import ApplicationConstants
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.statestore import StateStore
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
+
+workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 @workflow.defn

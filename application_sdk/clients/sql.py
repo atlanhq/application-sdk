@@ -20,6 +20,7 @@ from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class SQLConstants(Enum):
