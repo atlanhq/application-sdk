@@ -183,17 +183,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        iter_index = 0
-
         for row in results.to_dict(orient="records"):
             try:
                 if not state.transformer:
                     raise ValueError("Transformer is not set")
-
-                iter_index += 1
-                if iter_index % 100 == 0:
-                    details = ()
-                    activity.heartbeat(*details)
 
                 transformed_metadata: Optional[Dict[str, Any]] = (
                     state.transformer.transform_metadata(
