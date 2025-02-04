@@ -143,14 +143,14 @@ class Output(ABC):
         """
         pass
 
-    def get_metadata(self) -> Any:
-        """Get metadata about the output."""
+    def get_statistics(self) -> Any:
+        """Get statistics about the output."""
         pass
 
-    async def write_metadata(self):
+    async def write_statistics(self) -> Optional[Dict[str, Any]]:
         """Write metadata about the output to a JSON file.
 
-        This method writes metadata including total record count and chunk count
+        This method writes statistics including total record count and chunk count
         to a JSON file and uploads it to the object store.
 
         Raises:
@@ -158,19 +158,20 @@ class Output(ABC):
         """
         try:
             # prepare the metadata
-            metadata = {
-                "total_record_count": [self.total_record_count],
-                "chunk_count": [self.chunk_count],
+            statistics = {
+                "total_record_count": self.total_record_count,
+                "chunk_count": self.chunk_count,
             }
 
-            # Write the metadata to a json file
+            # Write the statistics to a json file
             output_file_name = f"{self.output_path}/metadata.json.ignore"
-            dataframe = pd.DataFrame(metadata)
+            dataframe = pd.DataFrame(statistics, index=[0])
             dataframe.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
             await ObjectStore.push_file_to_object_store(
                 self.output_prefix, output_file_name
             )
+            return statistics
         except Exception as e:
-            activity.logger.error(f"Error writing metadata: {str(e)}")
+            activity.logger.error(f"Error writing statistics: {str(e)}")

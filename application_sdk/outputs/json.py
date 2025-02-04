@@ -228,16 +228,21 @@ class JsonOutput(Output):
         self.buffer.clear()
         self.current_buffer_size = 0
 
-    def get_metadata(self, typename: Optional[str] = None) -> ActivityStatistics:
-        """Get metadata about the output.
+    async def get_statistics(
+        self, typename: Optional[str] = None
+    ) -> ActivityStatistics:
+        """Returns the statistics and about the output and writes it to a file.
 
         This method returns a ActivityStatistics object with total record count and chunk count.
 
         Args:
             typename (str): Type name of the entity e.g database, schema, table.
         """
-        return ActivityStatistics(
-            total_record_count=self.total_record_count,
-            chunk_count=self.chunk_count,
-            typename=typename,
-        )
+        # Write the statistics to a JSON file
+        statistics = await self.write_statistics()
+        statistics = ActivityStatistics.model_validate(statistics)
+        if typename:
+            statistics.typename = typename
+
+        # Return the statistics
+        return statistics
