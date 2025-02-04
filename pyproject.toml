@@ -13,7 +13,6 @@ opentelemetry-distro = "^0.50b0"
 opentelemetry-exporter-otlp = "^1.29.0"
 opentelemetry-instrumentation-fastapi = "^0.50b0"
 opentelemetry-exporter-prometheus = "^0.50b0"
-prometheus-fastapi-instrumentator = "^6.1.0"
 opentelemetry-proto = "^1.29.0"
 psutil = "^6.0.0"
 fastapi = {extras = ["standard"], version = "^0.115.0"}

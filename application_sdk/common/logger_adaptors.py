@@ -1,19 +1,8 @@
 import logging
-import os
 from contextvars import ContextVar
 from typing import Any, MutableMapping, Tuple
 
-# from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
-# from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-# from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
-# from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
-
-SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
-OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
-    "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
-)
 
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
@@ -39,44 +28,10 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         )
 
         try:
-            # In development, only use console handler
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
             console_handler.setFormatter(formatter)
             logger.addHandler(console_handler)
-            # Production OTLP setup
-            # logger_provider = LoggerProvider(
-            #     resource=Resource.create(
-            #         {
-            #             "service.name": SERVICE_NAME,
-            #             "service.version": SERVICE_VERSION,
-            #             "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
-            #             "k8s.log.type": "service-logs",
-            #         }
-            #     )
-            # )
-
-            # exporter = OTLPLogExporter(
-            #     endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
-            #     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
-            # )
-
-            # batch_processor = BatchLogRecordProcessor(
-            #     exporter,
-            #     schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
-            #     max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-            #     max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
-            # )
-
-            # logger_provider.add_log_record_processor(batch_processor)
-
-            # otlp_handler = LoggingHandler(
-            #     level=logging.INFO,
-            #     logger_provider=logger_provider,
-            # )
-            # otlp_handler.setFormatter(formatter)
-            # logger.addHandler(otlp_handler)
-
         except Exception as e:
             print(f"Failed to setup OTLP logging: {str(e)}")
             # Fallback to basic console logging with the same formatter

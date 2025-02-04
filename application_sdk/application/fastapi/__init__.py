@@ -29,11 +29,6 @@ from application_sdk.common.utils import get_workflow_config, update_workflow_co
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
-from opentelemetry import metrics
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.exporter.prometheus import PrometheusMetricReader
-from prometheus_client import start_http_server
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
