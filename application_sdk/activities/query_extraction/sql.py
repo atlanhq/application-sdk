@@ -147,6 +147,15 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         raw_output: JsonOutput,
         **kwargs,
     ):
+        """Fetch and process queries from the database.
+        Args:
+            batch_input: Input DataFrame containing the queries
+            raw_output: JsonOutput object for writing results
+            **kwargs: Additional keyword arguments
+
+        Returns:
+            None
+        """
         logger.info(
             "Starting query fetch",
             extra={
