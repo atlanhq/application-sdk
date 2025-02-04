@@ -31,10 +31,33 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
             console_handler.setFormatter(formatter)
-            logger.addHandler(console_handler)
+
+            # Main logger setup
+            if not logger.handlers:
+                logger.addHandler(console_handler)
+
+            # Temporal workflow and activity loggers
+            workflow_logger = workflow.logger
+            activity_logger = activity.logger
+
+            # Ensure they inherit from the main logger
+            workflow_logger.parent = logger
+            activity_logger.parent = logger
+
+            # Set levels to match the main logger
+            workflow_logger.setLevel(logging.INFO)
+            activity_logger.setLevel(logging.INFO)
+
+            # Avoid duplicate handlers
+            if not workflow_logger.handlers:
+                workflow_logger.addHandler(console_handler)
+
+            if not activity_logger.handlers:
+                activity_logger.addHandler(console_handler)
+
         except Exception as e:
-            print(f"Failed to setup OTLP logging: {str(e)}")
-            # Fallback to basic console logging with the same formatter
+            print(f"Failed to setup logging: {str(e)}")
+            # Fallback to basic console logging
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
             console_handler.setFormatter(formatter)
