@@ -13,6 +13,7 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
+from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs.objectstore import ObjectStore
 
@@ -143,9 +144,24 @@ class Output(ABC):
         """
         pass
 
-    def get_statistics(self) -> Any:
-        """Get statistics about the output."""
-        pass
+    async def get_statistics(
+        self, typename: Optional[str] = None
+    ) -> ActivityStatistics:
+        """Returns the statistics and about the output and writes it to a file.
+
+        This method returns a ActivityStatistics object with total record count and chunk count.
+
+        Args:
+            typename (str): Type name of the entity e.g database, schema, table.
+        """
+        # Write the statistics to a JSON file
+        statistics = await self.write_statistics()
+        statistics = ActivityStatistics.model_validate(statistics)
+        if typename:
+            statistics.typename = typename
+
+        # Return the statistics
+        return statistics
 
     async def write_statistics(self) -> Optional[Dict[str, Any]]:
         """Write metadata about the output to a JSON file.
