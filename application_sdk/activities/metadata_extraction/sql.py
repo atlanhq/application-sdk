@@ -21,6 +21,7 @@ from application_sdk.transformers.atlas import AtlasTransformer
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 activity.logger.setLevel(logging.DEBUG)
 
+
 class SQLMetadataExtractionActivitiesState(ActivitiesState):
     """State class for SQL metadata extraction activities.
 
