@@ -12,6 +12,7 @@ from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.outputs import Output
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger.setLevel(logging.DEBUG)
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
