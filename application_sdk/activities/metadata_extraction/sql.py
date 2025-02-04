@@ -4,11 +4,7 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
-from application_sdk.activities.common.utils import (
-    auto_heartbeater,
-    get_workflow_id,
-    to_async_generator,
-)
+from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.decorators import transform
@@ -187,7 +183,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        async for row in to_async_generator(results.to_dict(orient="records")):
+        for row in results.to_dict(orient="records"):
             try:
                 if not state.transformer:
                     raise ValueError("Transformer is not set")
