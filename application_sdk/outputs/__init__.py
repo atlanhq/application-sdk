@@ -144,7 +144,6 @@ class Output(ABC):
         """
         pass
 
-    @abstractmethod
     async def get_statistics(
         self, typename: Optional[str] = None
     ) -> ActivityStatistics:
@@ -170,6 +169,7 @@ class Output(ABC):
         except Exception as e:
             activity.logger.error(f"Error getting statistics: {str(e)}")
             raise
+
     async def write_statistics(self) -> Optional[Dict[str, Any]]:
         """Write metadata about the output to a JSON file.
 
