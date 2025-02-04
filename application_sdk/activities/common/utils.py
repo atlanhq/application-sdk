@@ -101,12 +101,6 @@ def auto_heartbeater(fn: F) -> F:
     return cast(F, wrapper)
 
 
-async def to_async_generator(generator):
-    for item in generator:
-        await asyncio.sleep(0)
-        yield item
-
-
 async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
     """Sends heartbeat signals at regular intervals until the task is cancelled.
 

@@ -93,7 +93,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
-            heartbeat_timeout=timedelta(seconds=10),
+            heartbeat_timeout=timedelta(seconds=120),
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -116,7 +116,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             },
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
-            heartbeat_timeout=timedelta(seconds=10),
+            heartbeat_timeout=timedelta(seconds=120),
         )
 
         batches, chunk_starts = self.get_transform_batches(
@@ -137,7 +137,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     start_to_close_timeout=timedelta(
                         seconds=start_to_close_timeout_seconds
                     ),
-                    heartbeat_timeout=timedelta(seconds=10),
+                    heartbeat_timeout=timedelta(seconds=120),
                 )
             )
 
@@ -162,7 +162,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             },
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
-            heartbeat_timeout=timedelta(seconds=10),
+            heartbeat_timeout=timedelta(seconds=120),
         )
 
     def get_transform_batches(self, chunk_count: int, typename: str):

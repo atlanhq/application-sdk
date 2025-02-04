@@ -1,14 +1,11 @@
+import asyncio
 from typing import Any, Dict, Generator, Optional, Type
 
 import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
-from application_sdk.activities.common.utils import (
-    auto_heartbeater,
-    get_workflow_id,
-    to_async_generator,
-)
+from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.decorators import transform
@@ -187,10 +184,14 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        async for row in to_async_generator(results.to_dict(orient="records")):
+        for iter_index, row in enumerate(results.to_dict(orient="records")):
             try:
                 if not state.transformer:
                     raise ValueError("Transformer is not set")
+
+                # TODO: This is a hack to get the heartbeat to work
+                if iter_index % 1000 == 0:
+                    await asyncio.sleep(0.1)
 
                 transformed_metadata: Optional[Dict[str, Any]] = (
                     state.transformer.transform_metadata(
