@@ -47,8 +47,6 @@ jobs:
 
       - name: Generate Sphinx Docs and UML Diagrams
         run: |
-          export POETRY_VIRTUALENVS_IN_PROJECT=1
-          export POETRY_VIRTUALENVS_CREATE=1
           git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}".insteadOf "ssh://git";
           poetry install
           source .venv/bin/activate
