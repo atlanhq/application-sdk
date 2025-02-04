@@ -199,12 +199,17 @@ class Table(assets.Table):
 
             # Determine the type of table based on metadata
             is_partition = bool(obj.get("is_partition", False))
-            table_type_value = obj.get("table_type")
+            table_type_value = obj.get("table_type", "TABLE")
             is_dynamic = obj.get("is_dynamic") == "YES"
 
             if is_partition:
                 table_type = assets.TablePartition
-            elif table_type_value in ["TABLE", "BASE TABLE"]:
+            elif table_type_value in [
+                "TABLE",
+                "BASE TABLE",
+                "FOREIGN TABLE",
+                "PARTITIONED TABLE",
+            ]:
                 table_type = assets.Table
             elif table_type_value == "MATERIALIZED VIEW":
                 table_type = assets.MaterialisedView
@@ -213,20 +218,53 @@ class Table(assets.Table):
             else:
                 table_type = assets.View
 
-            sql_table = table_type.creator(
-                name=obj["table_name"],
-                schema_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                ),
-                schema_name=obj["table_schema"],
-                database_name=obj["table_catalog"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["table_catalog"]
-                ),
-                connection_qualified_name=obj["connection_qualified_name"],
-            )
+            if table_type == assets.TablePartition:
+                sql_table = table_type.creator(
+                    name=obj["table_name"],
+                    schema_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                    ),
+                    schema_name=obj["table_schema"],
+                    database_name=obj["table_catalog"],
+                    database_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"], obj["table_catalog"]
+                    ),
+                    connection_qualified_name=obj["connection_qualified_name"],
+                    table_name=obj["parent_table_name"],
+                    table_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                        obj["parent_table_name"],
+                    ),
+                )
+                if obj.get("partitioned_parent_table", None):
+                    sql_table.parent_table_partition = (
+                        assets.TablePartition.ref_by_qualified_name(
+                            qualified_name=sql_table.table_qualified_name
+                        )
+                    )
+                else:
+                    sql_table.parent_table = Table.ref_by_qualified_name(
+                        qualified_name=sql_table.table_qualified_name
+                    )
+            else:
+                sql_table = table_type.creator(
+                    name=obj["table_name"],
+                    schema_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                    ),
+                    schema_name=obj["table_schema"],
+                    database_name=obj["table_catalog"],
+                    database_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"], obj["table_catalog"]
+                    ),
+                    connection_qualified_name=obj["connection_qualified_name"],
+                )
 
             if table_type in [assets.View, assets.MaterialisedView]:
                 sql_table.attributes.definition = obj.get("view_definition", "")
@@ -263,6 +301,7 @@ class Table(assets.Table):
             # Applicable only for Materialised Views
             if not sql_table.custom_attributes:
                 sql_table.custom_attributes = {}
+                sql_table.custom_attributes["table_type"] = table_type_value
 
             if obj.get("is_transient", "") != "":
                 sql_table.custom_attributes["is_transient"] = obj.get("is_transient")
@@ -361,11 +400,14 @@ class Column(assets.Column):
                 or obj.get("is_dynamic") == "YES"
             ):
                 parent_type = assets.SnowflakeDynamicTable
-            elif (
-                obj.get("belongs_to_partition") == "YES"
-            ):  # TODO: Check if the field belongs to partition exists, and if its YES/NO
+            elif obj.get("belongs_to_partition") == "YES":
                 parent_type = assets.TablePartition
-            elif obj.get("table_type") in ["TABLE", "BASE TABLE"]:
+            elif obj.get("table_type") in [
+                "TABLE",
+                "BASE TABLE",
+                "FOREIGN TABLE",
+                "PARTITIONED TABLE",
+            ]:
                 parent_type = assets.Table
             else:
                 parent_type = assets.View
