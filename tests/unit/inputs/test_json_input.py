@@ -26,7 +26,7 @@ async def test_init(json_input):
 @patch("application_sdk.inputs.objectstore.ObjectStore.download_file_from_object_store")
 async def test_not_download_file_that_exists(mock_download, mock_exists, json_input):
     mock_exists.return_value = True
-    json_input.download_files()
+    await json_input.download_files()
     mock_download.assert_not_called()
 
 
@@ -35,7 +35,7 @@ async def test_not_download_file_that_exists(mock_download, mock_exists, json_in
 @patch("application_sdk.inputs.objectstore.ObjectStore.download_file_from_object_store")
 async def test_download_file(mock_download, mock_exists, json_input):
     mock_exists.return_value = False
-    json_input.download_files()
+    await json_input.download_files()
     mock_download.assert_called_once_with(
         "test_prefix/test_file.json",
         "/test_path/test_file.json",
