@@ -16,7 +16,7 @@ class StateStoreInput:
     STATE_STORE_NAME = "statestore"
 
     @classmethod
-    def _get_state(cls, key: str) -> Dict[str, Any]:
+    def get_state(cls, key: str) -> Dict[str, Any]:
         """Private method to get state from the store.
 
         Args:
@@ -29,41 +29,15 @@ class StateStoreInput:
             ValueError: If no state is found for the given key.
             Exception: If there's an error with the Dapr client operations.
         """
-        client = DaprClient()
         try:
-            state = client.get_state(store_name=cls.STATE_STORE_NAME, key=key)
-            if not state.data:
-                raise ValueError(f"State not found for key: {key}")
-            return json.loads(state.data)
+            with DaprClient() as client:
+                state = client.get_state(store_name=cls.STATE_STORE_NAME, key=key)
+                if not state.data:
+                    raise ValueError(f"State not found for key: {key}")
+                return json.loads(state.data)
         except Exception as e:
             activity.logger.error(f"Failed to extract state: {str(e)}")
             raise e
-        finally:
-            client.close()
-
-    @classmethod
-    def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
-        """Extract credentials from the state store using the credential GUID.
-
-        Note: this method will be moved to secretstore.py
-
-        Args:
-            credential_guid: The unique identifier for the credentials.
-
-        Returns:
-            Dict[str, Any]: The credentials if found.
-
-        Raises:
-            ValueError: If the credential_guid is invalid or credentials are not found.
-            Exception: If there's an error with the Dapr client operations.
-
-        Examples:
-            >>> StateStoreInput.extract_credentials("1234567890")
-            {"username": "admin", "password": "password"}
-        """
-        if not credential_guid:
-            raise ValueError("Invalid credential GUID provided.")
-        return cls._get_state(f"credential_{credential_guid}")
 
     @classmethod
     def extract_configuration(cls, config_id: str) -> Dict[str, Any]:
@@ -81,5 +55,5 @@ class StateStoreInput:
         """
         if not config_id:
             raise ValueError("Invalid configuration ID provided.")
-        config = cls._get_state(f"config_{config_id}")
+        config = cls.get_state(f"config_{config_id}")
         return config

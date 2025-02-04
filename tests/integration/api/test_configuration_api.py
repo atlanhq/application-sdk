@@ -4,15 +4,16 @@ import pytest
 from fastapi.testclient import TestClient
 
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 
 
 class TestConfigurationAPI:
     def test_post_configuration_success(self, client: TestClient):
         """Test successful configuration creation/update"""
-        # Mock the StateStoreInput/StateStoreOutput methods
+        # Mock the secretstore and statestore methods
         with patch.object(
-            StateStoreOutput, "store_credentials"
+            SecretStoreOutput, "store_credentials"
         ) as mock_store_creds, patch.object(
             StateStoreInput, "extract_configuration"
         ) as mock_extract_config, patch.object(

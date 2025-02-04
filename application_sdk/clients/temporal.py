@@ -31,6 +31,7 @@ from application_sdk.outputs.eventstore import (
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
+from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
@@ -251,7 +252,7 @@ class TemporalClient(ClientInterface):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = StateStoreOutput.store_credentials(
+            workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
