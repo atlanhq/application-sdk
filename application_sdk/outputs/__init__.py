@@ -144,25 +144,32 @@ class Output(ABC):
         """
         pass
 
+    @abstractmethod
     async def get_statistics(
         self, typename: Optional[str] = None
     ) -> ActivityStatistics:
-        """Returns the statistics and about the output and writes it to a file.
+        """Returns statistics about the output.
 
         This method returns a ActivityStatistics object with total record count and chunk count.
 
         Args:
             typename (str): Type name of the entity e.g database, schema, table.
+
+        Raises:
+            ValidationError: If the statistics data is invalid
+            Exception: If there's an error writing the statistics
         """
-        # Write the statistics to a JSON file
-        statistics = await self.write_statistics()
-        statistics = ActivityStatistics.model_validate(statistics)
-        if typename:
-            statistics.typename = typename
-
-        # Return the statistics
-        return statistics
-
+        try:
+            statistics = await self.write_statistics()
+            if not statistics:
+                raise ValueError("No statistics data available")
+            statistics = ActivityStatistics.model_validate(statistics)
+            if typename:
+                statistics.typename = typename
+            return statistics
+        except Exception as e:
+            activity.logger.error(f"Error getting statistics: {str(e)}")
+            raise
     async def write_statistics(self) -> Optional[Dict[str, Any]]:
         """Write metadata about the output to a JSON file.
 
