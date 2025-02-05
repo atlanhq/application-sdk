@@ -47,8 +47,6 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 resource=Resource.create(
                     {
                         "service.name": SERVICE_NAME,
-                        "service.version": SERVICE_VERSION,
-                        "host.name": os.getenv("ATLAN_DOMAIN", "ENV_NOT_SET"),
                         "k8s.log.type": "service-logs",
                     }
                 )
