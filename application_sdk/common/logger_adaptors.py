@@ -17,6 +17,7 @@ SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
 OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
 )
+ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 
 
 class AtlanLoggerAdapter(logging.LoggerAdapter):
@@ -70,41 +71,36 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             logger.addHandler(console_handler)
 
             # OTLP handler setup
-            logger_provider = LoggerProvider(
-                resource=Resource.create(
-                    {
+            if ENABLE_OTLP_LOGS:
+                logger_provider = LoggerProvider(
+                    resource=Resource.create(
+                        {
                         "service.name": SERVICE_NAME,
                         "service.version": SERVICE_VERSION,
-                        "k8s.log.type": "service-logs",
-                    }
+                            "k8s.log.type": "service-logs",
+                        }
+                    )
                 )
-            )
 
-            exporter = OTLPLogExporter(
-                endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
-                timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
-            )
-            batch_processor = BatchLogRecordProcessor(
-                exporter,
-                schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
-                max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-                max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
-            )
-            logger_provider.add_log_record_processor(batch_processor)
-            
-            otlp_handler = LoggingHandler(
-                level=logging.INFO,
-                logger_provider=logger_provider,
-            )
-            otlp_handler.setFormatter(workflow_formatter)
-            # Only add OTLP handler for workflow/activity logs
-            otlp_handler.addFilter(
-                lambda record: (hasattr(record, "workflow_id") or 
-                              hasattr(record, "activity_id") or 
-                              "workflow" in record.name.lower() or 
-                              "activity" in record.name.lower())
-            )
-            logger.addHandler(otlp_handler)
+                exporter = OTLPLogExporter(
+                    endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
+                    timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                )
+                batch_processor = BatchLogRecordProcessor(
+                    exporter,
+                    schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
+                    max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
+                    max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                )
+                logger_provider.add_log_record_processor(batch_processor)
+                
+                otlp_handler = LoggingHandler(
+                    level=logging.INFO,
+                    logger_provider=logger_provider,
+                )
+                otlp_handler.setFormatter(workflow_formatter)
+                
+                logger.addHandler(otlp_handler)
 
         except Exception as e:
             print(f"Failed to setup logging: {str(e)}")
