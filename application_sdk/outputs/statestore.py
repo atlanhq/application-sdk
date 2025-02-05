@@ -17,7 +17,7 @@ class StateStoreOutput:
 
     @classmethod
     def save_state(cls, key: str, value: Dict[str, Any]) -> None:
-        """Private method to save state to the store.
+        """Save state to the store.
 
         Args:
             key: The key to store the state under.

@@ -17,7 +17,7 @@ class StateStoreInput:
 
     @classmethod
     def get_state(cls, key: str) -> Dict[str, Any]:
-        """Private method to get state from the store.
+        """Get state from the store.
 
         Args:
             key: The key to retrieve the state for.

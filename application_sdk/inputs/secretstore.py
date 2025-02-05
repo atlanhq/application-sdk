@@ -12,8 +12,6 @@ class SecretStoreInput:
     def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
         """Extract credentials from the state store using the credential GUID.
 
-        Note: this method will be moved to secretstore.py
-
         Args:
             credential_guid: The unique identifier for the credentials.
 

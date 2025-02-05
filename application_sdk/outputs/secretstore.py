@@ -13,8 +13,6 @@ class SecretStoreOutput:
     def store_credentials(cls, config: Dict[str, Any]) -> str:
         """Store credentials in the state store.
 
-        Note: this method will be moved to secretstore.py
-
         Args:
             config: The credentials to store.
 

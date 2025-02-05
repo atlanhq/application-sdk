@@ -55,7 +55,7 @@ class ObjectStoreOutput:
                 raise e
 
     @classmethod
-    async def push_to_object_store(
+    async def push_files_to_object_store(
         cls, output_prefix: str, input_files_path: str
     ) -> None:
         """Pushes files from a directory to the object store.
@@ -70,7 +70,7 @@ class ObjectStoreOutput:
             Exception: If there's an error with the Dapr client operations.
 
         Example:
-            >>> ObjectStoreOutput.push_to_object_store("logs", "/tmp/logs")
+            >>> ObjectStoreOutput.push_files_to_object_store("logs", "/tmp/logs")
         """
         if not os.path.isdir(input_files_path):
             raise ValueError(
