@@ -279,12 +279,22 @@ class FastAPIApplication(AtlanApplicationInterface):
             data=config,
         )
 
-    async def start(self, host: str = "0.0.0.0", port: int = 8000):
-        server = Server(
-            Config(
-                app=self.app,
-                host=host,
-                port=port,
-            )
+    async def start(self, host: str = "0.0.0.0", port: int = 8000, reload: bool = False):
+        """Start the FastAPI application with the given host and port.
+        
+        Args:
+            host: The host to bind to
+            port: The port to bind to
+            reload: Whether to enable hot-reloading (only for development)
+        """
+        config = Config(
+            app=self.app,
+            host=host,
+            port=port,
+            reload=reload,
+            reload_includes=["*.py"],  # Watch Python files for changes
+            reload_dirs=["."],  # Watch current directory
         )
+        
+        server = Server(config)
         await server.serve()
