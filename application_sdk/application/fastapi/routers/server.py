@@ -9,10 +9,12 @@ Note:
 
 import asyncio
 import logging
+import os
 import platform
 import re
 import socket
-import sys
+import threading
+import time
 import uuid
 
 import psutil
@@ -70,6 +72,15 @@ async def health():
     return info
 
 
+def terminate_process():
+    """
+    Terminate the process by sending a SIGTERM signal to the parent process.
+    """
+    time.sleep(1)
+    parent = psutil.Process(psutil.Process(os.getpid()).ppid())
+    parent.terminate()
+
+
 @router.post("/shutdown")
 async def shutdown(force: bool = False):
     """
@@ -106,10 +117,10 @@ async def shutdown(force: bool = False):
             except Exception as e:
                 logger.error(f"Error during task cancellation: {e}")
 
-        # Stop the server with exit code 0
-        sys.exit(0)
+    # TO BE IMPLEMENTED - currently graceful shutdown is dysfunctional
+    # asyncio.create_task(shutdown())
 
-    asyncio.create_task(shutdown())
+    threading.Thread(target=terminate_process, daemon=True).start()
 
     return JSONResponse(
         status_code=status.HTTP_200_OK,

@@ -13,10 +13,10 @@ from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
-from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
+from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -122,7 +122,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         """
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
-            credentials = StateStore.extract_credentials(
+            credentials = SecretStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
@@ -359,7 +359,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
 
-        await ObjectStore.push_file_to_object_store(
+        await ObjectStoreOutput.push_file_to_object_store(
             workflow_args["output_prefix"], metadata_file_path
         )
 
