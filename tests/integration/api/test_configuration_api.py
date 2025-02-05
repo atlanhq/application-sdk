@@ -21,10 +21,9 @@ class TestConfigurationAPI:
                 "credential_guid": "credential_test-abcd",
                 "connection": {"connection": "production"},
                 "metadata": {
-                    "exclude_filter": "{}",
-                    "include_filter": "{}",
-                    "temp_table_regex": "^temp_",
-                    "advanced_config_strategy": "default",
+                    "exclude-filter": "{}",
+                    "include-filter": "{}",
+                    "temp-table-regex": "^temp_",
                 },
             }
             mock_store_creds.return_value = "credential_test-uuid"
@@ -34,10 +33,9 @@ class TestConfigurationAPI:
                 "credential_guid": "credential_test-uuid",
                 "connection": {"connection": "dev"},
                 "metadata": {
-                    "exclude_filter": "{}",
-                    "include_filter": "{}",
-                    "temp_table_regex": "",
-                    "advanced_config_strategy": "default",
+                    "exclude-filter": "{}",
+                    "include-filter": "{}",
+                    "temp-table-regex": "",
                 },
             }
             expected_config = payload.copy()
@@ -62,9 +60,9 @@ class TestConfigurationAPI:
         existing_config = {
             "connection": {"connection": "dev"},
             "metadata": {
-                "exclude_filter": "{}",
-                "include_filter": "{}",
-                "temp_table_regex": "",
+                "exclude-filter": "{}",
+                "include-filter": "{}",
+                "temp-table-regex": "",
             },
             "credential_guid": "old-credential-uuid",
         }
@@ -105,9 +103,9 @@ class TestConfigurationAPI:
         test_config = {
             "connection": {"connection": "dev"},
             "metadata": {
-                "exclude_filter": "{}",
-                "include_filter": "{}",
-                "temp_table_regex": "",
+                "exclude-filter": "{}",
+                "include-filter": "{}",
+                "temp-table-regex": "",
             },
             "credential_guid": "credential_test-uuid",
         }
@@ -148,9 +146,9 @@ class TestConfigurationAPI:
         payload = {
             "connection": {"connection": "dev"},
             "metadata": {
-                "exclude_filter": "{}",
-                "include_filter": "{}",
-                "temp_table_regex": "",
+                "exclude-filter": "{}",
+                "include-filter": "{}",
+                "temp-table-regex": "",
             },
         }
 

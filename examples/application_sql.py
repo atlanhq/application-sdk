@@ -152,10 +152,9 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
             "connection_qualified_name": "default/postgres/1728518400",
         },
         "metadata": {
-            "exclude_filter": "{}",
-            "include_filter": "{}",
-            "temp_table_regex": "",
-            "advanced_config_strategy": "default",
+            "exclude-filter": "{}",
+            "include-filter": "{}",
+            "temp-table-regex": "",
             "extraction-method": "direct",
             "exclude_views": "true",
             "exclude_empty_tables": "false",

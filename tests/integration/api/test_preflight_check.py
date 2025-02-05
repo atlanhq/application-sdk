@@ -38,9 +38,9 @@ class TestSQLPreflightCheck:
                 "warehouse": "COMPUTE_WH",
             },
             "metadata": {
-                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
-                "exclude_filter": "{}",
-                "temp_table_regex": "",
+                "include-filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
+                "exclude-filter": "{}",
+                "temp-table-regex": "",
             },
         }
 
@@ -98,9 +98,9 @@ class TestSQLPreflightCheck:
                 "warehouse": "COMPUTE_WH",
             },
             "metadata": {
-                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
-                "exclude_filter": "{}",
-                "temp_table_regex": "^TEMP_TABLE$",
+                "include-filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
+                "exclude-filter": "{}",
+                "temp-table-regex": "^TEMP_TABLE$",
             },
         }
 
@@ -157,9 +157,9 @@ class TestSQLPreflightCheck:
                 "warehouse": "COMPUTE_WH",
             },
             "metadata": {
-                "include_filter": "{}",
-                "exclude_filter": "{}",
-                "temp_table_regex": "",
+                "include-filter": "{}",
+                "exclude-filter": "{}",
+                "temp-table-regex": "",
             },
         }
 
@@ -207,9 +207,9 @@ class TestSQLPreflightCheck:
                 "warehouse": "COMPUTE_WH",
             },
             "metadata": {
-                "include_filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
-                "exclude_filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
-                "temp_table_regex": "",
+                "include-filter": json.dumps({"^TESTDB$": ["^PUBLIC$"]}),
+                "exclude-filter": json.dumps({"^TESTDB$": ["^PRIVATE$"]}),
+                "temp-table-regex": "",
             },
         }
 

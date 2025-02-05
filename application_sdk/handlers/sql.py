@@ -210,7 +210,7 @@ class SQLHandler(HandlerInterface):
             schemas_results: List[Dict[str, str]] = await self.prepare_metadata()
 
             include_filter = json.loads(
-                payload.get("metadata", {}).get("include_filter", "{}")
+                payload.get("metadata", {}).get("include-filter", "{}")
             )
             allowed_databases, allowed_schemas = self.extract_allowed_schemas(
                 schemas_results
