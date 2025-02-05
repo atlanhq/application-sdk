@@ -1,21 +1,23 @@
 import logging
 import os
+from contextvars import ContextVar
+from typing import Any, MutableMapping, Tuple
+
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
-from contextvars import ContextVar
-from typing import Any, MutableMapping, Tuple
 from temporalio import activity, workflow
 
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
 
-SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk") 
+SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
 OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
 )
+
 
 class AtlanLoggerAdapter(logging.LoggerAdapter):
     def __init__(self, logger: logging.Logger) -> None:
