@@ -23,6 +23,10 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 class AtlanLoggerAdapter(logging.LoggerAdapter):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter with enhanced configuration."""
+        # Remove any existing handlers
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+
         logger.setLevel(logging.INFO)
 
         # Create OTLP formatter with detailed format for workflow/activity logs

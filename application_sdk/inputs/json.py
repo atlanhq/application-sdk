@@ -42,7 +42,7 @@ class JsonInput(Input):
     async def download_files(self):
         """Download the files from the object store to the local path"""
         if not self.file_names:
-            logger.debug("No files to download")
+            logger.info("No files to download")
             return
 
         for file_name in self.file_names or []:
