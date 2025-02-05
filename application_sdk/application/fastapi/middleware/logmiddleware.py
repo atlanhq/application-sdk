@@ -6,6 +6,7 @@ from uuid import uuid4
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
+from starlette.types import ASGIApp
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, request_context
 
@@ -13,6 +14,13 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
 
 class LogMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app: ASGIApp):
+        super().__init__(app)
+        # Use the existing logger instead of creating a new one
+        self.logger = logger
+        # Remove any existing handlers to prevent duplicate logging
+        self.logger.logger.handlers = []
+
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
@@ -22,7 +30,7 @@ class LogMiddleware(BaseHTTPMiddleware):
         token = request_context.set({"request_id": request_id})
         start_time = time.time()
 
-        logger.info(
+        self.logger.info(
             "Request started",
             extra={
                 "method": request.method,
@@ -37,7 +45,7 @@ class LogMiddleware(BaseHTTPMiddleware):
             response = await call_next(request)
             duration = time.time() - start_time
 
-            logger.info(
+            self.logger.info(
                 "Request completed",
                 extra={
                     "method": request.method,
@@ -51,7 +59,7 @@ class LogMiddleware(BaseHTTPMiddleware):
 
         except Exception as e:
             duration = time.time() - start_time
-            logger.error(
+            self.logger.error(
                 "Request failed",
                 extra={
                     "method": request.method,
@@ -65,16 +73,3 @@ class LogMiddleware(BaseHTTPMiddleware):
             raise
         finally:
             request_context.reset(token)
-
-    def _get_request_info(
-        self, request: Request, request_body_str: Optional[str]
-    ) -> Dict[str, Any]:
-        """Extract and format request information for logging."""
-        return {
-            "method": request.method,
-            "url": str(request.url),
-            "path": request.url.path,
-            "client_host": request.client.host if request.client else None,
-            "body": request_body_str,
-            "headers": dict(request.headers),
-        }

@@ -277,8 +277,8 @@ class TemporalClient(ClientInterface):
 
             logger.info(f"Created workflow config with ID: {workflow_id}")
 
-        workflow.logger.setLevel(logging.DEBUG)
-        activity.logger.setLevel(logging.DEBUG)
+        workflow.logger.setLevel(logging.INFO)
+        activity.logger.setLevel(logging.INFO)
 
         try:
             handle = await self.client.start_workflow(

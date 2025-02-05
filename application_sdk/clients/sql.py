@@ -21,7 +21,7 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-activity.logger.setLevel(logging.DEBUG)
+activity.logger.setLevel(logging.INFO)
 
 
 class SQLConstants(Enum):

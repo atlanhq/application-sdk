@@ -19,7 +19,7 @@ from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-activity.logger.setLevel(logging.DEBUG)
+activity.logger.setLevel(logging.INFO)
 
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState):

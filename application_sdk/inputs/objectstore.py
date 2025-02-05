@@ -9,7 +9,7 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-activity.logger.setLevel(logging.DEBUG)
+activity.logger.setLevel(logging.INFO)
 
 
 class ObjectStore:

@@ -13,6 +13,7 @@ from temporalio import activity, workflow
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
+SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
 OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
 )
@@ -22,12 +23,14 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter with enhanced configuration."""
         logger.setLevel(logging.INFO)
-        formatter = logging.Formatter(
+        
+        # Create OTLP formatter with detailed format for workflow/activity logs
+        workflow_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s - %(message)s "
             "[workflow_id=%(workflow_id)s] "
             "[run_id=%(run_id)s] "
             "[activity_id=%(activity_id)s] "
-            "[workflow_type=%(workflow_type)s] ",
+            "[workflow_type=%(workflow_type)s]",
             defaults={
                 "workflow_id": "N/A",
                 "run_id": "N/A",
@@ -35,84 +38,113 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 "workflow_type": "N/A",
             },
         )
+        
+        # Create simple formatter for regular logs
+        simple_formatter = logging.Formatter('%(message)s')
+        
         try:
-            # In development, only use console handler
+            # Console handler with workflow formatter for workflow/activity logs
+            workflow_handler = logging.StreamHandler()
+            workflow_handler.setLevel(logging.INFO)
+            workflow_handler.setFormatter(workflow_formatter)
+            workflow_handler.addFilter(lambda record: 
+                hasattr(record, 'workflow_id') or 
+                hasattr(record, 'activity_id') or 
+                'workflow' in record.name.lower() or 
+                'activity' in record.name.lower()
+            )
+            logger.addHandler(workflow_handler)
+
+            # Console handler with simple format for other logs
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
-            console_handler.setFormatter(formatter)
+            console_handler.setFormatter(simple_formatter)
+            console_handler.addFilter(lambda record: 
+                not (hasattr(record, 'workflow_id') or 
+                     hasattr(record, 'activity_id') or 
+                     'workflow' in record.name.lower() or 
+                     'activity' in record.name.lower())
+            )
             logger.addHandler(console_handler)
-            # Production OTLP setup
+            
+            # OTLP handler setup
             logger_provider = LoggerProvider(
-                resource=Resource.create(
-                    {
-                        "service.name": SERVICE_NAME,
-                        "k8s.log.type": "service-logs",
-                    }
-                )
+                resource=Resource.create({
+                    "service.name": SERVICE_NAME,
+                    "service.version": SERVICE_VERSION,
+                    "k8s.log.type": "service-logs",
+                })
             )
 
             exporter = OTLPLogExporter(
                 endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
                 timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
             )
-
             batch_processor = BatchLogRecordProcessor(
                 exporter,
                 schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
                 max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
                 max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
             )
-
             logger_provider.add_log_record_processor(batch_processor)
-
             otlp_handler = LoggingHandler(
                 level=logging.INFO,
                 logger_provider=logger_provider,
             )
-            otlp_handler.setFormatter(formatter)
+            otlp_handler.setFormatter(workflow_formatter)
             logger.addHandler(otlp_handler)
 
         except Exception as e:
-            print(f"Failed to setup OTLP logging: {str(e)}")
-            # Fallback to basic console logging with the same formatter
+            print(f"Failed to setup logging: {str(e)}")
+            # Fallback to basic console logging
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
-            console_handler.setFormatter(formatter)
+            console_handler.setFormatter(simple_formatter)
             logger.addHandler(console_handler)
 
         super().__init__(logger, {})
 
-    def process(
-        self, msg: Any, kwargs: MutableMapping[str, Any]
-    ) -> Tuple[Any, MutableMapping[str, Any]]:
+    def process(self, msg: Any, kwargs: MutableMapping[str, Any]) -> Tuple[Any, MutableMapping[str, Any]]:
         """Process the log message with temporal context."""
         if "extra" not in kwargs:
             kwargs["extra"] = {}
 
-        # Get temporal context
+        # Get request context
+        try:
+            ctx = request_context.get()
+            if ctx and "request_id" in ctx:
+                kwargs["extra"]["request_id"] = ctx["request_id"]
+        except Exception:
+            pass
+
+        # Get temporal context with more verbose logging
         try:
             workflow_info = workflow.info()
             if workflow_info:
-                kwargs["extra"].update(
-                    {
-                        "workflow_id": workflow_info.workflow_id,
-                        "run_id": workflow_info.run_id,
-                        "workflow_type": workflow_info.workflow_type,
-                    }
-                )
+                kwargs["extra"].update({
+                    "workflow_id": workflow_info.workflow_id,
+                    "run_id": workflow_info.run_id,
+                    "workflow_type": workflow_info.workflow_type,
+                    "namespace": workflow_info.namespace,
+                    "task_queue": workflow_info.task_queue,
+                    "attempt": workflow_info.attempt,
+                })
         except Exception:
             pass
 
         try:
             activity_info = activity.info()
             if activity_info:
-                kwargs["extra"].update(
-                    {
-                        "workflow_id": activity_info.workflow_id,
-                        "run_id": activity_info.workflow_run_id,
-                        "activity_id": activity_info.activity_id,
-                    }
-                )
+                kwargs["extra"].update({
+                    "workflow_id": activity_info.workflow_id,
+                    "run_id": activity_info.workflow_run_id,
+                    "activity_id": activity_info.activity_id,
+                    "activity_type": activity_info.activity_type,
+                    "task_queue": activity_info.task_queue,
+                    "attempt": activity_info.attempt,
+                    "schedule_to_close_timeout": str(activity_info.schedule_to_close_timeout),
+                    "start_to_close_timeout": str(activity_info.start_to_close_timeout),
+                })
         except Exception:
             pass
 
