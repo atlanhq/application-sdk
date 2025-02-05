@@ -13,7 +13,6 @@ from temporalio import activity, workflow
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "1.0.0")
 OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
 )
