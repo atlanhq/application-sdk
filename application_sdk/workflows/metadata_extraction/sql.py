@@ -32,9 +32,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         activities_cls (Type[SQLMetadataExtractionActivities]): The activities class
             containing the implementation of metadata extraction operations.
         application_name (str): Name of the application, set to "sql-connector".
-        batch_size (int): Size of each batch for processing, defaults to 100000.
-        max_transform_concurrency (int): Maximum number of concurrent transform
-            operations, defaults to 5.
     """
 
     activities_cls: Type[SQLMetadataExtractionActivities] = (
@@ -42,8 +39,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     )
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
-    batch_size: int = 100000
-    max_transform_concurrency: int = 5
 
     @staticmethod
     def get_activities(
@@ -98,6 +93,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
+            heartbeat_timeout=timedelta(seconds=120),
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -120,6 +116,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             },
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
+            heartbeat_timeout=timedelta(seconds=120),
         )
 
         batches, chunk_starts = self.get_transform_batches(
@@ -140,6 +137,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     start_to_close_timeout=timedelta(
                         seconds=start_to_close_timeout_seconds
                     ),
+                    heartbeat_timeout=timedelta(seconds=120),
                 )
             )
 
@@ -164,6 +162,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             },
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
+            heartbeat_timeout=timedelta(seconds=120),
         )
 
     def get_transform_batches(self, chunk_count: int, typename: str):
@@ -182,10 +181,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 - List of starting chunk numbers for each batch
         """
         # concurrency logic
-        concurrency_level = min(
-            self.max_transform_concurrency,
-            chunk_count,
-        )
+        concurrency_level = chunk_count
 
         batches: List[List[str]] = []
         chunk_start_numbers: List[int] = []
