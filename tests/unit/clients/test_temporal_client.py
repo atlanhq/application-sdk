@@ -12,6 +12,15 @@ def temporal_client():
     )
 
 
+@pytest.fixture
+def mock_dapr_output_client():
+    with patch("application_sdk.outputs.statestore.DaprClient") as mock_client:
+        mock_instance = mock_client.return_value
+        mock_instance.__enter__.return_value = mock_instance
+        mock_instance.__exit__.return_value = None
+        yield mock_instance
+
+
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
@@ -34,15 +43,16 @@ async def test_load(mock_connect: AsyncMock, temporal_client: TemporalClient):
     assert temporal_client.client == mock_client
 
 
-@patch("application_sdk.clients.temporal.StateStore")
+@patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow(
     mock_connect: AsyncMock,
-    mock_state_store: MagicMock,
+    mock_secret_store: MagicMock,
     temporal_client: TemporalClient,
+    mock_dapr_output_client,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -57,8 +67,7 @@ async def test_start_workflow(
     mock_client.start_workflow.return_value = mock_handle
 
     # Mock the state store
-    mock_state_store = MagicMock()
-    mock_state_store.store_credentials.return_value = "test_credentials"
+    mock_secret_store.store_credentials.return_value = "test_credentials"
 
     # Sample workflow arguments
     credentials = {"username": "test_username", "password": "test_password"}
@@ -70,20 +79,22 @@ async def test_start_workflow(
 
     # Assertions
     mock_client.start_workflow.assert_called_once()
+    mock_dapr_output_client.save_state.assert_called()
     assert "workflow_id" in result
     assert result["workflow_id"] == "test_workflow_id"
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.clients.temporal.StateStore")
+@patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_with_workflow_id(
     mock_connect: AsyncMock,
-    mock_state_store: MagicMock,
+    mock_secret_store: MagicMock,
     temporal_client: TemporalClient,
+    mock_dapr_output_client,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -100,8 +111,7 @@ async def test_start_workflow_with_workflow_id(
     mock_client.start_workflow.side_effect = start_workflow_side_effect
 
     # Mock the state store
-    mock_state_store = MagicMock()
-    mock_state_store.store_credentials.return_value = "test_credentials"
+    mock_secret_store.store_credentials.return_value = "test_credentials"
 
     # Sample workflow arguments
     credentials = {"username": "test_username", "password": "test_password"}
@@ -120,20 +130,22 @@ async def test_start_workflow_with_workflow_id(
 
     # Assertions
     mock_client.start_workflow.assert_called_once()
+    mock_dapr_output_client.save_state.assert_called()
     assert "workflow_id" in result
     assert result["workflow_id"] == "test_workflow_id"
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.clients.temporal.StateStore")
+@patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
 async def test_start_workflow_failure(
     mock_connect: AsyncMock,
-    mock_state_store: MagicMock,
+    mock_secret_store: MagicMock,
     temporal_client: TemporalClient,
+    mock_dapr_output_client,
 ):
     # Mock the client connection
     mock_client = AsyncMock()
@@ -144,7 +156,7 @@ async def test_start_workflow_failure(
     mock_client.start_workflow.side_effect = Exception("Simulated failure")
 
     # Mock the state store
-    mock_state_store.store_credentials.return_value = "test_credentials"
+    mock_secret_store.store_credentials.return_value = "test_credentials"
 
     # Sample workflow arguments
     credentials = {"username": "test_username", "password": "test_password"}
@@ -155,6 +167,7 @@ async def test_start_workflow_failure(
     with pytest.raises(Exception, match="Simulated failure"):
         await temporal_client.start_workflow(workflow_args, workflow_class)
     mock_client.start_workflow.assert_called_once()
+    mock_dapr_output_client.save_state.assert_called()
 
 
 @patch("application_sdk.clients.temporal.Worker")

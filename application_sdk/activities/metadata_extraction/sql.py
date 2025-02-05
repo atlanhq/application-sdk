@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Dict, Generator, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -11,8 +11,8 @@ from application_sdk.common.constants import ApplicationConstants
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
+from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
-from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
@@ -115,7 +115,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client = self.sql_client_class()
 
         if "credential_guid" in workflow_args:
-            credentials = StateStore.extract_credentials(
+            credentials = SecretStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
@@ -361,7 +361,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def transform_data(
         self,
-        raw_input: Generator[pd.DataFrame, None, None],
+        raw_input: AsyncGenerator[pd.DataFrame, None],
         transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -377,7 +377,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        for input in raw_input:
+        async for input in raw_input:
             transformed_chunk = await self._transform_batch(
                 input,
                 kwargs.get("typename"),

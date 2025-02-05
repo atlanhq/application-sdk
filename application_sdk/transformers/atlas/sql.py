@@ -66,7 +66,7 @@ class Procedure(assets.Procedure):
 
             return procedure
         except AssertionError as e:
-            raise ValueError(f"Error creating Table Entity: {str(e)}")
+            raise ValueError(f"Error creating Procedure Entity: {str(e)}")
 
 
 class Database(assets.Database):
