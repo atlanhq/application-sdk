@@ -29,7 +29,8 @@ class JsonInput(Input):
 
         Args:
             path (str): The path to the input directory.
-            file_suffixes (Optional[List[str]]): The file suffixes to read.
+            file_names (Optional[List[str]]): The list of files to read.
+            download_file_prefix (Optional[str]): The prefix path in object store.
             chunk_size (Optional[int]): The chunk size to read the data.
             **kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
@@ -39,11 +40,11 @@ class JsonInput(Input):
         self.download_file_prefix = download_file_prefix
 
     async def download_files(self):
+        """Download the files from the object store to the local path"""
         if not self.file_names:
             logger.debug("No files to download")
             return
 
-        """Download the files from the object store to the local path"""
         for file_name in self.file_names or []:
             try:
                 if not os.path.exists(os.path.join(self.path, file_name)):
