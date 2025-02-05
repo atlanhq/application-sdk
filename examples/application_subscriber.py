@@ -10,7 +10,7 @@ from application_sdk.application.fastapi import EventWorkflowTrigger, FastAPIApp
 from application_sdk.clients.constants import TemporalConstants
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.eventstore import (
     WORKFLOW_END_EVENT,
     AtlanEvent,
@@ -62,7 +62,9 @@ class SampleWorkflow(WorkflowInterface):
     @workflow.run
     async def run(self, workflow_config: dict[str, Any]):
         workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
+        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+            workflow_id
+        )
 
         workflow_run_id = workflow.info().run_id
         workflow_args["workflow_run_id"] = workflow_run_id
