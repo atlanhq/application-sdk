@@ -91,11 +91,19 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
             )
             logger_provider.add_log_record_processor(batch_processor)
+            
             otlp_handler = LoggingHandler(
                 level=logging.INFO,
                 logger_provider=logger_provider,
             )
             otlp_handler.setFormatter(workflow_formatter)
+            # Only add OTLP handler for workflow/activity logs
+            otlp_handler.addFilter(
+                lambda record: (hasattr(record, "workflow_id") or 
+                              hasattr(record, "activity_id") or 
+                              "workflow" in record.name.lower() or 
+                              "activity" in record.name.lower())
+            )
             logger.addHandler(otlp_handler)
 
         except Exception as e:
