@@ -46,7 +46,7 @@ class ObjectStore:
                     f.write(response.data.decode("utf-8"))
                     f.close()
 
-                activity.logger.debug(f"Successfully downloaded file: {relative_path}")
+                activity.logger.info(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
                 activity.logger.error(
                     f"Error downloading file {relative_path} to object store: {str(e)}"
@@ -85,7 +85,7 @@ class ObjectStore:
                     data=file_content,
                     binding_metadata=metadata,
                 )
-                activity.logger.debug(f"Successfully pushed file: {relative_path}")
+                activity.logger.info(f"Successfully pushed file: {relative_path}")
             except Exception as e:
                 activity.logger.error(
                     f"Error pushing file {relative_path} to object store: {str(e)}"
