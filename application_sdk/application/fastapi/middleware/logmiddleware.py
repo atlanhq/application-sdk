@@ -1,6 +1,5 @@
 import logging
 import time
-from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
