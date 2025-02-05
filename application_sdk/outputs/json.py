@@ -8,8 +8,8 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.outputs import Output
+from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 activity.logger.setLevel(logging.INFO)
@@ -222,7 +222,7 @@ class JsonOutput(Output):
             combined_dataframe.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
-            await ObjectStore.push_file_to_object_store(
+            await ObjectStoreOutput.push_file_to_object_store(
                 self.output_prefix, output_file_name
             )
 

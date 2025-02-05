@@ -18,7 +18,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -136,7 +136,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     self.activities_cls.transform_data,
                     {
                         "typename": raw_stat.typename,
-                        "file_suffixes": batches[i],
+                        "file_names": batches[i],
                         "chunk_start": chunk_starts[i],
                         **workflow_args,
                     },
@@ -235,7 +235,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         await super().run(workflow_config)
 
         workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
+        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+            workflow_id
+        )
 
         workflow_run_id = workflow.info().run_id
         workflow_args["workflow_run_id"] = workflow_run_id

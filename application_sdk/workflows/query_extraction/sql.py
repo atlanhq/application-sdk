@@ -17,7 +17,7 @@ from application_sdk.activities.query_extraction.sql import SQLQueryExtractionAc
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
@@ -81,7 +81,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         await super().run(workflow_config)
 
         workflow_guid = workflow_config["workflow_id"]
-        workflow_args = StateStore.extract_configuration(workflow_guid)
+        workflow_args = StateStoreInput.extract_configuration(workflow_guid)
 
         workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting miner workflow for {workflow_id}")

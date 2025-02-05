@@ -14,7 +14,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -64,19 +64,17 @@ class WorkflowInterface(ABC):
             workflow_config (Dict[str, Any]): Configuration for the workflow,
                 including workflow_id and other parameters.
         """
-        workflow_info = workflow.info()
+        workflow_id = workflow_config["workflow_id"]
+        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+            workflow_id
+        )
 
         logger.info(
             "Starting workflow execution",
         )
 
         try:
-            workflow_id = workflow_config["workflow_id"]
-            workflow_args: Dict[str, Any] = StateStore.extract_configuration(
-                workflow_id
-            )
-
-            workflow_run_id = workflow_info.run_id
+            workflow_run_id = workflow.info().run_id
             workflow_args["workflow_run_id"] = workflow_run_id
 
             retry_policy = RetryPolicy(

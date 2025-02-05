@@ -75,8 +75,8 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 logger_provider = LoggerProvider(
                     resource=Resource.create(
                         {
-                        "service.name": SERVICE_NAME,
-                        "service.version": SERVICE_VERSION,
+                            "service.name": SERVICE_NAME,
+                            "service.version": SERVICE_VERSION,
                             "k8s.log.type": "service-logs",
                         }
                     )
@@ -93,13 +93,13 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
                 )
                 logger_provider.add_log_record_processor(batch_processor)
-                
+
                 otlp_handler = LoggingHandler(
                     level=logging.INFO,
                     logger_provider=logger_provider,
                 )
                 otlp_handler.setFormatter(workflow_formatter)
-                
+
                 logger.addHandler(otlp_handler)
 
         except Exception as e:
