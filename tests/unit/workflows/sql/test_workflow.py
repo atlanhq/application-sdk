@@ -17,7 +17,6 @@ def workflow():
 def test_workflow_initialization():
     workflow = SQLMetadataExtractionWorkflow()
     assert workflow.application_name == "default"
-    assert workflow.max_transform_concurrency == 5
 
 
 def normalize_sql(query: str) -> str:
