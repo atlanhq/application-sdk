@@ -279,12 +279,13 @@ class FastAPIApplication(AtlanApplicationInterface):
             data=config,
         )
 
-    async def start(self, host: str = "0.0.0.0", port: int = 8000):
+    async def start(self, host: str = "0.0.0.0", port: int = 8000, reload: bool = True):
         server = Server(
             Config(
                 app=self.app,
                 host=host,
                 port=port,
+                reload=reload,
             )
         )
         await server.serve()
