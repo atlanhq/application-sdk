@@ -20,6 +20,55 @@ logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 T = TypeVar("T")
 
 
+class Procedure(assets.Procedure):
+    """Procedure entity transformer for Atlas.
+
+    This class handles the transformation of procedure metadata into Atlas Procedure entities.
+    """
+
+    @classmethod
+    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Procedure:
+        try:
+            assert (
+                obj.get("procedure_name") is not None
+            ), "Procedure name cannot be None"
+            assert (
+                obj.get("procedure_definition") is not None
+            ), "Procedure definition cannot be None"
+            assert (
+                obj.get("procedure_catalog") is not None
+            ), "Procedure catalog cannot be None"
+            assert (
+                obj.get("procedure_schema") is not None
+            ), "Procedure schema cannot be None"
+            assert (
+                obj.get("connection_qualified_name") is not None
+            ), "Connection qualified name cannot be None"
+
+            procedure = assets.Procedure.creator(
+                name=obj["procedure_name"],
+                definition=obj["procedure_definition"],
+                schema_qualified_name=build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["procedure_catalog"],
+                    obj["procedure_schema"],
+                ),
+                schema_name=obj["procedure_schema"],
+                database_name=obj["procedure_catalog"],
+                database_qualified_name=build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["procedure_catalog"],
+                ),
+                connection_qualified_name=obj["connection_qualified_name"],
+            )
+
+            procedure.sub_type = obj.get("procedure_type", "-1")
+
+            return procedure
+        except AssertionError as e:
+            raise ValueError(f"Error creating Procedure Entity: {str(e)}")
+
+
 class Database(assets.Database):
     """Database entity transformer for Atlas.
 
@@ -123,7 +172,11 @@ class Table(assets.Table):
     def parse_obj(
         cls, obj: Dict[str, Any]
     ) -> Union[
-        assets.Table, assets.View, assets.MaterialisedView, assets.SnowflakeDynamicTable
+        assets.Table,
+        assets.View,
+        assets.MaterialisedView,
+        assets.SnowflakeDynamicTable,
+        assets.TablePartition,
     ]:
         """Parse a dictionary into a Table entity.
 
@@ -138,35 +191,80 @@ class Table(assets.Table):
             ValueError: If required fields are missing or invalid.
         """
         try:
+            # Needed? Sequences don't have a table_name, table_schema
             assert obj.get("table_name") is not None, "Table name cannot be None"
-            assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
             assert obj.get("table_schema") is not None, "Table schema cannot be None"
 
-            table_type = (
-                assets.Table
-                if obj.get("table_type") in ["TABLE", "BASE TABLE"]
-                else assets.MaterialisedView
-                if obj.get("table_type") == "MATERIALIZED VIEW"
-                else assets.SnowflakeDynamicTable
-                if obj.get("table_type") == "DYNAMIC TABLE"
-                or obj.get("is_dynamic") == "YES"
-                else assets.View
-            )
+            assert obj.get("table_catalog") is not None, "Table catalog cannot be None"
 
-            sql_table = table_type.creator(
-                name=obj["table_name"],
-                schema_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                ),
-                schema_name=obj["table_schema"],
-                database_name=obj["table_catalog"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["table_catalog"]
-                ),
-                connection_qualified_name=obj["connection_qualified_name"],
-            )
+            # Determine the type of table based on metadata
+            is_partition = bool(obj.get("is_partition", False))
+            table_type_value = obj.get("table_type", "TABLE")
+            is_dynamic = obj.get("is_dynamic") == "YES"
+
+            if is_partition:
+                table_type = assets.TablePartition
+            elif table_type_value in [
+                "TABLE",
+                "BASE TABLE",
+                "FOREIGN TABLE",
+                "PARTITIONED TABLE",
+            ]:
+                table_type = assets.Table
+            elif table_type_value == "MATERIALIZED VIEW":
+                table_type = assets.MaterialisedView
+            elif table_type_value == "DYNAMIC TABLE" or is_dynamic:
+                table_type = assets.SnowflakeDynamicTable
+            else:
+                table_type = assets.View
+
+            if table_type == assets.TablePartition:
+                sql_table = table_type.creator(
+                    name=obj["table_name"],
+                    schema_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                    ),
+                    schema_name=obj["table_schema"],
+                    database_name=obj["table_catalog"],
+                    database_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"], obj["table_catalog"]
+                    ),
+                    connection_qualified_name=obj["connection_qualified_name"],
+                    table_name=obj["parent_table_name"],
+                    table_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                        obj["parent_table_name"],
+                    ),
+                )
+                if obj.get("partitioned_parent_table", None):
+                    sql_table.parent_table_partition = (
+                        assets.TablePartition.ref_by_qualified_name(
+                            qualified_name=sql_table.table_qualified_name
+                        )
+                    )
+                else:
+                    sql_table.parent_table = Table.ref_by_qualified_name(
+                        qualified_name=sql_table.table_qualified_name
+                    )
+            else:
+                sql_table = table_type.creator(
+                    name=obj["table_name"],
+                    schema_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                    ),
+                    schema_name=obj["table_schema"],
+                    database_name=obj["table_catalog"],
+                    database_qualified_name=build_atlas_qualified_name(
+                        obj["connection_qualified_name"], obj["table_catalog"]
+                    ),
+                    connection_qualified_name=obj["connection_qualified_name"],
+                )
 
             if table_type in [assets.View, assets.MaterialisedView]:
                 sql_table.attributes.definition = obj.get("view_definition", "")
@@ -175,35 +273,88 @@ class Table(assets.Table):
             sql_table.attributes.row_count = obj.get("row_count", 0)
             sql_table.attributes.size_bytes = obj.get("size_bytes", 0)
 
+            if hasattr(sql_table, "external_location"):
+                sql_table.external_location = obj.get("location", "")
+
+            if hasattr(sql_table, "external_location_format"):
+                sql_table.external_location_format = obj.get("file_format_type", "")
+
+            if hasattr(sql_table, "external_location_region"):
+                sql_table.external_location_region = obj.get("stage_region", "")
+
+            # Applicable only for Materialised Views
+            if obj.get("refresh_mode", "") != "":
+                sql_table.refresh_mode = obj.get("refresh_mode")
+
+            # Applicable only for Materialised Views
+            if obj.get("staleness", "") != "":
+                sql_table.staleness = obj.get("staleness")
+
+            # Applicable only for Materialised Views
+            if obj.get("stale_since_date", "") != "":
+                sql_table.stale_since_date = obj.get("stale_since_date")
+
+            # Applicable only for Materialised Views
+            if obj.get("refresh_method", "") != "":
+                sql_table.refresh_method = obj.get("refresh_method")
+
+            # Applicable only for Materialised Views
             if not sql_table.custom_attributes:
                 sql_table.custom_attributes = {}
+                sql_table.custom_attributes["table_type"] = table_type_value
 
-            sql_table.custom_attributes["is_transient"] = obj.get("is_transient")
+            if obj.get("is_transient", "") != "":
+                sql_table.custom_attributes["is_transient"] = obj.get("is_transient")
 
-            sql_table.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
-            sql_table.custom_attributes["schema_id"] = obj.get("table_schema_id")
+            if obj.get("table_catalog_id", "") != "":
+                sql_table.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
 
-            sql_table.custom_attributes["last_ddl"] = obj.get("last_ddl")
-            sql_table.custom_attributes["last_ddl_by"] = obj.get("last_ddl_by")
+            if obj.get("table_schema_id", "") != "":
+                sql_table.custom_attributes["schema_id"] = obj.get("table_schema_id")
 
-            sql_table.custom_attributes["is_secure"] = obj.get("is_secure")
-            sql_table.custom_attributes["retention_time"] = obj.get("retention_time")
-            sql_table.custom_attributes["stage_url"] = obj.get("stage_url")
-            sql_table.custom_attributes["is_insertable_into"] = obj.get(
-                "is_insertable_into"
-            )
-            sql_table.custom_attributes["number_columns_in_part_key"] = obj.get(
-                "number_columns_in_part_key"
-            )
-            sql_table.custom_attributes["columns_participating_in_part_key"] = obj.get(
-                "columns_participating_in_part_key"
-            )
-            sql_table.custom_attributes["is_typed"] = obj.get("is_typed")
-            sql_table.custom_attributes["auto_clustering_on"] = obj.get(
-                "auto_clustering_on"
-            )
+            if obj.get("last_ddl", "") != "":
+                sql_table.custom_attributes["last_ddl"] = obj.get("last_ddl")
+            if obj.get("last_ddl_by", "") != "":
+                sql_table.custom_attributes["last_ddl_by"] = obj.get("last_ddl_by")
+
+            if obj.get("is_secure", "") != "":
+                sql_table.custom_attributes["is_secure"] = obj.get("is_secure")
+
+            if obj.get("retention_time", "") != "":
+                sql_table.custom_attributes["retention_time"] = obj.get(
+                    "retention_time"
+                )
+
+            if obj.get("stage_url", "") != "":
+                sql_table.custom_attributes["stage_url"] = obj.get("stage_url")
+
+            if obj.get("is_insertable_into", "") != "":
+                sql_table.custom_attributes["is_insertable_into"] = obj.get(
+                    "is_insertable_into"
+                )
+
+            if obj.get("number_columns_in_part_key", "") != "":
+                sql_table.custom_attributes["number_columns_in_part_key"] = obj.get(
+                    "number_columns_in_part_key"
+                )
+            if obj.get("columns_participating_in_part_key", "") != "":
+                sql_table.custom_attributes["columns_participating_in_part_key"] = (
+                    obj.get("columns_participating_in_part_key")
+                )
+            if obj.get("is_typed", "") != "":
+                sql_table.custom_attributes["is_typed"] = obj.get("is_typed")
+
+            if obj.get("auto_clustering_on", "") != "":
+                sql_table.custom_attributes["auto_clustering_on"] = obj.get(
+                    "auto_clustering_on"
+                )
+
             sql_table.custom_attributes["engine"] = obj.get("engine")
-            sql_table.custom_attributes["auto_increment"] = obj.get("auto_increment")
+
+            if obj.get("auto_increment", "") != "":
+                sql_table.custom_attributes["auto_increment"] = obj.get(
+                    "auto_increment"
+                )
 
             return sql_table
         except AssertionError as e:
@@ -239,16 +390,27 @@ class Column(assets.Column):
             ), "Ordinal position cannot be None"
             assert obj.get("data_type") is not None, "Data type cannot be None"
 
-            parent_type = (
-                assets.Table
-                if obj.get("table_type") in ["TABLE", "BASE TABLE"]
-                else assets.MaterialisedView
-                if obj.get("table_type") == "MATERIALIZED VIEW"
-                else assets.SnowflakeDynamicTable
-                if obj.get("table_type") == "DYNAMIC TABLE"
+            parent_type = None
+            if obj.get("table_type") in ["VIEW"]:
+                parent_type = assets.View
+            elif obj.get("table_type") in ["MATERIALIZED VIEW"]:
+                parent_type = assets.MaterialisedView
+            elif (
+                obj.get("table_type") in ["DYNAMIC TABLE"]
                 or obj.get("is_dynamic") == "YES"
-                else assets.View
-            )
+            ):
+                parent_type = assets.SnowflakeDynamicTable
+            elif obj.get("belongs_to_partition") == "YES":
+                parent_type = assets.TablePartition
+            elif obj.get("table_type") in [
+                "TABLE",
+                "BASE TABLE",
+                "FOREIGN TABLE",
+                "PARTITIONED TABLE",
+            ]:
+                parent_type = assets.Table
+            else:
+                parent_type = assets.View
 
             sql_column = assets.Column.creator(
                 name=obj["column_name"],
@@ -261,7 +423,7 @@ class Column(assets.Column):
                 parent_type=parent_type,
                 order=obj.get(
                     "ordinal_position",
-                    obj.get("column_id", obj.get("internal_column_id", "")),
+                    obj.get("column_id", obj.get("internal_column_id", None)),
                 ),
                 parent_name=obj["table_name"],
                 database_name=obj["table_catalog"],
@@ -290,8 +452,10 @@ class Column(assets.Column):
             sql_column.attributes.is_primary = obj.get("primary_key", None) == "YES"
             sql_column.attributes.is_foreign = obj.get("foreign_key", None) == "YES"
             sql_column.attributes.max_length = obj.get("character_maximum_length", 0)
-            sql_column.attributes.precision = obj.get("numeric_precision", 0)
             sql_column.attributes.numeric_scale = obj.get("numeric_scale", 0)
+
+            if obj.get("decimal_digits", "") != "":
+                sql_column.attributes.precision = obj.get("decimal_digits")
 
             if not sql_column.custom_attributes:
                 sql_column.custom_attributes = {}
@@ -299,6 +463,11 @@ class Column(assets.Column):
             sql_column.custom_attributes["is_self_referencing"] = obj.get(
                 "is_self_referencing", "NO"
             )
+
+            if obj.get("numeric_precision", "") != "":
+                sql_column.custom_attributes["numeric_precision"] = obj.get(
+                    "numeric_precision", ""
+                )
 
             sql_column.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
             sql_column.custom_attributes["schema_id"] = obj.get("table_schema_id")

@@ -16,7 +16,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.inputs.statestore import StateStore
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 
@@ -76,6 +76,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
+        start_to_close_timeout_seconds: int = 1000,
     ) -> None:
         """Fetch and transform metadata using the provided fetch function.
 
@@ -86,6 +87,8 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn (Callable): The function to fetch metadata.
             workflow_args (Dict[str, Any]): Arguments for the workflow execution.
             retry_policy (RetryPolicy): The retry policy for activity execution.
+            start_to_close_timeout_seconds (int): The start to close timeout for the
+                activity execution.
 
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
@@ -94,7 +97,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn,
             workflow_args,
             retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
+            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -116,7 +119,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 **workflow_args,
             },
             retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
+            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
         )
 
         batches, chunk_starts = self.get_transform_batches(
@@ -134,7 +137,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                         **workflow_args,
                     },
                     retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(seconds=1000),
+                    start_to_close_timeout=timedelta(
+                        seconds=start_to_close_timeout_seconds
+                    ),
                 )
             )
 
@@ -158,7 +163,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 **workflow_args,
             },
             retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
+            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
         )
 
     def get_transform_batches(self, chunk_count: int, typename: str):
@@ -226,7 +231,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         await super().run(workflow_config)
 
         workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStore.extract_configuration(workflow_id)
+        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+            workflow_id
+        )
 
         workflow_run_id = workflow.info().run_id
         workflow_args["workflow_run_id"] = workflow_run_id

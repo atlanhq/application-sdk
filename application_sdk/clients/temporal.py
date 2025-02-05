@@ -24,7 +24,6 @@ from temporalio.worker.workflow_sandbox import (
 from application_sdk.clients import ClientInterface
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
-from application_sdk.inputs.statestore import StateStore
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -32,9 +31,15 @@ from application_sdk.outputs.eventstore import (
     WorkflowEndEvent,
     WorkflowStartEvent,
 )
+from application_sdk.outputs.secretstore import SecretStoreOutput
+from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+TEMPORAL_NOT_FOUND_FAILURE = (
+    "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
+)
 
 
 class TemporalConstants(Enum):
@@ -251,7 +256,7 @@ class TemporalClient(ClientInterface):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = StateStore.store_credentials(
+            workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
@@ -259,7 +264,7 @@ class TemporalClient(ClientInterface):
         workflow_id = workflow_args.get("workflow_id")
         if not workflow_id:
             # if workflow_id is not provided, create a new one
-            workflow_id = str(uuid.uuid4())
+            workflow_id = workflow_args.get("argo_workflow_name", str(uuid.uuid4()))
 
             workflow_args.update(
                 {
@@ -269,7 +274,7 @@ class TemporalClient(ClientInterface):
                 }
             )
 
-            StateStore.store_configuration(workflow_id, workflow_args)
+            StateStoreOutput.store_configuration(workflow_id, workflow_args)
 
             logger.info(f"Created workflow config with ID: {workflow_id}")
 
@@ -334,7 +339,10 @@ class TemporalClient(ClientInterface):
         )
 
     async def get_workflow_run_status(
-        self, workflow_id: str, run_id: str
+        self,
+        workflow_id: str,
+        run_id: Optional[str] = None,
+        include_last_executed_run_id: bool = False,
     ) -> Dict[str, Any]:
         """Get the status of a workflow run.
 
@@ -361,6 +369,14 @@ class TemporalClient(ClientInterface):
             workflow_execution = await workflow_handle.describe()
             execution_info = workflow_execution.raw_description.workflow_execution_info
         except Exception as e:
+            # if the workflow is not found, return the status as not found
+            if e.grpc_status.details[0].type_url == TEMPORAL_NOT_FOUND_FAILURE:
+                return {
+                    "workflow_id": workflow_id,
+                    "run_id": run_id,
+                    "status": "NOT_FOUND",
+                    "execution_duration_seconds": 0,
+                }
             logger.error(f"Error getting workflow status: {e}")
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
@@ -372,4 +388,6 @@ class TemporalClient(ClientInterface):
             "status": WorkflowExecutionStatus(execution_info.status).name,
             "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
         }
+        if include_last_executed_run_id:
+            workflow_info["last_executed_run_id"] = execution_info.root_execution.run_id
         return workflow_info
