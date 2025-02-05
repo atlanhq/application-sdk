@@ -165,7 +165,8 @@ class TestDaftDecorators:
         @transform_daft(
             batch_input=JsonInput(
                 path="/tmp/tests/test_daft_decorator/raw/",
-                file_suffixes=["schema/1.json"],
+                file_names=["schema/1.json"],
+                download_file_prefix="raw",
             ),
             out1=JsonOutput(
                 output_path="/tmp/tests/test_daft_decorator/",
@@ -173,7 +174,7 @@ class TestDaftDecorators:
             ),
         )
         async def func(batch_input, out1, **kwargs):
-            for chunk in batch_input:
+            async for chunk in batch_input:
                 await out1.write_daft_dataframe(chunk.transform(add_1))
 
         await func()

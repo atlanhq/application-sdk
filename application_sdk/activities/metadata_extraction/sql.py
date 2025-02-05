@@ -1,4 +1,4 @@
-from typing import Any, Dict, Generator, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -356,7 +356,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     )
     async def transform_data(
         self,
-        raw_input: Generator[pd.DataFrame, None, None],
+        raw_input: AsyncGenerator[pd.DataFrame, None],
         transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -372,7 +372,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        for input in raw_input:
+        async for input in raw_input:
             transformed_chunk = await self._transform_batch(
                 input,
                 kwargs.get("typename"),
