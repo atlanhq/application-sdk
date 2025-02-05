@@ -171,23 +171,23 @@ class Output(ABC):
             raise
 
     async def write_statistics(self) -> Optional[Dict[str, Any]]:
-        """Write metadata about the output to a JSON file.
+        """Write statistics about the output to a JSON file.
 
         This method writes statistics including total record count and chunk count
         to a JSON file and uploads it to the object store.
 
         Raises:
-            Exception: If there's an error writing or uploading the metadata.
+            Exception: If there's an error writing or uploading the statistics.
         """
         try:
-            # prepare the metadata
+            # prepare the statistics
             statistics = {
                 "total_record_count": self.total_record_count,
                 "chunk_count": self.chunk_count,
             }
 
             # Write the statistics to a json file
-            output_file_name = f"{self.output_path}/metadata.json.ignore"
+            output_file_name = f"{self.output_path}/statistics.json.ignore"
             dataframe = pd.DataFrame(statistics, index=[0])
             dataframe.to_json(output_file_name, orient="records", lines=True)
 
