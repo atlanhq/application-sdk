@@ -23,7 +23,9 @@ async def test_init(json_input):
 
 @pytest.mark.asyncio
 @patch("os.path.exists")
-@patch("application_sdk.inputs.objectstore.ObjectStore.download_file_from_object_store")
+@patch(
+    "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+)
 async def test_not_download_file_that_exists(mock_download, mock_exists, json_input):
     mock_exists.return_value = True
     await json_input.download_files()
@@ -32,7 +34,9 @@ async def test_not_download_file_that_exists(mock_download, mock_exists, json_in
 
 @pytest.mark.asyncio
 @patch("os.path.exists")
-@patch("application_sdk.inputs.objectstore.ObjectStore.download_file_from_object_store")
+@patch(
+    "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+)
 async def test_download_file(mock_download, mock_exists, json_input):
     mock_exists.return_value = False
     await json_input.download_files()

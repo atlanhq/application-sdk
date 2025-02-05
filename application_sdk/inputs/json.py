@@ -6,7 +6,7 @@ import pandas as pd
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.inputs import Input
-from application_sdk.inputs.objectstore import ObjectStore
+from application_sdk.inputs.objectstore import ObjectStoreInput
 
 logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -47,7 +47,7 @@ class JsonInput(Input):
         for file_name in self.file_names or []:
             try:
                 if not os.path.exists(os.path.join(self.path, file_name)):
-                    ObjectStore.download_file_from_object_store(
+                    ObjectStoreInput.download_file_from_object_store(
                         os.path.join(self.download_file_prefix, file_name),
                         os.path.join(self.path, file_name),
                     )
