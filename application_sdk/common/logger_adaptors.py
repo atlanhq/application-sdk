@@ -238,3 +238,10 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         handlers/formatters.
         """
         return self.logger
+
+
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+def get_logger() -> AtlanLoggerAdapter:
+    return logger

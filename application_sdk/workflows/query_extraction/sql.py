@@ -5,7 +5,6 @@ databases. It handles batch processing of queries and manages the workflow state
 """
 
 import asyncio
-import logging
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
@@ -16,11 +15,11 @@ from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 @workflow.defn

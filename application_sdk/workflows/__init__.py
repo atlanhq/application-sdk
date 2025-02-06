@@ -13,10 +13,10 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 @workflow.defn

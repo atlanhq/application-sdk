@@ -27,7 +27,6 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 """
 
 import asyncio
-import logging
 import os
 import time
 from typing import Any, Dict
@@ -40,7 +39,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.clients.sql import AsyncSQLClient
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.transformers.atlas import AtlasTransformer
 from application_sdk.worker import Worker
@@ -52,7 +51,7 @@ APPLICATION_NAME = "postgres-custom-transformer"
 DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class PostgreSQLClient(AsyncSQLClient):

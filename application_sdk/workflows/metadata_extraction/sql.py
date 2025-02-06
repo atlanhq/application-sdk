@@ -17,11 +17,11 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
-workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+workflow.logger = get_logger()
 
 
 @workflow.defn

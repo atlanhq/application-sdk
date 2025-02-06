@@ -7,9 +7,9 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, request_context
+from application_sdk.common.logger_adaptors import get_logger, request_context
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class LogMiddleware(BaseHTTPMiddleware):

@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
@@ -24,13 +23,13 @@ from application_sdk.application.fastapi.models import (
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class WorkflowTrigger(BaseModel):

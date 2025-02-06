@@ -6,10 +6,10 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class ActivitiesState(BaseModel):

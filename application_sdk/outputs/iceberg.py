@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Dict, Union
 
 import pandas as pd
@@ -6,10 +5,10 @@ from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger()
 
 
 class IcebergOutput(Output):
