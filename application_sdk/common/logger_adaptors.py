@@ -8,6 +8,10 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
+import re
+
+
+ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
 
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
@@ -74,6 +78,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             # Console handler with simple format for other logs
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
+            
             console_handler.setFormatter(simple_formatter)
             console_handler.addFilter(
                 lambda record: not (
@@ -83,6 +88,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     or "activity" in record.name.lower()
                 )
             )
+            
             logger.addHandler(console_handler)
 
             # OTLP handler setup
@@ -133,6 +139,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     logger_provider=logger_provider,
                 )
                 otlp_handler.setFormatter(workflow_formatter)
+                otlp_handler.addFilter(lambda record: setattr(record, 'msg', ansi_escape.sub('', record.msg)) or True)
                 logger.addHandler(otlp_handler)
 
         except Exception as e:
@@ -185,7 +192,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                         "attempt": workflow_info.attempt,
                     }
                 )
-                msg += f" \n Workflow Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={workflow_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={workflow_info.run_id}{COLORS['ENDC']}] [{COLORS['INFO']}workflow_type={workflow_info.workflow_type}{COLORS['ENDC']}]"
+                msg += f" \n Workflow Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={workflow_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={workflow_info.run_id}{COLORS['ENDC']}] [{COLORS['INFO']}workflow_type={workflow_info.workflow_type}{COLORS['ENDC']}] \n"
         except Exception:
             pass
 
@@ -208,7 +215,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                         ),
                     }
                 )
-                msg += f" \n Activity Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={activity_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={activity_info.workflow_run_id}{COLORS['ENDC']}][{COLORS['INFO']}activity_type={activity_info.activity_type}{COLORS['ENDC']}]"
+                msg += f" \n Activity Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={activity_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={activity_info.workflow_run_id}{COLORS['ENDC']}][{COLORS['INFO']}activity_type={activity_info.activity_type}{COLORS['ENDC']}] \n"
         except Exception:
             pass
 
