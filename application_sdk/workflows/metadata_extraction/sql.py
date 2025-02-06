@@ -5,7 +5,6 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-import logging
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 

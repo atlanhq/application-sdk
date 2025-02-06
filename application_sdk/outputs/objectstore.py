@@ -1,6 +1,5 @@
 """Object store interface for the application."""
 
-import logging
 import os
 
 from dapr.clients import DaprClient

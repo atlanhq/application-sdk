@@ -4,7 +4,6 @@ This module provides the base workflow interface and common functionality for
 all workflow implementations in the application SDK.
 """
 
-import logging
 from abc import ABC
 from datetime import timedelta
 from typing import Any, Callable, Dict, Sequence, Type
@@ -87,6 +86,7 @@ class WorkflowInterface(ABC):
                 args=[workflow_args],
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
+                heartbeat_timeout=timedelta(seconds=120),
             )
 
             logger.info(

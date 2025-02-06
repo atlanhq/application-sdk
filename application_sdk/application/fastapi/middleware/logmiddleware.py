@@ -1,4 +1,3 @@
-import logging
 import time
 from uuid import uuid4
 
