@@ -6,7 +6,6 @@ database operations, supporting batch processing and server-side cursors.
 """
 
 import asyncio
-import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -17,9 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class SQLConstants(Enum):

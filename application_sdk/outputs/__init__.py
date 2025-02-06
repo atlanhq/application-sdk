@@ -5,7 +5,6 @@ in the application, including file outputs and object store interactions.
 """
 
 import inspect
-import logging
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
 
@@ -13,10 +12,10 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger()
 
 
 def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821

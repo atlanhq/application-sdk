@@ -6,12 +6,12 @@ The SDK currently only supports FastAPI framework but in the future we will be a
 ## Simple Integration
 Simplest way to integrate the Application builder to your micro-service is by adding the following lines in your application
 ```python
-import logging
+
 import uvicorn
 from fastapi import FastAPI
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 app = FastAPI(title="My App")

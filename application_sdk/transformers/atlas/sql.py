@@ -5,17 +5,16 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-import logging
 from typing import Any, Dict, List, Optional, TypeVar, Union, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.utils import init_guid, validate_required_fields
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers.common.utils import build_atlas_qualified_name
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 T = TypeVar("T")
 
