@@ -2,11 +2,11 @@ import os
 import shutil
 
 from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
-from application_sdk.docgen.models.manifest import CustomerDocsManifest
+from application_sdk.docgen.models.manifest import DocsManifest
 
 
 class CustomerDocsExporter:
-    def __init__(self, docs_directory: str, manifest: CustomerDocsManifest):
+    def __init__(self, docs_directory: str, manifest: DocsManifest):
         self.docs_directory = docs_directory
         self.manifest = manifest
 
@@ -26,7 +26,7 @@ class CustomerDocsExporter:
         os.makedirs(export_path, exist_ok=True)
 
         # Loop through pages with enumeration for ordering
-        for page_num, page in enumerate(self.manifest.pages, start=1):
+        for page_num, page in enumerate(self.manifest.customer.pages, start=1):
             # Read page content from fileRef
             page_file_path = os.path.join(self.docs_directory, page.fileRef)
             page_output_path = os.path.join(export_path, f"{page_num:02d}_{page.id}.md")

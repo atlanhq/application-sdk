@@ -9,8 +9,12 @@ class InternalDocsExporter:
         self.docs_directory = docs_directory
         self.manifest = manifest
 
+    def run_sphinx_export(self):
+        os.system("make sphinx_docs")
+
     def export(self, export_path: str):
         # Create export directory if it doesn't exist
+        self.run_sphinx_export()
         os.makedirs(export_path, exist_ok=True)
 
         # Loop through pages with enumeration for ordering
