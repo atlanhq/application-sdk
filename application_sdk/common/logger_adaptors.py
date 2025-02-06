@@ -3,7 +3,7 @@ import os
 from contextvars import ContextVar
 from typing import Any, MutableMapping, Tuple
 
-from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
@@ -18,8 +18,8 @@ request_context: ContextVar[dict] = ContextVar("request_context", default={})
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
-OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
-    "OTEL_EXPORTER_LOGS_ENDPOINT", "http://localhost:4318/v1/logs"
+OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
+    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 
@@ -100,7 +100,6 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 resource_attributes = {
                     "service.name": SERVICE_NAME,
                     "service.version": SERVICE_VERSION,
-                    "k8s.log.type": "service-logs",
                 }
                 
                 # Add workflow node name if running in Argo
@@ -112,7 +111,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 )
 
                 exporter = OTLPLogExporter(
-                    endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
+                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
                 )
                 
