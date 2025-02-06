@@ -335,8 +335,6 @@ class TemporalClient(ClientInterface):
                     *passthrough_modules
                 )
             ),
-            max_concurrent_activity_task_polls=3,
-            max_concurrent_activities=3,
             interceptors=[EventInterceptor()],
         )
 
