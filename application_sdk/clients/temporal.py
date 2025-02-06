@@ -23,7 +23,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.clients import ClientInterface
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -35,7 +35,7 @@ from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
@@ -199,8 +199,8 @@ class TemporalClient(ClientInterface):
         self.port = port if port else TemporalConstants.PORT.value
         self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
 
-        workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-        activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+        workflow.logger = get_logger()
+        activity.logger = get_logger()
 
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.

@@ -1,6 +1,5 @@
 import asyncio
 import inspect
-import logging
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Any, Callable, Dict, Iterator, Optional, Union
@@ -8,10 +7,10 @@ from typing import Any, Callable, Dict, Iterator, Optional, Union
 import pandas as pd
 
 from application_sdk.activities import ActivitiesState
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 executor = ThreadPoolExecutor()

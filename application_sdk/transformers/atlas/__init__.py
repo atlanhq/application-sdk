@@ -4,14 +4,13 @@ This module provides the Atlas transformer implementation for converting metadat
 into Atlas entities using the pyatlan library.
 """
 
-import logging
 from datetime import datetime
 from typing import Any, Dict, Optional, Type
 
 from pyatlan.model.assets import Asset
 from pyatlan.model.enums import EntityStatus
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas.sql import (
     Column,
@@ -24,7 +23,7 @@ from application_sdk.transformers.atlas.sql import (
 )
 from application_sdk.transformers.common.utils import process_text
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class AtlasTransformer(TransformerInterface):
