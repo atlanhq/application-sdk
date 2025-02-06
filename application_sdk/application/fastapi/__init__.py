@@ -279,25 +279,27 @@ class FastAPIApplication(AtlanApplicationInterface):
             data=config,
         )
 
-    async def start(self, host: str = "0.0.0.0", port: int = 8000, env: str = "production"):
+    async def start(
+        self, host: str = "0.0.0.0", port: int = 8000, env: str = "production"
+    ):
         import uvicorn
+
         if env == "development":
             await uvicorn.run(
-                    app="main:get_application",  # Use the factory function
-                    host=host,
-                    port=port,
-                    reload=True,
-                    reload_includes=["*.py"],
-                    reload_dirs=["."],
-                    factory=True,
-                )
+                app="main:get_application",  # Use the factory function
+                host=host,
+                port=port,
+                reload=True,
+                reload_includes=["*.py"],
+                reload_dirs=["."],
+                factory=True,
+            )
         else:
-                server = Server(
+            server = Server(
                 Config(
                     app=self.app,
                     host=host,
                     port=port,
                 )
-                )
-                await server.serve()
-            
+            )
+            await server.serve()
