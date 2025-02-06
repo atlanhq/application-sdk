@@ -19,6 +19,17 @@ OTEL_EXPORTER_LOGS_ENDPOINT: str = os.getenv(
 )
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 
+COLORS = {
+    'DEBUG': '\033[94m',    # Blue
+    'INFO': '\033[92m',     # Green
+    'WARNING': '\033[93m',  # Yellow
+    'ERROR': '\033[91m',    # Red
+    'CRITICAL': '\033[91m', # Red
+    'WORKFLOW_ID': '\033[96m',  # Cyan
+    'RUN_ID': '\033[95m',   # Magenta
+    'ENDC': '\033[0m'       # Reset color
+}
+
 
 class AtlanLoggerAdapter(logging.LoggerAdapter):
     def __init__(self, logger: logging.Logger) -> None:
@@ -174,6 +185,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                         "attempt": workflow_info.attempt,
                     }
                 )
+                msg += f" \n Workflow Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={workflow_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={workflow_info.run_id}{COLORS['ENDC']}] [{COLORS['INFO']}workflow_type={workflow_info.workflow_type}{COLORS['ENDC']}]"
         except Exception:
             pass
 
@@ -196,6 +208,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                         ),
                     }
                 )
+                msg += f" \n Activity Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={activity_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={activity_info.workflow_run_id}{COLORS['ENDC']}][{COLORS['INFO']}activity_type={activity_info.activity_type}{COLORS['ENDC']}]"
         except Exception:
             pass
 
