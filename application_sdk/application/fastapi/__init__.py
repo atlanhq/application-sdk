@@ -1,6 +1,7 @@
 import logging
 from typing import Any, Callable, List, Optional, Type
 
+import uvicorn
 from fastapi import APIRouter, FastAPI, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -282,8 +283,6 @@ class FastAPIApplication(AtlanApplicationInterface):
     async def start(
         self, host: str = "0.0.0.0", port: int = 8000, env: str = "production"
     ):
-        import uvicorn
-
         if env == "development":
             await uvicorn.run(
                 app="main:get_application",  # Use the factory function
