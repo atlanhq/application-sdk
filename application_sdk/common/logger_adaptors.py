@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from contextvars import ContextVar
 from typing import Any, MutableMapping, Tuple
 
@@ -8,10 +9,8 @@ from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
-import re
 
-
-ansi_escape = re.compile(r'\x1B\[[0-?]*[ -/]*[@-~]')
+ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
@@ -24,14 +23,14 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 
 COLORS = {
-    'DEBUG': '\033[94m',    # Blue
-    'INFO': '\033[92m',     # Green
-    'WARNING': '\033[93m',  # Yellow
-    'ERROR': '\033[91m',    # Red
-    'CRITICAL': '\033[91m', # Red
-    'WORKFLOW_ID': '\033[96m',  # Cyan
-    'RUN_ID': '\033[95m',   # Magenta
-    'ENDC': '\033[0m'       # Reset color
+    "DEBUG": "\033[94m",  # Blue
+    "INFO": "\033[92m",  # Green
+    "WARNING": "\033[93m",  # Yellow
+    "ERROR": "\033[91m",  # Red
+    "CRITICAL": "\033[91m",  # Red
+    "WORKFLOW_ID": "\033[96m",  # Cyan
+    "RUN_ID": "\033[95m",  # Magenta
+    "ENDC": "\033[0m",  # Reset color
 }
 
 
@@ -78,7 +77,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             # Console handler with simple format for other logs
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
-            
+
             console_handler.setFormatter(simple_formatter)
             console_handler.addFilter(
                 lambda record: not (
@@ -88,20 +87,20 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     or "activity" in record.name.lower()
                 )
             )
-            
+
             logger.addHandler(console_handler)
 
             # OTLP handler setup
             if ENABLE_OTLP_LOGS:
                 # Get workflow node name for Argo environment
                 workflow_node_name = os.getenv("OTEL_WF_NODE_NAME", "")
-                
+
                 # Base resource attributes
                 resource_attributes = {
                     "service.name": SERVICE_NAME,
                     "service.version": SERVICE_VERSION,
                 }
-                
+
                 # Add workflow node name if running in Argo
                 if workflow_node_name:
                     resource_attributes["k8s.workflow.node.name"] = workflow_node_name
@@ -114,7 +113,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
                 )
-                
+
                 # Create batch processor with custom emit method
                 batch_processor = BatchLogRecordProcessor(
                     exporter,
@@ -122,13 +121,15 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
                     max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
                 )
-                
+
                 # Monkey patch the emit method to handle different types
                 original_emit = batch_processor.emit
+
                 def custom_emit(log_data):
                     if not self._is_valid_type(log_data.log_record.body):
                         log_data.log_record.body = str(log_data.log_record.body)
                     original_emit(log_data)
+
                 batch_processor.emit = custom_emit
 
                 logger_provider.add_log_record_processor(batch_processor)
@@ -138,7 +139,12 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     logger_provider=logger_provider,
                 )
                 otlp_handler.setFormatter(workflow_formatter)
-                otlp_handler.addFilter(lambda record: setattr(record, 'msg', ansi_escape.sub('', record.msg)) or True)
+                otlp_handler.addFilter(
+                    lambda record: setattr(
+                        record, "msg", ansi_escape.sub("", record.msg)
+                    )
+                    or True
+                )
                 logger.addHandler(otlp_handler)
 
         except Exception as e:
@@ -158,8 +164,10 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         if isinstance(value, (list, tuple)):
             return all(self._is_valid_type(v) for v in value)
         if isinstance(value, dict):
-            return all(self._is_valid_type(k) and self._is_valid_type(v) 
-                      for k, v in value.items())
+            return all(
+                self._is_valid_type(k) and self._is_valid_type(v)
+                for k, v in value.items()
+            )
         return False
 
     def process(
