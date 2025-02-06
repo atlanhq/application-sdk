@@ -76,26 +76,45 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
 
             # OTLP handler setup
             if ENABLE_OTLP_LOGS:
+                # Get workflow node name for Argo environment
+                workflow_node_name = os.getenv("OTEL_WF_NODE_NAME", "")
+                
+                # Base resource attributes
+                resource_attributes = {
+                    "service.name": SERVICE_NAME,
+                    "service.version": SERVICE_VERSION,
+                    "k8s.log.type": "service-logs",
+                }
+                
+                # Add workflow node name if running in Argo
+                if workflow_node_name:
+                    resource_attributes["k8s.workflow.node.name"] = workflow_node_name
+
                 logger_provider = LoggerProvider(
-                    resource=Resource.create(
-                        {
-                            "service.name": SERVICE_NAME,
-                            "service.version": SERVICE_VERSION,
-                            "k8s.log.type": "service-logs",
-                        }
-                    )
+                    resource=Resource.create(resource_attributes)
                 )
 
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_LOGS_ENDPOINT,
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
                 )
+                
+                # Create batch processor with custom emit method
                 batch_processor = BatchLogRecordProcessor(
                     exporter,
                     schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
                     max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
                     max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
                 )
+                
+                # Monkey patch the emit method to handle different types
+                original_emit = batch_processor.emit
+                def custom_emit(log_data):
+                    if not self._is_valid_type(log_data.log_record.body):
+                        log_data.log_record.body = str(log_data.log_record.body)
+                    original_emit(log_data)
+                batch_processor.emit = custom_emit
+
                 logger_provider.add_log_record_processor(batch_processor)
 
                 otlp_handler = LoggingHandler(
@@ -103,7 +122,6 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     logger_provider=logger_provider,
                 )
                 otlp_handler.setFormatter(workflow_formatter)
-
                 logger.addHandler(otlp_handler)
 
         except Exception as e:
@@ -115,6 +133,17 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             logger.addHandler(console_handler)
 
         super().__init__(logger, {})
+
+    def _is_valid_type(self, value):
+        """Helper method to check if a value is of a valid type for OTLP logging."""
+        if isinstance(value, (bool, str, int, float)):
+            return True
+        if isinstance(value, (list, tuple)):
+            return all(self._is_valid_type(v) for v in value)
+        if isinstance(value, dict):
+            return all(self._is_valid_type(k) and self._is_valid_type(v) 
+                      for k, v in value.items())
+        return False
 
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
