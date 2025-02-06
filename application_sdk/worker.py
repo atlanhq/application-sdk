@@ -5,16 +5,15 @@ including their initialization, configuration, and execution.
 """
 
 import asyncio
-import logging
 import threading
 from typing import Any, List, Sequence
 
 from temporalio.types import CallableType
 
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class Worker:

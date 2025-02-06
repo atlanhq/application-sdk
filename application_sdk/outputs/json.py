@@ -1,4 +1,3 @@
-import logging
 import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -7,11 +6,11 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.objectstore import ObjectStore
 from application_sdk.outputs import Output
 
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger()
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:

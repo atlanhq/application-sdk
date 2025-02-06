@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
@@ -9,10 +8,10 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.objectstore import ObjectStore
 
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger()
 
 
 class ChunkedObjectStoreWriterInterface(ABC):

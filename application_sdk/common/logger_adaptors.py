@@ -9,8 +9,14 @@ from temporalio import activity, workflow
 class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
     def __init__(self, logger: logging.Logger) -> None:
         """Create the logger adapter."""
-
         super().__init__(logger, {})
+
+        handler = logging.StreamHandler()
+        handler.setLevel(logging.DEBUG)  # Set handler to DEBUG
+        formatter = logging.Formatter("%(levelname)s: %(message)s")
+        handler.setFormatter(formatter)
+
+        logger.addHandler(handler)
 
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
@@ -58,3 +64,10 @@ class AtlanLoggerAdapter(logging.LoggerAdapter[logging.Logger]):
         handlers/formatters.
         """
         return self.logger
+
+
+logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+
+
+def get_logger() -> AtlanLoggerAdapter:
+    return logger

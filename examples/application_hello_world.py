@@ -1,18 +1,17 @@
 import asyncio
-import logging
 from typing import Any, Callable, Dict, Sequence
 
 from temporalio import workflow
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
 APPLICATION_NAME = "hello-world"
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 @workflow.defn

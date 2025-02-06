@@ -1,6 +1,5 @@
 import asyncio
 import json
-import logging
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -8,12 +7,12 @@ import pandas as pd
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.decorators import transform
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger()
 
 
 class SQLConstants(Enum):
