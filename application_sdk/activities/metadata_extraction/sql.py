@@ -18,7 +18,7 @@ from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
-activity.logger = get_logger()
+activity.logger = get_logger(__name__)
 
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState):

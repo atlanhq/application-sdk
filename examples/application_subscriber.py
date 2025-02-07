@@ -20,7 +20,7 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class SampleActivities(ActivitiesInterface):

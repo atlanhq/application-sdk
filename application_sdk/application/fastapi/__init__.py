@@ -29,7 +29,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class WorkflowTrigger(BaseModel):

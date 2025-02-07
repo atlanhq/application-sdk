@@ -8,7 +8,7 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class ActivitiesState(BaseModel):

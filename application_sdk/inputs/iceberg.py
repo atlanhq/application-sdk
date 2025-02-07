@@ -6,7 +6,7 @@ from pyiceberg.table import Table
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class IcebergInput(Input):

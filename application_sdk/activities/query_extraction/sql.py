@@ -17,7 +17,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class MinerArgs(BaseModel):

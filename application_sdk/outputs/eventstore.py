@@ -14,7 +14,7 @@ from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 
-activity.logger = get_logger()
+activity.logger = get_logger(__name__)
 
 WORKFLOW_END_EVENT = "workflow_end"
 WORKFLOW_START_EVENT = "workflow_start"

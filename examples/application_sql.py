@@ -45,7 +45,7 @@ from application_sdk.workflows.metadata_extraction.sql import (
 
 APPLICATION_NAME = "postgres"
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class PostgreSQLClient(AsyncSQLClient):

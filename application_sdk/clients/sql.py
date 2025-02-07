@@ -18,8 +18,8 @@ from temporalio import activity
 from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import get_logger
 
-logger = get_logger()
-activity.logger = get_logger()
+logger = get_logger(__name__)
+activity.logger = get_logger(__name__)
 
 
 class SQLConstants(Enum):

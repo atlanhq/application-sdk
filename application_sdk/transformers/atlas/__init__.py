@@ -23,7 +23,7 @@ from application_sdk.transformers.atlas.sql import (
 )
 from application_sdk.transformers.common.utils import process_text
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class AtlasTransformer(TransformerInterface):

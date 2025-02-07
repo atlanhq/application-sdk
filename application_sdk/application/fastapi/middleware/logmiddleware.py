@@ -8,7 +8,7 @@ from starlette.types import ASGIApp
 
 from application_sdk.common.logger_adaptors import get_logger, request_context
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class LogMiddleware(BaseHTTPMiddleware):

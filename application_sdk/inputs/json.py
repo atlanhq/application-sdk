@@ -7,7 +7,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class JsonInput(Input):

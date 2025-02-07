@@ -22,7 +22,7 @@ from fastapi.responses import JSONResponse
 
 from application_sdk.common.logger_adaptors import get_logger
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/server",

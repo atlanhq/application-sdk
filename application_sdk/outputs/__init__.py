@@ -15,7 +15,7 @@ from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-activity.logger = get_logger()
+activity.logger = get_logger(__name__)
 
 
 def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821

@@ -20,7 +20,7 @@ SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
-ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "false"
+ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 
 COLORS = {
     "DEBUG": "\033[94m",  # Blue
@@ -240,8 +240,28 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         return self.logger
 
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+# Create a singleton instance of the logger
+_logger_instances = {}
 
+def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
+    """Get or create an instance of AtlanLoggerAdapter.
+    
+    Args:
+        name (str, optional): Logger name. If None, uses the caller's module name.
+    
+    Returns:
+        AtlanLoggerAdapter: Logger instance for the specified name
+    """
+    global _logger_instances
+    
+    # If no name provided, use the caller's module name
+    if name is None:
+        name = __name__
+        
+    if name not in _logger_instances:
+        _logger_instances[name] = AtlanLoggerAdapter(logging.getLogger(name))
+    return _logger_instances[name]
 
-def get_logger() -> AtlanLoggerAdapter:
-    return logger
+# Initialize the default logger
+logger = get_logger()
+

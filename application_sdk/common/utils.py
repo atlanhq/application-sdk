@@ -5,7 +5,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.statestore import StateStoreOutput
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 

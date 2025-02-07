@@ -34,7 +34,7 @@ from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
@@ -198,8 +198,8 @@ class TemporalClient(ClientInterface):
         self.port = port if port else TemporalConstants.PORT.value
         self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
 
-        workflow.logger = get_logger()
-        activity.logger = get_logger()
+        workflow.logger = get_logger(__name__)
+        activity.logger = get_logger(__name__)
 
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
