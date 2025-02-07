@@ -20,7 +20,7 @@ SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
-ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "false"
 
 COLORS = {
     "DEBUG": "\033[94m",  # Blue
