@@ -46,7 +46,7 @@ class ObjectStoreOutput:
                     data=file_content,
                     binding_metadata=metadata,
                 )
-                activity.logger.info(f"Successfully pushed file: {relative_path}")
+                activity.logger.debug(f"Successfully pushed file: {relative_path}")
             except Exception as e:
                 activity.logger.error(
                     f"Error pushing file {relative_path} to object store: {str(e)}"
