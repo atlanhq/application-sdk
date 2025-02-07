@@ -43,7 +43,7 @@ class ObjectStoreInput:
                     f.write(response.data.decode("utf-8"))
                     f.close()
 
-                activity.logger.info(f"Successfully downloaded file: {relative_path}")
+                activity.logger.debug(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
                 activity.logger.error(
                     f"Error downloading file {relative_path} to object store: {str(e)}"

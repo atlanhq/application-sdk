@@ -8,7 +8,7 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
-logger = get_logger(__name__)
+activity.logger = get_logger(__name__)
 
 
 class ActivitiesState(BaseModel):
@@ -87,7 +87,7 @@ class ActivitiesInterface(ABC):
             if workflow_id in self._state:
                 self._state.pop(workflow_id)
         except Exception as e:
-            logger.warning("Failed to clean state", exc_info=e)
+            activity.logger.warning("Failed to clean state", exc_info=e)
 
     @activity.defn
     @auto_heartbeater
@@ -100,7 +100,7 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        logger.info("Starting preflight check")
+        activity.logger.info("Starting preflight check")
 
         try:
             state: ActivitiesState = await self._get_state(workflow_args)
@@ -116,9 +116,9 @@ class ActivitiesInterface(ABC):
             if not result or "error" in result:
                 raise ValueError("Preflight check failed")
 
-            logger.info("Preflight check completed successfully")
+            activity.logger.info("Preflight check completed successfully")
             return result
 
         except Exception as e:
-            logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
+            activity.logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
             raise

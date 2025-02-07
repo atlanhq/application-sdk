@@ -51,23 +51,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         try:
             # Single console handler with conditional formatting
             console_handler = logging.StreamHandler()
-
-            class ConditionalFormatter(logging.Formatter):
-                def format(self, record):
-                    is_workflow = (
-                        hasattr(record, "workflow_id")
-                        or hasattr(record, "activity_id")
-                        or "workflow" in record.name.lower()
-                        or "activity" in record.name.lower()
-                    )
-
-                    return (
-                        workflow_formatter.format(record)
-                        if is_workflow
-                        else record.getMessage()
-                    )
-
-            console_handler.setFormatter(ConditionalFormatter())
+            console_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s "))
             logger.addHandler(console_handler)
 
             # OTLP handler setup

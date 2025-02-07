@@ -63,7 +63,7 @@ async def monitor_workflow_execution_and_write_status(
                 status = "FAILED 🔴"
                 break
 
-            logger.info(
+            logger.debug(
                 f"Workflow is still running. Checking again in {polling_interval} seconds"
             )
             await asyncio.sleep(polling_interval)
