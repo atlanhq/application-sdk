@@ -243,25 +243,26 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
 # Create a singleton instance of the logger
 _logger_instances = {}
 
+
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
     """Get or create an instance of AtlanLoggerAdapter.
-    
+
     Args:
         name (str, optional): Logger name. If None, uses the caller's module name.
-    
+
     Returns:
         AtlanLoggerAdapter: Logger instance for the specified name
     """
     global _logger_instances
-    
+
     # If no name provided, use the caller's module name
     if name is None:
         name = __name__
-        
+
     if name not in _logger_instances:
         _logger_instances[name] = AtlanLoggerAdapter(logging.getLogger(name))
     return _logger_instances[name]
 
+
 # Initialize the default logger
 logger = get_logger()
-
