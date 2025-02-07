@@ -21,17 +21,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-
-COLORS = {
-    "DEBUG": "\033[94m",  # Blue
-    "INFO": "\033[92m",  # Green
-    "WARNING": "\033[93m",  # Yellow
-    "ERROR": "\033[91m",  # Red
-    "CRITICAL": "\033[91m",  # Red
-    "WORKFLOW_ID": "\033[96m",  # Cyan
-    "RUN_ID": "\033[95m",  # Magenta
-    "ENDC": "\033[0m",  # Reset color
-}
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
 
 class AtlanLoggerAdapter(logging.LoggerAdapter):
@@ -41,7 +31,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         for handler in logger.handlers[:]:
             logger.removeHandler(handler)
 
-        logger.setLevel(logging.INFO)
+        logger.setLevel(LOG_LEVEL)
 
         # Create OTLP formatter with detailed format for workflow/activity logs
         workflow_formatter = logging.Formatter(
@@ -58,36 +48,20 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
             },
         )
 
-        # Create simple formatter for regular logs
-        simple_formatter = logging.Formatter("%(message)s")
-
         try:
-            # Console handler with workflow formatter for workflow/activity logs
-            workflow_handler = logging.StreamHandler()
-            workflow_handler.setLevel(logging.INFO)
-            workflow_handler.setFormatter(workflow_formatter)
-            workflow_handler.addFilter(
-                lambda record: hasattr(record, "workflow_id")
-                or hasattr(record, "activity_id")
-                or "workflow" in record.name.lower()
-                or "activity" in record.name.lower()
-            )
-            logger.addHandler(workflow_handler)
-
-            # Console handler with simple format for other logs
+            # Single console handler with conditional formatting
             console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-
-            console_handler.setFormatter(simple_formatter)
-            console_handler.addFilter(
-                lambda record: not (
-                    hasattr(record, "workflow_id")
-                    or hasattr(record, "activity_id")
-                    or "workflow" in record.name.lower()
-                    or "activity" in record.name.lower()
-                )
-            )
-
+            
+            class ConditionalFormatter(logging.Formatter):
+                def format(self, record):
+                    is_workflow = (hasattr(record, "workflow_id")
+                        or hasattr(record, "activity_id")
+                        or "workflow" in record.name.lower()
+                        or "activity" in record.name.lower())
+                    
+                    return workflow_formatter.format(record) if is_workflow else record.getMessage()
+            
+            console_handler.setFormatter(ConditionalFormatter())
             logger.addHandler(console_handler)
 
             # OTLP handler setup
@@ -139,20 +113,13 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     logger_provider=logger_provider,
                 )
                 otlp_handler.setFormatter(workflow_formatter)
-                otlp_handler.addFilter(
-                    lambda record: setattr(
-                        record, "msg", ansi_escape.sub("", record.msg)
-                    )
-                    or True
-                )
                 logger.addHandler(otlp_handler)
 
         except Exception as e:
             print(f"Failed to setup logging: {str(e)}")
             # Fallback to basic console logging
             console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
-            console_handler.setFormatter(simple_formatter)
+            console_handler.setFormatter(logging.Formatter("%(message)s"))
             logger.addHandler(console_handler)
 
         super().__init__(logger, {})
@@ -199,7 +166,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                         "attempt": workflow_info.attempt,
                     }
                 )
-                msg += f" \n Workflow Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={workflow_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={workflow_info.run_id}{COLORS['ENDC']}] [{COLORS['INFO']}workflow_type={workflow_info.workflow_type}{COLORS['ENDC']}] \n"
+                msg += f" \n Workflow Info: \n ['workflow_id'={workflow_info.workflow_id}] ['run_id'={workflow_info.run_id}] ['workflow_type'={workflow_info.workflow_type}] \n"
         except Exception:
             pass
 
@@ -222,7 +189,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                         ),
                     }
                 )
-                msg += f" \n Activity Info: \n [{COLORS['WORKFLOW_ID']}workflow_id={activity_info.workflow_id}{COLORS['ENDC']}] [{COLORS['RUN_ID']}run_id={activity_info.workflow_run_id}{COLORS['ENDC']}][{COLORS['INFO']}activity_type={activity_info.activity_type}{COLORS['ENDC']}] \n"
+                msg += f" \n Activity Info: \n ['workflow_id'={activity_info.workflow_id}] ['run_id'={activity_info.workflow_run_id}] ['activity_type'={activity_info.activity_type}] \n"
         except Exception:
             pass
 

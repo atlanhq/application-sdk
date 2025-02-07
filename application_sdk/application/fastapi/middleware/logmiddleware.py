@@ -29,7 +29,8 @@ class LogMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
 
         self.logger.info(
-            "Request started for path: %s with request_id: %s",
+            "Request started for %s path: %s with request_id: %s",
+            request.method,
             request.url.path,
             request_id,
             extra={
@@ -46,7 +47,8 @@ class LogMiddleware(BaseHTTPMiddleware):
             duration = time.time() - start_time
 
             self.logger.info(
-                "Request completed for path: %s with request_id: %s",
+                "Request completed for %s path: %s with request_id: %s",
+                request.method,
                 request.url.path,
                 request_id,
                 extra={
@@ -62,7 +64,8 @@ class LogMiddleware(BaseHTTPMiddleware):
         except Exception as e:
             duration = time.time() - start_time
             self.logger.error(
-                "Request failed for path: %s with request_id: %s",
+                "Request failed for %s path: %s with request_id: %s",
+                request.method,
                 request.url.path,
                 request_id,
                 extra={

@@ -156,30 +156,21 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             None
         """
         logger.info(
-            "Starting query fetch",
-            extra={
-                "event_type": "DATA_PROCESSING_START",
-                "batch_size": len(batch_input) if batch_input else 0,
-            },
+            "Starting query fetch with batch size: %s",
+            len(batch_input) if batch_input else 0,
         )
 
         try:
             await raw_output.write_batched_dataframe(batch_input)
 
             logger.info(
-                "Query fetch completed",
-                extra={
-                    "event_type": "DATA_PROCESSING_END",
-                    "records_processed": raw_output.total_record_count,
-                },
+                "Query fetch completed, %s records processed",
+                raw_output.total_record_count,
             )
         except Exception as e:
             logger.error(
-                "Query fetch failed",
-                extra={
-                    "event_type": "DATA_PROCESSING_ERROR",
-                    "error": str(e),
-                },
+                "Query fetch failed %s",
+                e,
                 exc_info=True,
             )
             raise
