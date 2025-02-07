@@ -17,7 +17,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class MinerArgs(BaseModel):
@@ -147,7 +147,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         **kwargs,
     ):
         """Fetch and process queries from the database.
-
         Args:
             batch_input: Input DataFrame containing the queries
             raw_output: JsonOutput object for writing results
@@ -156,7 +155,25 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Returns:
             None
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        logger.info(
+            "Starting query fetch with batch size: %s",
+            len(batch_input) if batch_input else 0,
+        )
+
+        try:
+            await raw_output.write_batched_dataframe(batch_input)
+
+            logger.info(
+                "Query fetch completed, %s records processed",
+                raw_output.total_record_count,
+            )
+        except Exception as e:
+            logger.error(
+                "Query fetch failed %s",
+                e,
+                exc_info=True,
+            )
+            raise
 
     async def parallelize_query(
         self,

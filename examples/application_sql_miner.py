@@ -30,7 +30,7 @@ from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 APPLICATION_NAME = "snowflake"
 

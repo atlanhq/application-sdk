@@ -13,7 +13,7 @@ from temporalio.types import CallableType
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import get_logger
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class Worker:

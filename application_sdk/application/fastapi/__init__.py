@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
+from application_sdk.application.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -28,7 +29,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class WorkflowTrigger(BaseModel):
@@ -72,7 +73,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
         self.handler = handler
         self.temporal_client = temporal_client
-
+        self.app.add_middleware(LogMiddleware)
         self.register_routers()
         super().__init__(handler)
 

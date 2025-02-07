@@ -11,7 +11,7 @@ from application_sdk.workflows import WorkflowInterface
 
 APPLICATION_NAME = "hello-world"
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 @workflow.defn

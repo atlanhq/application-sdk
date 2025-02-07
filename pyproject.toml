@@ -32,6 +32,7 @@ duckdb-engine = {version = "^0.14.0", optional = true}
 pyiceberg = {version = "^0.8.1", optional = true}
 boto3 = "^1.31.3"
 boto3-stubs = "^1.31.3"
+starlette-context = "^0.3.6"
 pydantic = "^2.10.6"
 pyyaml = "^6.0.2"
 

@@ -5,7 +5,10 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
+
+activity.logger = get_logger(__name__)
 
 
 class ActivitiesState(BaseModel):
@@ -22,9 +25,7 @@ class ActivitiesState(BaseModel):
     """
 
     model_config = {"arbitrary_types_allowed": True}
-
     handler: Optional[HandlerInterface] = None
-
     workflow_args: Optional[Dict[str, Any]] = None
 
 
@@ -99,16 +100,25 @@ class ActivitiesInterface(ABC):
         Raises:
             NotImplementedError: When not implemented by subclass.
         """
-        state: ActivitiesState = await self._get_state(workflow_args)
-        handler = state.handler
+        activity.logger.info("Starting preflight check")
 
-        if not handler:
-            raise ValueError("Preflight check handler not found")
+        try:
+            state: ActivitiesState = await self._get_state(workflow_args)
+            handler = state.handler
 
-        result: Any = await handler.preflight_check(
-            {
-                "metadata": workflow_args["metadata"],
-            }
-        )
-        if not result or "error" in result:
-            raise ValueError("Preflight check failed")
+            if not handler:
+                raise ValueError("Preflight check handler not found")
+
+            result = await handler.preflight_check(
+                {"metadata": workflow_args["metadata"]}
+            )
+
+            if not result or "error" in result:
+                raise ValueError("Preflight check failed")
+
+            activity.logger.info("Preflight check completed successfully")
+            return result
+
+        except Exception as e:
+            activity.logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
+            raise

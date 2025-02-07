@@ -7,7 +7,7 @@ from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])

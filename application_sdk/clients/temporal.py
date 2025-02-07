@@ -1,4 +1,3 @@
-import logging
 import os
 import uuid
 from enum import Enum
@@ -35,7 +34,7 @@ from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
@@ -199,8 +198,8 @@ class TemporalClient(ClientInterface):
         self.port = port if port else TemporalConstants.PORT.value
         self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
 
-        workflow.logger = get_logger()
-        activity.logger = get_logger()
+        workflow.logger = get_logger(__name__)
+        activity.logger = get_logger(__name__)
 
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
@@ -277,9 +276,6 @@ class TemporalClient(ClientInterface):
             StateStoreOutput.store_configuration(workflow_id, workflow_args)
 
             logger.info(f"Created workflow config with ID: {workflow_id}")
-
-        workflow.logger.setLevel(logging.DEBUG)
-        activity.logger.setLevel(logging.DEBUG)
 
         try:
             handle = await self.client.start_workflow(

@@ -19,7 +19,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 @workflow.defn

@@ -12,7 +12,7 @@ from application_sdk.decorators import transform
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class SQLConstants(Enum):

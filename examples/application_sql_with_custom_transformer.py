@@ -51,7 +51,7 @@ APPLICATION_NAME = "postgres-custom-transformer"
 DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 class PostgreSQLClient(AsyncSQLClient):

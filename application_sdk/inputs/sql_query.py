@@ -14,7 +14,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
 
-logger = get_logger()
+logger = get_logger(__name__)
 
 
 def _get_sql_query(
