@@ -89,9 +89,7 @@ class WorkflowInterface(ABC):
                 heartbeat_timeout=timedelta(seconds=120),
             )
 
-            logger.info(
-                "Workflow completed successfully", extra={"result": str(result)}
-            )
+            logger.info("Workflow completed successfully")
             return result
 
         except Exception as e:
