@@ -18,11 +18,9 @@ on:
   pull_request:
     branches:
       - main
-      - develop
   push:
     branches:
       - main
-      - develop
   schedule:
     # run at 1:00AM everyday
     - cron: '0 1 * * *'
