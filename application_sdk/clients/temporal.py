@@ -303,6 +303,22 @@ class TemporalClient(ClientInterface):
             logger.error(f"Workflow failure: {e}")
             raise e
 
+    async def stop_workflow(self, workflow_id: str, run_id: str) -> None:
+        """Stop a workflow execution.
+
+        Args:
+            workflow_id (str): The ID of the workflow.
+            run_id (str): The run ID of the workflow.
+        """
+        try:
+            workflow_handle = self.client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            )
+            await workflow_handle.terminate()
+        except Exception as e:
+            logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
+            raise e
+
     def create_worker(
         self,
         activities: Sequence[CallableType],

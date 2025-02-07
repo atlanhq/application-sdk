@@ -164,6 +164,12 @@ class FastAPIApplication(AtlanApplicationInterface):
             methods=["GET"],
         )
 
+        self.workflow_router.add_api_route(
+            "/stop/{workflow_id}/{run_id:path}",
+            self.stop_workflow,
+            methods=["POST"],
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -277,6 +283,13 @@ class FastAPIApplication(AtlanApplicationInterface):
             message="Workflow configuration updated successfully",
             data=config,
         )
+
+    async def stop_workflow(self, workflow_id: str, run_id: str) -> JSONResponse:
+        if not self.temporal_client:
+            raise Exception("Temporal client not initialized")
+
+        await self.temporal_client.stop_workflow(workflow_id, run_id)
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(self, host: str = "0.0.0.0", port: int = 8000):
         server = Server(
