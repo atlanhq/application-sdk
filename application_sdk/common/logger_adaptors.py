@@ -21,7 +21,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
 class AtlanLoggerAdapter(logging.LoggerAdapter):
@@ -101,7 +101,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 logger_provider.add_log_record_processor(batch_processor)
 
                 otlp_handler = LoggingHandler(
-                    level=logging.INFO,
+                    level=getattr(logging, LOG_LEVEL, logging.INFO),
                     logger_provider=logger_provider,
                 )
                 otlp_handler.setFormatter(workflow_formatter)
