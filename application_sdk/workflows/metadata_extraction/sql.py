@@ -42,7 +42,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     )
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
-    batch_size: int = 100000
     max_transform_concurrency: int = 5
 
     @staticmethod
