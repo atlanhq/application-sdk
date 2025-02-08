@@ -1,4 +1,3 @@
-import asyncio
 from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
 
 import pandas as pd
@@ -187,14 +186,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        for iter_index, row in enumerate(results.to_dict(orient="records")):
+        for row in results.to_dict(orient="records"):
             try:
                 if not state.transformer:
                     raise ValueError("Transformer is not set")
-
-                # TODO: This is a hack to get the heartbeat to work
-                if iter_index % 1000 == 0:
-                    await asyncio.sleep(0.1)
 
                 transformed_metadata: Optional[Dict[str, Any]] = (
                     state.transformer.transform_metadata(

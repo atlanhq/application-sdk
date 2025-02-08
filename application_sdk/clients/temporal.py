@@ -348,7 +348,6 @@ class TemporalClient(ClientInterface):
                 )
             ),
             interceptors=[EventInterceptor()],
-            max_concurrent_activities=3,
         )
 
     async def get_workflow_run_status(
