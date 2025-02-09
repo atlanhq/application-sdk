@@ -86,7 +86,6 @@ class WorkflowInterface(ABC):
                 args=[workflow_args],
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
-                heartbeat_timeout=timedelta(seconds=120),
             )
 
             logger.info("Workflow completed successfully")
