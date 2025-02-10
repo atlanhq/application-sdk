@@ -298,12 +298,19 @@ class FastAPIApplication(AtlanApplicationInterface):
     ):
         if env == "development":
             """
-            Using both uvicorn and Server because of a bug with uvicorn 
-            uvicorn.run does not allow to run app in non-hot-reloading mode 
+            Using both uvicorn and Server because of a bug with uvicorn
+            uvicorn.run does not allow to run app in non-hot-reloading mode
             Server eventhough has a param for hot-reloading, it does not work as expected
             """
             await uvicorn.run(
                 app="main:get_application",  # Use the factory function
+                host=host,
+                port=port,
+                reload=True,
+                reload_includes=["*.py"],
+                reload_dirs=["."],
+                factory=True,
+            )
         else:
             server = Server(
                 Config(
