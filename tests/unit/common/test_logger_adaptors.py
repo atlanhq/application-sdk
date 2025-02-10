@@ -23,12 +23,11 @@ def mock_logger():
 def logger_adapter(mock_logger):
     """Create a logger adapter instance with mocked underlying logger."""
     # Mock environment variables
-    with mock.patch.dict('os.environ', {
-        'LOG_LEVEL': 'INFO',
-        'ENABLE_OTLP_LOGS': 'false'
-    }):
+    with mock.patch.dict(
+        "os.environ", {"LOG_LEVEL": "INFO", "ENABLE_OTLP_LOGS": "false"}
+    ):
         # Mock the StreamHandler
-        with mock.patch('logging.StreamHandler') as mock_handler:
+        with mock.patch("logging.StreamHandler") as mock_handler:
             mock_handler.return_value = mock.Mock()
             return AtlanLoggerAdapter(mock_logger)
 
@@ -91,7 +90,9 @@ def test_process_with_activity_context(logger_adapter: AtlanLoggerAdapter):
 
 def test_process_with_request_context(logger_adapter: AtlanLoggerAdapter):
     """Test process() method with request context."""
-    with mock.patch("application_sdk.common.logger_adaptors.request_context") as mock_context:
+    with mock.patch(
+        "application_sdk.common.logger_adaptors.request_context"
+    ) as mock_context:
         mock_context.get.return_value = {"request_id": "test_request_id"}
         msg, kwargs = logger_adapter.process("Test message", {})
         assert "extra" in kwargs
