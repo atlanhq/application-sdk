@@ -52,6 +52,233 @@ Here’s an overview of the core components:
 
 These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let’s start with setting up the necessary configurations for interacting with the database.
 
+
+## Detailed Architecture and Flow
+
+```mermaid
+graph TD
+    A[Frontend/Client] -->|HTTP POST| B[FastAPI Server]
+    B -->|1. Validate Request| C[SQLHandler]
+    C -->|2. Load SQL Client| D[SQLClient]
+    D -->|3. Prepare Query| E[prepare_query method]
+    E -->|4. Create Input| F[SQLQueryInput]
+    F -->|5. Execute Query| G[Database]
+    G -->|6. Return Results| F
+    F -->|7. Transform Data| C
+    C -->|8. Return Response| B
+    B -->|JSON Response| A
+
+    subgraph "SQLHandler Flow"
+        C --> H[Authentication]
+        C --> I[Metadata Extraction (to get DB/Schema list)]
+        C --> J[Preflight Checks]
+    end
+```
+
+## Understanding the Components
+
+### 1. Constants and Query Definition (const.py)
+
+The `const.py` file serves as a central repository for SQL queries used throughout the application. These queries are referenced by the SQLHandler for various operations:
+
+```python
+# app/const.py
+class SQLQueries:
+    # Authentication query
+    TEST_AUTH_SQL = "SELECT 1;"
+    
+    # Metadata queries
+    METADATA_SQL = """
+    SELECT schema_name, catalog_name
+    FROM INFORMATION_SCHEMA.SCHEMATA;
+    """
+    
+    # Tables check query
+    TABLES_CHECK_SQL = """
+    SELECT COUNT(*)
+    FROM INFORMATION_SCHEMA.TABLES
+    WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
+        AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
+        {temp_table_regex_sql};
+    """
+```
+
+
+### 2. Request Flow and Data Processing
+
+#### Frontend to FastAPI Server
+
+The frontend sends a POST request to the FastAPI server with the necessary parameters. The request is validated and processed by the SQLHandler.
+
+When a client makes a request, it sends a payload in the following format:
+
+```json
+{
+    "credentials": {
+        "authType": "basic",
+        "host": "localhost",
+        "port": "5432",
+        "username": "postgres",
+        "password": "password",
+        "database": "postgres"
+    },
+    "metadata": {
+        "exclude-filter": "{}",
+        "include-filter": "{}",
+        "temp-table-regex": "",
+        "extraction-method": "direct"
+    }
+}
+``` 
+
+
+#### SQLHandler Processing
+
+
+The SQLHandler processes requests through several stages:
+
+1. **Authentication**:
+
+```81:102:application_sdk/handlers/sql.py
+    @transform(
+        sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
+    )
+    async def test_auth(
+        self,
+        sql_input: pd.DataFrame,
+        **kwargs: Dict[str, Any],
+    ) -> bool:
+        """
+        Test the authentication credentials.
+
+        :raises Exception: If the credentials are invalid.
+        """
+        try:
+            sql_input.to_dict(orient="records")
+            return True
+        except Exception as exc:
+            logger.error(
+                f"Failed to authenticate with the given credentials: {str(exc)}"
+            )
+            raise exc
+```
+
+2. **Query Preparation**:
+
+The `prepare_query` method processes the SQL query by replacing placeholders with actual values:
+
+```python
+def prepare_query(query: str, payload: Dict[str, Any], **kwargs: Any) -> str:
+    # Get metadata filters
+    metadata = payload.get("metadata", {})
+    
+    # Process regex patterns
+    exclude_filter = json.loads(metadata.get("exclude-filter", "{}"))
+    include_filter = json.loads(metadata.get("include-filter", "{}"))
+    
+    # Replace placeholders
+    formatted_query = query.format(
+        normalized_exclude_regex=create_regex_pattern(exclude_filter),
+        normalized_include_regex=create_regex_pattern(include_filter),
+        temp_table_regex_sql=kwargs.get("temp_table_regex_sql", "")
+    )
+    
+    return formatted_query
+```
+
+
+3. **SQLQueryInput Processing**:
+
+```python
+    Attributes:
+        query (str): The SQL query to execute.
+        engine (Union[Engine, str]): SQLAlchemy engine or connection string.
+        chunk_size (Optional[int]): Number of rows to fetch per batch.
+        state (Optional[ActivitiesState]): State object for the activity.
+        async_session: Async session maker for database operations.
+    """
+
+    query: str
+    engine: Optional[Union[Engine, str]]
+    chunk_size: Optional[int]
+    state: Optional[ActivitiesState] = None
+    async_session: Optional[AsyncSession] = None
+    temp_table_sql_query: Optional[str] = None
+
+    def __init__(
+        self,
+        query: str,
+        engine: Optional[Union[Engine, str]] = None,
+        chunk_size: Optional[int] = 100000,
+        temp_table_sql_query: Optional[str] = None,
+        **kwargs: Dict[str, Any],
+    ):
+        """Initialize the async SQL query input handler.
+
+        Args:
+            engine (Union[Engine, str]): SQLAlchemy engine or connection string.
+            query (str): The SQL query to execute.
+            chunk_size (Optional[int], optional): Number of rows per batch.
+                Defaults to 100000.
+        """
+        self.query = query
+        self.engine = engine
+        self.chunk_size = chunk_size
+        self.temp_table_sql_query = temp_table_sql_query
+        if self.engine and isinstance(self.engine, AsyncEngine):
+            self.async_session = sessionmaker(
+                self.engine, expire_on_commit=False, class_=AsyncSession
+            )
+
+```
+
+### 3. Data Fetching and Transformation
+
+The SQLHandler uses the SQLQueryInput class to execute queries and process results:
+
+
+1. Query Execution:
+```python
+async def fetch_metadata(self, **kwargs: Dict[str, Any]) -> List[Dict[str, str]]:
+    query = self.prepare_query(self.metadata_sql, kwargs)
+    sql_input = SQLQueryInput(query=query, engine=self.engine)
+    return await sql_input.get_dataframe()
+```
+
+2. Data Transformation:
+
+```1python
+    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Method to perform preflight checks
+        """
+        logger.info("Starting preflight check")
+        results: Dict[str, Any] = {}
+        try:
+            (
+                results["databaseSchemaCheck"],
+                results["tablesCheck"],
+            ) = await asyncio.gather(
+                self.check_schemas_and_databases(payload),
+                self.tables_check(payload),
+            )
+
+            if (
+                not results["databaseSchemaCheck"]["success"]
+                or not results["tablesCheck"]["success"]
+            ):
+                raise ValueError(
+                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, tablesCheck: {results['tablesCheck']}"
+                )
+
+            logger.info("Preflight check completed successfully")
+        except Exception as exc:
+            logger.error("Error during preflight check", exc_info=True)
+            results["error"] = f"Preflight check failed: {str(exc)}"
+        return results
+```
+
+
 ## Configuration
 
 To interact with the database, we need to configure
