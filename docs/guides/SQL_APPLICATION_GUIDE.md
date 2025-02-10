@@ -70,7 +70,7 @@ graph TD
 
     subgraph "SQLHandler Flow"
         C --> H[Authentication]
-        C --> I[Metadata Extraction (to get DB/Schema list)]
+        C --> I[Metadata Extraction to get DB/Schema list]
         C --> J[Preflight Checks]
     end
 ```
