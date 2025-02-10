@@ -1,9 +1,9 @@
 import asyncio
-import uvloop
 import concurrent
 from typing import Any, Dict, Iterator, Optional, Union
 
 import pandas as pd
+import uvloop
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
@@ -17,6 +17,7 @@ from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 def _get_sql_query(
     query_attribute: str,

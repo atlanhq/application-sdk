@@ -1,8 +1,8 @@
 import asyncio
-import uvloop
 import uuid
 from typing import Any, Dict
 
+import uvloop
 from fastapi import APIRouter
 
 from application_sdk.application.fastapi import FastAPIApplication, HttpWorkflowTrigger
@@ -10,6 +10,8 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows import WorkflowInterface
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+
 class CustomHandler(HandlerInterface):
     async def load(self, **kwargs: Any) -> None:
         pass

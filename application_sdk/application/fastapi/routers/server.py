@@ -8,7 +8,6 @@ Note:
 """
 
 import asyncio
-import uvloop
 import os
 import platform
 import re
@@ -18,6 +17,7 @@ import time
 import uuid
 
 import psutil
+import uvloop
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 

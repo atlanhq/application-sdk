@@ -16,12 +16,13 @@ Note: This example is specific to Snowflake but can be adapted for other SQL dat
 """
 
 import asyncio
-import uvloop
 import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict
 from urllib.parse import quote_plus
+
+import uvloop
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient

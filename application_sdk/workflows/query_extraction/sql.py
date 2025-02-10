@@ -5,10 +5,10 @@ databases. It handles batch processing of queries and manages the workflow state
 """
 
 import asyncio
-import uvloop
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
+import uvloop
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
@@ -22,6 +22,7 @@ from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 @workflow.defn
 class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):

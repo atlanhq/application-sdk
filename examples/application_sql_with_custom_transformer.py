@@ -27,12 +27,12 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 """
 
 import asyncio
-import uvloop
 import os
 import time
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
+import uvloop
 from pyatlan.model.assets import Database
 
 from application_sdk.activities.metadata_extraction.sql import (
@@ -54,6 +54,7 @@ DATABASE_DIALECT = "postgresql"
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:

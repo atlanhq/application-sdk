@@ -1,12 +1,14 @@
 import asyncio
-import uvloop
 from typing import Any, Dict, List
+
+import uvloop
 
 from application_sdk.application.fastapi import FastAPIApplication, HttpWorkflowTrigger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.workflows import WorkflowInterface
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 class SampleSQLHandler(SQLHandler):
     async def prepare(self, credentials: Dict[str, Any], **kwargs) -> None:

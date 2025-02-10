@@ -1,5 +1,4 @@
 import asyncio
-import uvloop
 import os
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
@@ -7,6 +6,7 @@ from typing import Any, Dict, List
 import orjson
 import pyarrow as pa
 import pyarrow.parquet as pq
+import uvloop
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -14,6 +14,7 @@ from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 class ChunkedObjectStoreWriterInterface(ABC):
     """Abstract base class for chunked object store writers.

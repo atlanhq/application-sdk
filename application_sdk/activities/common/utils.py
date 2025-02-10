@@ -1,9 +1,9 @@
 import asyncio
-import uvloop
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
+import uvloop
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger

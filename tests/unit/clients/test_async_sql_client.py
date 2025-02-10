@@ -1,15 +1,17 @@
 import asyncio
-import uvloop
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
+import uvloop
 
 from application_sdk.clients.sql import AsyncSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+
 @pytest.fixture
 def async_sql_client():
     client = AsyncSQLClient()

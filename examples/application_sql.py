@@ -27,10 +27,11 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 """
 
 import asyncio
-import uvloop
 import os
 from typing import Any, Dict
 from urllib.parse import quote_plus
+
+import uvloop
 
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
@@ -48,6 +49,7 @@ APPLICATION_NAME = "postgres"
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:

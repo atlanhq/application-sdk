@@ -1,10 +1,10 @@
 import asyncio
-import uvloop
 import json
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
+import uvloop
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
@@ -15,6 +15,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 class SQLConstants(Enum):
     """

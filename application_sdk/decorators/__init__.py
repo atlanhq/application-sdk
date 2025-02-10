@@ -1,11 +1,11 @@
 import asyncio
-import uvloop
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from typing import Any, Callable, Dict, Iterator, Optional, Union
 
 import pandas as pd
+import uvloop
 
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger

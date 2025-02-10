@@ -5,10 +5,10 @@ including their initialization, configuration, and execution.
 """
 
 import asyncio
-import uvloop
 import threading
 from typing import Any, List, Sequence
 
+import uvloop
 from temporalio.types import CallableType
 
 from application_sdk.clients.temporal import TemporalClient
@@ -16,6 +16,7 @@ from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 
 class Worker:
     """Worker class for managing Temporal workflow workers.
