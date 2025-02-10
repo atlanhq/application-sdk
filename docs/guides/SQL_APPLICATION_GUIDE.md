@@ -247,7 +247,7 @@ async def fetch_metadata(self, **kwargs: Dict[str, Any]) -> List[Dict[str, str]]
 
 2. Data Transformation:
 
-```1python
+```python
     async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Method to perform preflight checks
