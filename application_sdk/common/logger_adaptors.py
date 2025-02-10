@@ -1,10 +1,10 @@
-from loguru import logger
 import os
 import re
+import sys
 from contextvars import ContextVar
 from typing import Any, MutableMapping, Tuple
-import sys
 
+from loguru import logger
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
@@ -30,9 +30,11 @@ class AtlanLoggerAdapter:
         """Create the logger adapter with enhanced configuration."""
         self.logger = logger.bind()
         logger.remove()  # Remove default handler
-        
+
         # Add console handler
-        format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> [{level}] {name} - {message}"
+        format_str = (
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> [{level}] {name} - {message}"
+        )
         logger.add(sys.stderr, format=format_str, level=LOG_LEVEL)
 
         # OTLP handler setup
@@ -73,15 +75,18 @@ class AtlanLoggerAdapter:
                 # Create sink for OTLP
                 def otlp_sink(message):
                     record = message.record
+                    # Define our own level mapping
                     level_map = {
-                        "DEBUG": logging.DEBUG,
-                        "INFO": logging.INFO,
-                        "WARNING": logging.WARNING,
-                        "ERROR": logging.ERROR,
-                        "CRITICAL": logging.CRITICAL,
+                        "DEBUG": 10,
+                        "INFO": 20,
+                        "WARNING": 30,
+                        "ERROR": 40,
+                        "CRITICAL": 50,
                     }
-                    logging_level = level_map.get(record["level"].name, logging.INFO)
-                    
+                    logging_level = level_map.get(
+                        LOG_LEVEL, 20
+                    )  # Default to INFO level (20)
+
                     handler = LoggingHandler(
                         level=logging_level,
                         logger_provider=logger_provider,
@@ -94,7 +99,9 @@ class AtlanLoggerAdapter:
             except Exception as e:
                 print(f"Failed to setup OTLP logging: {str(e)}")
 
-    def process(self, msg: Any, kwargs: MutableMapping[str, Any]) -> Tuple[Any, MutableMapping[str, Any]]:
+    def process(
+        self, msg: Any, kwargs: MutableMapping[str, Any]
+    ) -> Tuple[Any, MutableMapping[str, Any]]:
         """Process the log message with temporal context."""
         extra = kwargs.get("extra", {})
 
@@ -110,14 +117,16 @@ class AtlanLoggerAdapter:
         try:
             workflow_info = workflow.info()
             if workflow_info:
-                extra.update({
-                    "workflow_id": workflow_info.workflow_id,
-                    "run_id": workflow_info.run_id,
-                    "workflow_type": workflow_info.workflow_type,
-                    "namespace": workflow_info.namespace,
-                    "task_queue": workflow_info.task_queue,
-                    "attempt": workflow_info.attempt,
-                })
+                extra.update(
+                    {
+                        "workflow_id": workflow_info.workflow_id,
+                        "run_id": workflow_info.run_id,
+                        "workflow_type": workflow_info.workflow_type,
+                        "namespace": workflow_info.namespace,
+                        "task_queue": workflow_info.task_queue,
+                        "attempt": workflow_info.attempt,
+                    }
+                )
                 workflow_context = (
                     "\nWorkflow Context:"
                     f"\n  Workflow ID: {workflow_info.workflow_id}"
@@ -131,16 +140,22 @@ class AtlanLoggerAdapter:
         try:
             activity_info = activity.info()
             if activity_info:
-                extra.update({
-                    "workflow_id": activity_info.workflow_id,
-                    "run_id": activity_info.workflow_run_id,
-                    "activity_id": activity_info.activity_id,
-                    "activity_type": activity_info.activity_type,
-                    "task_queue": activity_info.task_queue,
-                    "attempt": activity_info.attempt,
-                    "schedule_to_close_timeout": str(activity_info.schedule_to_close_timeout),
-                    "start_to_close_timeout": str(activity_info.start_to_close_timeout),
-                })
+                extra.update(
+                    {
+                        "workflow_id": activity_info.workflow_id,
+                        "run_id": activity_info.workflow_run_id,
+                        "activity_id": activity_info.activity_id,
+                        "activity_type": activity_info.activity_type,
+                        "task_queue": activity_info.task_queue,
+                        "attempt": activity_info.attempt,
+                        "schedule_to_close_timeout": str(
+                            activity_info.schedule_to_close_timeout
+                        ),
+                        "start_to_close_timeout": str(
+                            activity_info.start_to_close_timeout
+                        ),
+                    }
+                )
                 activity_context = (
                     "\nActivity Context:"
                     f"\n  Activity ID: {activity_info.activity_id}"
@@ -201,4 +216,4 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
 
 
 # Initialize the default logger
-logger = get_logger()
+default_logger = get_logger()  # Use a different name instead of redefining 'logger'
