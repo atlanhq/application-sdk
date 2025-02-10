@@ -40,7 +40,7 @@ An SQL workflow defines a series of steps that interact with a database. Let's e
 
 The Atlan Platform SDK offers a set of base interfaces and abstract classes that provide default behavior for common tasks such as authentication, metadata extraction, and preflight checks. You can either use these default implementations or extend them to create custom workflows tailored to your specific use case.
 
-Here’s an overview of the core components:
+Here's an overview of the core components:
 
 - `SQLWorkflowAuthInterface`: This interface handles authentication for the workflow. The default implementation establishes a connection to the database using the provided credentials and checks their validity.
 
@@ -50,7 +50,7 @@ Here’s an overview of the core components:
 
 - `SQLWorkflowWorkerInterface`: This interface handles the execution logic of the workflow. The default implementation is responsible for running the tasks defined by the workflow, such as extracting data, running preflight checks, and processing results. You can override this interface to implement custom workflow logic, such as data transformations or running multiple queries in sequence.
 
-These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let’s start with setting up the necessary configurations for interacting with the database.
+These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let's start with setting up the necessary configurations for interacting with the database.
 
 
 ## Detailed Architecture and Flow
@@ -58,21 +58,22 @@ These components are flexible, enabling you to build workflows with custom logic
 ```mermaid
 graph TD
     A[Frontend/Client] -->|HTTP POST| B[FastAPI Server]
-    B -->|1. Validate Request| C[SQLHandler]
-    C -->|2. Load SQL Client| D[SQLClient]
-    D -->|3. Prepare Query| E[prepare_query method]
-    E -->|4. Create Input| F[SQLQueryInput]
-    F -->|5. Execute Query| G[Database]
-    G -->|6. Return Results| F
-    F -->|7. Transform Data| C
-    C -->|8. Return Response| B
-    B -->|JSON Response| A
-
+    B --> C[SQLHandler]
+    
     subgraph "SQLHandler Flow"
-        C --> H[Authentication]
-        C --> I[Metadata Extraction to get DB/Schema list]
-        C --> J[Preflight Checks]
+        C --> D[SQLClient]
+        C --> E[Authentication]
+        C --> F[Metadata Extraction to get DB/Schema list]
+        C --> G[Preflight Checks]
+        
+        D --> H[prepare_query method]
+        H --> I[SQLQueryInput]
+        I <-->|Execute Query| J[Database]
     end
+    
+    I --> C
+    C --> B
+    B -->|JSON Response| A
 ```
 
 ## Understanding the Components
@@ -379,7 +380,7 @@ class MySQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
 
 ### Defining the `SQLWorkflowWorkerInterface` class
 
-The `SQLWorkflowWorkerInterface` class handles the execution of the workflow. It provides the core logic to interact with the database, fetch data (such as schemas, tables, columns), and process that data according to the workflow’s configuration. The `execute_workflow` method is used to execute the workflow.
+The `SQLWorkflowWorkerInterface` class handles the execution of the workflow. It provides the core logic to interact with the database, fetch data (such as schemas, tables, columns), and process that data according to the workflow's configuration. The `execute_workflow` method is used to execute the workflow.
 
 The default implementation of SQLWorkflowWorkerInterface supports:
 
