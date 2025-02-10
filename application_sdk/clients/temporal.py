@@ -320,6 +320,7 @@ class TemporalClient(ClientInterface):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
+        max_concurrent_activities: Optional[int] = None,
     ) -> Worker:
         """Create a Temporal worker.
 
@@ -327,7 +328,7 @@ class TemporalClient(ClientInterface):
             activities (Sequence[CallableType]): Activity functions to register.
             workflow_classes (Sequence[ClassType]): Workflow classes to register.
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
-
+            max_concurrent_activities (int | None): Maximum number of concurrent activities.
         Returns:
             Worker: The created worker instance.
 
@@ -348,6 +349,7 @@ class TemporalClient(ClientInterface):
                 )
             ),
             interceptors=[EventInterceptor()],
+            max_concurrent_activities=max_concurrent_activities,
         )
 
     async def get_workflow_run_status(
