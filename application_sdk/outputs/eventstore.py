@@ -5,7 +5,6 @@ in the application, including workflow and activity events.
 """
 
 import json
-import logging
 from datetime import datetime
 from typing import Any, Dict
 
@@ -13,9 +12,9 @@ from dapr import clients
 from pydantic import BaseModel, Field
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger(__name__)
 
 WORKFLOW_END_EVENT = "workflow_end"
 WORKFLOW_START_EVENT = "workflow_start"

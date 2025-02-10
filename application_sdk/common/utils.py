@@ -1,12 +1,11 @@
 import json
-import logging
 from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.statestore import StateStoreOutput
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 

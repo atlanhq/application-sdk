@@ -16,7 +16,6 @@ Note: This example is specific to Snowflake but can be adapted for other SQL dat
 """
 
 import asyncio
-import logging
 import os
 import time
 from datetime import datetime, timedelta
@@ -26,12 +25,12 @@ from urllib.parse import quote_plus
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 APPLICATION_NAME = "snowflake"
 

@@ -1,15 +1,14 @@
 """State store for the application."""
 
 import json
-import logging
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger(__name__)
 
 
 class StateStoreOutput:

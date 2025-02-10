@@ -1,14 +1,13 @@
-import logging
 import os
 from typing import Any, Dict, Iterator, List, Optional
 
 import pandas as pd
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 class JsonInput(Input):

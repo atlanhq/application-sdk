@@ -1,4 +1,3 @@
-import logging
 import os
 import uuid
 from enum import Enum
@@ -23,7 +22,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.clients import ClientInterface
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -35,7 +34,7 @@ from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
@@ -199,8 +198,8 @@ class TemporalClient(ClientInterface):
         self.port = port if port else TemporalConstants.PORT.value
         self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
 
-        workflow.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-        activity.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+        workflow.logger = get_logger(__name__)
+        activity.logger = get_logger(__name__)
 
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
@@ -278,9 +277,6 @@ class TemporalClient(ClientInterface):
 
             logger.info(f"Created workflow config with ID: {workflow_id}")
 
-        workflow.logger.setLevel(logging.DEBUG)
-        activity.logger.setLevel(logging.DEBUG)
-
         try:
             handle = await self.client.start_workflow(
                 workflow_class,
@@ -301,6 +297,22 @@ class TemporalClient(ClientInterface):
             }
         except WorkflowFailureError as e:
             logger.error(f"Workflow failure: {e}")
+            raise e
+
+    async def stop_workflow(self, workflow_id: str, run_id: str) -> None:
+        """Stop a workflow execution.
+
+        Args:
+            workflow_id (str): The ID of the workflow.
+            run_id (str): The run ID of the workflow.
+        """
+        try:
+            workflow_handle = self.client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            )
+            await workflow_handle.terminate()
+        except Exception as e:
+            logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
             raise e
 
     def create_worker(

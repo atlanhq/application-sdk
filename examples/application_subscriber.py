@@ -1,5 +1,4 @@
 import asyncio
-import logging
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
@@ -9,7 +8,7 @@ from application_sdk.activities import ActivitiesInterface
 from application_sdk.application.fastapi import EventWorkflowTrigger, FastAPIApplication
 from application_sdk.clients.constants import TemporalConstants
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.eventstore import (
     WORKFLOW_END_EVENT,
@@ -21,7 +20,7 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 class SampleActivities(ActivitiesInterface):
