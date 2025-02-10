@@ -214,11 +214,15 @@ async def test_create_worker(
     # Mock workflow class and activities
     workflow_classes = [MagicMock(), MagicMock()]
     activities = [MagicMock(), MagicMock()]
+    activity_executor = MagicMock()
     passthrough_modules = ["application_sdk", "os"]
 
     # Run create_worker
     worker = temporal_client.create_worker(
-        activities, workflow_classes, passthrough_modules
+        activities,
+        workflow_classes,
+        passthrough_modules,
+        activity_executor=activity_executor,
     )
 
     # Verify Worker was instantiated with the expected parameters
@@ -227,6 +231,7 @@ async def test_create_worker(
         task_queue=temporal_client.worker_task_queue,
         workflows=workflow_classes,
         activities=activities,
+        activity_executor=activity_executor,
         workflow_runner=ANY,
         interceptors=ANY,
     )
