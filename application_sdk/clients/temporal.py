@@ -1,3 +1,4 @@
+import concurrent
 import os
 import uuid
 from enum import Enum
@@ -320,6 +321,7 @@ class TemporalClient(ClientInterface):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
+        activity_executor: Optional[concurrent.futures.Executor] = None,
     ) -> Worker:
         """Create a Temporal worker.
 
@@ -327,6 +329,9 @@ class TemporalClient(ClientInterface):
             activities (Sequence[CallableType]): Activity functions to register.
             workflow_classes (Sequence[ClassType]): Workflow classes to register.
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
+            activity_executor: (concurrent.futures.Executor, optional): Concurrent executor
+            to use for non-async activities. This is required if any activities are non-async.
+            :py:class:`concurrent.futures.ThreadPoolExecutor` is recommended.
 
         Returns:
             Worker: The created worker instance.
@@ -348,6 +353,7 @@ class TemporalClient(ClientInterface):
                 )
             ),
             interceptors=[EventInterceptor()],
+            activity_executor=activity_executor,
         )
 
     async def get_workflow_run_status(

@@ -1,6 +1,9 @@
-from typing import Any, Callable, List, Optional, Type
+import json
+import os
+import shutil
+from typing import Any, Callable, List, Optional, Type, Union
 
-from fastapi import APIRouter, FastAPI, status
+from fastapi import APIRouter, FastAPI, Form, HTTPException, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from uvicorn import Config, Server
@@ -87,6 +90,23 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
+    async def _handle_file_upload(self, file: Optional[UploadFile] = None):
+        if not file:
+            return
+        try:
+            upload_dir = "form/uploads"
+            os.makedirs(upload_dir, exist_ok=True)
+            file_path = os.path.join(upload_dir, file.filename)
+            with open(file_path, "wb") as fb:
+                shutil.copyfileobj(file.file, fb)
+        except Exception as e:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Something went wrong while saving the uploaded file: {str(e)}",
+            )
+        finally:
+            await file.close()
+
     def register_workflow(
         self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
@@ -95,12 +115,20 @@ class FastAPIApplication(AtlanApplicationInterface):
 
             if isinstance(trigger, HttpWorkflowTrigger):
 
-                async def start_workflow(body: WorkflowRequest):
+                async def start_workflow(
+                    body: Union[WorkflowRequest, str] = Form(...),
+                    file: Optional[UploadFile] = None,
+                ):
+                    await self._handle_file_upload(file)
                     if not self.temporal_client:
                         raise Exception("Temporal client not initialized")
+                    if isinstance(body, WorkflowRequest):
+                        workflow_args = body.model_dump()
+                    if isinstance(body, str):
+                        workflow_args = json.loads(body)
 
                     workflow_data = await self.temporal_client.start_workflow(
-                        body.model_dump(), workflow_class=workflow_class
+                        workflow_args=workflow_args, workflow_class=workflow_class
                     )
                     return WorkflowResponse(
                         success=True,

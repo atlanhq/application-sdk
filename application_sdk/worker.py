@@ -5,8 +5,9 @@ including their initialization, configuration, and execution.
 """
 
 import asyncio
+import concurrent
 import threading
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
 from temporalio.types import CallableType
 
@@ -36,6 +37,7 @@ class Worker:
         temporal_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = ["application_sdk", "os"],
         workflow_classes: List[Any] = [],
+        activity_executor: Optional[concurrent.futures.Executor] = None,
     ):
         """Initialize the Worker.
 
@@ -48,12 +50,16 @@ class Worker:
                 through. Defaults to ["application_sdk", "os"].
             workflow_classes (List[Any], optional): List of workflow classes.
                 Defaults to empty list.
+            activity_executor: (concurrent.futures.Executor, optional): Concurrent executor
+                to use for non-async activities. This is required if any activities are non-async.
+                :py:class:`concurrent.futures.ThreadPoolExecutor` is recommended.
         """
-        self.temporal_client = temporal_client
         self.temporal_worker = None
+        self.temporal_client = temporal_client
         self.temporal_activities = temporal_activities
-        self.workflow_classes = workflow_classes
         self.passthrough_modules = passthrough_modules
+        self.workflow_classes = workflow_classes
+        self.activity_executor = activity_executor
 
     async def start(self, daemon: bool = False, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
@@ -89,6 +95,7 @@ class Worker:
                 activities=self.temporal_activities,
                 workflow_classes=self.workflow_classes,
                 passthrough_modules=self.passthrough_modules,
+                activity_executor=self.activity_executor,
             )
 
             logger.info(
