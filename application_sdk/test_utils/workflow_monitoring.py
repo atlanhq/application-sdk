@@ -3,6 +3,7 @@ Utility functions for monitoring Temporal workflow execution status.
 """
 
 import asyncio
+import uvloop
 import logging
 import time
 from typing import Any, Optional
@@ -12,7 +13,7 @@ from temporalio.client import WorkflowExecutionStatus, WorkflowHandle
 from application_sdk.clients.temporal import TemporalClient
 
 logger = logging.getLogger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 async def monitor_workflow_execution_and_write_status(
     workflow_handle: WorkflowHandle[Any, Any],

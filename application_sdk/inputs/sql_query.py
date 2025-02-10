@@ -1,4 +1,5 @@
 import asyncio
+import uvloop
 import concurrent
 from typing import Any, Dict, Iterator, Optional, Union
 
@@ -15,7 +16,7 @@ from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 def _get_sql_query(
     query_attribute: str,

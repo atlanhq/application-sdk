@@ -27,6 +27,7 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 """
 
 import asyncio
+import uvloop
 import os
 import time
 from typing import Any, Dict
@@ -52,7 +53,7 @@ DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 class PostgreSQLClient(AsyncSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:

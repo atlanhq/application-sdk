@@ -1,4 +1,5 @@
 import asyncio
+import uvloop
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
@@ -11,7 +12,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 executor = ThreadPoolExecutor()
 

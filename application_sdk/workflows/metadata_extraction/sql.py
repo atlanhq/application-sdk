@@ -5,6 +5,7 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
+import uvloop   
 from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
@@ -21,7 +22,7 @@ from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 workflow.logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 @workflow.defn
 class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):

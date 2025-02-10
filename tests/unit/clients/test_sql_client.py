@@ -1,4 +1,5 @@
 import asyncio
+import uvloop
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,7 +9,7 @@ import pytest
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
 
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 @pytest.fixture
 def sql_client():
     client = SQLClient()

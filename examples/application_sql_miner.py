@@ -16,6 +16,7 @@ Note: This example is specific to Snowflake but can be adapted for other SQL dat
 """
 
 import asyncio
+import uvloop
 import os
 import time
 from datetime import datetime, timedelta
@@ -31,7 +32,7 @@ from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 APPLICATION_NAME = "snowflake"
 
 

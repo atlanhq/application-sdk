@@ -1,4 +1,5 @@
 import asyncio
+import uvloop
 from typing import Any, Callable, Dict, Sequence
 
 from temporalio import workflow
@@ -12,7 +13,7 @@ from application_sdk.workflows import WorkflowInterface
 APPLICATION_NAME = "hello-world"
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 @workflow.defn
 class HelloWorldWorkflow(WorkflowInterface):

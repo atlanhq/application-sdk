@@ -3,7 +3,7 @@ Utility functions for monitoring Temporal workflow execution status.
 """
 
 import asyncio
-
+import uvloop
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.test_utils.workflow_monitoring import run_and_monitor_workflow
 from examples.application_hello_world import application_hello_world
@@ -13,7 +13,7 @@ from examples.application_sql_with_custom_transformer import (
     application_sql_with_custom_transformer,
 )
 
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 async def main():
     temporal_client = TemporalClient()
     await temporal_client.load()

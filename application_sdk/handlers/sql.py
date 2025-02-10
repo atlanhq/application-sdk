@@ -1,4 +1,5 @@
 import asyncio
+import uvloop
 import json
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -13,7 +14,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 class SQLConstants(Enum):
     """

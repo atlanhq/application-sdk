@@ -1,4 +1,5 @@
 import asyncio
+import uvloop
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
@@ -8,7 +9,7 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
-
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
