@@ -1,8 +1,9 @@
-import logging
+from loguru import logger
 import os
 import re
 from contextvars import ContextVar
 from typing import Any, MutableMapping, Tuple
+import sys
 
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
@@ -24,40 +25,19 @@ ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
-class AtlanLoggerAdapter(logging.LoggerAdapter):
-    def __init__(self, logger: logging.Logger) -> None:
+class AtlanLoggerAdapter:
+    def __init__(self, logger_name: str) -> None:
         """Create the logger adapter with enhanced configuration."""
-        # Remove any existing handlers
-        for handler in logger.handlers[:]:
-            logger.removeHandler(handler)
+        self.logger = logger.bind()
+        logger.remove()  # Remove default handler
+        
+        # Add console handler
+        format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> [{level}] {name} - {message}"
+        logger.add(sys.stderr, format=format_str, level=LOG_LEVEL)
 
-        logger.setLevel(LOG_LEVEL)
-
-        # Create OTLP formatter with detailed format for workflow/activity logs
-        workflow_formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s - %(message)s "
-            "[workflow_id=%(workflow_id)s] "
-            "[run_id=%(run_id)s] "
-            "[activity_id=%(activity_id)s] "
-            "[workflow_type=%(workflow_type)s]",
-            defaults={
-                "workflow_id": "N/A",
-                "run_id": "N/A",
-                "activity_id": "N/A",
-                "workflow_type": "N/A",
-            },
-        )
-
-        try:
-            # Single console handler with conditional formatting
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(
-                logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s ")
-            )
-            logger.addHandler(console_handler)
-
-            # OTLP handler setup
-            if ENABLE_OTLP_LOGS:
+        # OTLP handler setup
+        if ENABLE_OTLP_LOGS:
+            try:
                 # Get workflow node name for Argo environment
                 workflow_node_name = os.getenv("OTEL_WF_NODE_NAME", "")
 
@@ -88,115 +68,112 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
                 )
 
-                # Monkey patch the emit method to handle different types
-                original_emit = batch_processor.emit
-
-                def custom_emit(log_data):
-                    if not self._is_valid_type(log_data.log_record.body):
-                        log_data.log_record.body = str(log_data.log_record.body)
-                    original_emit(log_data)
-
-                batch_processor.emit = custom_emit
-
                 logger_provider.add_log_record_processor(batch_processor)
 
-                otlp_handler = LoggingHandler(
-                    level=getattr(logging, LOG_LEVEL, logging.INFO),
-                    logger_provider=logger_provider,
-                )
-                otlp_handler.setFormatter(workflow_formatter)
-                logger.addHandler(otlp_handler)
+                # Create sink for OTLP
+                def otlp_sink(message):
+                    record = message.record
+                    level_map = {
+                        "DEBUG": logging.DEBUG,
+                        "INFO": logging.INFO,
+                        "WARNING": logging.WARNING,
+                        "ERROR": logging.ERROR,
+                        "CRITICAL": logging.CRITICAL,
+                    }
+                    logging_level = level_map.get(record["level"].name, logging.INFO)
+                    
+                    handler = LoggingHandler(
+                        level=logging_level,
+                        logger_provider=logger_provider,
+                    )
+                    handler.emit(record)
 
-        except Exception as e:
-            print(f"Failed to setup logging: {str(e)}")
-            # Fallback to basic console logging
-            console_handler = logging.StreamHandler()
-            console_handler.setFormatter(logging.Formatter("%(message)s"))
-            logger.addHandler(console_handler)
+                # Add OTLP sink
+                logger.add(otlp_sink, level=LOG_LEVEL)
 
-        super().__init__(logger, {})
+            except Exception as e:
+                print(f"Failed to setup OTLP logging: {str(e)}")
 
-    def _is_valid_type(self, value):
-        """Helper method to check if a value is of a valid type for OTLP logging."""
-        if isinstance(value, (bool, str, int, float)):
-            return True
-        if isinstance(value, (list, tuple)):
-            return all(self._is_valid_type(v) for v in value)
-        if isinstance(value, dict):
-            return all(
-                self._is_valid_type(k) and self._is_valid_type(v)
-                for k, v in value.items()
-            )
-        return False
-
-    def process(
-        self, msg: Any, kwargs: MutableMapping[str, Any]
-    ) -> Tuple[Any, MutableMapping[str, Any]]:
+    def process(self, msg: Any, kwargs: MutableMapping[str, Any]) -> Tuple[Any, MutableMapping[str, Any]]:
         """Process the log message with temporal context."""
-        if "extra" not in kwargs:
-            kwargs["extra"] = {}
+        extra = kwargs.get("extra", {})
 
         # Get request context
         try:
             ctx = request_context.get()
             if ctx and "request_id" in ctx:
-                kwargs["extra"]["request_id"] = ctx["request_id"]
+                extra["request_id"] = ctx["request_id"]
         except Exception:
             pass
 
-        # Get temporal context with more verbose logging
+        # Get temporal context
         try:
             workflow_info = workflow.info()
             if workflow_info:
-                kwargs["extra"].update(
-                    {
-                        "workflow_id": workflow_info.workflow_id,
-                        "run_id": workflow_info.run_id,
-                        "workflow_type": workflow_info.workflow_type,
-                        "namespace": workflow_info.namespace,
-                        "task_queue": workflow_info.task_queue,
-                        "attempt": workflow_info.attempt,
-                    }
+                extra.update({
+                    "workflow_id": workflow_info.workflow_id,
+                    "run_id": workflow_info.run_id,
+                    "workflow_type": workflow_info.workflow_type,
+                    "namespace": workflow_info.namespace,
+                    "task_queue": workflow_info.task_queue,
+                    "attempt": workflow_info.attempt,
+                })
+                workflow_context = (
+                    "\nWorkflow Context:"
+                    f"\n  Workflow ID: {workflow_info.workflow_id}"
+                    f"\n  Run ID: {workflow_info.run_id}"
+                    f"\n  Type: {workflow_info.workflow_type}"
                 )
-                msg += f" \n Workflow Info: \n ['workflow_id'={workflow_info.workflow_id}] ['run_id'={workflow_info.run_id}] ['workflow_type'={workflow_info.workflow_type}] \n"
+                msg = f"{msg}{workflow_context}"
         except Exception:
             pass
 
         try:
             activity_info = activity.info()
             if activity_info:
-                kwargs["extra"].update(
-                    {
-                        "workflow_id": activity_info.workflow_id,
-                        "run_id": activity_info.workflow_run_id,
-                        "activity_id": activity_info.activity_id,
-                        "activity_type": activity_info.activity_type,
-                        "task_queue": activity_info.task_queue,
-                        "attempt": activity_info.attempt,
-                        "schedule_to_close_timeout": str(
-                            activity_info.schedule_to_close_timeout
-                        ),
-                        "start_to_close_timeout": str(
-                            activity_info.start_to_close_timeout
-                        ),
-                    }
+                extra.update({
+                    "workflow_id": activity_info.workflow_id,
+                    "run_id": activity_info.workflow_run_id,
+                    "activity_id": activity_info.activity_id,
+                    "activity_type": activity_info.activity_type,
+                    "task_queue": activity_info.task_queue,
+                    "attempt": activity_info.attempt,
+                    "schedule_to_close_timeout": str(activity_info.schedule_to_close_timeout),
+                    "start_to_close_timeout": str(activity_info.start_to_close_timeout),
+                })
+                activity_context = (
+                    "\nActivity Context:"
+                    f"\n  Activity ID: {activity_info.activity_id}"
+                    f"\n  Type: {activity_info.activity_type}"
+                    f"\n  Workflow ID: {activity_info.workflow_id}"
+                    f"\n  Run ID: {activity_info.workflow_run_id}"
                 )
-                msg += f" \n Activity Info: \n ['workflow_id'={activity_info.workflow_id}] ['run_id'={activity_info.workflow_run_id}] ['activity_type'={activity_info.activity_type}] \n"
+                msg = f"{msg}{activity_context}"
         except Exception:
             pass
 
+        kwargs["extra"] = extra
         return msg, kwargs
 
-    def isEnabledFor(self, level: int) -> bool:
-        """Override to ignore replay logs."""
-        return super().isEnabledFor(level)
+    def debug(self, msg: str, *args, **kwargs):
+        msg, kwargs = self.process(msg, kwargs)
+        self.logger.debug(msg, *args, **kwargs)
 
-    @property
-    def base_logger(self) -> logging.Logger:
-        """Underlying logger usable for actions such as adding
-        handlers/formatters.
-        """
-        return self.logger
+    def info(self, msg: str, *args, **kwargs):
+        msg, kwargs = self.process(msg, kwargs)
+        self.logger.info(msg, *args, **kwargs)
+
+    def warning(self, msg: str, *args, **kwargs):
+        msg, kwargs = self.process(msg, kwargs)
+        self.logger.warning(msg, *args, **kwargs)
+
+    def error(self, msg: str, *args, **kwargs):
+        msg, kwargs = self.process(msg, kwargs)
+        self.logger.error(msg, *args, **kwargs)
+
+    def critical(self, msg: str, *args, **kwargs):
+        msg, kwargs = self.process(msg, kwargs)
+        self.logger.critical(msg, *args, **kwargs)
 
 
 # Create a singleton instance of the logger
@@ -219,7 +196,7 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
         name = __name__
 
     if name not in _logger_instances:
-        _logger_instances[name] = AtlanLoggerAdapter(logging.getLogger(name))
+        _logger_instances[name] = AtlanLoggerAdapter(name)
     return _logger_instances[name]
 
 
