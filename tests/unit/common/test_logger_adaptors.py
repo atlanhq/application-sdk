@@ -9,13 +9,22 @@ from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logge
 @pytest.fixture
 def mock_logger():
     """Create a mock logger instance."""
-    logger = mock.Mock(spec=logging.Logger)
+    logger = mock.MagicMock(spec=logging.Logger)
+    # Set handlers as a list attribute, not a mock
     logger.handlers = []
     logger.name = "test_logger"
-    # Add necessary mock methods
-    logger.setLevel = mock.Mock()
-    logger.addHandler = mock.Mock()
-    logger.removeHandler = mock.Mock()
+
+    # Configure the mock to properly handle handler operations
+    def remove_handler(handler):
+        if handler in logger.handlers:
+            logger.handlers.remove(handler)
+
+    def add_handler(handler):
+        logger.handlers.append(handler)
+
+    logger.removeHandler.side_effect = remove_handler
+    logger.addHandler.side_effect = add_handler
+
     return logger
 
 
@@ -24,12 +33,40 @@ def logger_adapter(mock_logger):
     """Create a logger adapter instance with mocked underlying logger."""
     # Mock environment variables
     with mock.patch.dict(
-        "os.environ", {"LOG_LEVEL": "INFO", "ENABLE_OTLP_LOGS": "false"}
+        "os.environ",
+        {
+            "LOG_LEVEL": "INFO",
+            "ENABLE_OTLP_LOGS": "false",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4317",
+        },
     ):
-        # Mock the StreamHandler
-        with mock.patch("logging.StreamHandler") as mock_handler:
-            mock_handler.return_value = mock.Mock()
+        # Mock the StreamHandler and Formatter
+        with mock.patch("logging.StreamHandler") as mock_handler, mock.patch(
+            "logging.Formatter"
+        ) as mock_formatter:
+            mock_handler.return_value = mock.MagicMock()
+            mock_formatter.return_value = mock.MagicMock()
+            mock_handler.return_value.setFormatter = mock.MagicMock()
             return AtlanLoggerAdapter(mock_logger)
+
+
+def test_process_without_context(logger_adapter: AtlanLoggerAdapter):
+    """Test process() method without any context."""
+    msg, kwargs = logger_adapter.process("Test message", {})
+    assert "extra" in kwargs
+    assert msg == "Test message"
+
+
+def test_is_enabled_for(logger_adapter: AtlanLoggerAdapter):
+    """Test isEnabledFor method."""
+    logger_adapter.logger.isEnabledFor.return_value = True
+    assert logger_adapter.isEnabledFor(logging.INFO)
+    logger_adapter.logger.isEnabledFor.assert_called_once_with(logging.INFO)
+
+
+def test_base_logger_property(logger_adapter: AtlanLoggerAdapter):
+    """Test base_logger property."""
+    assert logger_adapter.base_logger == logger_adapter.logger
 
 
 def test_process_with_workflow_context(logger_adapter: AtlanLoggerAdapter):
