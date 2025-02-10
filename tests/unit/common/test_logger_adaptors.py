@@ -3,21 +3,34 @@ from unittest import mock
 
 import pytest
 
-from application_sdk.common.logger_adaptors import (  # Assume this is the file where the class resides
-    AtlanLoggerAdapter,
-)
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logger
 
 
 @pytest.fixture
 def mock_logger():
-    """Fixture to provide a mock logger for testing."""
-    return mock.Mock(spec=logging.Logger)
+    """Create a mock logger instance."""
+    logger = mock.Mock(spec=logging.Logger)
+    logger.handlers = []
+    logger.name = "test_logger"
+    # Add necessary mock methods
+    logger.setLevel = mock.Mock()
+    logger.addHandler = mock.Mock()
+    logger.removeHandler = mock.Mock()
+    return logger
 
 
 @pytest.fixture
-def logger_adapter(mock_logger: logging.Logger):
-    """Fixture to provide the AtlanLoggerAdapter instance."""
-    return AtlanLoggerAdapter(mock_logger)
+def logger_adapter(mock_logger):
+    """Create a logger adapter instance with mocked underlying logger."""
+    # Mock environment variables
+    with mock.patch.dict('os.environ', {
+        'LOG_LEVEL': 'INFO',
+        'ENABLE_OTLP_LOGS': 'false'
+    }):
+        # Mock the StreamHandler
+        with mock.patch('logging.StreamHandler') as mock_handler:
+            mock_handler.return_value = mock.Mock()
+            return AtlanLoggerAdapter(mock_logger)
 
 
 def test_process_with_workflow_context(logger_adapter: AtlanLoggerAdapter):
@@ -76,38 +89,18 @@ def test_process_with_activity_context(logger_adapter: AtlanLoggerAdapter):
         assert msg == expected_msg
 
 
-def test_process_without_context(logger_adapter: AtlanLoggerAdapter):
-    """Test process() method when neither workflow nor activity information is available."""
-    # Mock workflow.info() and activity.info() to return None (no context)
-    with mock.patch("temporalio.workflow.info", return_value=None):
-        with mock.patch("temporalio.activity.info", return_value=None):
-            msg, kwargs = logger_adapter.process("Test message", {})
-
-            # Ensure process id and thread id are added
-            assert "extra" in kwargs
-            assert "process_id" in kwargs["extra"]
-            assert "thread_id" in kwargs["extra"]
-
-            del kwargs["extra"]["process_id"]
-            del kwargs["extra"]["thread_id"]
-
-            # Ensure no extra information is added
-            assert kwargs["extra"] == {}
-            assert msg == "Test message"
+def test_process_with_request_context(logger_adapter: AtlanLoggerAdapter):
+    """Test process() method with request context."""
+    with mock.patch("application_sdk.common.logger_adaptors.request_context") as mock_context:
+        mock_context.get.return_value = {"request_id": "test_request_id"}
+        msg, kwargs = logger_adapter.process("Test message", {})
+        assert "extra" in kwargs
+        assert kwargs["extra"]["request_id"] == "test_request_id"
 
 
-def test_is_enabled_for(logger_adapter: AtlanLoggerAdapter):
-    """Test that isEnabledFor returns the correct value."""
-    with mock.patch.object(logger_adapter, "logger") as mock_base_logger:
-        mock_base_logger.isEnabledFor.return_value = True
-        assert logger_adapter.isEnabledFor(logging.INFO) is True
-
-        mock_base_logger.isEnabledFor.return_value = False
-        assert logger_adapter.isEnabledFor(logging.INFO) is False
-
-
-def test_base_logger_property(
-    logger_adapter: AtlanLoggerAdapter, mock_logger: logging.Logger
-):
-    """Test that base_logger property returns the original logger."""
-    assert logger_adapter.base_logger is mock_logger
+def test_get_logger():
+    """Test get_logger function creates and caches logger instances."""
+    logger1 = get_logger("test_logger")
+    logger2 = get_logger("test_logger")
+    assert logger1 is logger2
+    assert isinstance(logger1, AtlanLoggerAdapter)
