@@ -6,7 +6,7 @@ including their initialization, configuration, and execution.
 
 import asyncio
 import threading
-from typing import Any, List, Sequence, Optional
+from typing import Any, List, Optional, Sequence
 
 from temporalio.types import CallableType
 
