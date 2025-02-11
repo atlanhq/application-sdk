@@ -67,7 +67,6 @@ def test_process_without_context(logger_adapter: AtlanLoggerAdapter):
             del kwargs["process_id"]
             del kwargs["thread_id"]
 
-            # Ensure no extra information is added
             assert kwargs == {}
             assert msg == "Test message"
 
