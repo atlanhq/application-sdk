@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 from contextvars import ContextVar
 from typing import Any, MutableMapping, Tuple
 
@@ -10,7 +9,6 @@ from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
 
-ansi_escape = re.compile(r"\x1B\[[0-?]*[ -/]*[@-~]")
 
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
