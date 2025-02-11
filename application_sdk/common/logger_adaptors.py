@@ -31,11 +31,11 @@ class AtlanLoggerAdapter:
         self.logger = logger.bind()
         logger.remove()  # Remove default handler
 
-        # Add console handler
+        # Add console handler with markup=True to interpret color tags
         format_str = (
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> [{level}] {name} - {message}"
+            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{name}</cyan> - <level>{message}</level>"
         )
-        logger.add(sys.stderr, format=format_str, level=LOG_LEVEL)
+        logger.add(sys.stderr, format=format_str, level=LOG_LEVEL, colorize=True)
 
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:
@@ -129,9 +129,9 @@ class AtlanLoggerAdapter:
                 )
                 workflow_context = (
                     "\nWorkflow Context:"
-                    f"\n  Workflow ID: {workflow_info.workflow_id}"
-                    f"\n  Run ID: {workflow_info.run_id}"
-                    f"\n  Type: {workflow_info.workflow_type}"
+                    f"\n  Workflow ID: <blue>{workflow_info.workflow_id}</blue>"
+                    f"\n  Run ID: <cyan>{workflow_info.run_id}</cyan>"
+                    f"\n  Type: <green>{workflow_info.workflow_type}</green>"
                 )
                 msg = f"{msg}{workflow_context}"
         except Exception:
@@ -160,8 +160,8 @@ class AtlanLoggerAdapter:
                     "\nActivity Context:"
                     f"\n  Activity ID: {activity_info.activity_id}"
                     f"\n  Type: {activity_info.activity_type}"
-                    f"\n  Workflow ID: {activity_info.workflow_id}"
-                    f"\n  Run ID: {activity_info.workflow_run_id}"
+                    f"\n  Workflow ID: <blue>{activity_info.workflow_id}</blue>"
+                    f"\n  Run ID: <cyan>{activity_info.workflow_run_id}</cyan>"
                 )
                 msg = f"{msg}{activity_context}"
         except Exception:
