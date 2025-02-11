@@ -29,6 +29,8 @@ class Worker:
         temporal_activities (Sequence[CallableType]): List of activity functions.
         workflow_classes (List[Any]): List of workflow classes.
         passthrough_modules (List[str]): List of module names to pass through.
+        max_concurrent_activities (int | None): Maximum number of concurrent activities.
+        activity_executor: (concurrent.futures.Executor | None): Concurrent executor to use for non-async activities.
     """
 
     def __init__(
@@ -37,6 +39,7 @@ class Worker:
         temporal_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = ["application_sdk", "os"],
         workflow_classes: List[Any] = [],
+        max_concurrent_activities: Optional[int] = None,
         activity_executor: Optional[concurrent.futures.Executor] = None,
     ):
         """Initialize the Worker.
@@ -59,6 +62,7 @@ class Worker:
         self.temporal_activities = temporal_activities
         self.passthrough_modules = passthrough_modules
         self.workflow_classes = workflow_classes
+        self.max_concurrent_activities = max_concurrent_activities
         self.activity_executor = activity_executor
 
     async def start(self, daemon: bool = False, *args: Any, **kwargs: Any) -> None:
@@ -95,6 +99,7 @@ class Worker:
                 activities=self.temporal_activities,
                 workflow_classes=self.workflow_classes,
                 passthrough_modules=self.passthrough_modules,
+                max_concurrent_activities=self.max_concurrent_activities,
                 activity_executor=self.activity_executor,
             )
 

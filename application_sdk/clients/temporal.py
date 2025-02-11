@@ -321,6 +321,7 @@ class TemporalClient(ClientInterface):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
+        max_concurrent_activities: Optional[int] = None,
         activity_executor: Optional[concurrent.futures.Executor] = None,
     ) -> Worker:
         """Create a Temporal worker.
@@ -329,6 +330,7 @@ class TemporalClient(ClientInterface):
             activities (Sequence[CallableType]): Activity functions to register.
             workflow_classes (Sequence[ClassType]): Workflow classes to register.
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
+            max_concurrent_activities (int | None): Maximum number of concurrent activities.
             activity_executor: (concurrent.futures.Executor, optional): Concurrent executor
             to use for non-async activities. This is required if any activities are non-async.
             :py:class:`concurrent.futures.ThreadPoolExecutor` is recommended.
@@ -352,7 +354,10 @@ class TemporalClient(ClientInterface):
                     *passthrough_modules
                 )
             ),
-            interceptors=[EventInterceptor()],
+            max_concurrent_activities=max_concurrent_activities,
+            # Disabled EventInterceptor for now
+            # interceptors=[EventInterceptor()],
+            interceptors=[],
             activity_executor=activity_executor,
         )
 
