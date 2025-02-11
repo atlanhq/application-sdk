@@ -1,3 +1,5 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
 
 import pandas as pd
@@ -182,33 +184,44 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             "connection_qualified_name", None
         )
 
-        transformed_metadata_list = []
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        for row in results.to_dict(orient="records"):
-            try:
-                if not state.transformer:
-                    raise ValueError("Transformer is not set")
+        def process_rows():
+            """Helper function to process rows inside a thread pool."""
+            transformed_metadata_list = []
+            for row in results.to_dict(orient="records"):
+                try:
+                    if not state.transformer:
+                        raise ValueError("Transformer is not set")
 
-                transformed_metadata: Optional[Dict[str, Any]] = (
-                    state.transformer.transform_metadata(
-                        typename,
-                        row,
-                        workflow_id=workflow_id,
-                        workflow_run_id=workflow_run_id,
-                        connection_name=connection_name,
-                        connection_qualified_name=connection_qualified_name,
+                    transformed_metadata: Optional[Dict[str, Any]] = (
+                        state.transformer.transform_metadata(
+                            typename,
+                            row,
+                            workflow_id=workflow_id,
+                            workflow_run_id=workflow_run_id,
+                            connection_name=connection_name,
+                            connection_qualified_name=connection_qualified_name,
+                        )
                     )
-                )
-                if transformed_metadata is not None:
-                    transformed_metadata_list.append(transformed_metadata)
-                else:
-                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                activity.logger.error(
-                    f"Error processing row for {typename}: {row_error}"
-                )
+                    if transformed_metadata is not None:
+                        transformed_metadata_list.append(transformed_metadata)
+                    else:
+                        activity.logger.warning(
+                            f"Skipped invalid {typename} data: {row}"
+                        )
+                except Exception as row_error:
+                    activity.logger.error(
+                        f"Error processing row for {typename}: {row_error}"
+                    )
+            return transformed_metadata_list
+
+        # Run the blocking `process_rows` function in a thread pool
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor() as pool:
+            transformed_metadata_list = await loop.run_in_executor(pool, process_rows)
+
         return pd.DataFrame(transformed_metadata_list)
 
     @activity.defn

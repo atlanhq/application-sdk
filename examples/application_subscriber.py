@@ -84,10 +84,12 @@ class SampleWorkflow(WorkflowInterface):
         await workflow.execute_activity_method(
             self.activities_cls.activity_1,
             start_to_close_timeout=timedelta(seconds=10),
+            heartbeat_timeout=timedelta(seconds=10),
         )
         await workflow.execute_activity_method(
             self.activities_cls.activity_2,
             start_to_close_timeout=timedelta(seconds=10),
+            heartbeat_timeout=timedelta(seconds=10),
         )
 
     @classmethod
