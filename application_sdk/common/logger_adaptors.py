@@ -34,7 +34,9 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         logger.setLevel(LOG_LEVEL)
 
         # Create OTLP formatter with detailed format for workflow/activity logs
-        atlan_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+        atlan_formatter = logging.Formatter(
+            "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+        )
 
         try:
             # Single console handler with conditional formatting
