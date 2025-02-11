@@ -8,7 +8,6 @@ Note:
 """
 
 import asyncio
-import logging
 import os
 import platform
 import re
@@ -21,9 +20,9 @@ import psutil
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 router = APIRouter(
     prefix="/server",

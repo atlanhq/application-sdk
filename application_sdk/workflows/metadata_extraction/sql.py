@@ -16,8 +16,11 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.constants import ApplicationConstants
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
+
+workflow.logger = get_logger(__name__)
 
 
 @workflow.defn
@@ -39,6 +42,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     )
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
+    max_transform_concurrency: int = 5
 
     @staticmethod
     def get_activities(
@@ -91,7 +95,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
-            heartbeat_timeout=timedelta(seconds=120),
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -121,7 +124,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     start_to_close_timeout=timedelta(
                         seconds=start_to_close_timeout_seconds
                     ),
-                    heartbeat_timeout=timedelta(seconds=120),
                 )
             )
 
@@ -151,7 +153,10 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 - List of starting chunk numbers for each batch
         """
         # concurrency logic
-        concurrency_level = chunk_count
+        concurrency_level = min(
+            self.max_transform_concurrency,
+            chunk_count,
+        )
 
         batches: List[List[str]] = []
         chunk_start_numbers: List[int] = []

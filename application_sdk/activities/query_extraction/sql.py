@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
@@ -10,7 +9,7 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -18,7 +17,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 class MinerArgs(BaseModel):
@@ -148,7 +147,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         **kwargs,
     ):
         """Fetch and process queries from the database.
-
         Args:
             batch_input: Input DataFrame containing the queries
             raw_output: JsonOutput object for writing results
@@ -157,7 +155,25 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Returns:
             None
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        logger.info(
+            "Starting query fetch with batch size: %s",
+            len(batch_input) if batch_input else 0,
+        )
+
+        try:
+            await raw_output.write_batched_dataframe(batch_input)
+
+            logger.info(
+                "Query fetch completed, %s records processed",
+                raw_output.total_record_count,
+            )
+        except Exception as e:
+            logger.error(
+                "Query fetch failed %s",
+                e,
+                exc_info=True,
+            )
+            raise
 
     async def parallelize_query(
         self,

@@ -1,4 +1,3 @@
-import logging
 from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
@@ -7,6 +6,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
+from application_sdk.application.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.application.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -23,13 +23,13 @@ from application_sdk.application.fastapi.models import (
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 class WorkflowTrigger(BaseModel):
@@ -73,7 +73,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
         self.handler = handler
         self.temporal_client = temporal_client
-
+        self.app.add_middleware(LogMiddleware)
         self.register_routers()
         super().__init__(handler)
 
@@ -163,6 +163,12 @@ class FastAPIApplication(AtlanApplicationInterface):
             self.get_workflow_run_status,
             description="Get the status of the current or last workflow run",
             methods=["GET"],
+        )
+
+        self.workflow_router.add_api_route(
+            "/stop/{workflow_id}/{run_id:path}",
+            self.stop_workflow,
+            methods=["POST"],
         )
 
         self.dapr_router.add_api_route(
@@ -278,6 +284,13 @@ class FastAPIApplication(AtlanApplicationInterface):
             message="Workflow configuration updated successfully",
             data=config,
         )
+
+    async def stop_workflow(self, workflow_id: str, run_id: str) -> JSONResponse:
+        if not self.temporal_client:
+            raise Exception("Temporal client not initialized")
+
+        await self.temporal_client.stop_workflow(workflow_id, run_id)
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(self, host: str = "0.0.0.0", port: int = 8000):
         server = Server(

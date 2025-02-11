@@ -27,7 +27,6 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 """
 
 import asyncio
-import logging
 import os
 from typing import Any, Dict
 from urllib.parse import quote_plus
@@ -37,7 +36,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.clients.sql import AsyncSQLClient
 from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -46,7 +45,7 @@ from application_sdk.workflows.metadata_extraction.sql import (
 
 APPLICATION_NAME = "postgres"
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 class PostgreSQLClient(AsyncSQLClient):

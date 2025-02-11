@@ -6,7 +6,6 @@ database operations, supporting batch processing and server-side cursors.
 """
 
 import asyncio
-import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
@@ -17,9 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_en
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+activity.logger = get_logger(__name__)
 
 
 class SQLConstants(Enum):
@@ -133,7 +132,7 @@ class SQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                logger.error(f"Error running query in batch: {e}")
+                activity.logger.error(f"Error running query in batch: {e}")
                 raise e
 
         activity.logger.info("Query execution completed")
@@ -214,7 +213,7 @@ class AsyncSQLClient(SQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            logger.error(f"Error executing query: {e}", exc_info=True)
+            activity.logger.error(f"Error executing query: {e}", exc_info=True)
             raise
 
         activity.logger.info("Query execution completed")

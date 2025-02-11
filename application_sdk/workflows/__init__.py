@@ -12,7 +12,10 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
+
+logger = get_logger(__name__)
 
 
 @workflow.defn
@@ -65,18 +68,29 @@ class WorkflowInterface(ABC):
             workflow_id
         )
 
-        workflow_run_id = workflow.info().run_id
-        workflow_args["workflow_run_id"] = workflow_run_id
-
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
+        logger.info(
+            "Starting workflow execution",
         )
 
-        await workflow.execute_activity_method(
-            self.activities_cls.preflight_check,
-            args=[workflow_args],
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
-            heartbeat_timeout=timedelta(seconds=120),
-        )
+        try:
+            workflow_run_id = workflow.info().run_id
+            workflow_args["workflow_run_id"] = workflow_run_id
+
+            retry_policy = RetryPolicy(
+                maximum_attempts=6,
+                backoff_coefficient=2,
+            )
+
+            result = await workflow.execute_activity_method(
+                self.activities_cls.preflight_check,
+                args=[workflow_args],
+                retry_policy=retry_policy,
+                start_to_close_timeout=timedelta(seconds=1000),
+            )
+
+            logger.info("Workflow completed successfully")
+            return result
+
+        except Exception as e:
+            logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
+            raise

@@ -1,13 +1,12 @@
-import logging
 from typing import Any, Dict, Iterator, Optional
 
 import pandas as pd
 from pyiceberg.table import Table
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 class IcebergInput(Input):

@@ -1,14 +1,13 @@
 import asyncio
-import logging
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 
-logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+logger = get_logger(__name__)
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
