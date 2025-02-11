@@ -33,13 +33,13 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
 
         logger.setLevel(LOG_LEVEL)
 
-        # Create OTLP formatter with detailed format for workflow/activity logs
+        # Create formatter
         atlan_formatter = logging.Formatter(
             "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
         )
 
         try:
-            # Single console handler with conditional formatting
+            # Single console handler
             console_handler = logging.StreamHandler()
             console_handler.setFormatter(atlan_formatter)
             logger.addHandler(console_handler)
