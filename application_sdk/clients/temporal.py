@@ -348,8 +348,10 @@ class TemporalClient(ClientInterface):
                     *passthrough_modules
                 )
             ),
-            interceptors=[EventInterceptor()],
             max_concurrent_activities=max_concurrent_activities,
+            # Disabled EventInterceptor for now
+            # interceptors=[EventInterceptor()],
+            interceptors=[],
         )
 
     async def get_workflow_run_status(
