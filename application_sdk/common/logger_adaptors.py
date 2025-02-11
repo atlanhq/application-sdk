@@ -131,7 +131,7 @@ class AtlanLoggerAdapter:
                 workflow_context = (
                     "\nWorkflow Context:"
                     f"\n  Workflow ID: <m>{workflow_info.workflow_id}</m>"
-                    f"\n  Run ID: <b>{workflow_info.run_id}</b>"
+                    f"\n  Run ID: <e>{workflow_info.run_id}</e>"
                     f"\n  Type: <g>{workflow_info.workflow_type}</g>"
                 )
                 msg = f"{msg}{workflow_context}"
@@ -161,7 +161,7 @@ class AtlanLoggerAdapter:
                     "\nActivity Context:"
                     f"\n  Activity ID: {activity_info.activity_id}"
                     f"\n  Workflow ID: <m>{activity_info.workflow_id}</m>"
-                    f"\n  Run ID: <b>{activity_info.workflow_run_id}</b>"
+                    f"\n  Run ID: <e>{activity_info.workflow_run_id}</e>"
                     f"\n  Type: <g>{activity_info.activity_type}</g>"
                 )
                 msg = f"{msg}{activity_context}"
