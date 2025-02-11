@@ -31,8 +31,8 @@ def test_process_with_workflow_context(logger_adapter: AtlanLoggerAdapter):
         msg, kwargs = logger_adapter.process("Test message", {})
 
         assert "extra" in kwargs
-        assert kwargs["extra"]["run_id"] == "test_run_id"
-        assert kwargs["extra"]["workflow_id"] == "test_workflow_id"
+        assert kwargs["run_id"] == "test_run_id"
+        assert kwargs["workflow_id"] == "test_workflow_id"
         assert msg == "Test message"
 
 
@@ -49,9 +49,9 @@ def test_process_with_activity_context(logger_adapter: AtlanLoggerAdapter):
         msg, kwargs = logger_adapter.process("Test message", {})
 
         assert "extra" in kwargs
-        assert kwargs["extra"]["run_id"] == "test_run_id"
-        assert kwargs["extra"]["workflow_id"] == "test_workflow_id"
-        assert kwargs["extra"]["activity_id"] == "test_activity_id"
+        assert kwargs["run_id"] == "test_run_id"
+        assert kwargs["workflow_id"] == "test_workflow_id"
+        assert kwargs["activity_id"] == "test_activity_id"
         assert msg == "Test message"
 
 
@@ -64,14 +64,14 @@ def test_process_without_context(logger_adapter: AtlanLoggerAdapter):
 
             # Ensure process id and thread id are added
             assert "extra" in kwargs
-            assert "process_id" in kwargs["extra"]
-            assert "thread_id" in kwargs["extra"]
+            assert "process_id" in kwargs
+            assert "thread_id" in kwargs
 
-            del kwargs["extra"]["process_id"]
-            del kwargs["extra"]["thread_id"]
+            del kwargs["process_id"]
+            del kwargs["thread_id"]
 
             # Ensure no extra information is added
-            assert kwargs["extra"] == {}
+            assert kwargs == {}
             assert msg == "Test message"
 
 
