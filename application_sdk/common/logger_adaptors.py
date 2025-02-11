@@ -34,26 +34,12 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
         logger.setLevel(LOG_LEVEL)
 
         # Create OTLP formatter with detailed format for workflow/activity logs
-        workflow_formatter = logging.Formatter(
-            "%(asctime)s [%(levelname)s] %(name)s - %(message)s "
-            "[workflow_id=%(workflow_id)s] "
-            "[run_id=%(run_id)s] "
-            "[activity_id=%(activity_id)s] "
-            "[workflow_type=%(workflow_type)s]",
-            defaults={
-                "workflow_id": "N/A",
-                "run_id": "N/A",
-                "activity_id": "N/A",
-                "workflow_type": "N/A",
-            },
-        )
+        atlan_formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
 
         try:
             # Single console handler with conditional formatting
             console_handler = logging.StreamHandler()
-            console_handler.setFormatter(
-                logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s ")
-            )
+            console_handler.setFormatter(atlan_formatter)
             logger.addHandler(console_handler)
 
             # OTLP handler setup
@@ -104,7 +90,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                     level=getattr(logging, LOG_LEVEL, logging.INFO),
                     logger_provider=logger_provider,
                 )
-                otlp_handler.setFormatter(workflow_formatter)
+                otlp_handler.setFormatter(atlan_formatter)
                 logger.addHandler(otlp_handler)
 
         except Exception as e:
