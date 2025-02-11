@@ -12,6 +12,7 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
+from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -142,34 +143,57 @@ class Output(ABC):
         """
         pass
 
-    def get_metadata(self) -> Any:
-        """Get metadata about the output."""
-        pass
+    async def get_statistics(
+        self, typename: Optional[str] = None
+    ) -> ActivityStatistics:
+        """Returns statistics about the output.
 
-    async def write_metadata(self):
-        """Write metadata about the output to a JSON file.
+        This method returns a ActivityStatistics object with total record count and chunk count.
 
-        This method writes metadata including total record count and chunk count
+        Args:
+            typename (str): Type name of the entity e.g database, schema, table.
+
+        Raises:
+            ValidationError: If the statistics data is invalid
+            Exception: If there's an error writing the statistics
+        """
+        try:
+            statistics = await self.write_statistics()
+            if not statistics:
+                raise ValueError("No statistics data available")
+            statistics = ActivityStatistics.model_validate(statistics)
+            if typename:
+                statistics.typename = typename
+            return statistics
+        except Exception as e:
+            activity.logger.error(f"Error getting statistics: {str(e)}")
+            raise
+
+    async def write_statistics(self) -> Optional[Dict[str, Any]]:
+        """Write statistics about the output to a JSON file.
+
+        This method writes statistics including total record count and chunk count
         to a JSON file and uploads it to the object store.
 
         Raises:
-            Exception: If there's an error writing or uploading the metadata.
+            Exception: If there's an error writing or uploading the statistics.
         """
         try:
-            # prepare the metadata
-            metadata = {
-                "total_record_count": [self.total_record_count],
-                "chunk_count": [self.chunk_count],
+            # prepare the statistics
+            statistics = {
+                "total_record_count": self.total_record_count,
+                "chunk_count": self.chunk_count,
             }
 
-            # Write the metadata to a json file
-            output_file_name = f"{self.output_path}/metadata.json.ignore"
-            dataframe = pd.DataFrame(metadata)
+            # Write the statistics to a json file
+            output_file_name = f"{self.output_path}/statistics.json.ignore"
+            dataframe = pd.DataFrame(statistics, index=[0])
             dataframe.to_json(output_file_name, orient="records", lines=True)
 
             # Push the file to the object store
             await ObjectStoreOutput.push_file_to_object_store(
                 self.output_prefix, output_file_name
             )
+            return statistics
         except Exception as e:
-            activity.logger.error(f"Error writing metadata: {str(e)}")
+            activity.logger.error(f"Error writing statistics: {str(e)}")

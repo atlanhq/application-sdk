@@ -5,7 +5,6 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
-from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -226,17 +225,3 @@ class JsonOutput(Output):
 
         self.buffer.clear()
         self.current_buffer_size = 0
-
-    def get_metadata(self, typename: Optional[str] = None) -> ActivityStatistics:
-        """Get metadata about the output.
-
-        This method returns a ActivityStatistics object with total record count and chunk count.
-
-        Args:
-            typename (str): Type name of the entity e.g database, schema, table.
-        """
-        return ActivityStatistics(
-            total_record_count=self.total_record_count,
-            chunk_count=self.chunk_count,
-            typename=typename,
-        )
