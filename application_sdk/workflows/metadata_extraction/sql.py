@@ -66,8 +66,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_tables,
             activities.fetch_columns,
             activities.transform_data,
-            activities.write_type_metadata,
-            activities.write_raw_type_metadata,
         ]
 
     async def fetch_and_transform(
@@ -108,19 +106,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         if raw_stat.typename is None:
             raise ValueError("Invalid typename")
 
-        # Write the raw metadata
-        await workflow.execute_activity_method(
-            self.activities_cls.write_raw_type_metadata,
-            {
-                "total_record_count": raw_stat.total_record_count,
-                "chunk_count": raw_stat.chunk_count,
-                "typename": raw_stat.typename,
-                **workflow_args,
-            },
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
-        )
-
         batches, chunk_starts = self.get_transform_batches(
             raw_stat.chunk_count, raw_stat.typename
         )
@@ -151,19 +136,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             metadata_model = ActivityStatistics.model_validate(record_count)
             total_record_count += metadata_model.total_record_count
             chunk_count += metadata_model.chunk_count
-
-        # Write the transformed metadata
-        await workflow.execute_activity_method(
-            self.activities_cls.write_type_metadata,
-            {
-                "total_record_count": total_record_count,
-                "chunk_count": chunk_count,
-                "typename": raw_stat.typename,
-                **workflow_args,
-            },
-            retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
-        )
 
     def get_transform_batches(self, chunk_count: int, typename: str):
         """Get batches for parallel transformation processing.

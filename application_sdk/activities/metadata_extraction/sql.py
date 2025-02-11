@@ -234,7 +234,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="database")
+        return await raw_output.get_statistics(typename="database")
 
     @activity.defn
     @auto_heartbeater
@@ -259,7 +259,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="schema")
+        return await raw_output.get_statistics(typename="schema")
 
     @activity.defn
     @auto_heartbeater
@@ -287,7 +287,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="table")
+        return await raw_output.get_statistics(typename="table")
 
     @activity.defn
     @auto_heartbeater
@@ -315,41 +315,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="column")
-
-    @activity.defn
-    @auto_heartbeater
-    @transform(metadata_output=JsonOutput(output_suffix="/transformed"))
-    async def write_type_metadata(
-        self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
-    ):
-        """Write transformed metadata to output.
-
-        Args:
-            metadata_output: JsonOutput instance for writing metadata.
-            batch_input: Optional DataFrame containing input data.
-            **kwargs: Additional keyword arguments.
-        """
-        await metadata_output.write_metadata()
-
-    @activity.defn
-    @auto_heartbeater
-    @transform(metadata_output=JsonOutput(output_suffix="/raw"))
-    async def write_raw_type_metadata(
-        self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
-    ):
-        """Write raw metadata to the specified output destination.
-
-        This activity writes the metadata of raw entities to the configured output path.
-        It is typically used to store raw data fetched from the source database before
-        any transformations are applied.
-
-        Args:
-            metadata_output (JsonOutput): Output handler for metadata.
-            batch_input (Optional[Any], optional): Input data. Defaults to None.
-            **kwargs: Additional keyword arguments.
-        """
-        await metadata_output.write_metadata()
+        return await raw_output.get_statistics(typename="column")
 
     @activity.defn
     @auto_heartbeater
@@ -384,4 +350,4 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 kwargs,
             )
             await transformed_output.write_dataframe(transformed_chunk)
-        return transformed_output.get_metadata()
+        return await transformed_output.get_statistics()

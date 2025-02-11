@@ -23,6 +23,7 @@ def mock_logger():
 @pytest.fixture
 def logger_adapter():
     """Create a logger adapter instance."""
+
     # Mock environment variables
     with mock.patch.dict(
         "os.environ",
