@@ -5,15 +5,12 @@ from functools import wraps
 from typing import Any, Callable, Dict, Iterator, Optional, Union
 
 import pandas as pd
-import uvloop
 
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-
 executor = ThreadPoolExecutor()
 
 

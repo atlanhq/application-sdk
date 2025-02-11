@@ -32,7 +32,6 @@ import time
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
-import uvloop
 from pyatlan.model.assets import Database
 
 from application_sdk.activities.metadata_extraction.sql import (
@@ -53,7 +52,6 @@ DATABASE_DRIVER = "psycopg2"
 DATABASE_DIALECT = "postgresql"
 
 logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class PostgreSQLClient(AsyncSQLClient):

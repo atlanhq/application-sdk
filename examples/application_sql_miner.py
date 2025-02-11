@@ -22,8 +22,6 @@ from datetime import datetime, timedelta
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
-import uvloop
-
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.temporal import TemporalClient
@@ -33,7 +31,7 @@ from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 APPLICATION_NAME = "snowflake"
 
 

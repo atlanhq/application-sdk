@@ -11,7 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Dict, List
 
-import uvloop
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
@@ -20,7 +19,6 @@ from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import get_logger
 
 activity.logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class SQLConstants(Enum):

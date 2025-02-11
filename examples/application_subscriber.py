@@ -2,7 +2,6 @@ import asyncio
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
-import uvloop
 from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
@@ -22,7 +21,6 @@ from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class SampleActivities(ActivitiesInterface):

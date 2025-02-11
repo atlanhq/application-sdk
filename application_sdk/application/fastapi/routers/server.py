@@ -17,14 +17,13 @@ import time
 import uuid
 
 import psutil
-import uvloop
 from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
 router = APIRouter(
     prefix="/server",
     tags=["server"],
