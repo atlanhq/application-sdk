@@ -102,8 +102,8 @@ def test_process_with_request_context(logger_adapter: AtlanLoggerAdapter):
     ) as mock_context:
         mock_context.get.return_value = {"request_id": "test_request_id"}
         msg, kwargs = logger_adapter.process("Test message", {})
-        assert "extra" in kwargs
-        assert kwargs["extra"]["request_id"] == "test_request_id"
+        assert "request_id" in kwargs
+        assert kwargs["request_id"] == "test_request_id"
 
 
 def test_get_logger():
