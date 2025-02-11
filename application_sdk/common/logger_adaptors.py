@@ -32,9 +32,7 @@ class AtlanLoggerAdapter:
         logger.remove()  # Remove default handler
 
         # Add console handler with markup=True to interpret color tags
-        format_str = (
-            "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{name}</cyan> - <level>{message}</level>"
-        )
+        format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{name}</cyan> - <level>{message}</level>"
         logger.add(sys.stderr, format=format_str, level=LOG_LEVEL, colorize=True)
 
         # OTLP handler setup
