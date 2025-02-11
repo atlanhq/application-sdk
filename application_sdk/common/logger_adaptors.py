@@ -2,11 +2,13 @@ import os
 import re
 import sys
 from contextvars import ContextVar
+from time import time_ns
 from typing import Any, MutableMapping, Tuple
 
 from loguru import logger
+from opentelemetry._logs import SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
@@ -24,15 +26,26 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
+# Add these constants
+SEVERITY_MAPPING = {
+    "DEBUG": SeverityNumber.DEBUG,
+    "INFO": SeverityNumber.INFO,
+    "WARNING": SeverityNumber.WARN,
+    "ERROR": SeverityNumber.ERROR,
+    "CRITICAL": SeverityNumber.FATAL,
+}
+
 
 class AtlanLoggerAdapter:
-    def __init__(self) -> None:
+    def __init__(self, logger_name: str) -> None:
         """Create the logger adapter with enhanced configuration."""
-        self.logger = logger.bind()
-        logger.remove()  # Remove default handler
+        self.logger_name = logger_name
+        # Bind the logger name when creating the logger instance
+        self.logger = logger
+        logger.remove()
 
-        # Add console handler with markup=True to interpret color tags
-        format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{name}</cyan> - <level>{message}</level>"
+        # Update format string to use the bound logger_name
+        format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
         self.logger.add(sys.stderr, format=format_str, level=LOG_LEVEL, colorize=True)
 
         # Store the color-enabled logger instance
@@ -54,7 +67,7 @@ class AtlanLoggerAdapter:
                 if workflow_node_name:
                     resource_attributes["k8s.workflow.node.name"] = workflow_node_name
 
-                logger_provider = LoggerProvider(
+                self.logger_provider = LoggerProvider(
                     resource=Resource.create(resource_attributes)
                 )
 
@@ -63,7 +76,6 @@ class AtlanLoggerAdapter:
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
                 )
 
-                # Create batch processor with custom emit method
                 batch_processor = BatchLogRecordProcessor(
                     exporter,
                     schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
@@ -71,46 +83,67 @@ class AtlanLoggerAdapter:
                     max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
                 )
 
-                logger_provider.add_log_record_processor(batch_processor)
-
-                # Create sink for OTLP
-                def otlp_sink(message):
-                    record = message.record
-                    # Define our own level mapping
-                    level_map = {
-                        "DEBUG": 10,
-                        "INFO": 20,
-                        "WARNING": 30,
-                        "ERROR": 40,
-                        "CRITICAL": 50,
-                    }
-                    logging_level = level_map.get(
-                        LOG_LEVEL, 20
-                    )  # Default to INFO level (20)
-
-                    handler = LoggingHandler(
-                        level=logging_level,
-                        logger_provider=logger_provider,
-                    )
-                    handler.emit(record)
+                self.logger_provider.add_log_record_processor(batch_processor)
 
                 # Add OTLP sink
-                logger.add(otlp_sink, level=LOG_LEVEL)
+                self.logger.add(self.otlp_sink, level=LOG_LEVEL)
 
             except Exception as e:
                 print(f"Failed to setup OTLP logging: {str(e)}")
+
+    def _create_log_record(self, record: dict) -> LogRecord:
+        """Create an OpenTelemetry LogRecord."""
+        severity_number = SEVERITY_MAPPING.get(
+            record["level"].name, SeverityNumber.UNSPECIFIED
+        )
+
+        # Start with base attributes
+        attributes = {
+            "code.filepath": str(record["file"].path),
+            "code.function": str(record["function"]),
+            "code.lineno": int(record["line"]),
+        }
+
+        # Add extra attributes at the same level
+        if "extra" in record:
+            for key, value in record["extra"].items():
+                if isinstance(value, (bool, int, float, str, bytes)):
+                    attributes[key] = value
+                else:
+                    attributes[key] = str(value)
+
+        return LogRecord(
+            timestamp=int(record["time"].timestamp() * 1e9),
+            observed_timestamp=time_ns(),
+            trace_id=0,
+            span_id=0,
+            trace_flags=0,
+            severity_text=record["level"].name,
+            severity_number=severity_number,
+            body=record["message"],
+            resource=self.logger_provider.resource,
+            attributes=attributes,
+        )
+
+    def otlp_sink(self, message):
+        """Process log message and emit to OTLP."""
+        try:
+            log_record = self._create_log_record(message.record)
+            self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
+        except Exception as e:
+            print(f"Error processing log record: {e}", file=sys.stderr)
 
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
     ) -> Tuple[Any, MutableMapping[str, Any]]:
         """Process the log message with temporal context."""
-        extra = kwargs.get("extra", {})
+        kwargs["logger_name"] = self.logger_name
 
         # Get request context
         try:
             ctx = request_context.get()
             if ctx and "request_id" in ctx:
-                extra["request_id"] = ctx["request_id"]
+                kwargs["request_id"] = ctx["request_id"]
         except Exception:
             pass
 
@@ -118,7 +151,7 @@ class AtlanLoggerAdapter:
         try:
             workflow_info = workflow.info()
             if workflow_info:
-                extra.update(
+                kwargs.update(
                     {
                         "workflow_id": workflow_info.workflow_id,
                         "run_id": workflow_info.run_id,
@@ -134,14 +167,14 @@ class AtlanLoggerAdapter:
                     f"\n  Run ID: <e>{workflow_info.run_id}</e>"
                     f"\n  Type: <g>{workflow_info.workflow_type}</g>"
                 )
-                msg = f"{msg}{workflow_context}"
+                msg = f"{msg} {workflow_context}"
         except Exception:
             pass
 
         try:
             activity_info = activity.info()
             if activity_info:
-                extra.update(
+                kwargs.update(
                     {
                         "workflow_id": activity_info.workflow_id,
                         "run_id": activity_info.workflow_run_id,
@@ -164,11 +197,10 @@ class AtlanLoggerAdapter:
                     f"\n  Run ID: <e>{activity_info.workflow_run_id}</e>"
                     f"\n  Type: <g>{activity_info.activity_type}</g>"
                 )
-                msg = f"{msg}{activity_context}"
+                msg = f"{msg} {activity_context}"
         except Exception:
             pass
 
-        kwargs["extra"] = extra
         return msg, kwargs
 
     def debug(self, msg: str, *args, **kwargs):
@@ -210,9 +242,10 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
     # If no name provided, use the caller's module name
     if name is None:
         name = __name__
-
+    # Create new logger instance if it doesn't exist
     if name not in _logger_instances:
-        _logger_instances[name] = AtlanLoggerAdapter()
+        _logger_instances[name] = AtlanLoggerAdapter(name)
+
     return _logger_instances[name]
 
 
