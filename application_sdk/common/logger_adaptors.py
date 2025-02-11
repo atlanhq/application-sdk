@@ -26,7 +26,7 @@ LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
 class AtlanLoggerAdapter:
-    def __init__(self, logger_name: str) -> None:
+    def __init__(self) -> None:
         """Create the logger adapter with enhanced configuration."""
         self.logger = logger.bind()
         logger.remove()  # Remove default handler
@@ -212,7 +212,7 @@ def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
         name = __name__
 
     if name not in _logger_instances:
-        _logger_instances[name] = AtlanLoggerAdapter(name)
+        _logger_instances[name] = AtlanLoggerAdapter()
     return _logger_instances[name]
 
 
