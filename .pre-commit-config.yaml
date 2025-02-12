@@ -19,3 +19,7 @@ repos:
         entry: isort
         types: [python]
         args: ["--profile", "black"]
+  - repo: https://github.com/RobertCraigie/pyright-python
+    rev: v1.1.379
+    hooks:
+      - id: pyright
