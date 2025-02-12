@@ -1,5 +1,7 @@
 """State store for the application."""
 
+import os
+
 import json
 from typing import Any, Dict
 
@@ -12,7 +14,7 @@ activity.logger = get_logger(__name__)
 
 
 class StateStoreInput:
-    STATE_STORE_NAME = "statestore"
+    STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 
     @classmethod
     def get_state(cls, key: str) -> Dict[str, Any]:
