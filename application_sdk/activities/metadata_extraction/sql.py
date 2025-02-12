@@ -1,6 +1,4 @@
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -10,7 +8,7 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
+from application_sdk.decorators import run_sync, transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -149,6 +147,57 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._clean_state()
 
+    @run_sync
+    def _process_rows(
+        self,
+        results: pd.DataFrame,
+        typename: str,
+        workflow_id: str,
+        workflow_run_id: str,
+        state: SQLMetadataExtractionActivitiesState,
+        connection_name: Optional[str],
+        connection_qualified_name: Optional[str],
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Process DataFrame rows and transform them into metadata.
+
+        Args:
+            results: DataFrame containing the rows to process
+            typename: Type of data being transformed
+            workflow_id: Current workflow ID
+            workflow_run_id: Current workflow run ID
+            state: Current activity state
+            connection_name: Name of the connection
+            connection_qualified_name: Qualified name of the connection
+
+        Returns:
+            list: List of transformed metadata dictionaries
+        """
+        transformed_metadata_list = []
+        for row in results.to_dict(orient="records"):
+            try:
+                if not state.transformer:
+                    raise ValueError("Transformer is not set")
+
+                transformed_metadata: Optional[Dict[str, Any]] = (
+                    state.transformer.transform_metadata(
+                        typename,
+                        row,
+                        workflow_id=workflow_id,
+                        workflow_run_id=workflow_run_id,
+                        connection_name=connection_name,
+                        connection_qualified_name=connection_qualified_name,
+                    )
+                )
+                if transformed_metadata is not None:
+                    transformed_metadata_list.append(transformed_metadata)
+                else:
+                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
+            except Exception as row_error:
+                activity.logger.error(
+                    f"Error processing row for {typename}: {row_error}"
+                )
+        return transformed_metadata_list
+
     async def _transform_batch(
         self,
         results,
@@ -157,22 +206,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
     ):
-        """Transform a batch of results into metadata.
-
-        Args:
-            results: The DataFrame containing the batch of results to transform.
-            typename: The type of data being transformed (e.g., 'database', 'schema', 'table').
-            workflow_id: The ID of the current workflow.
-            workflow_run_id: The run ID of the current workflow.
-            workflow_args: Dictionary containing workflow arguments and configuration.
-
-        Returns:
-            None
-
-        Raises:
-            ValueError: If the transformer is not properly set.
-        """
-
         state: SQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
@@ -187,40 +220,15 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        def process_rows():
-            """Helper function to process rows inside a thread pool."""
-            transformed_metadata_list = []
-            for row in results.to_dict(orient="records"):
-                try:
-                    if not state.transformer:
-                        raise ValueError("Transformer is not set")
-
-                    transformed_metadata: Optional[Dict[str, Any]] = (
-                        state.transformer.transform_metadata(
-                            typename,
-                            row,
-                            workflow_id=workflow_id,
-                            workflow_run_id=workflow_run_id,
-                            connection_name=connection_name,
-                            connection_qualified_name=connection_qualified_name,
-                        )
-                    )
-                    if transformed_metadata is not None:
-                        transformed_metadata_list.append(transformed_metadata)
-                    else:
-                        activity.logger.warning(
-                            f"Skipped invalid {typename} data: {row}"
-                        )
-                except Exception as row_error:
-                    activity.logger.error(
-                        f"Error processing row for {typename}: {row_error}"
-                    )
-            return transformed_metadata_list
-
-        # Run the blocking `process_rows` function in a thread pool
-        loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor() as pool:
-            transformed_metadata_list = await loop.run_in_executor(pool, process_rows)
+        transformed_metadata_list = await self._process_rows(
+            results,
+            typename,
+            workflow_id,
+            workflow_run_id,
+            state,
+            connection_name,
+            connection_qualified_name,
+        )
 
         return pd.DataFrame(transformed_metadata_list)
 
