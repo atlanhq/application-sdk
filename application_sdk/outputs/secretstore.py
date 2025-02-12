@@ -1,7 +1,6 @@
 """Secret store for the application."""
 
 import os
-
 import uuid
 from typing import Any, Dict
 

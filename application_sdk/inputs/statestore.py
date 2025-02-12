@@ -1,8 +1,7 @@
 """State store for the application."""
 
-import os
-
 import json
+import os
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
