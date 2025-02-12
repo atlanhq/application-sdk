@@ -20,6 +20,6 @@ repos:
         types: [python]
         args: ["--profile", "black"]
   - repo: https://github.com/RobertCraigie/pyright-python
-    rev: v1.1.379
+    rev: v1.1.393
     hooks:
       - id: pyright
