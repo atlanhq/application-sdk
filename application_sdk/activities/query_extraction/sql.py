@@ -155,11 +155,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Returns:
             None
         """
-        logger.info(
-            "Starting query fetch with batch size: %s",
-            len(batch_input) if batch_input else 0,
-        )
-
         try:
             await raw_output.write_batched_dataframe(batch_input)
 
