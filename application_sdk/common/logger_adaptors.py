@@ -9,7 +9,6 @@ from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from temporalio import activity, workflow
 
-
 # Create a context variable for request_id
 request_context: ContextVar[dict] = ContextVar("request_context", default={})
 
@@ -51,6 +50,7 @@ class AtlanLoggerAdapter(logging.LoggerAdapter):
                 resource_attributes = {
                     "service.name": SERVICE_NAME,
                     "service.version": SERVICE_VERSION,
+                    "k8s.log.type": "service-logs",
                 }
 
                 # Add workflow node name if running in Argo
