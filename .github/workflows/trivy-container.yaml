@@ -42,7 +42,7 @@ jobs:
           tags: "docker-trivy-tag"
 
       - name: Run Trivy vulnerability scanner and post comments
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.29.0
         with:
           image-ref: 'docker-trivy-tag:latest'
           format: 'table'
@@ -54,7 +54,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Post Trivy scan results as PR comment
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@0.29.0
         if: github.event_name == 'pull_request'
         with:
           image-ref: 'docker-trivy-tag:latest'
