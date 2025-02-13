@@ -55,7 +55,7 @@ class FastAPIApplication(AtlanApplicationInterface):
     temporal_client: Optional[TemporalClient]
 
     workflow_router: APIRouter = APIRouter()
-    dapr_router: APIRouter = APIRouter()
+    pubsub_router: APIRouter = APIRouter()
     events_router: APIRouter = APIRouter()
 
     workflows: List[WorkflowInterface] = []
@@ -84,7 +84,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         # Then include all routers
         self.app.include_router(get_server_router())
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
-        self.app.include_router(self.dapr_router, prefix="/dapr")
+        self.app.include_router(self.pubsub_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
     def register_workflow(
@@ -171,7 +171,7 @@ class FastAPIApplication(AtlanApplicationInterface):
             methods=["POST"],
         )
 
-        self.dapr_router.add_api_route(
+        self.pubsub_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
             methods=["GET"],
