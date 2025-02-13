@@ -11,7 +11,7 @@ jobs:
     if: ${{ github.event.pull_request.head.ref != 'develop' && github.event.pull_request.head.ref != 'master' }}
     steps:
       - name: Enforce Pull Request Title includes Jira Issue Key
-        uses: ryanvade/enforce-pr-title-style-action@v2.1.1
+        uses: ryanvade/enforce-pr-title-style-action@v2.1.2
         with:
           keyAnywhereInTitle: 'true'
       - name: Enforce Pull Request Title follows semantic commits
