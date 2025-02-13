@@ -36,10 +36,24 @@ class AtlanDocsGenerator:
 
         pages: List[Page] = []
 
+        # Generate index page content
+        # TODO: move this to a separate function
+
+        index_page_content = ""
+
+        index_page_content += f"# {manifest.name}\n\n"
+        index_page_content += f"{manifest.description}\n\n"
+
+        index_page_content += "## Supported Features\n\n"
+        index_page_content += "| Name | Supported | Notes |\n"
+        index_page_content += "|------|-----------|-------|\n"
+        for feature in manifest.customer.supported_features:
+            index_page_content += f"| {feature.name} | {'✅' if feature.supported else '❌'} | {feature.notes.strip()} |\n"
+
         index_page = Page(
             id="index",
-            title="Home",
-            content=manifest.description,
+            title=manifest.name,
+            content=index_page_content,
             last_updated=datetime.now().isoformat(),
             path="index.md",
         )
