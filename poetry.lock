@@ -1233,7 +1233,7 @@ files = [
 name = "duckdb"
 version = "1.2.0"
 description = "DuckDB in-process database"
-optional = true
+optional = false
 python-versions = ">=3.7.0"
 files = [
     {file = "duckdb-1.2.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:7452d3655063cc3062504b5b22f8968acb96ffcdc6c2b8207bbec9da1de1f884"},
@@ -1293,7 +1293,7 @@ files = [
 name = "duckdb-engine"
 version = "0.14.2"
 description = "SQLAlchemy driver for duckdb"
-optional = true
+optional = false
 python-versions = "<4,>=3.8"
 files = [
     {file = "duckdb_engine-0.14.2-py3-none-any.whl", hash = "sha256:9c0634e53b91a2b43bbd74b06f275eca80acd7ad02ebb0193ef6d9a22ed29b49"},
@@ -1324,7 +1324,7 @@ idna = ">=2.0.0"
 name = "faker"
 version = "8.16.0"
 description = "Faker is a Python package that generates fake data for you."
-optional = true
+optional = false
 python-versions = ">=3.6"
 files = [
     {file = "Faker-8.16.0-py3-none-any.whl", hash = "sha256:bb10913b9d3ac2aa37180f816c82040e81f9e0c32cb08445533f293cec8930bf"},
@@ -2769,7 +2769,7 @@ files = [
 name = "pandas"
 version = "2.2.3"
 description = "Powerful data structures for data analysis, time series, and statistics"
-optional = true
+optional = false
 python-versions = ">=3.9"
 files = [
     {file = "pandas-2.2.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:1948ddde24197a0f7add2bdc4ca83bf2b1ef84a1bc8ccffd95eda17fd836ecb5"},
@@ -4255,7 +4255,7 @@ doc = ["reno", "sphinx", "tornado (>=4.5)"]
 name = "text-unidecode"
 version = "1.3"
 description = "The most basic Text::Unidecode port"
-optional = true
+optional = false
 python-versions = "*"
 files = [
     {file = "text-unidecode-1.3.tar.gz", hash = "sha256:bad6603bb14d279193107714b288be206cac565dfa49aa5b105294dd5c4aab93"},
@@ -4835,10 +4835,9 @@ type = ["pytest-mypy"]
 [extras]
 daft = ["getdaft"]
 iceberg = ["pyiceberg"]
-scale-data-generator = ["duckdb", "duckdb-engine", "faker", "pandas", "pyarrow"]
 workflows = ["dapr", "pandas", "temporalio"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "dec4057eb2069859ca94c0fbdc632810759ee6fffadb3586d226d4870be3e70f"
+content-hash = "6c94a8689d51a25f654c0d1fa0df9b91b0f126e39eb7f92ea1bf1b0dc6c1aaa2"
