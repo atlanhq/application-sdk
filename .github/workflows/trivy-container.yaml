@@ -21,6 +21,7 @@ jobs:
       contents: read # for actions/checkout to fetch code
       security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
+      pull-requests: write # for commenting on PRs
     name: Build
     runs-on: "ubuntu-24.04"
     env:
@@ -40,26 +41,31 @@ jobs:
             "PRIVATE_REPO_ACCESS_TOKEN=${{ secrets.ORG_PAT_GITHUB }}"
           tags: "docker-trivy-tag"
 
-      - name: Run Trivy vulnerability scanner
+      - name: Run Trivy vulnerability scanner and post comments
         uses: aquasecurity/trivy-action@0.24.0
         with:
           image-ref: 'docker-trivy-tag:latest'
           format: 'table'
           severity: 'CRITICAL,HIGH'
+          exit-code: '1' # Fail the workflow if vulnerabilities are found
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
-      - name: Generate trivy results for GitHub Security tab
+      - name: Post Trivy scan results as PR comment
         uses: aquasecurity/trivy-action@0.24.0
+        if: github.event_name == 'pull_request'
         with:
           image-ref: 'docker-trivy-tag:latest'
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
+          exit-code: '0' # Don't fail here since we already failed above if needed
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
       - name: Upload Trivy scan results to GitHub Security tab
         uses: github/codeql-action/upload-sarif@v3
