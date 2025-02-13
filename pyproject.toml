@@ -45,6 +45,7 @@ iceberg = [
 pre-commit = "^3.8.0"
 isort = "^5.13.2"
 myst-parser = "^4.0.0"
+pydata-sphinx-theme = "^0.16.0"
 sphinx = "^8.1.3"
 graphviz = "^0.20.3"
 interrogate = "^1.7.0"
