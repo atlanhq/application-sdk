@@ -68,6 +68,7 @@ myst-parser = "^4.0.0"
 pylint = "^3.3.3"
 graphviz = "^0.20.3"
 interrogate = "^1.7.0"
+google-genai = "^1.2.0"
 
 [tool.poetry.group.test.dependencies]
 mock = "^5.1.0"
