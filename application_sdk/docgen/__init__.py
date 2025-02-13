@@ -1,5 +1,8 @@
+import argparse
+import http.server
 import logging
 import os
+import socketserver
 from datetime import datetime
 from typing import List
 
@@ -65,3 +68,38 @@ class AtlanDocsGenerator:
         mkdocs_exporter.export(pages=pages)
 
         self.logger.info(f"Documentation exported to {self.export_path}")
+
+
+def create_cli_parser():
+    parser = argparse.ArgumentParser(description="Atlan Documentation Generator CLI")
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+
+    # Build command
+    subparsers.add_parser("build", help="Build the documentation")
+
+    # Serve command
+    serve_parser = subparsers.add_parser("serve", help="Serve the documentation")
+    serve_parser.add_argument("--port", type=int, default=8000, help="Port to serve on")
+
+    return parser
+
+
+def setup_docs(docs_directory_path: str, export_path: str):
+    parser = create_cli_parser()
+    args = parser.parse_args()
+
+    generator = AtlanDocsGenerator(docs_directory_path, export_path)
+    generator.export()
+
+    os.chdir(export_path)
+    os.system("mkdocs build")
+
+    if args.command == "build":
+        print("Docs written to", export_path)
+    elif args.command == "serve":
+        print("Serving docs on port", args.port)
+        os.chdir("site")
+        handler = http.server.SimpleHTTPRequestHandler
+        with socketserver.TCPServer(("", args.port), handler) as httpd:
+            print(f"Serving at http://localhost:{args.port}")
+            httpd.serve_forever()
