@@ -64,7 +64,7 @@ def test_process_with_workflow_context(logger_adapter: AtlanLoggerAdapter):
         assert kwargs["namespace"] == "test_namespace"
         assert kwargs["task_queue"] == "test_queue"
         assert kwargs["attempt"] == 1
-        expected_msg = "Test message \nWorkflow Context:\n  Workflow ID: <m>test_workflow_id</m>\n  Run ID: <e>test_run_id</e>\n  Type: <g>test_workflow_type</g>"
+        expected_msg = "Test message Workflow Context: Workflow ID: <m>test_workflow_id</m> Run ID: <e>test_run_id</e> Type: <g>test_workflow_type</g>"
         assert msg == expected_msg
 
 
@@ -92,7 +92,7 @@ def test_process_with_activity_context(logger_adapter: AtlanLoggerAdapter):
         assert kwargs["attempt"] == 1
         assert kwargs["schedule_to_close_timeout"] == "30s"
         assert kwargs["start_to_close_timeout"] == "25s"
-        expected_msg = "Test message \nActivity Context:\n  Activity ID: test_activity_id\n  Workflow ID: <m>test_workflow_id</m>\n  Run ID: <e>test_run_id</e>\n  Type: <g>test_activity_type</g>"
+        expected_msg = "Test message Activity Context: Activity ID: test_activity_id Workflow ID: <m>test_workflow_id</m> Run ID: <e>test_run_id</e> Type: <g>test_activity_type</g>"
         assert msg == expected_msg
 
 

@@ -130,7 +130,7 @@ class AtlanLoggerAdapter:
             log_record = self._create_log_record(message.record)
             self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
         except Exception as e:
-            print(f"Error processing log record: {e}", file=sys.stderr)
+            self.logger.error(f"Error processing log record: {e}")
 
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
@@ -160,12 +160,7 @@ class AtlanLoggerAdapter:
                         "attempt": workflow_info.attempt,
                     }
                 )
-                workflow_context = (
-                    "\nWorkflow Context:"
-                    f"\n  Workflow ID: <m>{workflow_info.workflow_id}</m>"
-                    f"\n  Run ID: <e>{workflow_info.run_id}</e>"
-                    f"\n  Type: <g>{workflow_info.workflow_type}</g>"
-                )
+                workflow_context = "Workflow Context: Workflow ID: <m>{workflow_info.workflow_id}</m> Run ID: <e>{workflow_info.run_id}</e> Type: <g>{workflow_info.workflow_type}</g>"
                 msg = f"{msg} {workflow_context}"
         except Exception:
             pass
@@ -189,13 +184,7 @@ class AtlanLoggerAdapter:
                         ),
                     }
                 )
-                activity_context = (
-                    "\nActivity Context:"
-                    f"\n  Activity ID: {activity_info.activity_id}"
-                    f"\n  Workflow ID: <m>{activity_info.workflow_id}</m>"
-                    f"\n  Run ID: <e>{activity_info.workflow_run_id}</e>"
-                    f"\n  Type: <g>{activity_info.activity_type}</g>"
-                )
+                activity_context = "Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: <m>{activity_info.workflow_id}</m> Run ID: <e>{activity_info.workflow_run_id}</e> Type: <g>{activity_info.activity_type}</g>"
                 msg = f"{msg} {activity_context}"
         except Exception:
             pass
