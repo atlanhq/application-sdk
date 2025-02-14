@@ -88,7 +88,7 @@ class AtlanLoggerAdapter:
                 self.logger.add(self.otlp_sink, level=LOG_LEVEL)
 
             except Exception as e:
-                print(f"Failed to setup OTLP logging: {str(e)}")
+                self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord."""
