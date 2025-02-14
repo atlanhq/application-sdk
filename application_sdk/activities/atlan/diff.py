@@ -1,6 +1,7 @@
 import daft
 import duckdb
 from application_sdk.activities import ActivitiesInterface
+from temporalio import activity
 
 
 class DiffActivities(ActivitiesInterface):
@@ -70,3 +71,45 @@ class DiffActivities(ActivitiesInterface):
             "modified": daft.from_arrow(modified_entries_df),
         }
         return changes
+
+    @activity.defn
+    def calculate_atlas_diff(self, old_df: daft.DataFrame, new_df: daft.DataFrame) -> dict:
+        attributes_changes = self.calculate_diff(
+            old_df.select("typeName", "attributes.*"),
+            new_df.select("typeName", "attributes.*"),
+            ["typeName", "qualifiedName"],
+            ["lastWorkflowName"]
+        )
+
+        custom_attributes_changes = self.calculate_diff(
+            old_df.select("typeName", "customAttributes.*"),
+            new_df.select("typeName", "customAttributes.*"),
+            ["typeName", "qualifiedName"],
+            ["lastWorkflowName"]
+        )
+
+        classifications_changes = self.calculate_diff(
+            old_df.select("typeName", "classifications.*"),
+            new_df.select("typeName", "classifications.*"),
+            ["typeName", "qualifiedName"],
+            ["lastWorkflowName"]
+        )
+
+        return {
+            "attributes": {
+                "added": attributes_changes["added"].count_rows(),
+                "removed": attributes_changes["removed"].count_rows(),
+                "modified": attributes_changes["modified"].count_rows(),
+            },
+            "customAttributes": {
+                "added": custom_attributes_changes["added"].count_rows(),
+                "removed": custom_attributes_changes["removed"].count_rows(),
+                "modified": custom_attributes_changes["modified"].count_rows(),
+            },
+            "classifications": {
+                "added": classifications_changes["added"].count_rows(),
+                "removed": classifications_changes["removed"].count_rows(),
+                "modified": classifications_changes["modified"].count_rows(),
+            }
+        }
+
