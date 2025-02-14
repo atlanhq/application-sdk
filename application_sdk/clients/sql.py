@@ -110,7 +110,7 @@ class SQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info("Running query: {}", query)
+        activity.logger.info("Running query: {query}", query=query)
 
         with ThreadPoolExecutor() as pool:
             try:
