@@ -146,18 +146,17 @@ class AtlanLoggerAdapter:
         except Exception:
             pass
 
-        # Get temporal context
         try:
             workflow_info = workflow.info()
             if workflow_info:
                 kwargs.update(
                     {
-                        "workflow_id": workflow_info.workflow_id,
-                        "run_id": workflow_info.run_id,
-                        "workflow_type": workflow_info.workflow_type,
-                        "namespace": workflow_info.namespace,
-                        "task_queue": workflow_info.task_queue,
-                        "attempt": workflow_info.attempt,
+                        "workflow_id": workflow_info.workflow_id if workflow_info.workflow_id else "",
+                        "run_id": workflow_info.run_id if workflow_info.run_id else "",
+                        "workflow_type": workflow_info.workflow_type if workflow_info.workflow_type else "",
+                        "namespace": workflow_info.namespace if workflow_info.namespace else "",
+                        "task_queue": workflow_info.task_queue if workflow_info.task_queue else "",
+                        "attempt": workflow_info.attempt if workflow_info.attempt else 0,
                     }
                 )
                 workflow_context = "Workflow Context: Workflow ID: <m>{workflow_info.workflow_id}</m> Run ID: <e>{workflow_info.run_id}</e> Type: <g>{workflow_info.workflow_type}</g>"
@@ -170,17 +169,17 @@ class AtlanLoggerAdapter:
             if activity_info:
                 kwargs.update(
                     {
-                        "workflow_id": activity_info.workflow_id,
-                        "run_id": activity_info.workflow_run_id,
-                        "activity_id": activity_info.activity_id,
-                        "activity_type": activity_info.activity_type,
-                        "task_queue": activity_info.task_queue,
-                        "attempt": activity_info.attempt,
+                        "workflow_id": activity_info.workflow_id if activity_info.workflow_id else "",
+                        "run_id": activity_info.workflow_run_id if activity_info.workflow_run_id else "",
+                        "activity_id": activity_info.activity_id if activity_info.activity_id else "",
+                        "activity_type": activity_info.activity_type if activity_info.activity_type else "",
+                        "task_queue": activity_info.task_queue if activity_info.task_queue else "",
+                        "attempt": activity_info.attempt if activity_info.attempt else 0,
                         "schedule_to_close_timeout": str(
-                            activity_info.schedule_to_close_timeout
+                            activity_info.schedule_to_close_timeout if activity_info.schedule_to_close_timeout else 0
                         ),
                         "start_to_close_timeout": str(
-                            activity_info.start_to_close_timeout
+                            activity_info.start_to_close_timeout if activity_info.start_to_close_timeout else 0
                         ),
                     }
                 )
