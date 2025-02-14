@@ -444,44 +444,46 @@ class Column(assets.Column):
                 ),
                 connection_qualified_name=obj["connection_qualified_name"],
             )
-            sql_column.attributes.data_type = obj.get("data_type")
-            sql_column.attributes.is_nullable = obj.get("is_nullable", "YES") == "YES"
-            sql_column.attributes.is_partition = obj.get("is_partition", None) == "YES"
-            sql_column.attributes.partition_order = obj.get("partition_order", 0)
-            sql_column.attributes.is_primary = obj.get("primary_key", None) == "YES"
-            sql_column.attributes.is_foreign = obj.get("foreign_key", None) == "YES"
-            sql_column.attributes.max_length = obj.get("character_maximum_length", 0)
-            sql_column.attributes.numeric_scale = obj.get("numeric_scale", 0)
+
+            attributes = {}
+            attributes["data_type"] = obj.get("data_type")
+            attributes["is_nullable"] = obj.get("is_nullable", "YES") == "YES"
+            attributes["is_partition"] = obj.get("is_partition", None) == "YES"
+            attributes["partition_order"] = obj.get("partition_order", 0)
+            attributes["is_primary"] = obj.get("primary_key", None) == "YES"
+            attributes["is_foreign"] = obj.get("foreign_key", None) == "YES"
+            attributes["max_length"] = obj.get("character_maximum_length", 0)
+            attributes["numeric_scale"] = obj.get("numeric_scale", 0)
 
             if obj.get("decimal_digits", "") != "":
-                sql_column.attributes.precision = obj.get("decimal_digits")
+                attributes["precision"] = obj.get("decimal_digits")
 
-            if not sql_column.custom_attributes:
-                sql_column.custom_attributes = {}
+            custom_attributes = {}
 
-            sql_column.custom_attributes["is_self_referencing"] = obj.get(
+            custom_attributes["is_self_referencing"] = obj.get(
                 "is_self_referencing", "NO"
             )
 
             if obj.get("numeric_precision", "") != "":
-                sql_column.custom_attributes["numeric_precision"] = obj.get(
+                custom_attributes["numeric_precision"] = obj.get(
                     "numeric_precision", ""
                 )
 
-            sql_column.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
-            sql_column.custom_attributes["schema_id"] = obj.get("table_schema_id")
-            sql_column.custom_attributes["table_id"] = obj.get("table_id")
+            custom_attributes["catalog_id"] = obj.get("table_catalog_id")
+            custom_attributes["schema_id"] = obj.get("table_schema_id")
+            custom_attributes["table_id"] = obj.get("table_id")
 
-            sql_column.custom_attributes["character_octet_length"] = obj.get(
+            custom_attributes["character_octet_length"] = obj.get(
                 "character_octet_length", None
             )
-            sql_column.custom_attributes["is_auto_increment"] = obj.get(
-                "is_autoincrement"
-            )
-            sql_column.custom_attributes["is_generated"] = obj.get("is_generatedcolumn")
-            sql_column.custom_attributes["extra_info"] = obj.get("extra_info", None)
-            sql_column.custom_attributes["buffer_length"] = obj.get("buffer_length")
-            sql_column.custom_attributes["column_size"] = obj.get("column_size")
+            custom_attributes["is_auto_increment"] = obj.get("is_autoincrement")
+            custom_attributes["is_generated"] = obj.get("is_generatedcolumn")
+            custom_attributes["extra_info"] = obj.get("extra_info", None)
+            custom_attributes["buffer_length"] = obj.get("buffer_length")
+            custom_attributes["column_size"] = obj.get("column_size")
+
+            sql_column.attributes = assets.Column.Attributes(**attributes)
+            sql_column.custom_attributes = custom_attributes
 
             return sql_column
         except AssertionError as e:
