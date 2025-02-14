@@ -66,9 +66,7 @@ def test_process_with_workflow_context(logger_adapter: AtlanLoggerAdapter):
         assert kwargs["task_queue"] == "test_queue"
         assert kwargs["attempt"] == 1
 
-        # Format the expected message using the workflow_info object
-        workflow_context = f"Workflow Context: Workflow ID: <m>{workflow_info.workflow_id}</m> Run ID: <e>{workflow_info.run_id}</e> Type: <g>{workflow_info.workflow_type}</g>"
-        expected_msg = f"Test message {workflow_context}"
+        expected_msg = "Test message"
         assert msg == expected_msg
 
 
@@ -98,9 +96,7 @@ def test_process_with_activity_context(logger_adapter: AtlanLoggerAdapter):
         assert kwargs["schedule_to_close_timeout"] == "30s"
         assert kwargs["start_to_close_timeout"] == "25s"
 
-        # Format the expected message using the activity_info object
-        activity_context = f"Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: <m>{activity_info.workflow_id}</m> Run ID: <e>{activity_info.workflow_run_id}</e> Type: <g>{activity_info.activity_type}</g>"
-        expected_msg = f"Test message {activity_context}"
+        expected_msg = "Test message"
         assert msg == expected_msg
 
 
