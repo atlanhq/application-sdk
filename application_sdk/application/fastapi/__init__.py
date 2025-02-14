@@ -205,7 +205,7 @@ class FastAPIApplication(AtlanApplicationInterface):
                 logger.info(
                     "Triggering workflow {} with event {}",
                     trigger.workflow_class,
-                    event
+                    event,
                 )
 
                 await self.temporal_client.start_workflow(

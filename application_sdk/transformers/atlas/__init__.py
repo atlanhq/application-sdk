@@ -132,7 +132,7 @@ class AtlasTransformer(TransformerInterface):
                     "Error transforming {} entity: {}",
                     typename,
                     str(e),
-                    extra={"data": data}
+                    extra={"data": data},
                 )
                 return None
         else:
