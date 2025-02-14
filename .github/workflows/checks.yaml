@@ -3,9 +3,9 @@
 name: Pre-commit Checks
 on:
   workflow_call:
-  push:
   pull_request:
     types: [ opened, synchronize, labeled, reopened ]
+    branches: [ main, master, develop ]
 
 jobs:
   pre-commit:
@@ -35,3 +35,6 @@ jobs:
         poetry config virtualenvs.in-project true
         poetry install --no-root --without dev,test --extras "workflows"
     - uses: pre-commit/action@v3.0.1
+    - uses: webiny/action-conventional-commits@v1.3.0
+      with:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

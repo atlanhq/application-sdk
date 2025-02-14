@@ -89,6 +89,24 @@ async def prepare_fn_kwargs(
     return fn_kwargs
 
 
+def run_sync(func):
+    """Decorator to run a function in a thread pool executor.
+
+    Args:
+        func: The function to run in thread pool
+
+    Returns:
+        Wrapped async function that runs in thread pool
+    """
+
+    async def wrapper(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor() as pool:
+            return await loop.run_in_executor(pool, func, *args, **kwargs)
+
+    return wrapper
+
+
 async def run_process(
     fn: Callable[..., Any],
     get_dataframe_fn: Callable[..., Any],
