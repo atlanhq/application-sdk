@@ -11,7 +11,7 @@ activity.logger = get_logger(__name__)
 
 
 class ObjectStoreOutput:
-    OBJECT_STORE_NAME = "objectstore"
+    OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
     OBJECT_CREATE_OPERATION = "create"
 
     @classmethod
