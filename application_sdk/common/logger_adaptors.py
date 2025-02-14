@@ -149,42 +149,40 @@ class AtlanLoggerAdapter:
         try:
             workflow_info = workflow.info()
             if workflow_info:
-                kwargs.update(
-                    {
-                        "workflow_id": workflow_info.workflow_id if workflow_info.workflow_id else "",
-                        "run_id": workflow_info.run_id if workflow_info.run_id else "",
-                        "workflow_type": workflow_info.workflow_type if workflow_info.workflow_type else "",
-                        "namespace": workflow_info.namespace if workflow_info.namespace else "",
-                        "task_queue": workflow_info.task_queue if workflow_info.task_queue else "",
-                        "attempt": workflow_info.attempt if workflow_info.attempt else 0,
-                    }
-                )
-                workflow_context = "Workflow Context: Workflow ID: <m>{workflow_info.workflow_id}</m> Run ID: <e>{workflow_info.run_id}</e> Type: <g>{workflow_info.workflow_type}</g>"
-                msg = f"{msg} {workflow_context}"
+                workflow_context = {
+                    "workflow_id": workflow_info.workflow_id or "",
+                    "run_id": workflow_info.run_id or "",
+                    "workflow_type": workflow_info.workflow_type or "",
+                    "namespace": workflow_info.namespace or "",
+                    "task_queue": workflow_info.task_queue or "",
+                    "attempt": workflow_info.attempt or 0,
+                }
+                kwargs.update(workflow_context)
+                
+                # Only append workflow context if we have workflow info
+                workflow_msg = " Workflow Context: Workflow ID: {workflow_id} Run ID: {run_id} Type: {workflow_type}"
+                msg = f"{msg}{workflow_msg}"
         except Exception:
             pass
 
         try:
             activity_info = activity.info()
             if activity_info:
-                kwargs.update(
-                    {
-                        "workflow_id": activity_info.workflow_id if activity_info.workflow_id else "",
-                        "run_id": activity_info.workflow_run_id if activity_info.workflow_run_id else "",
-                        "activity_id": activity_info.activity_id if activity_info.activity_id else "",
-                        "activity_type": activity_info.activity_type if activity_info.activity_type else "",
-                        "task_queue": activity_info.task_queue if activity_info.task_queue else "",
-                        "attempt": activity_info.attempt if activity_info.attempt else 0,
-                        "schedule_to_close_timeout": str(
-                            activity_info.schedule_to_close_timeout if activity_info.schedule_to_close_timeout else 0
-                        ),
-                        "start_to_close_timeout": str(
-                            activity_info.start_to_close_timeout if activity_info.start_to_close_timeout else 0
-                        ),
-                    }
-                )
-                activity_context = "Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: <m>{activity_info.workflow_id}</m> Run ID: <e>{activity_info.workflow_run_id}</e> Type: <g>{activity_info.activity_type}</g>"
-                msg = f"{msg} {activity_context}"
+                activity_context = {
+                    "workflow_id": activity_info.workflow_id or "",
+                    "run_id": activity_info.workflow_run_id or "",
+                    "activity_id": activity_info.activity_id or "",
+                    "activity_type": activity_info.activity_type or "",
+                    "task_queue": activity_info.task_queue or "",
+                    "attempt": activity_info.attempt or 0,
+                    "schedule_to_close_timeout": str(activity_info.schedule_to_close_timeout or 0),
+                    "start_to_close_timeout": str(activity_info.start_to_close_timeout or 0),
+                }
+                kwargs.update(activity_context)
+                
+                # Only append activity context if we have activity info
+                activity_msg = " Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
+                msg = f"{msg}{activity_msg}"
         except Exception:
             pass
 
