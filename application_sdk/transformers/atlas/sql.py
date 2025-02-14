@@ -61,7 +61,10 @@ class Procedure(assets.Procedure):
                 connection_qualified_name=obj["connection_qualified_name"],
             )
 
-            procedure.sub_type = obj.get("procedure_type", "-1")
+            attributes = {}
+            attributes["sub_type"] = obj.get("procedure_type", "-1")
+
+            procedure.attributes = assets.Procedure.Attributes(**attributes)
 
             return procedure
         except AssertionError as e:
@@ -100,7 +103,10 @@ class Database(assets.Database):
                 connection_qualified_name=obj["connection_qualified_name"],
             )
 
-            database.attributes.schema_count = obj.get("schema_count", 0)
+            attributes = {}
+            attributes["schema_count"] = obj.get("schema_count", 0)
+
+            database.attributes = assets.Database.Attributes(**attributes)
 
             return database
         except AssertionError as e:
@@ -143,8 +149,11 @@ class Schema(assets.Schema):
                 connection_qualified_name=obj["connection_qualified_name"],
             )
 
-            schema.attributes.table_count = obj.get("table_count", 0)
-            schema.attributes.views_count = obj.get("views_count", 0)
+            attributes = {}
+            attributes["table_count"] = obj.get("table_count", 0)
+            attributes["views_count"] = obj.get("views_count", 0)
+
+            schema.attributes = assets.Schema.Attributes(**attributes)
 
             if not schema.custom_attributes:
                 schema.custom_attributes = {}
@@ -265,95 +274,97 @@ class Table(assets.Table):
                     connection_qualified_name=obj["connection_qualified_name"],
                 )
 
-            if table_type in [assets.View, assets.MaterialisedView]:
-                sql_table.attributes.definition = obj.get("view_definition", "")
+            attributes = {}
 
-            sql_table.attributes.column_count = obj.get("column_count", 0)
-            sql_table.attributes.row_count = obj.get("row_count", 0)
-            sql_table.attributes.size_bytes = obj.get("size_bytes", 0)
+            if table_type in [assets.View, assets.MaterialisedView]:
+                attributes["definition"] = obj.get("view_definition", "")
+
+            attributes["column_count"] = obj.get("column_count", 0)
+            attributes["row_count"] = obj.get("row_count", 0)
+            attributes["size_bytes"] = obj.get("size_bytes", 0)
 
             if hasattr(sql_table, "external_location"):
-                sql_table.external_location = obj.get("location", "")
+                attributes["external_location"] = obj.get("location", "")
 
             if hasattr(sql_table, "external_location_format"):
-                sql_table.external_location_format = obj.get("file_format_type", "")
+                attributes["external_location_format"] = obj.get("file_format_type", "")
 
             if hasattr(sql_table, "external_location_region"):
-                sql_table.external_location_region = obj.get("stage_region", "")
+                attributes["external_location_region"] = obj.get("stage_region", "")
 
             # Applicable only for Materialised Views
             if obj.get("refresh_mode", "") != "":
-                sql_table.refresh_mode = obj.get("refresh_mode")
+                attributes["refresh_mode"] = obj.get("refresh_mode")
 
             # Applicable only for Materialised Views
             if obj.get("staleness", "") != "":
-                sql_table.staleness = obj.get("staleness")
+                attributes["staleness"] = obj.get("staleness")
 
             # Applicable only for Materialised Views
             if obj.get("stale_since_date", "") != "":
-                sql_table.stale_since_date = obj.get("stale_since_date")
+                attributes["stale_since_date"] = obj.get("stale_since_date")
 
             # Applicable only for Materialised Views
             if obj.get("refresh_method", "") != "":
-                sql_table.refresh_method = obj.get("refresh_method")
+                attributes["refresh_method"] = obj.get("refresh_method")
+
+            custom_attributes = {}
 
             # Applicable only for Materialised Views
             if not sql_table.custom_attributes:
-                sql_table.custom_attributes = {}
-                sql_table.custom_attributes["table_type"] = table_type_value
+                custom_attributes["table_type"] = table_type_value
 
             if obj.get("is_transient", "") != "":
-                sql_table.custom_attributes["is_transient"] = obj.get("is_transient")
+                custom_attributes["is_transient"] = obj.get("is_transient")
 
             if obj.get("table_catalog_id", "") != "":
-                sql_table.custom_attributes["catalog_id"] = obj.get("table_catalog_id")
+                custom_attributes["catalog_id"] = obj.get("table_catalog_id")
 
             if obj.get("table_schema_id", "") != "":
-                sql_table.custom_attributes["schema_id"] = obj.get("table_schema_id")
+                custom_attributes["schema_id"] = obj.get("table_schema_id")
 
             if obj.get("last_ddl", "") != "":
-                sql_table.custom_attributes["last_ddl"] = obj.get("last_ddl")
+                custom_attributes["last_ddl"] = obj.get("last_ddl")
             if obj.get("last_ddl_by", "") != "":
-                sql_table.custom_attributes["last_ddl_by"] = obj.get("last_ddl_by")
+                custom_attributes["last_ddl_by"] = obj.get("last_ddl_by")
 
             if obj.get("is_secure", "") != "":
-                sql_table.custom_attributes["is_secure"] = obj.get("is_secure")
+                custom_attributes["is_secure"] = obj.get("is_secure")
 
             if obj.get("retention_time", "") != "":
-                sql_table.custom_attributes["retention_time"] = obj.get(
-                    "retention_time"
-                )
+                custom_attributes["retention_time"] = obj.get("retention_time")
 
             if obj.get("stage_url", "") != "":
-                sql_table.custom_attributes["stage_url"] = obj.get("stage_url")
+                custom_attributes["stage_url"] = obj.get("stage_url")
 
             if obj.get("is_insertable_into", "") != "":
-                sql_table.custom_attributes["is_insertable_into"] = obj.get(
+                custom_attributes["is_insertable_into"] = obj.get(
                     "is_insertable_into"
                 )
 
             if obj.get("number_columns_in_part_key", "") != "":
-                sql_table.custom_attributes["number_columns_in_part_key"] = obj.get(
+                custom_attributes["number_columns_in_part_key"] = obj.get(
                     "number_columns_in_part_key"
                 )
             if obj.get("columns_participating_in_part_key", "") != "":
-                sql_table.custom_attributes["columns_participating_in_part_key"] = (
+                custom_attributes["columns_participating_in_part_key"] = (
                     obj.get("columns_participating_in_part_key")
                 )
             if obj.get("is_typed", "") != "":
-                sql_table.custom_attributes["is_typed"] = obj.get("is_typed")
+                custom_attributes["is_typed"] = obj.get("is_typed")
 
             if obj.get("auto_clustering_on", "") != "":
-                sql_table.custom_attributes["auto_clustering_on"] = obj.get(
+                custom_attributes["auto_clustering_on"] = obj.get(
                     "auto_clustering_on"
                 )
 
-            sql_table.custom_attributes["engine"] = obj.get("engine")
+            custom_attributes["engine"] = obj.get("engine")
 
             if obj.get("auto_increment", "") != "":
-                sql_table.custom_attributes["auto_increment"] = obj.get(
-                    "auto_increment"
-                )
+                custom_attributes["auto_increment"] = obj.get("auto_increment")
+
+            sql_table.attributes = assets.Table.Attributes(**attributes)
+            sql_table.custom_attributes = custom_attributes
 
             return sql_table
         except AssertionError as e:
@@ -683,28 +694,30 @@ class Function(assets.Function):
                 schema_name=obj["function_schema"],
                 database_name=obj["function_catalog"],
             )
+
+            attributes = {}
             if "TABLE" in obj.get("data_type", None):
-                function.attributes.function_type = "Tabular"
+                attributes["function_type"] = "Tabular"
             else:
-                function.attributes.function_type = "Scalar"
-            function.attributes.function_return_type = obj.get("data_type", None)
-            function.attributes.function_language = obj.get("function_language", None)
-            function.attributes.function_definition = obj.get(
+                attributes["function_type"] = "Scalar"
+            attributes["function_return_type"] = obj.get("data_type", None)
+            attributes["function_language"] = obj.get("function_language", None)
+            attributes["function_definition"] = obj.get(
                 "function_definition", None
             )
-            function.attributes.function_arguments = list(
+            attributes["function_arguments"] = list(
                 obj.get("argument_signature", "()")[1:-1].split(",")
             )
-            function.attributes.function_is_secure = obj.get("is_secure", None) == "YES"
-            function.attributes.function_is_external = (
+            attributes["function_is_secure"] = obj.get("is_secure", None) == "YES"
+            attributes["function_is_external"] = (
                 obj.get("is_external", None) == "YES"
             )
-            function.attributes.function_is_d_m_f = (
-                obj.get("is_data_metric", None) == "YES"
-            )
-            function.attributes.function_is_memoizable = (
+            attributes["function_is_d_m_f"] = obj.get("is_data_metric", None) == "YES"
+            attributes["function_is_memoizable"] = (
                 obj.get("is_memoizable", None) == "YES"
             )
+
+            function.attributes = assets.Function.Attributes(**attributes)
 
             return function
         except AssertionError as e:
@@ -896,24 +909,23 @@ class TagAttachment(assets.TagAttachment):
             object_cat = obj.get("object_database", "")
             object_schema = obj.get("object_schema", "")
 
-            tag_attachment.attributes.object_database_qualified_name = (
+            attributes = {}
+            attributes["object_database_qualified_name"] = (
                 build_atlas_qualified_name(obj["connection_qualified_name"], object_cat)
             )
-            tag_attachment.attributes.object_schema_qualified_name = (
+            attributes["object_schema_qualified_name"] = (
                 build_atlas_qualified_name(
                     obj["connection_qualified_name"], object_cat, object_schema
                 )
             )
-            tag_attachment.attributes.object_database_name = object_cat
-            tag_attachment.attributes.object_schema_name = object_schema
-            tag_attachment.attributes.object_domain = obj.get("domain", None)
-            tag_attachment.attributes.object_name = obj.get("object_name", None)
-            tag_attachment.attributes.database_name = obj["tag_database"]
-            tag_attachment.attributes.schema_name = obj["tag_schema"]
-            tag_attachment.attributes.source_tag_id = obj.get("tag_id", None)
-            tag_attachment.attributes.tag_attachment_string_value = obj.get(
-                "tag_value", None
-            )
+            attributes["object_database_name"] = object_cat
+            attributes["object_schema_name"] = object_schema
+            attributes["object_domain"] = obj.get("domain", None)
+            attributes["object_name"] = obj.get("object_name", None)
+            attributes["database_name"] = obj["tag_database"]
+            attributes["schema_name"] = obj["tag_schema"]
+            attributes["source_tag_id"] = obj.get("tag_id", None)
+            attributes["tag_attachment_string_value"] = obj.get("tag_value", None)
 
             if object_domain := obj.get("domain", None):
                 object_cat = obj.get("object_cat", "")
@@ -949,7 +961,7 @@ class TagAttachment(assets.TagAttachment):
                         column_name,
                     )
 
-                tag_attachment.attributes.object_qualified_name = object_qualified_name
+                attributes["object_qualified_name"] = object_qualified_name
 
             if classification_defs := obj.get("classification_defs", []):
                 tag_name = obj.get("tag_name", "").upper()
@@ -963,18 +975,19 @@ class TagAttachment(assets.TagAttachment):
                     oldest_def = min(
                         matching_defs, key=lambda x: x.get("createTime", float("inf"))
                     )
-                    tag_attachment.mapped_classification_name = json.dumps(
+                    attributes["mapped_classification_name"] = json.dumps(
                         oldest_def.get("name")
                     )
                 else:
-                    tag_attachment.mapped_classification_name = json.dumps(
+                    attributes["mapped_classification_name"] = json.dumps(
                         obj.get("mappedClassificationName", "")
                     )
             else:
-                tag_attachment.mapped_classification_name = json.dumps(
+                attributes["mapped_classification_name"] = json.dumps(
                     obj.get("mappedClassificationName", "")
                 )
 
+            tag_attachment.attributes = assets.TagAttachment.Attributes(**attributes)
             return tag_attachment
         except Exception as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
