@@ -82,14 +82,13 @@ def test_process_with_activity_context(logger_adapter: AtlanLoggerAdapter):
             attempt=1,
             schedule_to_close_timeout="30s",
             start_to_close_timeout="25s",
-            heartbeat_timeout="10s",
         )
         mock_activity_info.return_value = activity_info
 
         msg, kwargs = logger_adapter.process("Test message", {})
 
         assert kwargs["workflow_id"] == "test_workflow_id"
-        assert kwargs["workflow_run_id"] == "test_run_id"
+        assert kwargs["run_id"] == "test_run_id"
         assert kwargs["activity_id"] == "test_activity_id"
         assert kwargs["activity_type"] == "test_activity_type"
         assert kwargs["task_queue"] == "test_queue"
