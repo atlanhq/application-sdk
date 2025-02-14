@@ -110,7 +110,7 @@ class SQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info(f"Running query: {query}")
+        activity.logger.info("Running query: {}", query)
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -187,7 +187,7 @@ class AsyncSQLClient(SQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info(f"Running query: {query}")
+        activity.logger.info("Running query: {}", query)
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
