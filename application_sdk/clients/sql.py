@@ -110,7 +110,7 @@ class SQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info(f"Running query: {query}")
+        activity.logger.info("Running query: {query}", query=query)
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -132,7 +132,9 @@ class SQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                activity.logger.error(f"Error running query in batch: {e}")
+                activity.logger.error(
+                    "Error running query in batch: {error}", error=str(e)
+                )
                 raise e
 
         activity.logger.info("Query execution completed")
@@ -187,7 +189,7 @@ class AsyncSQLClient(SQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info(f"Running query: {query}")
+        activity.logger.info("Running query: {query}", query=query)
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -213,7 +215,7 @@ class AsyncSQLClient(SQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error(f"Error executing query: {e}", exc_info=True)
+            activity.logger.error("Error executing query: {error}", error=str(e))
             raise
 
         activity.logger.info("Query execution completed")

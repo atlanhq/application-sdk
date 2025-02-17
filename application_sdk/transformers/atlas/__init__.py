@@ -128,7 +128,12 @@ class AtlasTransformer(TransformerInterface):
 
                 return entity.dict(by_alias=True, exclude_none=True)
             except Exception as e:
-                logger.error(f"Error deserializing {typename} entity {data}: {e}")
+                logger.error(
+                    "Error transforming {} entity: {}",
+                    typename,
+                    str(e),
+                    extra={"data": data},
+                )
                 return None
         else:
             logger.error(f"Unknown typename: {typename}")
