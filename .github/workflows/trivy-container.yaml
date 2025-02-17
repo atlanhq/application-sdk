@@ -12,7 +12,7 @@ on:
       skip-files:
         description: "Comma-separated list of files or directories to be skipped"
         required: true
-        type: strings
+        type: string
 
 permissions:
   contents: read
