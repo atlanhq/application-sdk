@@ -1,192 +1,134 @@
-import asyncio
 import os
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Union, cast
 
-import orjson
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pandas as pd
+import pyarrow as pa  # type: ignore
+import pyarrow.parquet as pq  # type: ignore
 from temporalio import activity
 
+from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
 
 
-class ChunkedObjectStoreWriterInterface(ABC):
-    """Abstract base class for chunked object store writers.
+class ParquetOutput(Output):
+    """Output handler for writing data to Parquet files.
 
-    This class provides a common interface for writing data in chunks to files
-    and uploading them to an object store.
+    This class handles writing DataFrames to Parquet files with support for chunking,
+    schema evolution, and automatic uploading to object store.
 
     Attributes:
-        local_file_prefix (str): Prefix for local file paths.
-        upload_file_prefix (str): Prefix for files when uploading to object store.
+        output_path (str): Path where Parquet files will be written.
+        output_prefix (str): Prefix for files when uploading to object store.
         chunk_size (int): Maximum number of records per chunk.
-        buffer_size (int): Size of the buffer in bytes.
-        current_file: Current file being written to.
-        current_file_name (str): Name of the current file.
-        current_file_number (int): Current chunk number.
-        current_record_count (int): Number of records in current chunk.
         total_record_count (int): Total number of records processed.
-        buffer (List[str]): Buffer holding records before writing.
-        current_buffer_size (int): Current size of the buffer.
+        chunk_count (int): Number of chunks created.
+        schema (Optional[pa.Schema]): Current schema for Parquet files.
     """
 
     def __init__(
         self,
-        local_file_prefix: str,
-        upload_file_prefix: str,
-        chunk_size: int = 30000,
-        buffer_size: int = 1024 * 1024 * 10,
-        start_file_number: int = 0,
-    ):  # 10MB buffer by default
-        """Initialize the chunked object store writer.
-
-        Args:
-            local_file_prefix (str): Prefix for local file paths.
-            upload_file_prefix (str): Prefix for files when uploading to object store.
-            chunk_size (int, optional): Maximum records per chunk. Defaults to 30000.
-            buffer_size (int, optional): Buffer size in bytes. Defaults to 10MB.
-            start_file_number (int, optional): Starting chunk number. Defaults to 0.
-        """
-        self.local_file_prefix = local_file_prefix
-        self.upload_file_prefix = upload_file_prefix
-        self.chunk_size = chunk_size
-        self.lock = asyncio.Lock()
-        self.current_file = None
-        self.current_file_name = None
-        self.current_file_number = start_file_number
-        self.current_record_count = 0
-        self.total_record_count = 0
-
-        self.buffer: List[str] = []
-        self.buffer_size = buffer_size
-        self.current_buffer_size = 0
-
-        os.makedirs(self.local_file_prefix, exist_ok=True)
-
-    @abstractmethod
-    async def write(self, data: Dict[str, Any]) -> None:
-        """Write a single record to the output.
-
-        Args:
-            data (Dict[str, Any]): Record to write.
-        """
-        raise NotImplementedError
-
-    async def write_list(self, data: List[Dict[str, Any]]) -> None:
-        """Write multiple records to the output.
-
-        Args:
-            data (List[Dict[str, Any]]): List of records to write.
-        """
-        for record in data:
-            await self.write(record)
-
-    @abstractmethod
-    async def close(self) -> int:
-        """Close the current file and clean up resources.
-
-        Returns:
-            int: Total number of records written.
-        """
-        raise NotImplementedError
-
-    async def close_current_file(self):
-        """Close the current file and upload it to object store.
-
-        This method closes the current file if one is open, uploads it to
-        the object store, and optionally removes the local copy.
-        """
-        if not self.current_file:
-            return
-
-        await self.current_file.close()
-        await self.upload_file(self.current_file_name)
-        # os.unlink(self.current_file_name)
-        activity.logger.info(
-            f"Uploaded file: {self.current_file_name} and removed local copy"
-        )
-
-    async def upload_file(self, local_file_path: str) -> None:
-        """Upload a file to the object store.
-
-        Args:
-            local_file_path (str): Path to the local file to upload.
-        """
-        activity.logger.info(
-            f"Uploading file: {local_file_path} to {self.upload_file_prefix}"
-        )
-        await ObjectStoreOutput.push_file_to_object_store(
-            self.upload_file_prefix, local_file_path
-        )
-
-    async def __aenter__(self):
-        """Enter the async context.
-
-        Returns:
-            ChunkedObjectStoreWriterInterface: The writer instance.
-        """
-        return self
-
-    async def __aexit__(self, exc_type, exc_value, traceback):
-        """Exit the async context.
-
-        Args:
-            exc_type: Type of the exception that occurred, if any.
-            exc_value: The exception instance that occurred, if any.
-            traceback: The traceback of the exception that occurred, if any.
-
-        Returns:
-            bool: False to propagate exceptions, if any.
-        """
-        await self.close()
-        return False
-
-
-class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
-    """Chunked object store writer for Parquet files.
-
-    This class handles writing data to Parquet files with support for schema
-    evolution and automatic uploading to object store.
-
-    Attributes:
-        schema (pq.ParquetSchema): Schema for the Parquet files.
-        parquet_writer_options (Dict[str, Any]): Options for Parquet writer.
-    """
-
-    def __init__(
-        self,
-        local_file_prefix: str,
-        upload_file_prefix: str,
+        output_suffix: str,
+        output_path: str,
+        output_prefix: str,
+        typename: Optional[str] = None,
+        state: Optional[ActivitiesState] = None,
         chunk_size: int = 100000,
-        schema: pq.ParquetSchema = None,
+        total_record_count: int = 0,
+        chunk_count: int = 0,
+        schema: Optional[Any] = None,  # type: ignore # pa.Schema not recognized by type checker
         parquet_writer_options: Dict[str, Any] = {},
+        **kwargs: Dict[str, Any],
     ):
-        """Initialize the Parquet writer.
+        """Initialize the Parquet output handler.
 
         Args:
-            local_file_prefix (str): Prefix for local file paths.
-            upload_file_prefix (str): Prefix for files when uploading to object store.
-            chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
-            schema (pq.ParquetSchema, optional): Initial schema. Defaults to None.
-            parquet_writer_options (Dict[str, Any], optional): Writer options.
+            output_path (str): Path where Parquet files will be written.
+            output_suffix (str): Suffix for output files.
+            output_prefix (str): Prefix for files where the files will be written and uploaded.
+            typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
+            state (Optional[ActivitiesState], optional): State of the activities.
+            chunk_size (int, optional): Maximum number of records per chunk.
+                Defaults to 100000.
+            total_record_count (int, optional): Initial total record count.
+                Defaults to 0.
+            chunk_count (int, optional): Initial chunk count.
+                Defaults to 0.
+            schema (Optional[pa.Schema], optional): Initial schema for Parquet files.
+                Defaults to None.
+            parquet_writer_options (Dict[str, Any], optional): Options for Parquet writer.
                 Defaults to {}.
         """
-        super().__init__(local_file_prefix, upload_file_prefix, chunk_size)
+        self.output_path = output_path
+        self.output_suffix = output_suffix
+        self.output_prefix = output_prefix
+        self.typename = typename
+        self.state = state
+        self.chunk_size = chunk_size
+        self.total_record_count = total_record_count
+        self.chunk_count = chunk_count
         self.schema = schema
         self.parquet_writer_options = parquet_writer_options
 
-    async def update_schema(self, new_schema: pq.ParquetSchema):
+    @classmethod
+    def re_init(
+        cls,
+        output_path: str,
+        typename: Optional[str] = None,
+        chunk_count: int = 0,
+        total_record_count: int = 0,
+        output_suffix: str = "",
+        **kwargs: Dict[str, Any],
+    ):
+        """Re-initialize the output class with given keyword arguments.
+
+        Args:
+            output_path (str): Path where Parquet files will be written.
+            typename (str, optional): Type name of the entity e.g database, schema, table.
+                Defaults to None.
+            chunk_count (int, optional): Initial chunk count.
+                Defaults to 0.
+            total_record_count (int, optional): Initial total record count.
+                Defaults to 0.
+            output_suffix (str, optional): Suffix for output files.
+                Defaults to empty string.
+            kwargs (Dict[str, Any]): Additional keyword arguments.
+        """
+        output_path = f"{output_path}{output_suffix}"
+        if typename:
+            output_path = f"{output_path}/{typename}"
+        os.makedirs(f"{output_path}", exist_ok=True)
+
+        # Extract output_prefix from kwargs or use output_path as default
+        output_prefix = str(kwargs.pop("output_prefix", output_path))
+
+        # Extract known parameters from kwargs
+        chunk_size = int(kwargs.pop("chunk_size", 100000))
+        state = cast(Optional[ActivitiesState], kwargs.pop("state", None))
+
+        return cls(
+            output_suffix=output_suffix,
+            output_path=output_path,
+            output_prefix=output_prefix,
+            typename=typename,
+            chunk_count=chunk_count,
+            total_record_count=total_record_count,
+            chunk_size=chunk_size,
+            state=state,
+            **kwargs,
+        )
+
+    async def update_schema(self, new_schema: Any):  # type: ignore # pa.Schema not recognized
         """Update the schema by merging with a new schema.
 
         This method handles schema evolution by merging the existing schema
         with new fields from the provided schema.
 
         Args:
-            new_schema (pq.ParquetSchema): New schema to merge with existing one.
+            new_schema (pa.Schema): New schema to merge with existing one.
         """
         if self.schema is None:
             self.schema = new_schema
@@ -198,69 +140,62 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
                     merged_fields.append(field)
             self.schema = pa.schema(merged_fields)
 
-    async def write(self, data: Dict[str, Any]) -> None:
-        """Write a single record to a Parquet file.
+    async def write_dataframe(self, dataframe: pd.DataFrame):
+        """Write a pandas DataFrame to Parquet files.
 
-        This method handles schema evolution and ensures the data conforms
-        to the current schema before writing.
+        This method writes the DataFrame to Parquet files, potentially splitting it
+        into chunks based on chunk_size settings.
 
         Args:
-            data (Dict[str, Any]): Record to write.
+            dataframe (pd.DataFrame): The DataFrame to write.
+
+        Note:
+            If the DataFrame is empty, the method returns without writing.
         """
-        async with self.lock:
-            if (
-                self.current_file is None
-                or self.current_record_count >= self.chunk_size
-            ):
-                await self._create_new_file()
+        if len(dataframe) == 0:
+            return
 
-            table = pa.Table.from_pydict(data)
-            new_schema = table.schema
+        try:
+            # Split the DataFrame into chunks
+            chunks = [
+                dataframe[i : i + self.chunk_size]
+                for i in range(0, len(dataframe), self.chunk_size)
+            ]
 
-            await self.update_schema(new_schema)
-            # Ensure the table conforms to the current schema
-            table = table.cast(self.schema)
-            self.current_file.write_table(table)
+            for chunk in chunks:
+                # Convert chunk to Arrow table and update schema
+                table = pa.Table.from_pandas(chunk)  # type: ignore
+                await self.update_schema(table.schema)
 
-            self.current_record_count += 1
-            self.total_record_count += 1
+                # Write chunk to Parquet file
+                self.chunk_count += 1
+                self.total_record_count += len(chunk)
+                output_file_name = f"{self.output_path}/{self.chunk_count}.parquet"
 
-    async def close(self) -> None:
-        """Close the current file and write metadata.
+                pq.write_table(  # type: ignore
+                    table.cast(self.schema),
+                    output_file_name,
+                    **self.parquet_writer_options,
+                )
 
-        This method closes the current file, writes metadata about the chunks,
-        and uploads both to the object store.
+                # Push the file to the object store
+                await ObjectStoreOutput.push_file_to_object_store(
+                    self.output_prefix, output_file_name
+                )
+
+        except Exception as e:
+            activity.logger.error(f"Error writing dataframe to parquet: {str(e)}")
+
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+        """Write a daft DataFrame to Parquet files.
+
+        This method converts the daft DataFrame to pandas and writes it to Parquet files.
+
+        Args:
+            dataframe (daft.DataFrame): The DataFrame to write.
+
+        Note:
+            Daft has built-in Parquet writing support, but we convert to pandas
+            to maintain consistency with schema evolution and chunking.
         """
-        await self.close_current_file()
-
-        # Write number of chunks
-        with open(f"{self.local_file_prefix}-metadata.json.ignore", mode="w") as f:
-            f.write(
-                orjson.dumps(
-                    {
-                        "total_record_count": self.total_record_count,
-                        "chunk_count": self.current_file_number,
-                    },
-                    option=orjson.OPT_APPEND_NEWLINE,
-                ).decode("utf-8")
-            )
-        await self.upload_file(f"{self.local_file_prefix}-metadata.json.ignore")
-
-    async def _create_new_file(self):
-        """Create a new Parquet file for writing.
-
-        This method closes the current file if one exists, creates a new file
-        with the current schema, and initializes it for writing.
-        """
-        await self.close_current_file()
-
-        self.current_file_number += 1
-        self.current_file_name = (
-            f"{self.local_file_prefix}_{self.current_file_number}.parquet"
-        )
-        self.current_file = pq.ParquetWriter(
-            self.current_file_name, self.schema, **self.parquet_writer_options
-        )
-
-        activity.logger.info(f"Created new file: {self.current_file_name}")
-        self.current_record_count = 0
+        await self.write_dataframe(dataframe.to_pandas())
