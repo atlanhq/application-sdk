@@ -8,6 +8,11 @@ on:
       ORG_PAT_GITHUB:
         required: true
 
+inputs:
+  who-to-greet:
+    description: Who to greet
+    required: true
+    default: World
 
 permissions:
   contents: read
