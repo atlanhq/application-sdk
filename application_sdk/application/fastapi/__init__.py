@@ -2,6 +2,7 @@ from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
@@ -25,6 +26,7 @@ from application_sdk.application.fastapi.utils import internal_server_error_hand
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
+from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
@@ -58,6 +60,9 @@ class FastAPIApplication(AtlanApplicationInterface):
     pubsub_router: APIRouter = APIRouter()
     events_router: APIRouter = APIRouter()
 
+    docs_directory_path: str = "docs"
+    docs_export_path: str = "dist"
+
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
 
@@ -75,7 +80,24 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.temporal_client = temporal_client
         self.app.add_middleware(LogMiddleware)
         self.register_routers()
+        self.setup_atlan_docs()
         super().__init__(handler)
+
+    def setup_atlan_docs(self):
+        docs_generator = AtlanDocsGenerator(
+            docs_directory_path=self.docs_directory_path,
+            export_path=self.docs_export_path,
+        )
+        try:
+            docs_generator.export()
+
+            self.app.mount(
+                "/atlandocs",
+                StaticFiles(directory=f"{self.docs_export_path}/site", html=True),
+                name="atlandocs",
+            )
+        except Exception as e:
+            logger.warning(str(e))
 
     def register_routers(self):
         # Register all routes first
