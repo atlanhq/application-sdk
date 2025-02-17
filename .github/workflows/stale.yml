@@ -7,8 +7,8 @@ name: Atlan Application to mark stale PRs and issues
 
 on:
   schedule:
-    #weekly At 00:00 on Sunday
-    - cron: 0 0 * * 0
+    #daily At 00:00
+    - cron: 0 0 * * *
   workflow_call: # Add this to make the workflow reusable
 
 jobs:
