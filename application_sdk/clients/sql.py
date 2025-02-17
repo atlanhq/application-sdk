@@ -132,7 +132,9 @@ class SQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                activity.logger.error("Error running query in batch: {error}", error=str(e))
+                activity.logger.error(
+                    "Error running query in batch: {error}", error=str(e)
+                )
                 raise e
 
         activity.logger.info("Query execution completed")

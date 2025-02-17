@@ -158,7 +158,7 @@ class AtlanLoggerAdapter:
                     "attempt": workflow_info.attempt or 0,
                 }
                 kwargs.update(workflow_context)
-                
+
                 # Only append workflow context if we have workflow info
                 workflow_msg = " Workflow Context: Workflow ID: {workflow_id} Run ID: {run_id} Type: {workflow_type}"
                 msg = f"{msg}{workflow_msg}"
@@ -175,11 +175,15 @@ class AtlanLoggerAdapter:
                     "activity_type": activity_info.activity_type or "",
                     "task_queue": activity_info.task_queue or "",
                     "attempt": activity_info.attempt or 0,
-                    "schedule_to_close_timeout": str(activity_info.schedule_to_close_timeout or 0),
-                    "start_to_close_timeout": str(activity_info.start_to_close_timeout or 0),
+                    "schedule_to_close_timeout": str(
+                        activity_info.schedule_to_close_timeout or 0
+                    ),
+                    "start_to_close_timeout": str(
+                        activity_info.start_to_close_timeout or 0
+                    ),
                 }
                 kwargs.update(activity_context)
-                
+
                 # Only append activity context if we have activity info
                 activity_msg = " Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
                 msg = f"{msg}{activity_msg}"
