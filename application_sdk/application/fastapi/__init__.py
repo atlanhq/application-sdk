@@ -199,11 +199,13 @@ class FastAPIApplication(AtlanApplicationInterface):
         if not self.temporal_client:
             raise Exception("Temporal client not initialized")
 
-        logger.info(f"Received event {event}")
+        logger.info("Received event {}", event)
         for trigger in self.event_triggers:
             if trigger.should_trigger_workflow(AtlanEvent(**event)):
                 logger.info(
-                    f"Triggering workflow {trigger.workflow_class} with event {event}"
+                    "Triggering workflow {} with event {}",
+                    trigger.workflow_class,
+                    event,
                 )
 
                 await self.temporal_client.start_workflow(
