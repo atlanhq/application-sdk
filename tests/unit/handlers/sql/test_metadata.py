@@ -1,11 +1,12 @@
 from typing import Any, Dict, Generic, List, TypeVar
-from unittest.mock import AsyncMock, MagicMock, call
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
+from application_sdk.config import ApplicationConfig
 
 T = TypeVar("T")
 
@@ -40,10 +41,20 @@ def handler(mock_sql_client: Any) -> SQLHandler:
     return handler
 
 
+@pytest.fixture
+def mock_config():
+    test_config = ApplicationConfig(
+        sql_chunk_size=1000,
+        json_chunk_size=1000
+    )
+    with patch('application_sdk.config.config', test_config):
+        yield test_config
+
+
 class TestSQLWorkflowHandler:
     @pytest.mark.asyncio
     async def test_fetch_metadata_flat_mode(
-        self, handler: MagicMock, mock_sql_client: MagicMock
+        self, handler: MagicMock, mock_sql_client: MagicMock, mock_config
     ) -> None:
         """Test fetch_metadata when hierarchical fetching is disabled (MetadataType.ALL)"""
         # Setup
@@ -464,3 +475,8 @@ class TestSQLWorkflowHandler:
         # Verify neither method was called
         mock_sql_client.run_query.assert_not_called()
         handler.prepare_metadata.assert_not_called()
+
+
+def test_metadata_handler(mock_config):
+    # Your test code here
+    pass

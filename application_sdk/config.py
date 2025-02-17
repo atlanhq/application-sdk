@@ -1,7 +1,7 @@
 import os
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ApplicationConfig(BaseModel):
@@ -26,6 +26,8 @@ class ApplicationConfig(BaseModel):
         temporal_heartbeat_timeout: Timeout for temporal heartbeats in seconds
         sql_use_server_side_cursor: Whether to use server-side cursors for SQL queries
     """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="allow")
 
     # SQL Settings
     sql_chunk_size: int = Field(

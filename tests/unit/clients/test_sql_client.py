@@ -7,6 +7,7 @@ import pytest
 
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
+from application_sdk.config import ApplicationConfig
 
 
 @pytest.fixture
@@ -140,7 +141,7 @@ async def test_fetch_metadata_with_error(
     new_callable=MagicMock,
 )
 async def test_run_query(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient, mock_config
 ):
     # Mock the query text
     query = "SELECT * FROM test_table"
