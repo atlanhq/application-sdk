@@ -64,12 +64,12 @@ jobs:
       # install dependencies if cache does not exist
       #----------------------------------------------
       - name: Install dependencies
-        # if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
+        if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
         run: poetry install --no-interaction --no-root --extras "iceberg workflows daft"
 
       - name: Run Unit and Integration Tests with Coverage
         run: |
-          poetry run coverage run -m pytest tests/ -q --tb=short --hypothesis-show-statistics
+          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
           poetry run coverage xml
           poetry run coverage report
 
