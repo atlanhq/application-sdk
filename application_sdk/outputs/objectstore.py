@@ -12,6 +12,7 @@ activity.logger = get_logger(__name__)
 
 class ObjectStoreOutput:
     OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
+    CLOUD = os.getenv("CLOUD", "local")
     OBJECT_CREATE_OPERATION = "create"
 
     @classmethod
@@ -37,7 +38,12 @@ class ObjectStoreOutput:
                 raise e
 
             relative_path = os.path.relpath(file_path, output_prefix)
-            metadata = {"key": relative_path, "fileName": relative_path}
+            if cls.CLOUD == "local":
+                metadata = {"key": relative_path, "fileName": relative_path}
+            elif cls.CLOUD == "azure":
+                metadata = {"blobName": relative_path}
+            elif cls.CLOUD == "aws" | cls.CLOUD == "gcp":
+                metadata = {"key": relative_path}
 
             try:
                 client.invoke_binding(
