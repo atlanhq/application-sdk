@@ -69,7 +69,6 @@ pydata-sphinx-theme = "^0.16.0"
 myst-parser = "^4.0.0"
 pylint = "^3.3.3"
 graphviz = "^0.20.3"
-interrogate = "^1.7.0"
 
 [tool.poetry.group.test.dependencies]
 mock = "^5.1.0"
@@ -94,6 +93,3 @@ typeCheckingMode = "strict"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-
-[tool.interrogate]
-fail-under = 65
