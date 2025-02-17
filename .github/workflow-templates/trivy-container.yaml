@@ -19,7 +19,7 @@ on:
     inputs:
       skip-files:
         description: "Comma-separated list of files or directories to be skipped"
-        required: true
+        required: false
         type: string
 
 permissions:
