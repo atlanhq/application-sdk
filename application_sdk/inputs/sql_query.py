@@ -12,8 +12,8 @@ from sqlalchemy.orm.session import Session
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
-from application_sdk.inputs import Input
 from application_sdk.config import config
+from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
 

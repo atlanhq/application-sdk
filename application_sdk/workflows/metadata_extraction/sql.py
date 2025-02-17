@@ -17,9 +17,9 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.config import config
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
-from application_sdk.config import config
 
 workflow.logger = get_logger(__name__)
 
