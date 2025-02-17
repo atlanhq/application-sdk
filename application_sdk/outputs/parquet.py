@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, Optional, cast
 
 import pandas as pd
 import pyarrow as pa  # type: ignore
