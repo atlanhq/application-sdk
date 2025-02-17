@@ -15,6 +15,12 @@ on:
       - master
   schedule:
     - cron: '35 21 * * 3'
+  workflow_call:
+    inputs:
+      skip-files:
+        description: "Comma-separated list of files or directories to be skipped"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -53,7 +59,7 @@ jobs:
           image-ref: 'docker-trivy-tag:latest'
           format: 'table'
           severity: 'CRITICAL,HIGH'
-          skip-files: '/app/.venv/lib64/python3.12/site-packages/snowflake/connector/secret_detector.py'
+          skip-files: '${{ inputs.skip-files }}'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
@@ -65,7 +71,7 @@ jobs:
           format: 'sarif'
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
-          skip-files: '/app/.venv/lib64/python3.12/site-packages/snowflake/connector/secret_detector.py'
+          skip-files: '${{ inputs.skip-files }}'
         env:
           TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
