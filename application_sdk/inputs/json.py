@@ -6,6 +6,7 @@ import pandas as pd
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
+from application_sdk.config import config
 
 logger = get_logger(__name__)
 
@@ -21,7 +22,7 @@ class JsonInput(Input):
         path: str,
         file_names: Optional[List[str]] = None,
         download_file_prefix: Optional[str] = None,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: Optional[int] = config.json_chunk_size,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JsonInput class.

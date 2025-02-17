@@ -13,6 +13,7 @@ from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
+from application_sdk.config import config
 
 logger = get_logger(__name__)
 
@@ -86,7 +87,7 @@ class SQLQueryInput(Input):
         """
         self.query = query
         self.engine = engine
-        self.chunk_size = chunk_size
+        self.chunk_size = chunk_size or config.sql_chunk_size
         self.temp_table_sql_query = temp_table_sql_query
         if self.engine and isinstance(self.engine, AsyncEngine):
             self.async_session = sessionmaker(

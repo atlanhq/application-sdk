@@ -19,6 +19,7 @@ from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
+from application_sdk.config import config
 
 workflow.logger = get_logger(__name__)
 
@@ -42,7 +43,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     )
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
-    max_transform_concurrency: int = 5
+    max_transform_concurrency: int = config.max_transform_concurrency
 
     @staticmethod
     def get_activities(
