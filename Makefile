@@ -34,17 +34,3 @@ sphinx_docs:
 	sphinx-apidoc -o ./docs/reference ./application_sdk --tocfile index --module-first --separate --force
 	cd docs && make html
 
-# Generate Docstring Coverage Report
-docstring_coverage:
-	echo "### 📜 Docstring Coverage Report \n" > docstring-cov.md
-
-	poetry run interrogate application_sdk >> docstring-cov.md
-
-	echo "\n\n" >> docstring-cov.md
-	echo "<details><summary>Detailed Coverage Report</summary>" >> docstring-cov.md
-	echo "\n\`\`\`" >> docstring-cov.md
-
-	poetry run interrogate application_sdk -v >> docstring-cov.md
-
-	echo "\`\`\`" >> docstring-cov.md
-	echo "</details>" >> docstring-cov.md

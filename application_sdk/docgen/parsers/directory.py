@@ -1,10 +1,10 @@
 import enum
 import glob
-import logging
 import os
 from typing import Callable, List, Tuple
 
 import pydantic
+from loguru import logger
 
 
 class DocsSubDirectory(enum.Enum):
@@ -64,7 +64,7 @@ class DirectoryParser:
     """
 
     def __init__(self, docs_directory: str):
-        self.logger = logging.getLogger(__name__)
+        self.logger = logger
 
         self.docs_directory = docs_directory
 
