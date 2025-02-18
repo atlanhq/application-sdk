@@ -43,8 +43,7 @@ sqlalchemy = [
     "sqlalchemy"
 ]
 # Modules for iam auth support
-# contains boto3 and boto3-stubs
-# boto3-stubs is optional and is used for boto related type checking
+# contains boto3
 iam_auth = [
     "boto3",
 ]
@@ -59,7 +58,7 @@ pydata-sphinx-theme = "^0.16.0"
 pylint = "^3.3.3"
 sphinx = "^8.1.3"
 graphviz = "^0.20.3"
-boto3-stubs = {version = "^1.31.3", optional = true}
+boto3-stubs = {version = "^1.31.3", optional = true} # For boto related type checking
 
 [tool.poetry.group.test.dependencies]
 mock = "^5.1.0"
