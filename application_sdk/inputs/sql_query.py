@@ -87,7 +87,7 @@ class SQLQueryInput(Input):
         """
         self.query = query
         self.engine = engine
-        self.chunk_size = chunk_size or config.sql_chunk_size
+        self.chunk_size = chunk_size or settings.sql_chunk_size
         self.temp_table_sql_query = temp_table_sql_query
         if self.engine and isinstance(self.engine, AsyncEngine):
             self.async_session = sessionmaker(
