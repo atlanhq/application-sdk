@@ -25,7 +25,11 @@ def process_text(text: str, max_length: int = 100000) -> str:
     if len(text) > max_length:
         text = text[:max_length]
 
+    # Remove HTML tags
     text = re.sub(r"<[^>]+>", "", text)
+
+    # Normalize whitespace
+    text = re.sub(r"\s+", " ", text).strip()
 
     return text
 
