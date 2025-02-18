@@ -37,7 +37,11 @@ class ObjectStoreOutput:
                 raise e
 
             relative_path = os.path.relpath(file_path, output_prefix)
-            metadata = {"key": relative_path, "blobName": relative_path, "fileName": relative_path}
+            metadata = {
+                "key": relative_path,
+                "blobName": relative_path,
+                "fileName": relative_path,
+            }
 
             try:
                 client.invoke_binding(
