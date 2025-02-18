@@ -42,8 +42,11 @@ class ObjectStoreOutput:
                 metadata = {"key": relative_path, "fileName": relative_path}
             elif cls.CLOUD == "azure":
                 metadata = {"blobName": relative_path}
-            elif cls.CLOUD == "aws" | cls.CLOUD == "gcp":
+            elif cls.CLOUD == "aws" or cls.CLOUD == "gcp":
                 metadata = {"key": relative_path}
+            else:
+                activity.logger.error(f"Unsupported CLOUD provider: {cls.CLOUD}")
+                raise ValueError(f"Unsupported CLOUD provider: {cls.CLOUD}")
 
             try:
                 client.invoke_binding(
