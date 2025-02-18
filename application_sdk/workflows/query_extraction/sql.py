@@ -99,7 +99,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=timedelta(seconds=1000),
-            heartbeat_timeout=timedelta(seconds=10),
+            heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
         miner_activities: List[Coroutine[Any, Any, None]] = []
@@ -117,7 +117,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
                     activity_args,
                     retry_policy=retry_policy,
                     start_to_close_timeout=timedelta(seconds=1000),
-                    heartbeat_timeout=timedelta(seconds=10),
+                    heartbeat_timeout=self.default_heartbeat_timeout,
                 )
             )
 
