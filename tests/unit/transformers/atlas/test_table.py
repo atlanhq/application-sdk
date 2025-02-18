@@ -88,7 +88,7 @@ def test_table_transformation(
         transformed_data, expected_table, custom_attributes, is_custom=True
     )
 
-    # Special handling for description as it's JSON
+    # Direct comparison for description since it's processed text
     assert (
         transformed_data["attributes"]["description"]
         == expected_table["attributes"]["description"]
