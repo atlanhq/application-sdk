@@ -11,7 +11,6 @@ activity.logger = get_logger(__name__)
 
 
 class ObjectStoreOutput:
-    CLOUD = os.getenv("CLOUD", "local")
     OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
     OBJECT_CREATE_OPERATION = "create"
 
@@ -38,15 +37,7 @@ class ObjectStoreOutput:
                 raise e
 
             relative_path = os.path.relpath(file_path, output_prefix)
-            if cls.CLOUD == "local":
-                metadata = {"key": relative_path, "fileName": relative_path}
-            elif cls.CLOUD == "azure":
-                metadata = {"blobName": relative_path}
-            elif cls.CLOUD == "aws" or cls.CLOUD == "gcp":
-                metadata = {"key": relative_path}
-            else:
-                activity.logger.error(f"Unsupported CLOUD provider: {cls.CLOUD}")
-                raise ValueError(f"Unsupported CLOUD provider: {cls.CLOUD}")
+            metadata = {"key": relative_path, "blobName": relative_path, "fileName": relative_path}
 
             try:
                 client.invoke_binding(
