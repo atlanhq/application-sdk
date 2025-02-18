@@ -12,7 +12,7 @@ from sqlalchemy.orm.session import Session
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
-from application_sdk.config import config
+from application_sdk.config import settings
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
@@ -73,7 +73,7 @@ class SQLQueryInput(Input):
         self,
         query: str,
         engine: Optional[Union[Engine, str]] = None,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: Optional[int] = settings.sql_chunk_size,
         temp_table_sql_query: Optional[str] = None,
         **kwargs: Dict[str, Any],
     ):

@@ -1,17 +1,21 @@
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
+
 import pytest
 from application_sdk.inputs.json import JsonInput
+from application_sdk.config import ApplicationConfig
+
 
 @pytest.fixture
-def json_input(mock_config):  # Use the global mock_config
+def json_input(mock_config: ApplicationConfig) -> JsonInput:
     return JsonInput(
         path="/test_path",
         download_file_prefix="test_prefix",
         file_names=["test_file.json"],
     )
 
+
 @pytest.mark.asyncio
-async def test_init(json_input, mock_config):
+async def test_init(json_input: JsonInput, mock_config: ApplicationConfig) -> None:
     assert json_input.path.endswith("test_path")
     assert json_input.download_file_prefix == "test_prefix"
     assert json_input.file_names == ["test_file.json"]
@@ -23,7 +27,9 @@ async def test_init(json_input, mock_config):
 @patch(
     "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
 )
-async def test_not_download_file_that_exists(mock_download, mock_exists, json_input):
+async def test_not_download_file_that_exists(
+    mock_download: MagicMock, mock_exists: MagicMock, json_input: JsonInput
+) -> None:
     mock_exists.return_value = True
     await json_input.download_files()
     mock_download.assert_not_called()
@@ -34,7 +40,9 @@ async def test_not_download_file_that_exists(mock_download, mock_exists, json_in
 @patch(
     "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
 )
-async def test_download_file(mock_download, mock_exists, json_input):
+async def test_download_file(
+    mock_download: MagicMock, mock_exists: MagicMock, json_input: JsonInput
+) -> None:
     mock_exists.return_value = False
     await json_input.download_files()
     mock_download.assert_called_once_with(
@@ -43,6 +51,6 @@ async def test_download_file(mock_download, mock_exists, json_input):
     )
 
 
-def test_json_input(mock_config):
+def test_json_input(mock_config: ApplicationConfig) -> None:
     input_handler = JsonInput(path="test/path")
     assert input_handler.chunk_size == mock_config.json_chunk_size

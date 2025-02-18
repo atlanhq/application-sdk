@@ -11,7 +11,7 @@ from application_sdk.config import ApplicationConfig
 
 
 @pytest.fixture
-def sql_client():
+def sql_client() -> SQLClient:
     client = SQLClient()
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
@@ -26,7 +26,7 @@ def handler(sql_client: Any) -> SQLHandler:
 
 
 @patch("application_sdk.clients.sql.create_engine")
-def test_load(mock_create_engine: Any, sql_client: SQLClient):
+def test_load(mock_create_engine: MagicMock, sql_client: SQLClient) -> None:
     # Mock the engine and connection
     mock_engine = MagicMock()
     mock_connection = MagicMock()
@@ -48,7 +48,7 @@ def test_load(mock_create_engine: Any, sql_client: SQLClient):
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
-async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
+async def test_fetch_metadata(mock_run_query: MagicMock, handler: SQLHandler) -> None:
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     mock_run_query.return_value = pd.DataFrame(data)
@@ -69,7 +69,7 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, handler: SQLHandler
+    mock_run_query: MagicMock, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -93,7 +93,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, handler: SQLHandler
+    mock_run_query: MagicMock, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     mock_run_query.return_value = pd.DataFrame(data)
@@ -141,8 +141,11 @@ async def test_fetch_metadata_with_error(
     new_callable=MagicMock,
 )
 async def test_run_query(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient, mock_config
-):
+    mock_get_running_loop: MagicMock, 
+    mock_text: MagicMock, 
+    sql_client: SQLClient, 
+    mock_config: ApplicationConfig
+) -> None:
     # Mock the query text
     query = "SELECT * FROM test_table"
     mock_text.return_value = query
@@ -217,8 +220,10 @@ async def test_run_query(
     new_callable=MagicMock,
 )
 async def test_run_query_with_error(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient
-):
+    mock_get_running_loop: MagicMock, 
+    mock_text: MagicMock, 
+    sql_client: SQLClient
+) -> None:
     # Mock the query text
     query = "SELECT * FROM test_table"
     mock_text.return_value = query

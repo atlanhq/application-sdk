@@ -34,6 +34,7 @@ boto3 = "^1.31.3"
 boto3-stubs = "^1.31.3"
 starlette-context = "^0.3.6"
 pydantic = "^2.10.6"
+pydantic-settings = "^2.2.1"
 pyyaml = "^6.0.2"
 uvloop = "^0.21.0"
 
