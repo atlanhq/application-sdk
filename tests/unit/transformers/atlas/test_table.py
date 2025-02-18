@@ -90,7 +90,7 @@ def test_table_transformation(
 
     # Special handling for description as it's JSON
     assert (
-        json.loads(transformed_data["attributes"]["description"])
+        transformed_data["attributes"]["description"]
         == expected_table["attributes"]["description"]
     )
 

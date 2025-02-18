@@ -85,7 +85,7 @@ def test_regular_schema_transformation(
 
     # Special handling for description as it's JSON
     assert (
-        json.loads(transformed_data["attributes"]["description"])
+        transformed_data["attributes"]["description"]
         == expected_schema["attributes"]["description"]
     )
 
