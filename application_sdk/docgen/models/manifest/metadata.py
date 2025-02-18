@@ -14,6 +14,7 @@ class DocsManifestMetadata(BaseModel):
         homepage (Optional[HttpUrl]): URL of the project homepage.
         supportEmail (Optional[EmailStr]): Email address for support.
         license (Optional[str]): License information.
+        repository (Optional[HttpUrl]): URL of the project repository.
         author (Optional[str]): Author information.
         metadata (Dict[str, Any]): Additional metadata as key-value pairs.
     """
@@ -21,9 +22,10 @@ class DocsManifestMetadata(BaseModel):
     version: str
     name: str
     description: str
+    author: str
     keywords: List[str] = []
     homepage: Optional[HttpUrl] = None
     supportEmail: Optional[EmailStr] = None
     license: Optional[str] = None
-    author: Optional[str] = None
+    repository: Optional[HttpUrl] = None
     metadata: Dict[str, Any] = {}
