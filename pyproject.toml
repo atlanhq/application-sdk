@@ -47,7 +47,6 @@ sqlalchemy = [
 # boto3-stubs is optional and is used for boto related type checking
 iam_auth = [
     "boto3",
-    "boto3-stubs"
 ]
 
 
