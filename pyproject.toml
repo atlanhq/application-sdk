@@ -38,9 +38,6 @@ pyyaml = "^6.0.2"
 loguru = "^0.7.3"
 uvloop = "^0.21.0"
 langchain-core = {version = "^0.3.28", optional = true}
-langchain-openai = {version = "^0.2.14", optional = true}
-langchain = {version = "^0.3.13", optional = true}
-langchain-community = {version = "^0.3.13", optional = true}
 langgraph = {version = "^0.2.62", optional = true}
 
 [tool.poetry.extras]
@@ -64,11 +61,8 @@ scale_data_generator = [
 iceberg = [
     "pyiceberg"
 ]
-agent = [
+langgraph_agent = [
     "langchain-core",
-    "langchain-openai",
-    "langchain",
-    "langchain-community",
     "langgraph"
 ]
 
