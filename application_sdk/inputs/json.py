@@ -4,6 +4,7 @@ from typing import Any, Dict, Iterator, List, Optional
 import pandas as pd
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.config import get_settings
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
@@ -21,7 +22,7 @@ class JsonInput(Input):
         path: str,
         file_names: Optional[List[str]] = None,
         download_file_prefix: Optional[str] = None,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: Optional[int] = None,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JsonInput class.
@@ -30,11 +31,12 @@ class JsonInput(Input):
             path (str): The path to the input directory.
             file_names (Optional[List[str]]): The list of files to read.
             download_file_prefix (Optional[str]): The prefix path in object store.
-            chunk_size (Optional[int]): The chunk size to read the data.
+            chunk_size (Optional[int]): The chunk size to read the data. If None, uses config value.
             **kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
         self.path = path
-        self.chunk_size = chunk_size
+        settings = get_settings()
+        self.chunk_size = chunk_size or settings.json_chunk_size
         self.file_names = file_names
         self.download_file_prefix = download_file_prefix
 
