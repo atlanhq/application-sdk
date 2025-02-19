@@ -1,5 +1,4 @@
 import inspect
-import json
 import os
 from abc import abstractmethod
 from glob import glob
@@ -7,7 +6,6 @@ from typing import Any, Dict
 
 import orjson
 import pandas as pd
-import pandera as pa
 import pandera.extensions as extensions
 from pandera.io import from_yaml
 
@@ -126,8 +124,14 @@ class TestInterface:
         """
         tests_dir = os.path.dirname(inspect.getfile(cls))
         cls.config_file_path = f"{tests_dir}/config.yaml"
-        cls.extracted_output_base_path = "/tmp/output"
+        if not os.path.exists(cls.config_file_path):
+            raise FileNotFoundError(f"Config file not found: {cls.config_file_path}")
         cls.schema_base_path = f"{tests_dir}/schema"
+        if not os.path.exists(cls.schema_base_path):
+            raise FileNotFoundError(
+                f"Schema base path not found: {cls.schema_base_path}"
+            )
+        cls.extracted_output_base_path = "/tmp/output"
 
     def validate_data(self):
         """
@@ -159,11 +163,5 @@ class TestInterface:
 
             # We can have nested data in the json files, so we need to flatten it
             dataframe = pd.json_normalize(data)
-            try:
-                schema.validate(dataframe, lazy=True)
-                logger.info(f"Data Validation for {expected_file_postfix} successful")
-            except pa.errors.SchemaError as e:
-                logger.error(
-                    f"Data Validation for {expected_file_postfix} failed."
-                    f"\nError Report: {json.dumps(e.message, indent=2)}"
-                )
+            schema.validate(dataframe, lazy=True)
+            logger.info(f"Data Validation for {expected_file_postfix} successful")
