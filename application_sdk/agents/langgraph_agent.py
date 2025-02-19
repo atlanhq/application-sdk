@@ -1,13 +1,13 @@
 import uuid
 from typing import Any, Dict, Optional, cast
 
-from langgraph.graph import END, START, StateGraph, add_messages
-from langgraph.graph.state import CompiledStateGraph
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables.config import RunnableConfig
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from langgraph.graph import StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from application_sdk.agents.agent import AgentInterface
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 
 
 class LangGraphAgent(AgentInterface):
@@ -77,14 +77,14 @@ class LangGraphAgent(AgentInterface):
         """
         if self._state is None:
             self._state = {"messages": []}
-            
+
         initial_state = cast(Dict[str, Any], self._state)
-        
+
         if not self.graph:
             graph = self.compile_graph()
         else:
             graph = self.graph
-            
+
         try:
             if task:
                 initial_state["messages"].append(HumanMessage(content=task))
