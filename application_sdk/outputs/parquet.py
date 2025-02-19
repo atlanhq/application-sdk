@@ -1,7 +1,8 @@
 import asyncio
 import os
+import types
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional, Type
 
 import orjson
 import pyarrow as pa
@@ -9,6 +10,7 @@ import pyarrow.parquet as pq
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.config import get_settings
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
@@ -38,7 +40,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self,
         local_file_prefix: str,
         upload_file_prefix: str,
-        chunk_size: int = 30000,
+        chunk_size: Optional[int] = None,
         buffer_size: int = 1024 * 1024 * 10,
         start_file_number: int = 0,
     ):  # 10MB buffer by default
@@ -47,13 +49,14 @@ class ChunkedObjectStoreWriterInterface(ABC):
         Args:
             local_file_prefix (str): Prefix for local file paths.
             upload_file_prefix (str): Prefix for files when uploading to object store.
-            chunk_size (int, optional): Maximum records per chunk. Defaults to 30000.
+            chunk_size (Optional[int], optional): Maximum records per chunk. If None, uses config value.
             buffer_size (int, optional): Buffer size in bytes. Defaults to 10MB.
             start_file_number (int, optional): Starting chunk number. Defaults to 0.
         """
         self.local_file_prefix = local_file_prefix
         self.upload_file_prefix = upload_file_prefix
-        self.chunk_size = chunk_size
+        settings = get_settings()
+        self.chunk_size = chunk_size or settings.parquet_chunk_size
         self.lock = asyncio.Lock()
         self.current_file = None
         self.current_file_name = None
@@ -131,7 +134,12 @@ class ChunkedObjectStoreWriterInterface(ABC):
         """
         return self
 
-    async def __aexit__(self, exc_type, exc_value, traceback):
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_value: Optional[BaseException],
+        traceback: Optional[types.TracebackType],
+    ) -> bool:
         """Exit the async context.
 
         Args:
@@ -161,7 +169,7 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         self,
         local_file_prefix: str,
         upload_file_prefix: str,
-        chunk_size: int = 100000,
+        chunk_size: Optional[int] = None,
         schema: pq.ParquetSchema = None,
         parquet_writer_options: Dict[str, Any] = {},
     ):
@@ -170,7 +178,7 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         Args:
             local_file_prefix (str): Prefix for local file paths.
             upload_file_prefix (str): Prefix for files when uploading to object store.
-            chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
+            chunk_size (Optional[int], optional): Maximum records per chunk. If None, uses config value.
             schema (pq.ParquetSchema, optional): Initial schema. Defaults to None.
             parquet_writer_options (Dict[str, Any], optional): Writer options.
                 Defaults to {}.
