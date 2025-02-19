@@ -17,6 +17,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.config import get_settings
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
@@ -35,6 +36,8 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         activities_cls (Type[SQLMetadataExtractionActivities]): The activities class
             containing the implementation of metadata extraction operations.
         application_name (str): Name of the application, set to "sql-connector".
+        max_transform_concurrency (int): Maximum number of concurrent transformations.
+            Can be overridden via config.
     """
 
     activities_cls: Type[SQLMetadataExtractionActivities] = (
@@ -42,7 +45,21 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     )
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
-    max_transform_concurrency: int = 5
+
+    @property
+    def max_transform_concurrency(self) -> int:
+        """Get the maximum transform concurrency.
+
+        Returns:
+            int: The maximum number of concurrent transformations.
+            Uses the value from config if available, otherwise defaults to 5.
+        """
+        try:
+            settings = get_settings()
+            return settings.max_transform_concurrency
+        except Exception:
+            # If config is not available or there's an error, use default
+            return 5
 
     @staticmethod
     def get_activities(
