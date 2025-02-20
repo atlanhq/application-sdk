@@ -122,7 +122,9 @@ def calculate_version_bump(
             new_version = version.bump_minor()
             logging.info(f"Feature detected - bumping minor version to {new_version}")
         elif is_fix:
-            new_version = version.bump_patch()
+            # Patch was already bumped in the develop branch
+            version.prerelease = None
+            new_version = version
             logging.info(f"Fix detected - bumping patch version to {new_version}")
         else:
             new_version = current_version
