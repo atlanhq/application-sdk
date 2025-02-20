@@ -127,7 +127,9 @@ def calculate_version_bump(
             new_version = version
             logging.info(f"Fix detected - bumping patch version to {new_version}")
         else:
-            new_version = current_version
+            # No changes were detected in the commits
+            version.prerelease = None
+            new_version = version
             logging.info(
                 f"No version bump needed - current version {current_version} is a release"
             )
