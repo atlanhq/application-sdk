@@ -125,14 +125,11 @@ def calculate_version_bump(
             # Patch was already bumped in the develop branch
             version.prerelease = None
             new_version = version
-            logging.info(f"Fix detected - bumping patch version to {new_version}")
+            logging.info(f"Fix detected - bumping version to {new_version}")
         else:
-            # No changes were detected in the commits
+            # No changes were detected in the commits, remove the prerelease, as patch was already bumped in the develop branch
             version.prerelease = None
             new_version = version
-            logging.info(
-                f"No version bump needed - current version {current_version} is a release"
-            )
 
         return str(new_version)
     else:
