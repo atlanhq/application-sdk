@@ -14,6 +14,16 @@ from application_sdk.docgen.parsers.manifest import ManifestParser
 
 
 class AtlanDocsGenerator:
+    """Docs Generator for Atlan Apps.
+
+    This class handles parsing documentation manifests, validating content,
+    and exporting the documentation to MkDocs format.
+
+    Args:
+        docs_directory_path (str): Path to the directory containing documentation files.
+        export_path (str): Path where the generated documentation will be exported.
+    """
+
     def __init__(self, docs_directory_path: str, export_path: str) -> None:
         self.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
 
@@ -25,6 +35,11 @@ class AtlanDocsGenerator:
         self.directory_parser = DirectoryParser(docs_directory=self.docs_directory_path)
 
     def verify(self):
+        """Verify the manifest content meets minimum requirements.
+
+        Raises:
+            ValueError: If manifest doesn't contain at least one page or supported feature.
+        """
         manifest = self.manifest_parser.parse_manifest()
 
         if len(manifest.customer.pages) == 0:
@@ -34,6 +49,19 @@ class AtlanDocsGenerator:
             raise ValueError("Manifest must contain at least one supported feature")
 
     def export(self):
+        """Export the documentation to MkDocs format.
+
+        This method:
+        1. Parses the manifest file
+        2. Validates the directory structure
+        3. Generates an index page with supported features
+        4. Processes all additional pages
+        5. Exports to MkDocs format
+        6. Builds the final MkDocs site
+
+        Raises:
+            Exception: Any exception that occurs during manifest parsing or export process.
+        """
         try:
             manifest = self.manifest_parser.parse_manifest()
         except Exception as e:
@@ -44,9 +72,6 @@ class AtlanDocsGenerator:
             self.logger.info(f"Directory validation - {attr}: {value}")
 
         pages: List[Page] = []
-
-        # Generate index page content
-        # TODO: move this to a separate function
 
         index_page_content = ""
 

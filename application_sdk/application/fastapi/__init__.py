@@ -49,8 +49,27 @@ class EventWorkflowTrigger(WorkflowTrigger):
 
 
 class FastAPIApplication(AtlanApplicationInterface):
-    """
-    Class for Fast API Application
+    """FastAPI Application implementation of the Atlan Application Interface.
+
+    This class provides a FastAPI-based web application that handles workflow management,
+    authentication, metadata operations, and event processing. It supports both HTTP and
+    event-based workflow triggers.
+
+    Attributes:
+        app (FastAPI): The main FastAPI application instance.
+        temporal_client (Optional[TemporalClient]): Client for interacting with Temporal workflows.
+        workflow_router (APIRouter): Router for workflow-related endpoints.
+        pubsub_router (APIRouter): Router for pub/sub operations.
+        events_router (APIRouter): Router for event handling.
+        docs_directory_path (str): Path to documentation source directory.
+        docs_export_path (str): Path where documentation will be exported.
+        workflows (List[WorkflowInterface]): List of registered workflows.
+        event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
+
+    Args:
+        lifespan: Optional lifespan manager for the FastAPI application.
+        handler (Optional[HandlerInterface]): Handler for processing application operations.
+        temporal_client (Optional[TemporalClient]): Client for Temporal workflow operations.
     """
 
     app: FastAPI
@@ -72,6 +91,13 @@ class FastAPIApplication(AtlanApplicationInterface):
         handler: Optional[HandlerInterface] = None,
         temporal_client: Optional[TemporalClient] = None,
     ):
+        """Initialize the FastAPI application.
+
+        Args:
+            lifespan: Optional lifespan manager for the FastAPI application.
+            handler (Optional[HandlerInterface]): Handler for processing application operations.
+            temporal_client (Optional[TemporalClient]): Client for Temporal workflow operations.
+        """
         self.app = FastAPI(lifespan=lifespan)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
@@ -84,6 +110,11 @@ class FastAPIApplication(AtlanApplicationInterface):
         super().__init__(handler)
 
     def setup_atlan_docs(self):
+        """Set up and serve Atlan documentation.
+
+        Generates documentation using AtlanDocsGenerator and mounts it at the /atlandocs endpoint.
+        Any exceptions during documentation generation are logged as warnings.
+        """
         docs_generator = AtlanDocsGenerator(
             docs_directory_path=self.docs_directory_path,
             export_path=self.docs_export_path,
@@ -100,6 +131,14 @@ class FastAPIApplication(AtlanApplicationInterface):
             logger.warning(str(e))
 
     def register_routers(self):
+        """Register all routers with the FastAPI application.
+
+        Registers routes and includes all routers with their respective prefixes:
+        - Server router
+        - Workflow router (/workflows/v1)
+        - Pubsub router (/dapr)
+        - Events router (/events/v1)
+        """
         # Register all routes first
         self.register_routes()
 
@@ -112,6 +151,15 @@ class FastAPIApplication(AtlanApplicationInterface):
     def register_workflow(
         self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
+        """Register a workflow with its associated triggers.
+
+        Args:
+            workflow_class (Type[WorkflowInterface]): The workflow class to register.
+            triggers (List[WorkflowTrigger]): List of triggers (HTTP or Event) that can start the workflow.
+
+        Raises:
+            Exception: If temporal client is not initialized for HTTP triggers.
+        """
         for trigger in triggers:
             trigger.workflow_class = workflow_class
 
@@ -209,6 +257,12 @@ class FastAPIApplication(AtlanApplicationInterface):
     async def get_dapr_subscriptions(
         self,
     ) -> List[dict[str, Any]]:
+        """Get Dapr pubsub subscriptions configuration.
+
+        Returns:
+            List[dict[str, Any]]: List of Dapr subscription configurations including
+                pubsub name, topic, and routing rules.
+        """
         return [
             {
                 "pubsubname": EventStore.EVENT_STORE_NAME,
@@ -218,6 +272,14 @@ class FastAPIApplication(AtlanApplicationInterface):
         ]
 
     async def on_event(self, event: dict[str, Any]):
+        """Handle incoming events and trigger appropriate workflows.
+
+        Args:
+            event (dict[str, Any]): The event data to process.
+
+        Raises:
+            Exception: If temporal client is not initialized.
+        """
         if not self.temporal_client:
             raise Exception("Temporal client not initialized")
 
@@ -235,16 +297,26 @@ class FastAPIApplication(AtlanApplicationInterface):
                 )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
-        """
-        Get the credentials from the request body and test the authentication
+        """Test authentication credentials.
+
+        Args:
+            body (TestAuthRequest): Request containing authentication credentials.
+
+        Returns:
+            TestAuthResponse: Response indicating authentication success.
         """
         await self.handler.load(body.model_dump())
         await self.handler.test_auth()
         return TestAuthResponse(success=True, message="Authentication successful")
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
-        """
-        Get the credentials from the request body and fetch the metadata
+        """Fetch metadata based on request parameters.
+
+        Args:
+            body (FetchMetadataRequest): Request containing metadata fetch parameters.
+
+        Returns:
+            FetchMetadataResponse: Response containing the requested metadata.
         """
         await self.handler.load(body.model_dump())
         metadata = await self.handler.fetch_metadata(
@@ -255,13 +327,26 @@ class FastAPIApplication(AtlanApplicationInterface):
     async def preflight_check(
         self, body: PreflightCheckRequest
     ) -> PreflightCheckResponse:
-        """
-        Get the credentials from the request body and perform preflight checks
+        """Perform preflight checks with provided configuration.
+
+        Args:
+            body (PreflightCheckRequest): Request containing preflight check parameters.
+
+        Returns:
+            PreflightCheckResponse: Response containing preflight check results.
         """
         preflight_check = await self.handler.preflight_check(body.model_dump())
         return PreflightCheckResponse(success=True, data=preflight_check)
 
     def get_workflow_config(self, config_id: str) -> WorkflowConfigResponse:
+        """Retrieve workflow configuration by ID.
+
+        Args:
+            config_id (str): The ID of the workflow configuration to retrieve.
+
+        Returns:
+            WorkflowConfigResponse: Response containing the workflow configuration.
+        """
         config = get_workflow_config(config_id)
         return WorkflowConfigResponse(
             success=True,
@@ -272,13 +357,17 @@ class FastAPIApplication(AtlanApplicationInterface):
     async def get_workflow_run_status(
         self, workflow_id: str, run_id: str
     ) -> JSONResponse:
-        """
-        Get the status of a workflow run
+        """Get the status of a specific workflow run.
+
         Args:
-            workflow_id: The ID of the workflow
-            run_id: The ID of the run (optional, if not provided, the status of the current or last run will be returned)
+            workflow_id (str): The ID of the workflow.
+            run_id (str): The ID of the specific run.
+
         Returns:
-            JSONResponse containing the status of the workflow
+            JSONResponse: Response containing the workflow run status.
+
+        Raises:
+            Exception: If temporal client is not initialized.
         """
         if not self.temporal_client:
             raise Exception("Temporal client not initialized")
@@ -301,6 +390,15 @@ class FastAPIApplication(AtlanApplicationInterface):
     def update_workflow_config(
         self, config_id: str, body: WorkflowConfigRequest
     ) -> WorkflowConfigResponse:
+        """Update workflow configuration.
+
+        Args:
+            config_id (str): The ID of the workflow configuration to update.
+            body (WorkflowConfigRequest): The new configuration data.
+
+        Returns:
+            WorkflowConfigResponse: Response containing the updated configuration.
+        """
         # note: it's assumed that the preflight check is successful if the config is being updated
         config = update_workflow_config(config_id, body.model_dump())
         return WorkflowConfigResponse(
@@ -310,6 +408,18 @@ class FastAPIApplication(AtlanApplicationInterface):
         )
 
     async def stop_workflow(self, workflow_id: str, run_id: str) -> JSONResponse:
+        """Stop a running workflow.
+
+        Args:
+            workflow_id (str): The ID of the workflow to stop.
+            run_id (str): The ID of the specific run to stop.
+
+        Returns:
+            JSONResponse: Response indicating success of the stop operation.
+
+        Raises:
+            Exception: If temporal client is not initialized.
+        """
         if not self.temporal_client:
             raise Exception("Temporal client not initialized")
 
@@ -317,6 +427,12 @@ class FastAPIApplication(AtlanApplicationInterface):
         return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(self, host: str = "0.0.0.0", port: int = 8000):
+        """Start the FastAPI application server.
+
+        Args:
+            host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
+            port (int, optional): Port to listen on. Defaults to 8000.
+        """
         server = Server(
             Config(
                 app=self.app,
