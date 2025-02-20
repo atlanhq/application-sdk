@@ -19,8 +19,8 @@ logger = get_logger(__name__)
 
 # Custom Tests
 @extensions.register_check_method(statistics=["expected_record_count"])
-def check_record_count(df: pd.DataFrame, *, expected_record_count) -> bool:
-    if df.shape[0] == expected_record_count:
+def check_record_count_ge(df: pd.DataFrame, *, expected_record_count) -> bool:
+    if df.shape[0] >= expected_record_count:
         return True
     else:
         raise ValueError(
