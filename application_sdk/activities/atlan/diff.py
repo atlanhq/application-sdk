@@ -1,10 +1,29 @@
+from typing import Dict, Any
+
 import daft
 import duckdb
-from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities import ActivitiesInterface, ActivitiesState, get_workflow_id
 from temporalio import activity
 
 
+class DiffActivitiesState(ActivitiesState):
+    circuit_breaker_check: bool = True
+
+
 class DiffActivities(ActivitiesInterface):
+
+    def __init__(self, workflow_args: dict):
+        super().__init__()
+        self.workflow_args = workflow_args
+
+    async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
+        workflow_id = get_workflow_id()
+        if not self._state.get(workflow_id):
+            circuit_breaker_check = workflow_args.get("circuit_breaker_check", True)
+            self._state[workflow_id] = DiffActivitiesState(workflow_args=workflow_args,
+                                                           circuit_breaker_check=circuit_breaker_check)
+        return
+
 
     @staticmethod
     def _compute_row_hash(df: daft.DataFrame, columns_order: list[str], ignore_columns: list[str] = None) -> daft.DataFrame:
@@ -30,7 +49,6 @@ class DiffActivities(ActivitiesInterface):
         # Query in duckdb
         results = duckdb.sql(f"SELECT *, md5(concat({concat_expr})) as row_hash FROM arrow_df").arrow()
         return daft.from_arrow(results)
-
 
     def calculate_diff(self,
                        old_df: daft.DataFrame,
@@ -69,26 +87,46 @@ class DiffActivities(ActivitiesInterface):
             "added": daft.from_arrow(new_entries_df),
             "removed": daft.from_arrow(removed_entries_df),
             "modified": daft.from_arrow(modified_entries_df),
+            "original": old_df,
         }
         return changes
 
+    def delete_circuit_breaker_check(self, changes: Dict[str, daft.DataFrame],
+                                     threshold: float=80.0) -> bool:
+
+        check = self._get_state(self.workflow_args).circut_breaker_check
+        if not check:
+            return False
+
+        delete_changes = changes["removed"]
+        original_count = changes["original"].count_rows()
+        delete_count = delete_changes.count_rows()
+        if original_count == 0:
+            return False
+
+        delete_percentage = (delete_count / original_count) * 100
+        if delete_percentage > threshold:
+            return True
+        return False
+
+
     @activity.defn
     def calculate_atlas_diff(self, old_df: daft.DataFrame, new_df: daft.DataFrame) -> dict:
-        attributes_changes = self.calculate_diff(
+        attribute_changes = self.calculate_diff(
             old_df.select("typeName", "attributes.*"),
             new_df.select("typeName", "attributes.*"),
             ["typeName", "qualifiedName"],
-            ["lastWorkflowName"]
+            ["lastSyncWorkflowName", "lastSyncRunAt", "lastSyncRun"]
         )
 
-        custom_attributes_changes = self.calculate_diff(
+        custom_attribute_changes = self.calculate_diff(
             old_df.select("typeName", "customAttributes.*"),
             new_df.select("typeName", "customAttributes.*"),
             ["typeName", "qualifiedName"],
             ["lastWorkflowName"]
         )
 
-        classifications_changes = self.calculate_diff(
+        classification_changes = self.calculate_diff(
             old_df.select("typeName", "classifications.*"),
             new_df.select("typeName", "classifications.*"),
             ["typeName", "qualifiedName"],
@@ -97,19 +135,19 @@ class DiffActivities(ActivitiesInterface):
 
         return {
             "attributes": {
-                "added": attributes_changes["added"].count_rows(),
-                "removed": attributes_changes["removed"].count_rows(),
-                "modified": attributes_changes["modified"].count_rows(),
+                "added": attribute_changes["added"].count_rows(),
+                "removed": attribute_changes["removed"].count_rows(),
+                "modified": attribute_changes["modified"].count_rows(),
             },
             "customAttributes": {
-                "added": custom_attributes_changes["added"].count_rows(),
-                "removed": custom_attributes_changes["removed"].count_rows(),
-                "modified": custom_attributes_changes["modified"].count_rows(),
+                "added": custom_attribute_changes["added"].count_rows(),
+                "removed": custom_attribute_changes["removed"].count_rows(),
+                "modified": custom_attribute_changes["modified"].count_rows(),
             },
             "classifications": {
-                "added": classifications_changes["added"].count_rows(),
-                "removed": classifications_changes["removed"].count_rows(),
-                "modified": classifications_changes["modified"].count_rows(),
+                "added": classification_changes["added"].count_rows(),
+                "removed": classification_changes["removed"].count_rows(),
+                "modified": classification_changes["modified"].count_rows(),
             }
         }
 
