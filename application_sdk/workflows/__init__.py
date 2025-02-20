@@ -28,9 +28,13 @@ class WorkflowInterface(ABC):
     Attributes:
         activities_cls (Type[ActivitiesInterface]): The activities class to be used
             by the workflow.
+        default_heartbeat_timeout (timedelta): The default heartbeat timeout for the
+            workflow.
     """
 
     activities_cls: Type[ActivitiesInterface]
+
+    default_heartbeat_timeout: timedelta = timedelta(seconds=10)
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
@@ -86,7 +90,7 @@ class WorkflowInterface(ABC):
                 args=[workflow_args],
                 retry_policy=retry_policy,
                 start_to_close_timeout=timedelta(seconds=1000),
-                heartbeat_timeout=timedelta(seconds=10),
+                heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
             logger.info("Workflow completed successfully")
