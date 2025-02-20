@@ -70,14 +70,43 @@ class SQLClient(ClientInterface):
 
         Args:
             credentials (Dict[str, Any]): Database connection credentials.
+
+        Raises:
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
-        self.engine = create_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.sql_alchemy_connect_args,
-            pool_pre_ping=True,
-        )
-        self.connection = self.engine.connect()
+        try:
+            self.engine = create_engine(
+                self.get_sqlalchemy_connection_string(),
+                connect_args=self.sql_alchemy_connect_args,
+                pool_pre_ping=True,
+            )
+            try:
+                self.connection = self.engine.connect()
+            except Exception as conn_err:
+                # Catch specific database connection errors and provide clear messages
+                error_msg = str(conn_err).lower()
+                if "password authentication failed" in error_msg:
+                    raise ValueError(
+                        "Database authentication failed: Invalid username or password"
+                    )
+                elif "could not connect to server" in error_msg:
+                    raise ValueError(
+                        "Database connection failed: Could not reach the server"
+                    )
+                elif "connection refused" in error_msg:
+                    raise ValueError(
+                        "Database connection failed: Connection refused by server"
+                    )
+                else:
+                    raise ValueError(f"Database connection failed: {str(conn_err)}")
+        except Exception as e:
+            activity.logger.error(f"Error loading SQL client: {str(e)}")
+            # Clean up engine if it was created
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+            raise
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -159,14 +188,44 @@ class AsyncSQLClient(SQLClient):
 
         Args:
             credentials (Dict[str, Any]): Database connection credentials.
+
+        Raises:
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
-        self.engine = create_async_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.sql_alchemy_connect_args,
-            pool_pre_ping=True,
-        )
-        self.connection = await self.engine.connect()
+        try:
+            self.engine = create_async_engine(
+                self.get_sqlalchemy_connection_string(),
+                connect_args=self.sql_alchemy_connect_args,
+                pool_pre_ping=True,
+            )
+            try:
+                self.connection = await self.engine.connect()
+            except Exception as conn_err:
+                # Catch specific database connection errors and provide clear messages
+                error_msg = str(conn_err).lower()
+                if "password authentication failed" in error_msg:
+                    raise ValueError(
+                        "Database authentication failed: Invalid username or password"
+                    )
+                elif "could not connect to server" in error_msg:
+                    raise ValueError(
+                        "Database connection failed: Could not reach the server"
+                    )
+                elif "connection refused" in error_msg:
+                    raise ValueError(
+                        "Database connection failed: Connection refused by server"
+                    )
+                else:
+                    raise ValueError(f"Database connection failed: {str(conn_err)}")
+        except Exception as e:
+            activity.logger.error(f"Error establishing database connection: {str(e)}")
+            # Clean up engine if it was created
+            if self.engine:
+                await self.engine.dispose()
+                self.engine = None
+            # Re-raise the error to be handled by the caller
+            raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """
