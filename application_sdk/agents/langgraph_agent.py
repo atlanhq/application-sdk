@@ -16,10 +16,7 @@ class LangGraphAgent(AgentInterface):
     the workflow is a langgraph StateGraph object.
     Example:
     state = {
-        "messages": [
-            HumanMessage(content="Hello, world!")
-        ],
-        "query": "What is the capital of France?",
+        "messages": [],
         "answer": "",
     }
     workflow = StateGraph()
@@ -29,7 +26,7 @@ class LangGraphAgent(AgentInterface):
     agent = LangGraphAgent(workflow=workflow, state=state, config={"configurable": {"thread_id": uuid.uuid4()}})
     agent.compile_graph()
     agent.visualize()
-    agent.run()
+    agent.run(task="What is the capital of France?")
     """
 
     workflow: Optional[StateGraph]
@@ -49,8 +46,8 @@ class LangGraphAgent(AgentInterface):
         Args:
             workflow: The workflow to execute
             state: The initial state of the workflow
-            config: The configuration of the workflow
-            logger: Logger instance for the agent
+            config (optional): The configuration of the workflow
+            logger (optional): Logger instance for the agent
         """
         self.workflow = workflow
         self._state = state
@@ -81,14 +78,12 @@ class LangGraphAgent(AgentInterface):
         initial_state = cast(Dict[str, Any], self._state)
 
         if not self.graph:
-            graph = self.compile_graph()
-        else:
-            graph = self.graph
+            self.graph = self.compile_graph()
 
         try:
             if task:
                 initial_state["messages"].append(HumanMessage(content=task))
-            for chunk in graph.stream(
+            for chunk in self.graph.stream(
                 initial_state, stream_mode="values", config=self._config
             ):
                 if chunk.get("messages"):
