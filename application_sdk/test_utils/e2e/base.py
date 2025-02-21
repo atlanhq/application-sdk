@@ -1,8 +1,8 @@
-import time
 from typing import Any, Dict
 
 import pytest
 import requests
+from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e import TestInterface
@@ -11,9 +11,12 @@ from application_sdk.test_utils.e2e.conftest import WorkflowDetails
 logger = get_logger(__name__)
 
 
+class WorkflowExecutionError(Exception):
+    """Exception class for raising exceptions during workflow execution"""
+
+
 class BaseTest(TestInterface):
     config_file_path: str
-    api_response_path: str
     extracted_output_base_path: str
     schema_base_path: str
     credentials: Dict[str, Any]
@@ -66,25 +69,17 @@ class BaseTest(TestInterface):
         )
         self.assertEqual(response["success"], True)
         self.assertEqual(response["message"], "Workflow started successfully")
-        workflow_id = response["data"]["workflow_id"]
-        run_id = response["data"]["run_id"]
+        WorkflowDetails.workflow_id = response["data"]["workflow_id"]
+        WorkflowDetails.run_id = response["data"]["run_id"]
 
         # Wait for the workflow to complete
-        start_time = time.time()
-        while True:
-            workflow_status_response = self.client.get_workflow_status(
-                workflow_id, run_id
+        workflow_status = self.monitor_and_wait_workflow_execution()
+
+        # If worklfow is not completed successfully, raise an exception
+        if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
+            raise WorkflowExecutionError(
+                f"Workflow failed with status: {workflow_status}"
             )
-            self.assertEqual(workflow_status_response["success"], True)
-            if workflow_status_response["data"]["status"].lower() == "completed":
-                WorkflowDetails.workflow_id = workflow_status_response["data"][
-                    "workflow_id"
-                ]
-                WorkflowDetails.run_id = workflow_status_response["data"]["run_id"]
-                break
-            if time.time() - start_time > self.workflow_timeout:
-                raise TimeoutError("Workflow did not complete in the expected time")
-            time.sleep(2)
 
         logger.info("Workflow completed successfully")
 
