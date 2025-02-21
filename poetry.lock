@@ -291,19 +291,19 @@ lxml = ["lxml"]
 
 [[package]]
 name = "boto3"
-version = "1.36.22"
+version = "1.36.23"
 description = "The AWS SDK for Python"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
 markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"iam-auth\""
 files = [
-    {file = "boto3-1.36.22-py3-none-any.whl", hash = "sha256:39957eabdce009353d72d131046489fbbfa15891865d5f069f1e8bfa414e6b81"},
-    {file = "boto3-1.36.22.tar.gz", hash = "sha256:768c8a4d4a6227fe2258105efa086f1424cba5ca915a5eb2305b2cd979306ad1"},
+    {file = "boto3-1.36.23-py3-none-any.whl", hash = "sha256:d59642672b1f35f55f47b317693241ce53333816f47c9e72fcc8fd0e9adc6a87"},
+    {file = "boto3-1.36.23.tar.gz", hash = "sha256:006800604c34382873521b20890b758eea7109d699696ece932131259d0a4658"},
 ]
 
 [package.dependencies]
-botocore = ">=1.36.22,<1.37.0"
+botocore = ">=1.36.23,<1.37.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.11.0,<0.12.0"
 
@@ -312,15 +312,15 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "boto3-stubs"
-version = "1.36.22"
-description = "Type annotations for boto3 1.36.22 generated with mypy-boto3-builder 8.9.1"
+version = "1.36.23"
+description = "Type annotations for boto3 1.36.23 generated with mypy-boto3-builder 8.9.1"
 optional = true
 python-versions = ">=3.8"
 groups = ["dev"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
-    {file = "boto3_stubs-1.36.22-py3-none-any.whl", hash = "sha256:d17acae4b6fc6fd67b0b0c2b9b897a501e2451d883e9e9f4264448a6089541df"},
-    {file = "boto3_stubs-1.36.22.tar.gz", hash = "sha256:55cee1e9d7b181f07b8ffc7d71eb0fc681b1b2eb1601d19373f33008d4070826"},
+    {file = "boto3_stubs-1.36.23-py3-none-any.whl", hash = "sha256:ee2738fd742742dbe9db2745c66ac1f853ed497b4f2f9c1625d81b0a27b6d1b2"},
+    {file = "boto3_stubs-1.36.23.tar.gz", hash = "sha256:e09016f06daf7794d11815891b962f588c513c5f5ee6c0ab2c045c375f798c9a"},
 ]
 
 [package.dependencies]
@@ -376,7 +376,7 @@ bedrock-data-automation-runtime = ["mypy-boto3-bedrock-data-automation-runtime (
 bedrock-runtime = ["mypy-boto3-bedrock-runtime (>=1.36.0,<1.37.0)"]
 billing = ["mypy-boto3-billing (>=1.36.0,<1.37.0)"]
 billingconductor = ["mypy-boto3-billingconductor (>=1.36.0,<1.37.0)"]
-boto3 = ["boto3 (==1.36.22)"]
+boto3 = ["boto3 (==1.36.23)"]
 braket = ["mypy-boto3-braket (>=1.36.0,<1.37.0)"]
 budgets = ["mypy-boto3-budgets (>=1.36.0,<1.37.0)"]
 ce = ["mypy-boto3-ce (>=1.36.0,<1.37.0)"]
@@ -739,15 +739,15 @@ xray = ["mypy-boto3-xray (>=1.36.0,<1.37.0)"]
 
 [[package]]
 name = "botocore"
-version = "1.36.22"
+version = "1.36.23"
 description = "Low-level, data-driven core of boto 3."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
 markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"iam-auth\""
 files = [
-    {file = "botocore-1.36.22-py3-none-any.whl", hash = "sha256:75d6b34acb0686ee4d54ff6eb285e78ccfe318407428769d1e3e13351714d890"},
-    {file = "botocore-1.36.22.tar.gz", hash = "sha256:59520247d5a479731724f97c995d5a1c2aae3b303b324f39d99efcfad1d3019e"},
+    {file = "botocore-1.36.23-py3-none-any.whl", hash = "sha256:886730e79495a2e153842725ebdf85185c8277cdf255b3b5879cd097ddc7fcc3"},
+    {file = "botocore-1.36.23.tar.gz", hash = "sha256:9feaa2d876f487e718a5fd80a35fa401042b518c0c75117d3e1ea39a567439e7"},
 ]
 
 [package.dependencies]
@@ -760,15 +760,15 @@ crt = ["awscrt (==0.23.8)"]
 
 [[package]]
 name = "botocore-stubs"
-version = "1.36.22"
+version = "1.36.23"
 description = "Type annotations and code completion for botocore"
 optional = true
 python-versions = ">=3.8"
 groups = ["dev"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
-    {file = "botocore_stubs-1.36.22-py3-none-any.whl", hash = "sha256:4d76940ade5dca987bb66a5d9844a862fd09acfccf3fcb79d761e185e56145e5"},
-    {file = "botocore_stubs-1.36.22.tar.gz", hash = "sha256:20d46e9639edd2eef37197bba0f9dbee77410ac00a9c4de627711c949c543454"},
+    {file = "botocore_stubs-1.36.23-py3-none-any.whl", hash = "sha256:b150699f4f98e39e3e90e0d6787f5e8f919876f9ddbd24e3663b8311222588ec"},
+    {file = "botocore_stubs-1.36.23.tar.gz", hash = "sha256:2283cf6e926a323d2a2ba0322228960db7f40061dfee197858118359d8402816"},
 ]
 
 [package.dependencies]
@@ -1989,15 +1989,15 @@ zstd = ["zstandard (>=0.18.0)"]
 
 [[package]]
 name = "hypothesis"
-version = "6.125.3"
+version = "6.126.0"
 description = "A library for property-based testing"
 optional = false
 python-versions = ">=3.9"
 groups = ["test"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
-    {file = "hypothesis-6.125.3-py3-none-any.whl", hash = "sha256:ae0381987d0ccacc62867343acc38a0ca5e959fc4da98b3e018b0debf080a557"},
-    {file = "hypothesis-6.125.3.tar.gz", hash = "sha256:6276d9d8f7f91ebd7ad95081f004bcf5699afb4d680a8321861cbf3a5de45d3b"},
+    {file = "hypothesis-6.126.0-py3-none-any.whl", hash = "sha256:323c58a773482a2b4ba4e35202560cfcba45e8a8e09e7ffb83c0f9bac5b544da"},
+    {file = "hypothesis-6.126.0.tar.gz", hash = "sha256:648b6215ee0468fa85eaee9dceb5b7766a5861c20ee4801bd904a2c02f1a6c9b"},
 ]
 
 [package.dependencies]
@@ -2005,7 +2005,7 @@ attrs = ">=22.2.0"
 sortedcontainers = ">=2.1.0,<3.0.0"
 
 [package.extras]
-all = ["black (>=19.10b0)", "click (>=7.0)", "crosshair-tool (>=0.0.82)", "django (>=4.2)", "dpcontracts (>=0.4)", "hypothesis-crosshair (>=0.0.19)", "lark (>=0.10.1)", "libcst (>=0.3.16)", "numpy (>=1.19.3)", "pandas (>=1.1)", "pytest (>=4.6)", "python-dateutil (>=1.4)", "pytz (>=2014.1)", "redis (>=3.0.0)", "rich (>=9.0.0)", "tzdata (>=2025.1)"]
+all = ["black (>=19.10b0)", "click (>=7.0)", "crosshair-tool (>=0.0.82)", "django (>=4.2)", "dpcontracts (>=0.4)", "hypothesis-crosshair (>=0.0.19)", "lark (>=0.10.1)", "libcst (>=0.3.16)", "numpy (>=1.19.3)", "pandas (>=1.1)", "pytest (>=4.6)", "python-dateutil (>=1.4)", "pytz (>=2014.1)", "redis (>=3.0.0)", "rich (>=9.0.0)", "tzdata (>=2025.1)", "watchdog (>=4.0.0)"]
 cli = ["black (>=19.10b0)", "click (>=7.0)", "rich (>=9.0.0)"]
 codemods = ["libcst (>=0.3.16)"]
 crosshair = ["crosshair-tool (>=0.0.82)", "hypothesis-crosshair (>=0.0.19)"]
@@ -2019,6 +2019,7 @@ pandas = ["pandas (>=1.1)"]
 pytest = ["pytest (>=4.6)"]
 pytz = ["pytz (>=2014.1)"]
 redis = ["redis (>=3.0.0)"]
+watchdog = ["watchdog (>=4.0.0)"]
 zoneinfo = ["tzdata (>=2025.1)"]
 
 [[package]]
@@ -4195,6 +4196,23 @@ rich = ">=13.7.1"
 typing-extensions = ">=4.12.2"
 
 [[package]]
+name = "roman-numerals-py"
+version = "3.0.0"
+description = "Manipulate well-formed Roman numerals"
+optional = false
+python-versions = ">=3.9"
+groups = ["dev"]
+markers = "python_version >= \"3.12\" or python_version == \"3.11\""
+files = [
+    {file = "roman_numerals_py-3.0.0-py3-none-any.whl", hash = "sha256:a1421ce66b3eab7e8735065458de3fa5c4a46263d50f9f4ac8f0e5e7701dd125"},
+    {file = "roman_numerals_py-3.0.0.tar.gz", hash = "sha256:91199c4373658c03d87d9fe004f4a5120a20f6cb192be745c2377cce274ef41c"},
+]
+
+[package.extras]
+lint = ["mypy (==1.15.0)", "pyright (==1.1.394)", "ruff (==0.9.6)"]
+test = ["pytest (>=8)"]
+
+[[package]]
 name = "s3transfer"
 version = "0.11.2"
 description = "An Amazon S3 Transfer Manager"
@@ -4374,15 +4392,15 @@ files = [
 
 [[package]]
 name = "sphinx"
-version = "8.1.3"
+version = "8.2.0"
 description = "Python documentation generator"
 optional = false
-python-versions = ">=3.10"
+python-versions = ">=3.11"
 groups = ["dev"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
-    {file = "sphinx-8.1.3-py3-none-any.whl", hash = "sha256:09719015511837b76bf6e03e42eb7595ac8c2e41eeb9c29c5b755c6b677992a2"},
-    {file = "sphinx-8.1.3.tar.gz", hash = "sha256:43c1911eecb0d3e161ad78611bc905d1ad0e523e4ddc202a58a821773dc4c927"},
+    {file = "sphinx-8.2.0-py3-none-any.whl", hash = "sha256:3c0a40ff71ace28b316bde7387d93b9249a3688c202181519689b66d5d0aed53"},
+    {file = "sphinx-8.2.0.tar.gz", hash = "sha256:5b0067853d6e97f3fa87563e3404ebd008fce03525b55b25da90706764da6215"},
 ]
 
 [package.dependencies]
@@ -4395,6 +4413,7 @@ Jinja2 = ">=3.1"
 packaging = ">=23.0"
 Pygments = ">=2.17"
 requests = ">=2.30.0"
+roman-numerals-py = ">=1.0.0"
 snowballstemmer = ">=2.2"
 sphinxcontrib-applehelp = ">=1.0.7"
 sphinxcontrib-devhelp = ">=1.0.6"
@@ -4405,8 +4424,8 @@ sphinxcontrib-serializinghtml = ">=1.1.9"
 
 [package.extras]
 docs = ["sphinxcontrib-websupport"]
-lint = ["flake8 (>=6.0)", "mypy (==1.11.1)", "pyright (==1.1.384)", "pytest (>=6.0)", "ruff (==0.6.9)", "sphinx-lint (>=0.9)", "tomli (>=2)", "types-Pillow (==10.2.0.20240822)", "types-Pygments (==2.18.0.20240506)", "types-colorama (==0.4.15.20240311)", "types-defusedxml (==0.7.0.20240218)", "types-docutils (==0.21.0.20241005)", "types-requests (==2.32.0.20240914)", "types-urllib3 (==1.26.25.14)"]
-test = ["cython (>=3.0)", "defusedxml (>=0.7.1)", "pytest (>=8.0)", "setuptools (>=70.0)", "typing_extensions (>=4.9)"]
+lint = ["betterproto (==2.0.0b6)", "mypy (==1.15.0)", "pypi-attestations (==0.0.21)", "pyright (==1.1.394)", "pytest (>=8.0)", "ruff (==0.9.6)", "sphinx-lint (>=0.9)", "types-Pillow (==10.2.0.20240822)", "types-Pygments (==2.19.0.20250107)", "types-colorama (==0.4.15.20240311)", "types-defusedxml (==0.7.0.20240218)", "types-docutils (==0.21.0.20241128)", "types-requests (==2.32.0.20241016)", "types-urllib3 (==1.26.25.14)"]
+test = ["cython (>=3.0)", "defusedxml (>=0.7.1)", "pytest (>=8.0)", "pytest-xdist[psutil] (>=3.4)", "setuptools (>=70.0)", "typing_extensions (>=4.9)"]
 
 [[package]]
 name = "sphinxcontrib-applehelp"
@@ -4668,19 +4687,19 @@ python-dateutil = ">=2.6.0"
 
 [[package]]
 name = "temporalio"
-version = "1.9.0"
+version = "1.10.0"
 description = "Temporal.io Python SDK"
 optional = true
-python-versions = "<4.0,>=3.8"
+python-versions = "<4.0,>=3.9"
 groups = ["main"]
 markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"workflows\""
 files = [
-    {file = "temporalio-1.9.0-cp38-abi3-macosx_10_9_x86_64.whl", hash = "sha256:ee941702e8925e2c018b5c2d7b296f811205043654d7f9c4564d7fa6597f1989"},
-    {file = "temporalio-1.9.0-cp38-abi3-macosx_11_0_arm64.whl", hash = "sha256:101040090238d97b61d769e009f732409894d8f26596a3827662f2dde2862097"},
-    {file = "temporalio-1.9.0-cp38-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:91f49b81823f8f44819cc48da0b730175acd793dc428e451e1824b48a4e41465"},
-    {file = "temporalio-1.9.0-cp38-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:f516ae152935ec16afb65b7555486f161b427eaa4b411e945063e31da1a644eb"},
-    {file = "temporalio-1.9.0-cp38-abi3-win_amd64.whl", hash = "sha256:254267109e8e5cb3fa35b4719fdde5ec114b264f3b030ab5be6a69f697acdc5e"},
-    {file = "temporalio-1.9.0.tar.gz", hash = "sha256:932b56720a20401f333ffdaea157cc64d0f9d615a2fd16358bee56d9491bff77"},
+    {file = "temporalio-1.10.0-cp39-abi3-macosx_10_9_x86_64.whl", hash = "sha256:81fd40eeeba0396a7193ab5b45877301234b983aa38e444dfceecad2b3224398"},
+    {file = "temporalio-1.10.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:2f7bff9ac1fc832655342e9677bbee1b413b97857d1f2265f018ce72fb7758f8"},
+    {file = "temporalio-1.10.0-cp39-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:c3ee8416d1cab04036e03e39a4db4cf4a9a799750b8da20022e0d719da9c9371"},
+    {file = "temporalio-1.10.0-cp39-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:4f5805e0d33ba525ccea01e3cd9d3eca313e0c66c6b86e6cb0f15ef004c0acc0"},
+    {file = "temporalio-1.10.0-cp39-abi3-win_amd64.whl", hash = "sha256:81cb8bef8aef6d3cc130c7cecf008cf529177a2f9cb206cfba2897db7df9d093"},
+    {file = "temporalio-1.10.0.tar.gz", hash = "sha256:688400e4ca7f6b47c0ade3ebb6549e4d79b0762430ea735a0d8ff83b1ab8b8ba"},
 ]
 
 [package.dependencies]
@@ -4689,8 +4708,9 @@ types-protobuf = ">=3.20"
 typing-extensions = ">=4.2.0,<5.0.0"
 
 [package.extras]
-grpc = ["grpcio (>=1.59.0,<2.0.0)"]
+grpc = ["grpcio (>=1.48.2,<2.0.0)"]
 opentelemetry = ["opentelemetry-api (>=1.11.1,<2.0.0)", "opentelemetry-sdk (>=1.11.1,<2.0.0)"]
+pydantic = ["pydantic (>=2.0.0,<3.0.0)"]
 
 [[package]]
 name = "tenacity"
