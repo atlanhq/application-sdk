@@ -45,6 +45,28 @@ class SQLClient(ClientInterface):
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
 
+    @staticmethod
+    def _handle_connection_error(conn_err: Exception) -> None:
+        """Handle common database connection errors and raise appropriate exceptions.
+
+        Args:
+            conn_err: The connection error to handle.
+
+        Raises:
+            ValueError: With a descriptive message based on the error type.
+        """
+        error_msg = str(conn_err).lower()
+        if "password authentication failed" in error_msg:
+            raise ValueError(
+                "Database authentication failed: Invalid username or password"
+            )
+        elif "could not connect to server" in error_msg:
+            raise ValueError("Database connection failed: Could not reach the server")
+        elif "connection refused" in error_msg:
+            raise ValueError("Database connection failed: Connection refused by server")
+        else:
+            raise ValueError(f"Database connection failed: {str(conn_err)}")
+
     def __init__(
         self,
         use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value,
@@ -84,25 +106,9 @@ class SQLClient(ClientInterface):
             try:
                 self.connection = self.engine.connect()
             except Exception as conn_err:
-                # Catch specific database connection errors and provide clear messages
-                error_msg = str(conn_err).lower()
-                if "password authentication failed" in error_msg:
-                    raise ValueError(
-                        "Database authentication failed: Invalid username or password"
-                    )
-                elif "could not connect to server" in error_msg:
-                    raise ValueError(
-                        "Database connection failed: Could not reach the server"
-                    )
-                elif "connection refused" in error_msg:
-                    raise ValueError(
-                        "Database connection failed: Connection refused by server"
-                    )
-                else:
-                    raise ValueError(f"Database connection failed: {str(conn_err)}")
+                self._handle_connection_error(conn_err)
         except Exception as e:
             activity.logger.error(f"Error loading SQL client: {str(e)}")
-            # Clean up engine if it was created
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -202,29 +208,12 @@ class AsyncSQLClient(SQLClient):
             try:
                 self.connection = await self.engine.connect()
             except Exception as conn_err:
-                # Catch specific database connection errors and provide clear messages
-                error_msg = str(conn_err).lower()
-                if "password authentication failed" in error_msg:
-                    raise ValueError(
-                        "Database authentication failed: Invalid username or password"
-                    )
-                elif "could not connect to server" in error_msg:
-                    raise ValueError(
-                        "Database connection failed: Could not reach the server"
-                    )
-                elif "connection refused" in error_msg:
-                    raise ValueError(
-                        "Database connection failed: Connection refused by server"
-                    )
-                else:
-                    raise ValueError(f"Database connection failed: {str(conn_err)}")
+                self._handle_connection_error(conn_err)
         except Exception as e:
             activity.logger.error(f"Error establishing database connection: {str(e)}")
-            # Clean up engine if it was created
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            # Re-raise the error to be handled by the caller
             raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
