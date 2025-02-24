@@ -81,11 +81,7 @@ class SQLClient(ClientInterface):
                 connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
-            try:
-                self.connection = self.engine.connect()
-            except Exception as e:
-                activity.logger.error(f"Error loading SQL client: {str(e)}")
-                raise
+            self.connection = self.engine.connect()
         except Exception as e:
             activity.logger.error(f"Error loading SQL client: {str(e)}")
             if self.engine:
@@ -184,13 +180,7 @@ class AsyncSQLClient(SQLClient):
                 connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
-            try:
-                self.connection = await self.engine.connect()
-            except Exception as e:
-                activity.logger.error(
-                    f"Error establishing database connection: {str(e)}"
-                )
-                raise
+            self.connection = await self.engine.connect()
         except Exception as e:
             activity.logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
