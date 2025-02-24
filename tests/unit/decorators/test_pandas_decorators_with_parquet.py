@@ -1,7 +1,8 @@
 import os
+import tempfile
 import types
 from concurrent.futures import Future
-from typing import Any, Callable, List, Optional, TypeVar
+from typing import Any, AsyncIterator, Callable, List, Optional, TypeVar
 from unittest.mock import patch
 
 import pandas as pd
@@ -10,7 +11,7 @@ from application_sdk.decorators import transform
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.outputs.parquet import ParquetOutput
 
-T = TypeVar('T')
+T = TypeVar("T")
 
 TEST_DATA = [
     {"value": 0},
@@ -68,12 +69,11 @@ class TestPandasDecoratorsParquet:
         """
         Method to setup the test data
         """
-        cls.test_dir = "/tmp/tests/parquet_pandas"
-        os.makedirs(cls.test_dir, exist_ok=True)
-        
+        cls.test_dir = tempfile.mkdtemp(prefix="parquet_pandas_test_")
+
         # Create test parquet file
         df = pd.DataFrame(TEST_DATA)
-        cls.input_file = f"{cls.test_dir}/input.parquet"
+        cls.input_file = os.path.join(cls.test_dir, "input.parquet")
         df.to_parquet(cls.input_file)
 
     @classmethod
@@ -81,15 +81,18 @@ class TestPandasDecoratorsParquet:
         """
         Clean up the test files
         """
-        if os.path.exists(cls.input_file):
-            os.remove(cls.input_file)
-        
-        # Clean up output files
-        for file in os.listdir(cls.test_dir):
-            if file.startswith("output"):
-                os.remove(os.path.join(cls.test_dir, file))
-        
-        os.rmdir(cls.test_dir)
+        try:
+            if os.path.exists(cls.input_file):
+                os.remove(cls.input_file)
+
+            # Clean up output files
+            for file in os.listdir(cls.test_dir):
+                if file.startswith("output"):
+                    os.remove(os.path.join(cls.test_dir, file))
+
+            os.rmdir(cls.test_dir)
+        except Exception as e:
+            print(f"Warning: Failed to clean up test files: {e}")
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -100,6 +103,7 @@ class TestPandasDecoratorsParquet:
         Test to read the data from a parquet file (INPUT), transform it
         and write it back to another parquet file (OUTPUT)
         """
+
         @transform(
             batch_input=ParquetInput(
                 file_path=self.input_file,
@@ -112,7 +116,9 @@ class TestPandasDecoratorsParquet:
                 mode="overwrite",
             ),
         )
-        async def func(batch_input: pd.DataFrame, output: ParquetOutput, **kwargs: Any) -> pd.DataFrame:
+        async def func(
+            batch_input: pd.DataFrame, output: ParquetOutput, **kwargs: Any
+        ) -> pd.DataFrame:
             await output.write_dataframe(add_1(batch_input))
             return batch_input
 
@@ -121,7 +127,7 @@ class TestPandasDecoratorsParquet:
         # Verify output
         output_file = f"{self.test_dir}/output_1.parquet"
         assert os.path.exists(output_file)
-        
+
         # Read and verify transformed data
         df = pd.read_parquet(output_file)
         assert len(df) == 10
@@ -135,6 +141,8 @@ class TestPandasDecoratorsParquet:
         """
         Test to read the parquet data in batches
         """
+        batch_count = 0
+
         @transform(
             batch_input=ParquetInput(
                 file_path=self.input_file,
@@ -147,17 +155,24 @@ class TestPandasDecoratorsParquet:
                 mode="overwrite",
             ),
         )
-        async def func(batch_input: pd.DataFrame, output: ParquetOutput, **kwargs: Any) -> None:
-            await output.write_dataframe(add_1(batch_input))
+        async def func(
+            batch_input: AsyncIterator[pd.DataFrame],
+            output: ParquetOutput,
+            **kwargs: Any,
+        ) -> None:
+            nonlocal batch_count
+            async for chunk in batch_input:
+                await output.write_dataframe(add_1(chunk))
+                batch_count += 1
 
         await func()
 
         # Verify output files exist
         output_files = [
-            f for f in os.listdir(f"{self.test_dir}")
-            if f.startswith("output_batch_")
+            f for f in os.listdir(f"{self.test_dir}") if f.startswith("output_batch_")
         ]
         assert len(output_files) == 4  # 10 records split into chunks of 3
+        assert batch_count == 4  # Verify we processed 4 batches
 
         # Read and verify all transformed data
         all_data: List[int] = []
@@ -166,4 +181,4 @@ class TestPandasDecoratorsParquet:
             all_data.extend(df["value"].tolist())
 
         assert len(all_data) == 10
-        assert all_data == list(range(1, 11))  # Original values + 1 
+        assert all_data == list(range(1, 11))  # Original values + 1

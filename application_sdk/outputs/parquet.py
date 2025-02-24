@@ -126,7 +126,7 @@ class ParquetOutput(Output):
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
                 file_path,
-                mode=self.mode,
+                write_mode="overwrite" if self.mode == "overwrite" else "append",
             )
         except Exception as e:
             activity.logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
