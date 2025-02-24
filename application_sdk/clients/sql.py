@@ -12,6 +12,12 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import (
+    DatabaseError,
+    InterfaceError,
+    OperationalError,
+    ProgrammingError,
+)
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
@@ -44,28 +50,6 @@ class SQLClient(ClientInterface):
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
-
-    @staticmethod
-    def _handle_connection_error(conn_err: Exception) -> None:
-        """Handle common database connection errors and raise appropriate exceptions.
-
-        Args:
-            conn_err: The connection error to handle.
-
-        Raises:
-            ValueError: With a descriptive message based on the error type.
-        """
-        error_msg = str(conn_err).lower()
-        if "password authentication failed" in error_msg:
-            raise ValueError(
-                "Database authentication failed: Invalid username or password"
-            )
-        elif "could not connect to server" in error_msg:
-            raise ValueError("Database connection failed: Could not reach the server")
-        elif "connection refused" in error_msg:
-            raise ValueError("Database connection failed: Connection refused by server")
-        else:
-            raise ValueError(f"Database connection failed: {str(conn_err)}")
 
     def __init__(
         self,
@@ -105,8 +89,18 @@ class SQLClient(ClientInterface):
             )
             try:
                 self.connection = self.engine.connect()
-            except Exception as conn_err:
-                self._handle_connection_error(conn_err)
+            except OperationalError as op_err:
+                # Handles connection and authentication failures
+                raise ValueError(f"Database configuration error: {str(op_err)}")
+            except ProgrammingError as prog_err:
+                # Handles syntax errors, wrong database name, etc.
+                raise ValueError(f"Database configuration error: {str(prog_err)}")
+            except InterfaceError as int_err:
+                # Handles connection adapter errors
+                raise ValueError(f"Database interface error: {str(int_err)}")
+            except DatabaseError as db_err:
+                # Handles other database-related errors
+                raise ValueError(f"Database error: {str(db_err)}")
         except Exception as e:
             activity.logger.error(f"Error loading SQL client: {str(e)}")
             if self.engine:
@@ -207,8 +201,18 @@ class AsyncSQLClient(SQLClient):
             )
             try:
                 self.connection = await self.engine.connect()
-            except Exception as conn_err:
-                self._handle_connection_error(conn_err)
+            except OperationalError as op_err:
+                # Handles connection and authentication failures
+                raise ValueError(f"Database configuration error: {str(op_err)}")
+            except ProgrammingError as prog_err:
+                # Handles syntax errors, wrong database name, etc.
+                raise ValueError(f"Database configuration error: {str(prog_err)}")
+            except InterfaceError as int_err:
+                # Handles connection adapter errors
+                raise ValueError(f"Database interface error: {str(int_err)}")
+            except DatabaseError as db_err:
+                # Handles other database-related errors
+                raise ValueError(f"Database error: {str(db_err)}")
         except Exception as e:
             activity.logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
