@@ -75,17 +75,16 @@ class LangGraphAgent(AgentInterface):
         if self._state is None:
             self._state = {"messages": []}
 
-        initial_state = cast(Dict[str, Any], self._state)
-
         if not self.graph:
             self.graph = self.compile_graph()
 
         try:
             if task:
-                initial_state["messages"].append(HumanMessage(content=task))
+                self._state["messages"].append(HumanMessage(content=task))
             for chunk in self.graph.stream(
-                initial_state, stream_mode="values", config=self._config
+                self._state, stream_mode="values", config=self._config
             ):
+                self._state = chunk
                 if chunk.get("messages"):
                     chunk["messages"][-1].pretty_print()
         except Exception as e:
