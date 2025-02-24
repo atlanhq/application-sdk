@@ -72,7 +72,7 @@ class ParquetOutput(Output):
         os.makedirs(full_path, exist_ok=True)
 
     async def write_dataframe(self, dataframe: pd.DataFrame):
-        """Write a pandas DataFrame to Parquet files.
+        """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (pd.DataFrame): The DataFrame to write.
@@ -97,6 +97,9 @@ class ParquetOutput(Output):
                 index=False,
                 compression="snappy",  # Using snappy compression by default
             )
+
+            # Upload the file to object store
+            await self.upload_file(file_path)
         except Exception as e:
             activity.logger.error(
                 f"Error writing pandas dataframe to parquet: {str(e)}"
@@ -104,7 +107,7 @@ class ParquetOutput(Output):
             raise
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
-        """Write a daft DataFrame to Parquet files.
+        """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
@@ -128,6 +131,9 @@ class ParquetOutput(Output):
                 file_path,
                 write_mode="overwrite" if self.mode == "overwrite" else "append",
             )
+
+            # Upload the file to object store
+            await self.upload_file(file_path)
         except Exception as e:
             activity.logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
             raise
