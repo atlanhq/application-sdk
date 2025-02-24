@@ -1,12 +1,16 @@
 import os
+import types
 from concurrent.futures import Future
+from typing import Any, Callable, List, Optional, TypeVar
 from unittest.mock import patch
 
 import pandas as pd
 
-from application_sdk.decorators import transform_pandas
+from application_sdk.decorators import transform
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.outputs.parquet import ParquetOutput
+
+T = TypeVar('T')
 
 TEST_DATA = [
     {"value": 0},
@@ -34,11 +38,21 @@ class MockSingleThreadExecutor:
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[types.TracebackType],
+    ) -> None:
         pass
 
-    def submit(self, fn, *args, **kwargs):
-        future = Future()
+    def submit(
+        self,
+        fn: Callable[..., T],
+        *args: Any,
+        **kwargs: Any,
+    ) -> Future[T]:
+        future: Future[T] = Future()
         try:
             # Execute the function synchronously
             result = fn(*args, **kwargs)
@@ -86,7 +100,7 @@ class TestPandasDecoratorsParquet:
         Test to read the data from a parquet file (INPUT), transform it
         and write it back to another parquet file (OUTPUT)
         """
-        @transform_pandas(
+        @transform(
             batch_input=ParquetInput(
                 file_path=self.input_file,
                 chunk_size=None,
@@ -98,7 +112,7 @@ class TestPandasDecoratorsParquet:
                 mode="overwrite",
             ),
         )
-        async def func(batch_input: pd.DataFrame, output, **kwargs):
+        async def func(batch_input: pd.DataFrame, output: ParquetOutput, **kwargs: Any) -> pd.DataFrame:
             await output.write_dataframe(add_1(batch_input))
             return batch_input
 
@@ -121,7 +135,7 @@ class TestPandasDecoratorsParquet:
         """
         Test to read the parquet data in batches
         """
-        @transform_pandas(
+        @transform(
             batch_input=ParquetInput(
                 file_path=self.input_file,
                 chunk_size=3,
@@ -133,7 +147,7 @@ class TestPandasDecoratorsParquet:
                 mode="overwrite",
             ),
         )
-        async def func(batch_input: pd.DataFrame, output, **kwargs):
+        async def func(batch_input: pd.DataFrame, output: ParquetOutput, **kwargs: Any) -> None:
             await output.write_dataframe(add_1(batch_input))
 
         await func()
@@ -146,7 +160,7 @@ class TestPandasDecoratorsParquet:
         assert len(output_files) == 4  # 10 records split into chunks of 3
 
         # Read and verify all transformed data
-        all_data = []
+        all_data: List[int] = []
         for file in sorted(output_files):
             df = pd.read_parquet(f"{self.test_dir}/{file}")
             all_data.extend(df["value"].tolist())
