@@ -64,7 +64,7 @@ class Procedure(assets.Procedure):
             attributes = {}
             attributes["sub_type"] = obj.get("procedure_type", "-1")
 
-            procedure.attributes = assets.Procedure.Attributes(**attributes)
+            procedure.attributes = procedure.attributes.copy(update=attributes)
 
             return procedure
         except AssertionError as e:
@@ -106,7 +106,7 @@ class Database(assets.Database):
             attributes = {}
             attributes["schema_count"] = obj.get("schema_count", 0)
 
-            database.attributes = assets.Database.Attributes(**attributes)
+            database.attributes = database.attributes.copy(update=attributes)
 
             return database
         except AssertionError as e:
@@ -153,7 +153,7 @@ class Schema(assets.Schema):
             attributes["table_count"] = obj.get("table_count", 0)
             attributes["views_count"] = obj.get("views_count", 0)
 
-            schema.attributes = assets.Schema.Attributes(**attributes)
+            schema.attributes = schema.attributes.copy(update=attributes)
 
             if not schema.custom_attributes:
                 schema.custom_attributes = {}
@@ -338,32 +338,28 @@ class Table(assets.Table):
                 custom_attributes["stage_url"] = obj.get("stage_url")
 
             if obj.get("is_insertable_into", "") != "":
-                custom_attributes["is_insertable_into"] = obj.get(
-                    "is_insertable_into"
-                )
+                custom_attributes["is_insertable_into"] = obj.get("is_insertable_into")
 
             if obj.get("number_columns_in_part_key", "") != "":
                 custom_attributes["number_columns_in_part_key"] = obj.get(
                     "number_columns_in_part_key"
                 )
             if obj.get("columns_participating_in_part_key", "") != "":
-                custom_attributes["columns_participating_in_part_key"] = (
-                    obj.get("columns_participating_in_part_key")
+                custom_attributes["columns_participating_in_part_key"] = obj.get(
+                    "columns_participating_in_part_key"
                 )
             if obj.get("is_typed", "") != "":
                 custom_attributes["is_typed"] = obj.get("is_typed")
 
             if obj.get("auto_clustering_on", "") != "":
-                custom_attributes["auto_clustering_on"] = obj.get(
-                    "auto_clustering_on"
-                )
+                custom_attributes["auto_clustering_on"] = obj.get("auto_clustering_on")
 
             custom_attributes["engine"] = obj.get("engine")
 
             if obj.get("auto_increment", "") != "":
                 custom_attributes["auto_increment"] = obj.get("auto_increment")
 
-            sql_table.attributes = assets.Table.Attributes(**attributes)
+            sql_table.attributes = sql_table.attributes.copy(update=attributes)
             sql_table.custom_attributes = custom_attributes
 
             return sql_table
@@ -493,7 +489,7 @@ class Column(assets.Column):
             custom_attributes["buffer_length"] = obj.get("buffer_length")
             custom_attributes["column_size"] = obj.get("column_size")
 
-            sql_column.attributes = assets.Column.Attributes(**attributes)
+            sql_column.attributes = sql_column.attributes.copy(update=attributes)
             sql_column.custom_attributes = custom_attributes
 
             return sql_column
@@ -702,22 +698,18 @@ class Function(assets.Function):
                 attributes["function_type"] = "Scalar"
             attributes["function_return_type"] = obj.get("data_type", None)
             attributes["function_language"] = obj.get("function_language", None)
-            attributes["function_definition"] = obj.get(
-                "function_definition", None
-            )
+            attributes["function_definition"] = obj.get("function_definition", None)
             attributes["function_arguments"] = list(
                 obj.get("argument_signature", "()")[1:-1].split(",")
             )
             attributes["function_is_secure"] = obj.get("is_secure", None) == "YES"
-            attributes["function_is_external"] = (
-                obj.get("is_external", None) == "YES"
-            )
+            attributes["function_is_external"] = obj.get("is_external", None) == "YES"
             attributes["function_is_d_m_f"] = obj.get("is_data_metric", None) == "YES"
             attributes["function_is_memoizable"] = (
                 obj.get("is_memoizable", None) == "YES"
             )
 
-            function.attributes = assets.Function.Attributes(**attributes)
+            function.attributes = function.attributes.copy(update=attributes)
 
             return function
         except AssertionError as e:
@@ -910,13 +902,11 @@ class TagAttachment(assets.TagAttachment):
             object_schema = obj.get("object_schema", "")
 
             attributes = {}
-            attributes["object_database_qualified_name"] = (
-                build_atlas_qualified_name(obj["connection_qualified_name"], object_cat)
+            attributes["object_database_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], object_cat
             )
-            attributes["object_schema_qualified_name"] = (
-                build_atlas_qualified_name(
-                    obj["connection_qualified_name"], object_cat, object_schema
-                )
+            attributes["object_schema_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], object_cat, object_schema
             )
             attributes["object_database_name"] = object_cat
             attributes["object_schema_name"] = object_schema
@@ -987,7 +977,9 @@ class TagAttachment(assets.TagAttachment):
                     obj.get("mappedClassificationName", "")
                 )
 
-            tag_attachment.attributes = assets.TagAttachment.Attributes(**attributes)
+            tag_attachment.attributes = tag_attachment.attributes.copy(
+                update=attributes
+            )
             return tag_attachment
         except Exception as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
