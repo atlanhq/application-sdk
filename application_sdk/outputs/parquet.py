@@ -56,7 +56,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self.local_file_prefix = local_file_prefix
         self.upload_file_prefix = upload_file_prefix
         settings = get_settings()
-        self.chunk_size = chunk_size or settings.parquet_chunk_size
+        self.chunk_size = chunk_size or settings.chunk_size
         self.lock = asyncio.Lock()
         self.current_file = None
         self.current_file_name = None

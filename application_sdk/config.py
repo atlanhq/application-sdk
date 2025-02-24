@@ -13,11 +13,8 @@ class ApplicationSDKSettings(BaseSettings):
     variables and/or direct assignment. Environment variables take precedence over defaults.
 
     Environment Variables:
-        ATLAN_APP_SDK_SQL_CHUNK_SIZE: Chunk size for SQL query operations
-        ATLAN_APP_SDK_JSON_CHUNK_SIZE: Chunk size for JSON operations
+        ATLAN_APP_SDK_CHUNK_SIZE: Chunk size for SQL | JSON | Parquet | Iceberg I/0 query operations
         ATLAN_APP_SDK_MAX_TRANSFORM_CONCURRENCY: Maximum concurrent transformations
-        ATLAN_APP_SDK_PARQUET_CHUNK_SIZE: Chunk size for Parquet operations
-        ATLAN_APP_SDK_ICEBERG_CHUNK_SIZE: Chunk size for Iceberg operations
     """
 
     model_config = SettingsConfigDict(
@@ -27,17 +24,8 @@ class ApplicationSDKSettings(BaseSettings):
         extra="allow",
     )
 
-    # SQL Input/Output settings
-    sql_chunk_size: int = 100000
-
-    # JSON Input/Output settings
-    json_chunk_size: int = 100000
-
-    # Parquet Output settings
-    parquet_chunk_size: int = 30000
-
-    # Iceberg Input settings
-    iceberg_chunk_size: int = 100000
+    # chunk size will apply for Iceber, Parquet, JSON and SQL I/O
+    chunk_size: int = 100000
 
     # Workflow settings
     max_transform_concurrency: int = 5
@@ -77,7 +65,7 @@ def configure_settings(**kwargs: Any) -> None:
         **kwargs: Keyword arguments to override default settings.
 
     Example:
-        >>> configure_settings(sql_chunk_size=50000, max_transform_concurrency=10)
+        >>> configure_settings(chunk_size=50000, max_transform_concurrency=10)
     """
     global settings
     settings = ApplicationSDKSettings.get_settings(**kwargs)

@@ -36,7 +36,7 @@ class JsonInput(Input):
         """
         self.path = path
         settings = get_settings()
-        self.chunk_size = chunk_size or settings.json_chunk_size
+        self.chunk_size = chunk_size or settings.chunk_size
         self.file_names = file_names
         self.download_file_prefix = download_file_prefix
 

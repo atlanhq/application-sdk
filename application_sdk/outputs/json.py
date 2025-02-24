@@ -91,7 +91,7 @@ class JsonOutput(Output):
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
         settings = get_settings()
-        self.chunk_size = chunk_size or settings.json_chunk_size
+        self.chunk_size = chunk_size or settings.chunk_size
         self.buffer: List[Union[pd.DataFrame, "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
