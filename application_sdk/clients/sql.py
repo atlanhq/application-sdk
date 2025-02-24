@@ -12,12 +12,6 @@ from enum import Enum
 from typing import Any, Dict, List
 
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import (
-    DatabaseError,
-    InterfaceError,
-    OperationalError,
-    ProgrammingError,
-)
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
@@ -89,18 +83,9 @@ class SQLClient(ClientInterface):
             )
             try:
                 self.connection = self.engine.connect()
-            except OperationalError as op_err:
-                # Handles connection and authentication failures
-                raise ValueError(f"Database configuration error: {str(op_err)}")
-            except ProgrammingError as prog_err:
-                # Handles syntax errors, wrong database name, etc.
-                raise ValueError(f"Database configuration error: {str(prog_err)}")
-            except InterfaceError as int_err:
-                # Handles connection adapter errors
-                raise ValueError(f"Database interface error: {str(int_err)}")
-            except DatabaseError as db_err:
-                # Handles other database-related errors
-                raise ValueError(f"Database error: {str(db_err)}")
+            except Exception as e:
+                activity.logger.error(f"Error loading SQL client: {str(e)}")
+                raise
         except Exception as e:
             activity.logger.error(f"Error loading SQL client: {str(e)}")
             if self.engine:
@@ -201,18 +186,11 @@ class AsyncSQLClient(SQLClient):
             )
             try:
                 self.connection = await self.engine.connect()
-            except OperationalError as op_err:
-                # Handles connection and authentication failures
-                raise ValueError(f"Database configuration error: {str(op_err)}")
-            except ProgrammingError as prog_err:
-                # Handles syntax errors, wrong database name, etc.
-                raise ValueError(f"Database configuration error: {str(prog_err)}")
-            except InterfaceError as int_err:
-                # Handles connection adapter errors
-                raise ValueError(f"Database interface error: {str(int_err)}")
-            except DatabaseError as db_err:
-                # Handles other database-related errors
-                raise ValueError(f"Database error: {str(db_err)}")
+            except Exception as e:
+                activity.logger.error(
+                    f"Error establishing database connection: {str(e)}"
+                )
+                raise
         except Exception as e:
             activity.logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
