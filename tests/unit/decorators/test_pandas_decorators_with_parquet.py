@@ -98,11 +98,17 @@ class TestPandasDecoratorsParquet:
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
-    async def test_parquet_single_input_and_output(self, _):
+    @patch("application_sdk.inputs.parquet.ParquetInput.read_file")
+    @patch("application_sdk.outputs.parquet.ParquetOutput.upload_file")
+    async def test_parquet_single_input_and_output(self, mock_upload, mock_read, _):
         """
         Test to read the data from a parquet file (INPUT), transform it
         and write it back to another parquet file (OUTPUT)
         """
+        # Configure mock for read_file to return the input file path
+        mock_read.return_value = self.input_file
+        # Configure mock for upload_file to do nothing
+        mock_upload.return_value = None
 
         @transform(
             batch_input=ParquetInput(
@@ -137,10 +143,17 @@ class TestPandasDecoratorsParquet:
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
-    async def test_parquet_batch_processing(self, _):
+    @patch("application_sdk.inputs.parquet.ParquetInput.read_file")
+    @patch("application_sdk.outputs.parquet.ParquetOutput.upload_file")
+    async def test_parquet_batch_processing(self, mock_upload, mock_read, _):
         """
         Test to read the parquet data in batches
         """
+        # Configure mock for read_file to return the input file path
+        mock_read.return_value = self.input_file
+        # Configure mock for upload_file to do nothing
+        mock_upload.return_value = None
+
         batch_count = 0
 
         @transform(
