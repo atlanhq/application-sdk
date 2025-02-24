@@ -70,14 +70,24 @@ class SQLClient(ClientInterface):
 
         Args:
             credentials (Dict[str, Any]): Database connection credentials.
+
+        Raises:
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
-        self.engine = create_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.sql_alchemy_connect_args,
-            pool_pre_ping=True,
-        )
-        self.connection = self.engine.connect()
+        try:
+            self.engine = create_engine(
+                self.get_sqlalchemy_connection_string(),
+                connect_args=self.sql_alchemy_connect_args,
+                pool_pre_ping=True,
+            )
+            self.connection = self.engine.connect()
+        except Exception as e:
+            activity.logger.error(f"Error loading SQL client: {str(e)}")
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+            raise
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -159,14 +169,24 @@ class AsyncSQLClient(SQLClient):
 
         Args:
             credentials (Dict[str, Any]): Database connection credentials.
+
+        Raises:
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
-        self.engine = create_async_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.sql_alchemy_connect_args,
-            pool_pre_ping=True,
-        )
-        self.connection = await self.engine.connect()
+        try:
+            self.engine = create_async_engine(
+                self.get_sqlalchemy_connection_string(),
+                connect_args=self.sql_alchemy_connect_args,
+                pool_pre_ping=True,
+            )
+            self.connection = await self.engine.connect()
+        except Exception as e:
+            activity.logger.error(f"Error establishing database connection: {str(e)}")
+            if self.engine:
+                await self.engine.dispose()
+                self.engine = None
+            raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """
