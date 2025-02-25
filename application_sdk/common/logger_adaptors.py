@@ -105,11 +105,13 @@ class AtlanLoggerAdapter:
             attributes = env_var.split(",")
             # Create a dictionary from the key-value pairs
             return {
-                item.split("=")[0].strip(): item.split("=")[1].strip()  # Strip spaces around the key and value
-                for item in attributes if "=" in item  # Ensure there's an "=" to split
+                item.split("=")[0].strip(): item.split("=")[
+                    1
+                ].strip()  # Strip spaces around the key and value
+                for item in attributes
+                if "=" in item  # Ensure there's an "=" to split
             }
         return {}
-
 
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord."""
