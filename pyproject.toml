@@ -24,7 +24,7 @@ pydantic = "^2.10.6"
 loguru = "^0.7.3"
 uvloop = "^0.21.0" # in worker module for managing Temporal workers.
 mkdocs = "^1.6.1"  # Added here for docgen module
-mkdocs-material = "^9.6.4" 
+mkdocs-material = "^9.6.4"
 
 [tool.poetry.extras]
 workflows = [
