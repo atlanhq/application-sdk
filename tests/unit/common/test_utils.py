@@ -1,5 +1,4 @@
 from typing import Dict, List, Union
-
 from unittest.mock import Mock, patch
 
 from application_sdk.common.utils import (
@@ -45,7 +44,9 @@ class TestPrepareQuery:
 
     def test_query_preparation_with_empty_filters(self) -> None:
         """Test query preparation with empty filter strings"""
-        query = "SELECT * FROM {normalized_include_regex} WHERE {normalized_exclude_regex}"
+        query = (
+            "SELECT * FROM {normalized_include_regex} WHERE {normalized_exclude_regex}"
+        )
         workflow_args: Dict[str, Dict[str, str]] = {
             "metadata": {
                 "include-filter": "",
@@ -125,7 +126,9 @@ class TestNormalizeFilters:
         }
         result = normalize_filters(filter_dict, True)
 
-        assert sorted(result) == sorted(["db1\\.schema1", "db1\\.schema2", "db2\\.schema3"])
+        assert sorted(result) == sorted(
+            ["db1\\.schema1", "db1\\.schema2", "db2\\.schema3"]
+        )
 
     def test_normalize_filters_with_wildcard(self) -> None:
         """Test normalize_filters with wildcard schema"""
@@ -164,9 +167,7 @@ class TestWorkflowConfig:
 
     @patch("application_sdk.common.utils.StateStoreInput.extract_configuration")
     @patch("application_sdk.common.utils.StateStoreOutput.store_configuration")
-    def test_update_workflow_config(
-        self, mock_store: Mock, mock_extract: Mock
-    ) -> None:
+    def test_update_workflow_config(self, mock_store: Mock, mock_extract: Mock) -> None:
         """Test updating workflow configuration"""
         existing_config = {"key1": "value1", "key2": "value2"}
         update_config = {"key1": "new_value", "key3": "value3"}

@@ -24,7 +24,9 @@ class TestValidateFilters:
         self, allowed_databases: Set[str], allowed_schemas: Set[str]
     ) -> None:
         """Test validation with valid database and schema combinations"""
-        include_filter: Dict[str, List[str] | str] = {"^db1$": ["^schema1$", "^schema2$"]}
+        include_filter: Dict[str, List[str] | str] = {
+            "^db1$": ["^schema1$", "^schema2$"]
+        }
         success, message = SQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )

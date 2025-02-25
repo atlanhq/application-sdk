@@ -21,14 +21,15 @@ class TestAuthenticationHandler:
         return handler
 
     @pytest.mark.asyncio
-    async def test_successful_authentication(
-        self, handler: SQLHandler
-    ) -> None:
+    async def test_successful_authentication(self, handler: SQLHandler) -> None:
         """Test successful authentication with valid credentials"""
         # Mock a successful DataFrame response
         mock_df = pd.DataFrame({"result": [1]})
-        
-        with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe", new_callable=AsyncMock) as mock_get_dataframe:
+
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
             mock_get_dataframe.return_value = mock_df
 
             # Test authentication
@@ -39,11 +40,12 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_failed_authentication(
-        self, handler: SQLHandler
-    ) -> None:
+    async def test_failed_authentication(self, handler: SQLHandler) -> None:
         """Test failed authentication with invalid credentials"""
-        with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe", new_callable=AsyncMock) as mock_get_dataframe:
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
             # Mock a failed response
             mock_get_dataframe.side_effect = Exception("Authentication failed")
 
@@ -56,11 +58,12 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_dataframe_authentication(
-        self, handler: SQLHandler
-    ) -> None:
+    async def test_empty_dataframe_authentication(self, handler: SQLHandler) -> None:
         """Test authentication with empty DataFrame response"""
-        with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe", new_callable=AsyncMock) as mock_get_dataframe:
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
             # Mock an empty DataFrame
             mock_df = pd.DataFrame()
             mock_get_dataframe.return_value = mock_df
@@ -73,11 +76,12 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_none_dataframe_authentication(
-        self, handler: SQLHandler
-    ) -> None:
+    async def test_none_dataframe_authentication(self, handler: SQLHandler) -> None:
         """Test authentication with None DataFrame response"""
-        with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe", new_callable=AsyncMock) as mock_get_dataframe:
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
             # Mock None response
             mock_get_dataframe.return_value = None
 
@@ -94,7 +98,10 @@ class TestAuthenticationHandler:
         self, handler: SQLHandler
     ) -> None:
         """Test authentication with malformed DataFrame that raises on to_dict"""
-        with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe", new_callable=AsyncMock) as mock_get_dataframe:
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
             # Create a mock DataFrame that raises on to_dict
             mock_df = Mock(spec=pd.DataFrame)
             mock_df.to_dict.side_effect = Exception("DataFrame conversion error")
@@ -109,11 +116,12 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_custom_sql_query(
-        self, handler: SQLHandler
-    ) -> None:
+    async def test_custom_sql_query(self, handler: SQLHandler) -> None:
         """Test authentication with custom SQL query"""
-        with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe", new_callable=AsyncMock) as mock_get_dataframe:
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
             # Set custom test query
             handler.test_authentication_sql = "SELECT version();"
             mock_df = pd.DataFrame({"version": ["test_version"]})

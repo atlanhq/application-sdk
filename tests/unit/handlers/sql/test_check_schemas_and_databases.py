@@ -112,7 +112,7 @@ class TestCheckSchemasAndDatabases:
         """Test check when prepare_metadata raises an error"""
         handler.prepare_metadata = AsyncMock(side_effect=Exception("Database error"))
 
-        payload = {"metadata": {"include-filter": '{}'}}
+        payload = {"metadata": {"include-filter": "{}"}}
         result = await handler.check_schemas_and_databases(payload)
 
         assert result["success"] is False

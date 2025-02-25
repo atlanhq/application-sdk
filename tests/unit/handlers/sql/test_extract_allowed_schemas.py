@@ -18,7 +18,9 @@ class TestExtractAllowedSchemas:
         schemas_results: List[Dict[str, str]] = [
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
         ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == {"db1"}
         assert allowed_schemas == {"db1.schema1"}
@@ -29,7 +31,9 @@ class TestExtractAllowedSchemas:
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},
         ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == {"db1"}
         assert allowed_schemas == {"db1.schema1", "db1.schema2"}
@@ -40,7 +44,9 @@ class TestExtractAllowedSchemas:
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
             {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": "schema1"},
         ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == {"db1", "db2"}
         assert allowed_schemas == {"db1.schema1", "db2.schema1"}
@@ -48,7 +54,9 @@ class TestExtractAllowedSchemas:
     def test_empty_results(self, handler: SQLHandler) -> None:
         """Test extraction with empty results"""
         schemas_results: List[Dict[str, str]] = []
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == set()
         assert allowed_schemas == set()
@@ -62,7 +70,9 @@ class TestExtractAllowedSchemas:
             {"DATABASE": "db1", "SCHEMA": "schema1"},
             {"DATABASE": "db1", "SCHEMA": "schema2"},
         ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == {"db1"}
         assert allowed_schemas == {"db1.schema1", "db1.schema2"}
@@ -74,7 +84,9 @@ class TestExtractAllowedSchemas:
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},  # Duplicate entry
             {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},
         ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == {"db1"}
         assert allowed_schemas == {"db1.schema1", "db1.schema2"}
@@ -94,7 +106,9 @@ class TestExtractAllowedSchemas:
             {"TABLE_CATALOG": "db-1", "TABLE_SCHEMA": "schema.1"},
             {"TABLE_CATALOG": "db_2", "TABLE_SCHEMA": "schema@2"},
         ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(schemas_results)
+        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
+            schemas_results
+        )
 
         assert allowed_databases == {"db-1", "db_2"}
         assert allowed_schemas == {"db-1.schema.1", "db_2.schema@2"}
