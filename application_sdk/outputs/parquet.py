@@ -1,39 +1,35 @@
-import asyncio
 import os
 import types
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Type
 
-import orjson
-import pyarrow as pa
-import pyarrow.parquet as pq
+import pandas as pd
 from temporalio import activity
 
+from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
+from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
 
 
-class ChunkedObjectStoreWriterInterface(ABC):
-    """Abstract base class for chunked object store writers.
+class ParquetOutput(Output):
+    """Output handler for writing data to Parquet files.
 
-    This class provides a common interface for writing data in chunks to files
-    and uploading them to an object store.
+    This class handles writing DataFrames to Parquet files with support for chunking
+    and automatic uploading to object store.
 
     Attributes:
-        local_file_prefix (str): Prefix for local file paths.
-        upload_file_prefix (str): Prefix for files when uploading to object store.
+        output_path (str): Base path where Parquet files will be written.
+        output_prefix (str): Prefix for files when uploading to object store.
+        output_suffix (str): Suffix for output files.
+        typename (Optional[str]): Type name of the entity e.g database, schema, table.
+        mode (str): Write mode for parquet files ("append" or "overwrite").
         chunk_size (int): Maximum number of records per chunk.
-        buffer_size (int): Size of the buffer in bytes.
-        current_file: Current file being written to.
-        current_file_name (str): Name of the current file.
-        current_file_number (int): Current chunk number.
-        current_record_count (int): Number of records in current chunk.
         total_record_count (int): Total number of records processed.
-        buffer (List[str]): Buffer holding records before writing.
-        current_buffer_size (int): Current size of the buffer.
+        chunk_count (int): Number of chunks created.
     """
 
     def __init__(
@@ -68,50 +64,78 @@ class ChunkedObjectStoreWriterInterface(ABC):
         self.buffer_size = buffer_size
         self.current_buffer_size = 0
 
-        os.makedirs(self.local_file_prefix, exist_ok=True)
+        # Create output directory
+        full_path = f"{output_path}{output_suffix}"
+        if typename:
+            full_path = f"{full_path}/{typename}"
+        os.makedirs(full_path, exist_ok=True)
 
-    @abstractmethod
-    async def write(self, data: Dict[str, Any]) -> None:
-        """Write a single record to the output.
-
-        Args:
-            data (Dict[str, Any]): Record to write.
-        """
-        raise NotImplementedError
-
-    async def write_list(self, data: List[Dict[str, Any]]) -> None:
-        """Write multiple records to the output.
+    async def write_dataframe(self, dataframe: pd.DataFrame):
+        """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
-            data (List[Dict[str, Any]]): List of records to write.
+            dataframe (pd.DataFrame): The DataFrame to write.
         """
-        for record in data:
-            await self.write(record)
+        try:
+            if len(dataframe) == 0:
+                return
 
-    @abstractmethod
-    async def close(self) -> int:
-        """Close the current file and clean up resources.
+            # Update counters
+            self.chunk_count += 1
+            self.total_record_count += len(dataframe)
 
-        Returns:
-            int: Total number of records written.
+            # Generate output file path
+            file_path = f"{self.output_path}{self.output_suffix}"
+            if self.typename:
+                file_path = f"{file_path}/{self.typename}"
+            file_path = f"{file_path}_{self.chunk_count}.parquet"
+
+            # Write the dataframe to parquet using pandas native method
+            dataframe.to_parquet(
+                file_path,
+                index=False,
+                compression="snappy",  # Using snappy compression by default
+            )
+
+            # Upload the file to object store
+            await self.upload_file(file_path)
+        except Exception as e:
+            activity.logger.error(
+                f"Error writing pandas dataframe to parquet: {str(e)}"
+            )
+            raise
+
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+        """Write a daft DataFrame to Parquet files and upload to object store.
+
+        Args:
+            dataframe (daft.DataFrame): The DataFrame to write.
         """
-        raise NotImplementedError
+        try:
+            if dataframe.count_rows() == 0:
+                return
 
-    async def close_current_file(self):
-        """Close the current file and upload it to object store.
+            # Update counters
+            self.chunk_count += 1
+            self.total_record_count += dataframe.count_rows()
 
-        This method closes the current file if one is open, uploads it to
-        the object store, and optionally removes the local copy.
-        """
-        if not self.current_file:
-            return
+            # Generate output file path
+            file_path = f"{self.output_path}{self.output_suffix}"
+            if self.typename:
+                file_path = f"{file_path}/{self.typename}"
+            file_path = f"{file_path}_{self.chunk_count}.parquet"
 
-        await self.current_file.close()
-        await self.upload_file(self.current_file_name)
-        # os.unlink(self.current_file_name)
-        activity.logger.info(
-            f"Uploaded file: {self.current_file_name} and removed local copy"
-        )
+            # Write the dataframe to parquet using daft
+            dataframe.write_parquet(
+                file_path,
+                write_mode="overwrite" if self.mode == "overwrite" else "append",
+            )
+
+            # Upload the file to object store
+            await self.upload_file(file_path)
+        except Exception as e:
+            activity.logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
+            raise
 
     async def upload_file(self, local_file_path: str) -> None:
         """Upload a file to the object store.
@@ -120,7 +144,7 @@ class ChunkedObjectStoreWriterInterface(ABC):
             local_file_path (str): Path to the local file to upload.
         """
         activity.logger.info(
-            f"Uploading file: {local_file_path} to {self.upload_file_prefix}"
+            f"Uploading file: {local_file_path} to {self.output_prefix}"
         )
         await ObjectStoreOutput.push_file_to_object_store(
             self.upload_file_prefix, local_file_path
@@ -266,9 +290,3 @@ class ParquetChunkedObjectStoreWriter(ChunkedObjectStoreWriterInterface):
         self.current_file_name = (
             f"{self.local_file_prefix}_{self.current_file_number}.parquet"
         )
-        self.current_file = pq.ParquetWriter(
-            self.current_file_name, self.schema, **self.parquet_writer_options
-        )
-
-        activity.logger.info(f"Created new file: {self.current_file_name}")
-        self.current_record_count = 0
