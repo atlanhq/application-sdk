@@ -36,7 +36,7 @@ jobs:
             https://api.github.com/repos/$repo_owner/$repo_name/dispatches \
             -d "{\"event_type\": \"$event_type\", \"client_payload\": {\"commit_hash\": \"$commit_hash\"}}")
 
-          echo "Triggered workflow in $repo_name"
+          echo "Triggered workflow in $repo_name with $response"
 
       - name: Check Workflow Status
         run: |
