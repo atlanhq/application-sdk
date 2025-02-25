@@ -77,9 +77,12 @@ jobs:
           poetry lock
 
       - name: Commit version bump and changelog
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
+          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/$GITHUB_REPOSITORY
 
           git add pyproject.toml poetry.lock
           git commit -m "chore(release): bump version"
