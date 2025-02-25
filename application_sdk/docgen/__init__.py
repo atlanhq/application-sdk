@@ -1,4 +1,3 @@
-import logging
 import os
 from datetime import datetime
 from typing import List
@@ -22,7 +21,7 @@ class AtlanDocsGenerator:
     """
 
     def __init__(self, docs_directory_path: str, export_path: str) -> None:
-        self.logger = AtlanLoggerAdapter(str(logging.getLogger(__name__)))
+        self.logger = AtlanLoggerAdapter(logger_name=__name__)
 
         self.docs_directory_path = docs_directory_path
         self.export_path = export_path
