@@ -116,16 +116,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         sql_client = self.sql_client_class()
 
+        handler = self.handler_class(sql_client)
+        self._state[workflow_id].handler = handler
+
         if "credential_guid" in workflow_args:
             credentials = SecretStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
 
-        handler = self.handler_class(sql_client)
-
         self._state[workflow_id].sql_client = sql_client
-        self._state[workflow_id].handler = handler
         self._state[workflow_id].transformer = self.transformer_class(
             connector_name=ApplicationConstants.APPLICATION_NAME.value,
             connector_type="sql",
