@@ -269,7 +269,7 @@ lxml = ["lxml"]
 name = "black"
 version = "25.1.0"
 description = "The uncompromising code formatter."
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "black-25.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:759e7ec1e050a15f89b770cefbf91ebee8917aac5c20483bc2d80a6c3a04df32"},
@@ -904,7 +904,7 @@ files = [
 name = "chardet"
 version = "5.2.0"
 description = "Universal encoding detector for Python 3"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "chardet-5.2.0-py3-none-any.whl", hash = "sha256:e1cf59446890a00105fe7b7912492ea04b6e6f06d4b742b2c788469e34c82970"},
@@ -1454,7 +1454,7 @@ typing = ["typing-extensions (>=4.12.2)"]
 name = "frictionless"
 version = "4.40.8"
 description = "Data management framework for Python that provides functionality to describe, extract, validate, and transform tabular data"
-optional = false
+optional = true
 python-versions = "*"
 files = [
     {file = "frictionless-4.40.8-py2.py3-none-any.whl", hash = "sha256:87b71da5ba5f694b2091aabc6f705cf1c00bb44395964735d57aec00a89c555f"},
@@ -2110,7 +2110,7 @@ files = [
 name = "isodate"
 version = "0.7.2"
 description = "An ISO 8601 date/time/duration parser and formatter"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15"},
@@ -2163,7 +2163,7 @@ files = [
 name = "jsonschema"
 version = "4.23.0"
 description = "An implementation of JSON Schema validation for Python"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "jsonschema-4.23.0-py3-none-any.whl", hash = "sha256:fbadb6f8b144a8f8cf9f0b89ba94501d143e50411a1278633f56a7acf7fd5566"},
@@ -2184,7 +2184,7 @@ format-nongpl = ["fqdn", "idna", "isoduration", "jsonpointer (>1.13)", "rfc3339-
 name = "jsonschema-specifications"
 version = "2024.10.1"
 description = "The JSON Schema meta-schemas and vocabularies, exposed as a Registry"
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "jsonschema_specifications-2024.10.1-py3-none-any.whl", hash = "sha256:a09a0680616357d9a0ecf05c12ad234479f549239d0f5b55f3deea67475da9bf"},
@@ -2274,7 +2274,7 @@ testing = ["coverage", "pytest", "pytest-cov", "pytest-regressions"]
 name = "marko"
 version = "2.1.2"
 description = "A markdown parser with high extensibility."
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "marko-2.1.2-py3-none-any.whl", hash = "sha256:c14aa7a77468aaaf53cf056dcd3d32398b9df4c3fb81f5e120dd37cbb9f8c859"},
@@ -2713,7 +2713,7 @@ files = [
 name = "mypy-extensions"
 version = "1.0.0"
 description = "Type system extensions for programs checked with the mypy type checker."
-optional = false
+optional = true
 python-versions = ">=3.5"
 files = [
     {file = "mypy_extensions-1.0.0-py3-none-any.whl", hash = "sha256:4392f6c0eb8a5668a69e23d168ffa70f0be9ccfd32b5cc2d26a34ae5b844552d"},
@@ -2772,7 +2772,7 @@ files = [
 name = "numpy"
 version = "2.2.3"
 description = "Fundamental package for array computing in Python"
-optional = false
+optional = true
 python-versions = ">=3.10"
 files = [
     {file = "numpy-2.2.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:cbc6472e01952d3d1b2772b720428f8b90e2deea8344e854df22b0618e9cce71"},
@@ -2965,7 +2965,7 @@ opentelemetry-api = "1.30.0"
 name = "orjson"
 version = "3.10.15"
 description = "Fast, correct Python JSON library supporting dataclasses, datetimes, and numpy"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "orjson-3.10.15-cp310-cp310-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:552c883d03ad185f720d0c09583ebde257e41b9521b74ff40e08b7dec4559c04"},
@@ -3079,7 +3079,7 @@ lint = ["black"]
 name = "pandas"
 version = "2.2.3"
 description = "Powerful data structures for data analysis, time series, and statistics"
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "pandas-2.2.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:1948ddde24197a0f7add2bdc4ca83bf2b1ef84a1bc8ccffd95eda17fd836ecb5"},
@@ -3164,7 +3164,7 @@ xml = ["lxml (>=4.9.2)"]
 name = "pandera"
 version = "0.22.1"
 description = "A light-weight and flexible data validation and testing tool for statistical data objects."
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "pandera-0.22.1-py3-none-any.whl", hash = "sha256:2a35531b4b533ac83e606a6dcc3cd41561774ff3d872117228e931f22e72f330"},
@@ -3212,7 +3212,7 @@ files = [
 name = "petl"
 version = "1.7.15"
 description = "A Python package for extracting, transforming and loading tables of data."
-optional = false
+optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
 files = [
     {file = "petl-1.7.15.tar.gz", hash = "sha256:8e31438380ad51552539865ad3b1ab655de1b531bd03980c871ec2cff4a8c414"},
@@ -4000,7 +4000,7 @@ testing = ["coverage (>=6.2)", "hypothesis (>=5.7.1)"]
 name = "pytest-order"
 version = "1.3.0"
 description = "pytest plugin to run your tests in a specific order"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "pytest_order-1.3.0-py3-none-any.whl", hash = "sha256:2cd562a21380345dd8d5774aa5fd38b7849b6ee7397ca5f6999bbe6e89f07f6e"},
@@ -4053,7 +4053,7 @@ files = [
 name = "python-slugify"
 version = "8.0.4"
 description = "A Python slugify application that also handles Unicode"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "python-slugify-8.0.4.tar.gz", hash = "sha256:59202371d1d05b54a9e7720c5e038f928f45daaffe41dd10822f3907b937c856"},
@@ -4157,7 +4157,7 @@ pyyaml = "*"
 name = "referencing"
 version = "0.36.2"
 description = "JSON Referencing + Python"
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "referencing-0.36.2-py3-none-any.whl", hash = "sha256:e8699adbbf8b5c7de96d8ffa0eb5c158b3beafce084968e2ea8bb08c6794dcd0"},
@@ -4297,7 +4297,7 @@ use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 name = "rfc3986"
 version = "2.0.0"
 description = "Validating URI References per RFC 3986"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "rfc3986-2.0.0-py2.py3-none-any.whl", hash = "sha256:50b1502b60e289cb37883f3dfd34532b8873c7de9f49bb546641ce9cbd256ebd"},
@@ -4360,7 +4360,7 @@ test = ["pytest (>=8)"]
 name = "rpds-py"
 version = "0.23.1"
 description = "Python bindings to Rust's persistent data structures (rpds)"
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "rpds_py-0.23.1-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:2a54027554ce9b129fc3d633c92fa33b30de9f08bc61b32c053dc9b537266fed"},
@@ -4451,7 +4451,7 @@ files = [
 name = "simpleeval"
 version = "1.0.3"
 description = "A simple, safe single expression evaluator library."
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "simpleeval-1.0.3-py3-none-any.whl", hash = "sha256:e3bdbb8c82c26297c9a153902d0fd1858a6c3774bf53ff4f134788c3f2035c38"},
@@ -4864,7 +4864,7 @@ python-dateutil = ">=2.6.0"
 name = "stringcase"
 version = "1.2.0"
 description = "String case converter."
-optional = false
+optional = true
 python-versions = "*"
 files = [
     {file = "stringcase-1.2.0.tar.gz", hash = "sha256:48a06980661908efe8d9d34eab2b6c13aefa2163b3ced26972902e3bdfd87008"},
@@ -4874,7 +4874,7 @@ files = [
 name = "tabulate"
 version = "0.9.0"
 description = "Pretty-print tabular data"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f"},
@@ -4970,7 +4970,7 @@ telegram = ["requests"]
 name = "typeguard"
 version = "4.4.2"
 description = "Run-time type checker for Python"
-optional = false
+optional = true
 python-versions = ">=3.9"
 files = [
     {file = "typeguard-4.4.2-py3-none-any.whl", hash = "sha256:77a78f11f09777aeae7fa08585f33b5f4ef0e7335af40005b0c422ed398ff48c"},
@@ -5049,7 +5049,7 @@ files = [
 name = "typing-inspect"
 version = "0.9.0"
 description = "Runtime inspection utilities for typing module."
-optional = false
+optional = true
 python-versions = "*"
 files = [
     {file = "typing_inspect-0.9.0-py3-none-any.whl", hash = "sha256:9ee6fc59062311ef8547596ab6b955e1b8aa46242d854bfc78f4f6b0eff35f9f"},
@@ -5168,7 +5168,7 @@ test = ["aiohttp (>=3.10.5)", "flake8 (>=5.0,<6.0)", "mypy (>=0.800)", "psutil",
 name = "validators"
 version = "0.34.0"
 description = "Python Data Validation for Humans™"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "validators-0.34.0-py3-none-any.whl", hash = "sha256:c804b476e3e6d3786fa07a30073a4ef694e617805eb1946ceee3fe5a9b8b1321"},
@@ -5623,9 +5623,10 @@ daft = ["getdaft"]
 iam-auth = ["boto3"]
 iceberg = ["pyiceberg"]
 sqlalchemy = ["sqlalchemy"]
+tests = ["orjson", "pandera", "pytest-order"]
 workflows = ["dapr", "pandas", "temporalio"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "f364f4b73dcd3a4378263115105ad6e22c31c442813bb8ca0e9061ee247e0206"
+content-hash = "16390333c38fb3261a2852ab27c793d64946d0b7cfff5b734d1513610586933f"
