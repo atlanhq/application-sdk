@@ -3,9 +3,6 @@ import os
 from datetime import datetime
 from typing import List
 
-from mkdocs import config
-from mkdocs.commands import build
-
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
 from application_sdk.docgen.models.export.page import Page
@@ -25,7 +22,7 @@ class AtlanDocsGenerator:
     """
 
     def __init__(self, docs_directory_path: str, export_path: str) -> None:
-        self.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+        self.logger = AtlanLoggerAdapter(str(logging.getLogger(__name__)))
 
         self.docs_directory_path = docs_directory_path
         self.export_path = export_path
@@ -62,6 +59,16 @@ class AtlanDocsGenerator:
         Raises:
             Exception: Any exception that occurs during manifest parsing or export process.
         """
+
+        try:
+            from mkdocs import config
+            from mkdocs.commands import build
+        except ImportError:
+            self.logger.warning(
+                "mkdocs is not installed. Please install it using 'pip install mkdocs'"
+            )
+            return
+
         try:
             manifest = self.manifest_parser.parse_manifest()
         except Exception as e:
