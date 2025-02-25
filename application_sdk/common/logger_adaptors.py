@@ -2,7 +2,7 @@ import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
-from typing import Any, Dict, MutableMapping, Tuple
+from typing import Any, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
@@ -191,25 +191,23 @@ class AtlanLoggerAdapter:
 
         return msg, kwargs
 
-    def debug(
-        self, msg: str, *args: Any, **kwargs: Dict[Any, MutableMapping[str, Any]]
-    ):
+    def debug(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.debug(msg, *args, **kwargs)
 
-    def info(self, msg: str, *args: Any, **kwargs: MutableMapping[str, Any]):
+    def info(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.info(msg, *args, **kwargs)
 
-    def warning(self, msg: str, *args: Any, **kwargs: MutableMapping[str, Any]):
+    def warning(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.warning(msg, *args, **kwargs)
 
-    def error(self, msg: str, *args: Any, **kwargs: MutableMapping[str, Any]):
+    def error(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.error(msg, *args, **kwargs)
 
-    def critical(self, msg: str, *args: Any, **kwargs: MutableMapping[str, Any]):
+    def critical(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.critical(msg, *args, **kwargs)
 
