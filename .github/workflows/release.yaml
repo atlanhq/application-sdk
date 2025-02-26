@@ -77,6 +77,8 @@ jobs:
           poetry lock
 
       - name: Commit version bump and changelog
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
