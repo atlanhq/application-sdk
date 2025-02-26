@@ -7,7 +7,6 @@ import pandas as pd
 import pytest
 from temporalio import activity
 
-from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.outputs import Output, is_empty_dataframe
 
 
@@ -51,7 +50,7 @@ class TestOutput:
         """Test re_init class method."""
         kwargs: Dict[str, Any] = {
             "output_path": "/new/path",
-            "output_prefix": "/new/prefix"
+            "output_prefix": "/new/prefix",
         }
         new_output = self.ConcreteOutput.re_init(**kwargs)
         assert isinstance(new_output, self.ConcreteOutput)
@@ -61,6 +60,7 @@ class TestOutput:
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_sync(self):
         """Test write_batched_dataframe with sync generator."""
+
         def generate_dataframes():
             yield pd.DataFrame({"col": [1, 2]})
             yield pd.DataFrame({"col": [3, 4]})
@@ -72,6 +72,7 @@ class TestOutput:
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_async(self):
         """Test write_batched_dataframe with async generator."""
+
         async def generate_dataframes():
             yield pd.DataFrame({"col": [1, 2]})
             yield pd.DataFrame({"col": [3, 4]})
@@ -83,6 +84,7 @@ class TestOutput:
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_empty(self):
         """Test write_batched_dataframe with empty DataFrame."""
+
         def generate_empty_dataframes():
             yield pd.DataFrame()
 
@@ -93,6 +95,7 @@ class TestOutput:
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_error(self):
         """Test write_batched_dataframe error handling."""
+
         def generate_error():
             yield pd.DataFrame({"col": [1]})
             raise Exception("Test error")
@@ -100,7 +103,9 @@ class TestOutput:
         with patch.object(activity.logger, "error") as mock_logger:
             await self.output.write_batched_dataframe(generate_error())
             mock_logger.assert_called_once()
-            assert "Error writing batched dataframe to json" in mock_logger.call_args[0][0]
+            assert (
+                "Error writing batched dataframe to json" in mock_logger.call_args[0][0]
+            )
 
     @pytest.mark.asyncio
     async def test_get_statistics_error(self):
@@ -116,15 +121,12 @@ class TestOutput:
         self.output.total_record_count = 100
         self.output.chunk_count = 5
 
-        with patch("pandas.DataFrame.to_json") as mock_to_json, \
-             patch("application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store") as mock_push:
-            
+        with patch("pandas.DataFrame.to_json") as mock_to_json, patch(
+            "application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store"
+        ) as mock_push:
             stats = await self.output.write_statistics()
-            
-            assert stats == {
-                "total_record_count": 100,
-                "chunk_count": 5
-            }
+
+            assert stats == {"total_record_count": 100, "chunk_count": 5}
             mock_to_json.assert_called_once()
             mock_push.assert_called_once()
 
@@ -133,7 +135,7 @@ class TestOutput:
         """Test write_statistics error handling."""
         with patch("pandas.DataFrame.to_json") as mock_to_json:
             mock_to_json.side_effect = Exception("Test error")
-            
+
             with patch.object(activity.logger, "error") as mock_logger:
                 result = await self.output.write_statistics()
                 assert result is None
