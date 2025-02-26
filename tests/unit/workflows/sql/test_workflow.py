@@ -1,4 +1,5 @@
 import re
+from typing import Any, Dict, List
 
 import pytest
 
@@ -22,13 +23,17 @@ def test_workflow_initialization():
 def normalize_sql(query: str) -> str:
     """
     Normalize SQL queries by removing extra whitespace, line breaks, and indentation.
+    Also normalizes spacing around semicolons and parentheses.
     """
+    # First remove all whitespace around semicolons and parentheses
+    query = re.sub(r"\s*([;()])\s*", r"\1", query)
+    # Then normalize all other whitespace
     return re.sub(r"\s+", " ", query).strip()
 
 
 @pytest.mark.asyncio
 async def test_prepare_query():
-    test_cases = [
+    test_cases: List[Dict[str, Any]] = [
         {
             "query": """SELECT
                         S.COMMENT AS REMARKS, S.*, IFNULL(T.TABLE_COUNT, 0) AS TABLE_COUNT, IFNULL(V.VIEW_COUNT, 0) AS VIEW_COUNT
@@ -62,9 +67,32 @@ async def test_prepare_query():
                             and concat(CATALOG_NAME, concat('.', SCHEMA_NAME)) NOT REGEXP '^$'
                             and concat(CATALOG_NAME, concat('.', SCHEMA_NAME)) REGEXP '.*';""",
         },
+        {
+            "query": """SELECT count(*) as "count"
+                    FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+                    WHERE NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_exclude_regex}'
+                        AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '{normalized_include_regex}'
+                        {temp_table_regex_sql};""",
+            "workflow_args": {
+                "metadata": {
+                    "include-filter": "{}",
+                    "exclude-filter": "{}",
+                    "temp-table-regex": "",
+                }
+            },
+            "temp_table_regex_sql": "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'",
+            "expected": """SELECT count(*) as "count"
+                    FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES
+                    WHERE NOT concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '^$'
+                        AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) RLIKE '.*';""",
+        },
     ]
 
     for case in test_cases:
-        result = prepare_query(case["query"], case["workflow_args"])
+        result = prepare_query(
+            query=case["query"],
+            workflow_args=case["workflow_args"],
+            temp_table_regex_sql=case.get("temp_table_regex_sql", ""),
+        )
         # Normalize both the result and the expected SQL before asserting
         assert normalize_sql(result) == normalize_sql(case["expected"])

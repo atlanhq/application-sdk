@@ -1,5 +1,6 @@
 """Secret store for the application."""
 
+import os
 import uuid
 from typing import Any, Dict
 
@@ -7,7 +8,7 @@ from application_sdk.outputs.statestore import StateStoreOutput
 
 
 class SecretStoreOutput:
-    SECRET_STORE_NAME = "secretstore"
+    SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 
     @classmethod
     def store_credentials(cls, config: Dict[str, Any]) -> str:

@@ -8,12 +8,14 @@ import asyncio
 import threading
 from typing import Any, List, Optional, Sequence
 
+import uvloop
 from temporalio.types import CallableType
 
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class Worker:

@@ -70,14 +70,24 @@ class SQLClient(ClientInterface):
 
         Args:
             credentials (Dict[str, Any]): Database connection credentials.
+
+        Raises:
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
-        self.engine = create_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.sql_alchemy_connect_args,
-            pool_pre_ping=True,
-        )
-        self.connection = self.engine.connect()
+        try:
+            self.engine = create_engine(
+                self.get_sqlalchemy_connection_string(),
+                connect_args=self.sql_alchemy_connect_args,
+                pool_pre_ping=True,
+            )
+            self.connection = self.engine.connect()
+        except Exception as e:
+            activity.logger.error(f"Error loading SQL client: {str(e)}")
+            if self.engine:
+                self.engine.dispose()
+                self.engine = None
+            raise
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -110,7 +120,7 @@ class SQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info(f"Running query: {query}")
+        activity.logger.info("Running query: {query}", query=query)
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -132,7 +142,9 @@ class SQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                activity.logger.error(f"Error running query in batch: {e}")
+                activity.logger.error(
+                    "Error running query in batch: {error}", error=str(e)
+                )
                 raise e
 
         activity.logger.info("Query execution completed")
@@ -157,14 +169,24 @@ class AsyncSQLClient(SQLClient):
 
         Args:
             credentials (Dict[str, Any]): Database connection credentials.
+
+        Raises:
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
-        self.engine = create_async_engine(
-            self.get_sqlalchemy_connection_string(),
-            connect_args=self.sql_alchemy_connect_args,
-            pool_pre_ping=True,
-        )
-        self.connection = await self.engine.connect()
+        try:
+            self.engine = create_async_engine(
+                self.get_sqlalchemy_connection_string(),
+                connect_args=self.sql_alchemy_connect_args,
+                pool_pre_ping=True,
+            )
+            self.connection = await self.engine.connect()
+        except Exception as e:
+            activity.logger.error(f"Error establishing database connection: {str(e)}")
+            if self.engine:
+                await self.engine.dispose()
+                self.engine = None
+            raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """
@@ -187,7 +209,7 @@ class AsyncSQLClient(SQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info(f"Running query: {query}")
+        activity.logger.info("Running query: {query}", query=query)
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -213,7 +235,7 @@ class AsyncSQLClient(SQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error(f"Error executing query: {e}", exc_info=True)
+            activity.logger.error("Error executing query: {error}", error=str(e))
             raise
 
         activity.logger.info("Query execution completed")

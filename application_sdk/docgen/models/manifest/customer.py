@@ -5,6 +5,12 @@ from pydantic import BaseModel
 from application_sdk.docgen.models.manifest.page import DocsManifestPage
 
 
+class FeatureDetails(BaseModel):
+    name: str
+    supported: bool = False
+    notes: str = ""
+
+
 class CustomerDocsManifest(BaseModel):
     """A manifest file containing documentation pages for customer use.
 
@@ -13,3 +19,4 @@ class CustomerDocsManifest(BaseModel):
     """
 
     pages: List[DocsManifestPage]
+    supported_features: List[FeatureDetails]
