@@ -86,7 +86,7 @@ jobs:
 
           git add pyproject.toml poetry.lock
           git commit -m "chore(release): bump version"
-          git push origin ${{ github.ref_name }}
+          git push origin ${{ github.ref_name }} --force
 
       - name: Create GitHub Release
         env:
