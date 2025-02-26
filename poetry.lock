@@ -5611,4 +5611,4 @@ workflows = ["dapr", "pandas", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "1a98ea24ad7fa38f6714ef1b2486e730e94fd486c6f8da35ca0c554d95202b29"
+content-hash = "784ae518c4cfe6aa634f46ca771c67592b3272dcb54e92adfbd940d1490ea903"
