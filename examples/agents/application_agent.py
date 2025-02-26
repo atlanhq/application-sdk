@@ -1,133 +1,71 @@
 import asyncio
-from datetime import timedelta
-from typing import Any, Dict
 
-from temporalio import activity, workflow
-from temporalio.client import Client
-from temporalio.worker import Worker
+from application_sdk.activities.agents.langgraph import register_graph_builder
+from application_sdk.agents import AgentState, LangGraphWorkflow
+from application_sdk.clients.temporal import TemporalClient
+from application_sdk.worker import Worker
+from examples.agents.workflow import get_workflow
 
-
-class LangGraphActivities:
-    """Defines activities related to the LangGraph agent."""
-
-    @activity.defn
-    async def compile_graph(self, workflow_args: Dict[str, Any]) -> Dict[str, str]:
-        """Compiles and initializes the LangGraph agent."""
-        try:
-            from application_sdk.agents import LangGraphAgent
-            from examples.agents.workflow import get_workflow
-
-            agent = LangGraphAgent(
-                workflow=get_workflow(), state=workflow_args["state"]
-            )
-            agent.compile_graph()
-            return {"agent_status": "no error"}
-
-        except ImportError as e:
-            return {"error": f"Missing dependency - {str(e)}"}
-
-    @activity.defn
-    async def run_agent_task(self, activity_input: Dict[str, Any]) -> Dict[str, Any]:
-        """Runs the LangGraph agent with the given task."""
-        try:
-            if activity_input.get("agent_status") != "no error":
-                return {"error": "Error: Agent initialization failed."}
-
-            user_query = activity_input.get(
-                "user_query", "Get me the books that are related to science"
-            )
-
-            from application_sdk.agents import LangGraphAgent
-            from examples.agents.workflow import get_workflow
-
-            agent = LangGraphAgent(
-                workflow=get_workflow(), state=activity_input["state"]
-            )
-            agent.compile_graph()  # this is because, the compiled graph cannot be passed between activities
-            result = agent.run(user_query)
-            state = agent.state
-            return {"result": result, "state": state}
-
-        except Exception as e:
-            return {"error": f"Error: {str(e)}"}
+# Register the graph builder
+register_graph_builder("workflow", get_workflow)
 
 
-@workflow.defn
-class LangGraphWorkflow:
-    """Temporal Workflow to execute LangGraph agent steps."""
-
-    def __init__(self):
-        self.state = {
-            "messages": [],
-            "enriched_query": "",
-            "steps_list": [],
-            "validation_response": "",
-        }
-
-    @workflow.query
-    def get_state(self) -> Dict[str, Any]:
-        return self.state
-
-    @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        """Executes the LangGraph workflow."""
-        workflow_args["state"] = self.state
-
-        # Step 1: Compile graph
-        agent_data = await workflow.execute_activity(
-            LangGraphActivities.compile_graph,
-            workflow_args,
-            schedule_to_close_timeout=timedelta(seconds=60),
-        )
-        # Step 2: Process user query
-        user_query = workflow_args.get("user_query")
-        if not user_query:
-            user_query = input("Enter the task for LangGraph Agent: ")
-
-        activity_input = {
-            "agent_status": agent_data.get("agent_status", "failed"),
-            "user_query": user_query,
-            "state": self.state,
-        }
-
-        # Step 3: Run agent task
-        result = await workflow.execute_activity(
-            LangGraphActivities.run_agent_task,
-            activity_input,
-            schedule_to_close_timeout=timedelta(seconds=120),
-        )
-        return result
-
-
-async def application_langgraph():
+async def run_my_workflow(daemon: bool = True):
     """Initializes and runs the LangGraph workflow."""
-    client = await Client.connect("localhost:7233")
+    temporal_client = TemporalClient(application_name="my-langgraph")
+    await temporal_client.load()
 
+    # Create worker but don't start it yet
     worker = Worker(
-        client=client,
-        task_queue="langgraph-task-queue",
-        workflows=[LangGraphWorkflow],
-        activities=[
-            LangGraphActivities().compile_graph,
-            LangGraphActivities().run_agent_task,
-        ],
+        temporal_client=temporal_client,
+        workflow_classes=[LangGraphWorkflow],
+        temporal_activities=LangGraphWorkflow.get_activities(
+            LangGraphWorkflow.activities_cls()
+        ),
         max_concurrent_activities=5,
     )
 
+    # Start the worker as a daemon (non-blocking)
+    print("Starting worker...")
+    await worker.start(daemon=daemon)
+
+    # Give the worker a moment to fully initialize
+    await asyncio.sleep(1)
+
+    # Prepare workflow input with query, initial state, and graph builder name
     workflow_input = {
         "user_query": "Get me the books that are related to horror",
+        "state": AgentState(messages=[]),  # Initial state for the workflow
+        "graph_builder_name": "workflow",  # Name of the registered graph builder
     }
 
-    async with worker:
-        handle = await client.start_workflow(
-            LangGraphWorkflow.run,
-            workflow_input,
-            id="langgraph-workflow",
-            task_queue="langgraph-task-queue",
+    try:
+        # Start the workflow with the correct parameter order
+        response = await temporal_client.start_workflow(
+            workflow_class=LangGraphWorkflow,
+            workflow_args=workflow_input,
         )
 
-        return await handle.result()
+        print("Workflow started, waiting for result...")
+
+        # Get the workflow handle from the response and await its result
+        if "handle" in response:
+            # Since worker is running as daemon, we can just wait for the result
+            result = await response["handle"].result()
+            print("Workflow result:", result)
+
+            # Allow some time for cleanup
+            await asyncio.sleep(2)
+
+            return result
+        else:
+            print("Workflow started with ID:", response["workflow_id"])
+            return response
+
+    except Exception as e:
+        print(f"Error in workflow execution: {e}")
+        raise
 
 
 if __name__ == "__main__":
-    asyncio.run(application_langgraph())
+    asyncio.run(run_my_workflow(daemon=True))

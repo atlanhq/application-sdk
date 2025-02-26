@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Annotated, Any, Callable, Dict, List, Optional, Sequence, Type, Union
+from typing import Annotated, Any, Callable, Dict, Sequence, Type
 
 from langgraph.graph.message import AnyMessage, add_messages
 from temporalio import workflow
