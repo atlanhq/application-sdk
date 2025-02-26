@@ -2,7 +2,7 @@ import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
-from typing import Any, MutableMapping, Tuple
+from typing import Any, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
@@ -10,10 +10,11 @@ from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
+from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
 # Create a context variable for request_id
-request_context: ContextVar[dict] = ContextVar("request_context", default={})
+request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
@@ -120,7 +121,7 @@ class AtlanLoggerAdapter:
         )
 
         # Start with base attributes
-        attributes = {
+        attributes: Dict[str, Any] = {
             "code.filepath": str(record["file"].path),
             "code.function": str(record["function"]),
             "code.lineno": int(record["line"]),
@@ -139,7 +140,7 @@ class AtlanLoggerAdapter:
             observed_timestamp=time_ns(),
             trace_id=0,
             span_id=0,
-            trace_flags=0,
+            trace_flags=TraceFlags(0),
             severity_text=record["level"].name,
             severity_number=severity_number,
             body=record["message"],
@@ -147,7 +148,7 @@ class AtlanLoggerAdapter:
             attributes=attributes,
         )
 
-    def otlp_sink(self, message):
+    def otlp_sink(self, message: Any):
         """Process log message and emit to OTLP."""
         try:
             log_record = self._create_log_record(message.record)
@@ -155,9 +156,7 @@ class AtlanLoggerAdapter:
         except Exception as e:
             self.logger.error(f"Error processing log record: {e}")
 
-    def process(
-        self, msg: Any, kwargs: MutableMapping[str, Any]
-    ) -> Tuple[Any, MutableMapping[str, Any]]:
+    def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
         kwargs["logger_name"] = self.logger_name
 
@@ -215,29 +214,29 @@ class AtlanLoggerAdapter:
 
         return msg, kwargs
 
-    def debug(self, msg: str, *args, **kwargs):
+    def debug(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.debug(msg, *args, **kwargs)
 
-    def info(self, msg: str, *args, **kwargs):
+    def info(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.info(msg, *args, **kwargs)
 
-    def warning(self, msg: str, *args, **kwargs):
+    def warning(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.warning(msg, *args, **kwargs)
 
-    def error(self, msg: str, *args, **kwargs):
+    def error(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.error(msg, *args, **kwargs)
 
-    def critical(self, msg: str, *args, **kwargs):
+    def critical(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.critical(msg, *args, **kwargs)
 
 
 # Create a singleton instance of the logger
-_logger_instances = {}
+_logger_instances: Dict[str, AtlanLoggerAdapter] = {}
 
 
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
