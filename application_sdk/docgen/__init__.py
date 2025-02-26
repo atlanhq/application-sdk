@@ -8,6 +8,8 @@ from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.parsers.directory import DirectoryParser
 from application_sdk.docgen.parsers.manifest import ManifestParser
 
+LOGGER = get_logger(__name__)
+
 
 class AtlanDocsGenerator:
     """Docs Generator for Atlan Apps.
@@ -21,8 +23,6 @@ class AtlanDocsGenerator:
     """
 
     def __init__(self, docs_directory_path: str, export_path: str) -> None:
-        self.logger = get_logger(__name__)
-
         self.docs_directory_path = docs_directory_path
         self.export_path = export_path
 
@@ -63,7 +63,7 @@ class AtlanDocsGenerator:
             from mkdocs import config
             from mkdocs.commands import build
         except ImportError:
-            self.logger.warning(
+            LOGGER.warning(
                 "mkdocs is not installed. Please install it using 'pip install mkdocs'"
             )
             return
@@ -75,7 +75,7 @@ class AtlanDocsGenerator:
 
         directory_parser_result = self.directory_parser.parse()
         for attr, value in directory_parser_result:
-            self.logger.info(f"Directory validation - {attr}: {value}")
+            LOGGER.info(f"Directory validation - {attr}: {value}")
 
         pages: List[Page] = []
 
@@ -133,4 +133,4 @@ class AtlanDocsGenerator:
         finally:
             cfg.plugins.on_shutdown()
 
-        self.logger.info(f"Documentation exported to {self.export_path}")
+        LOGGER.info(f"Documentation exported to {self.export_path}")
