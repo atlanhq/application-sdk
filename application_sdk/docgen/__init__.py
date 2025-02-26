@@ -2,7 +2,7 @@ import os
 from datetime import datetime
 from typing import List
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.parsers.directory import DirectoryParser
@@ -21,7 +21,7 @@ class AtlanDocsGenerator:
     """
 
     def __init__(self, docs_directory_path: str, export_path: str) -> None:
-        self.logger = AtlanLoggerAdapter(logger_name=__name__)
+        self.logger = get_logger(__name__)
 
         self.docs_directory_path = docs_directory_path
         self.export_path = export_path
