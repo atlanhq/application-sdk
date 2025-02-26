@@ -14,8 +14,13 @@ sqlalchemy = {extras = ["asyncio"], version = "^2.0.36", optional = true}
 pyatlan = "4.1.0"
 orjson = {version = "^3.10.7", optional = true}   # Being used in parquet.py
 pyarrow = {version = "^17.0.0", optional = true}  # Being used in parquet.py
+pyyaml = {version = "^6.0.2", optional = true}
 pandas = {version = "^2.2.3", optional = true}
 dapr = {version = "^1.14.0", optional = true}
+faker = {version = "^8.0.0", optional = true}
+numpy = {version = ">=1.23.5,<2.0.0", optional = true}
+duckdb = {version = "^1.1.3", optional = true}
+duckdb-engine = {version = "^0.14.0", optional = true}
 temporalio = {version = "^1.7.1", optional = true}
 getdaft = {extras = ["sql"], version = "^0.3.15", optional = true}
 pyiceberg = {version = "^0.8.1", optional = true} # For iceberg input and output support
@@ -47,6 +52,16 @@ sqlalchemy = [
 iam_auth = [
     "boto3",
 ]
+# scale_data_generator module to be used when dealing with snowflake app for now
+scale_data_generator = [
+    "pyyaml",
+    "pandas",
+    "pyarrow",
+    "faker",
+    "numpy",
+    "duckdb",
+    "duckdb-engine"
+]
 
 
 
@@ -68,9 +83,6 @@ pytest = "^8.3.3"
 coverage = "^7.6.1"
 pytest-asyncio = "^0.24.0"
 hypothesis = "^6.114.0"
-faker = "^8.0.0"
-duckdb = "^1.1.3"
-duckdb-engine = "^0.14.0"
 
 
 [tool.poetry.group.examples.dependencies]
