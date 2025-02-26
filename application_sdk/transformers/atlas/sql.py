@@ -420,6 +420,13 @@ class Column(assets.Column):
 
             attributes = {}
             attributes["name"] = obj.get("column_name")
+            attributes["qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["table_catalog"],
+                obj["table_schema"],
+                obj["table_name"],
+                obj["column_name"],
+            )
             attributes["parent_qualified_name"] = build_atlas_qualified_name(
                 obj["connection_qualified_name"],
                 obj["table_catalog"],
