@@ -1,5 +1,5 @@
 import uuid
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional
 
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables.config import RunnableConfig
@@ -19,23 +19,23 @@ class LangGraphAgent(AgentInterface):
         "messages": [],
         "answer": "",
     }
-    workflow = StateGraph()
-    workflow.add_node("node1", node1)
-    workflow.add_edge(START, "node1")
-    workflow.add_edge("node1", END)
-    agent = LangGraphAgent(workflow=workflow, state=state, config={"configurable": {"thread_id": uuid.uuid4()}})
+    state_graph = StateGraph()
+    state_graph.add_node("node1", node1)
+    state_graph.add_edge(START, "node1")
+    state_graph.add_edge("node1", END)
+    agent = LangGraphAgent(state_graph=state_graph, state=state, config={"configurable": {"thread_id": uuid.uuid4()}})
     agent.compile_graph()
-    agent.visualize()
+    png_data = agent.visualize()
     agent.run(task="What is the capital of France?")
     """
 
-    workflow: Optional[StateGraph]
+    state_graph: Optional[StateGraph]
     graph: Optional[CompiledStateGraph]
     logger: AtlanLoggerAdapter
 
     def __init__(
         self,
-        workflow: Optional[StateGraph] = None,
+        state_graph: Optional[StateGraph],
         state: Optional[Dict[str, Any]] = None,
         config: Optional[RunnableConfig] = None,
         logger: Optional[AtlanLoggerAdapter] = None,
@@ -44,12 +44,12 @@ class LangGraphAgent(AgentInterface):
         Initialize a langgraph agent with a workflow configuration.
 
         Args:
-            workflow: The workflow to execute
+            state_graph: The langgraphs' StateGraph to compile
             state: The initial state of the workflow
             config (optional): The configuration of the workflow
             logger (optional): Logger instance for the agent
         """
-        self.workflow = workflow
+        self.state_graph = state_graph
         self._state = state
         self._config = config or RunnableConfig(
             configurable={"thread_id": uuid.uuid4()}
@@ -58,19 +58,16 @@ class LangGraphAgent(AgentInterface):
 
     def compile_graph(self) -> CompiledStateGraph:
         """
-        Compile the workflow into an executable graph.
-        This method should be implemented by specific agent implementations
-        to use their preferred graph execution engine.
+        Compile the langgraph StateGraph into an executable graph.
         """
-        if not self.workflow:
-            raise ValueError("Workflow not initialized")
-        self.graph = self.workflow.compile()
+        if not self.state_graph:
+            raise ValueError("StateGraph not initialized")
+        self.graph = self.state_graph.compile()
         return self.graph
 
-    def run(self, task: Optional[str] = None) -> None:
+    def run(self, task: Optional[str]) -> None:
         """
-        Run the workflow with the given initial state.
-        This method should be implemented by specific agent implementations.
+        Run the langgraph StateGraph with the given initial state, and task.
         """
         if self._state is None:
             self._state = {"messages": []}
@@ -94,15 +91,18 @@ class LangGraphAgent(AgentInterface):
     def state(self) -> Optional[Dict[str, Any]]:
         return self._state
 
-    def visualize(self) -> None:
+    def visualize(self) -> bytes:
+        """
+        Visualize the graph and return the raw bytes of the PNG visualization.
+
+        Returns:
+            bytes: The raw bytes of the graph visualization in PNG format.
+        """
         try:
             if not self.graph:
                 raise ValueError("Graph not compiled")
             png_data = self.graph.get_graph().draw_mermaid_png()
-
-            output_path = "graph.png"
-            with open(output_path, "wb") as f:
-                f.write(png_data)
-            self.logger.info(f"Graph visualization saved to {output_path}")
+            return png_data
         except Exception as e:
-            self.logger.error(f"Failed to save graph visualization: {str(e)}")
+            self.logger.error("Error visualizing graph: %s", str(e))
+            raise

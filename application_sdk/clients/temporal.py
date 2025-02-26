@@ -237,13 +237,13 @@ class TemporalClient(ClientInterface):
         return
 
     async def start_workflow(
-        self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
+        self, workflow_class: Type[WorkflowInterface], workflow_args: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Start a workflow execution.
 
         Args:
-            workflow_args (Dict[str, Any]): Arguments for the workflow.
             workflow_class (Type[WorkflowInterface]): The workflow class to execute.
+            workflow_args (Dict[str, Any]): Arguments for the workflow.
 
         Returns:
             Dict[str, Any]: A dictionary containing:
@@ -278,22 +278,20 @@ class TemporalClient(ClientInterface):
             logger.info(f"Created workflow config with ID: {workflow_id}")
 
         try:
+            # Pass the full workflow_args to the workflow
             handle = await self.client.start_workflow(
                 workflow_class,
-                {
-                    "workflow_id": workflow_id,
-                },
+                workflow_args,  # Pass the full workflow_args here
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
             )
-            workflow.logger.info(
-                f"Workflow started: {handle.id} {handle.result_run_id}"
-            )
+            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
             return {
                 "workflow_id": handle.id,
                 "run_id": handle.result_run_id,
+                "handle": handle,  # Return the handle so it can be used to get the result
             }
         except WorkflowFailureError as e:
             logger.error(f"Workflow failure: {e}")
