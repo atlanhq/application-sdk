@@ -78,7 +78,7 @@ class Database(assets.Database):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Database:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         """Parse a dictionary into a Database entity.
 
         Args:
@@ -98,17 +98,24 @@ class Database(assets.Database):
                 obj.get("connection_qualified_name"), str
             ), "Connection qualified name cannot be None"
 
-            database = assets.Database.creator(
-                name=obj["database_name"],
-                connection_qualified_name=obj["connection_qualified_name"],
+            database_attributes = {}
+            database_custom_attributes = {}
+
+            database_attributes["qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], obj["database_name"]
             )
 
-            attributes = {}
-            attributes["schema_count"] = obj.get("schema_count", 0)
+            database_attributes["name"] = obj["database_name"]
+            database_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+            database_attributes["schema_count"] = obj.get("schema_count", 0)
 
-            database.attributes = database.attributes.copy(update=attributes)
+            if catalog_id := obj.get("catalog_id", None):
+                database_custom_attributes["catalog_id"] = catalog_id
 
-            return database
+            return {
+                "attributes": database_attributes,
+                "custom_attributes": database_custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Database Entity: {str(e)}")
 
@@ -120,7 +127,7 @@ class Schema(assets.Schema):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Schema:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         """Parse a dictionary into a Schema entity.
 
         Args:
@@ -140,31 +147,32 @@ class Schema(assets.Schema):
                 obj.get("connection_qualified_name"), str
             ), "Connection qualified name cannot be None"
 
-            schema = assets.Schema.creator(
-                name=obj["schema_name"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["catalog_name"]
-                ),
-                database_name=obj["catalog_name"],
-                connection_qualified_name=obj["connection_qualified_name"],
+            schema_attributes = {}
+            schema_custom_attributes = {}
+
+            schema_attributes["qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], obj["catalog_name"], obj["schema_name"]
             )
 
-            attributes = {}
-            attributes["table_count"] = obj.get("table_count", 0)
-            attributes["views_count"] = obj.get("views_count", 0)
-
-            schema.attributes = schema.attributes.copy(update=attributes)
-
-            if not schema.custom_attributes:
-                schema.custom_attributes = {}
+            schema_attributes["name"] = obj["schema_name"]
+            schema_attributes["database_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], obj["catalog_name"]
+            )
+            schema_attributes["database_name"] = obj["catalog_name"]
+            schema_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+            schema_attributes["table_count"] = obj.get("table_count", 0)
+            schema_attributes["views_count"] = obj.get("views_count", 0)
 
             if catalog_id := obj.get("catalog_id", None):
-                schema.custom_attributes["catalog_id"] = catalog_id
+                schema_custom_attributes["catalog_id"] = catalog_id
 
             if is_managed_access := obj.get("is_managed_access", None):
-                schema.custom_attributes["is_managed_access"] = is_managed_access
+                schema_custom_attributes["is_managed_access"] = is_managed_access
 
-            return schema
+            return {
+                "attributes": schema_attributes,
+                "custom_attributes": schema_custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Schema Entity: {str(e)}")
 
@@ -177,15 +185,9 @@ class Table(assets.Table):
     """
 
     @classmethod
-    def parse_obj(
+    def get_attributes(
         cls, obj: Dict[str, Any]
-    ) -> Union[
-        assets.Table,
-        assets.View,
-        assets.MaterialisedView,
-        assets.SnowflakeDynamicTable,
-        assets.TablePartition,
-    ]:
+    ) -> dict[str, Any]:
         """Parse a dictionary into a Table entity.
 
         Args:
@@ -226,92 +228,101 @@ class Table(assets.Table):
             else:
                 table_type = assets.View
 
+            sql_table_attributes = {}
+            sql_table_attributes["qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["table_catalog"],
+                obj["table_schema"],
+                obj["parent_table_name"],
+            )
             if table_type == assets.TablePartition:
-                sql_table = table_type.creator(
-                    name=obj["table_name"],
-                    schema_qualified_name=build_atlas_qualified_name(
-                        obj["connection_qualified_name"],
-                        obj["table_catalog"],
-                        obj["table_schema"],
-                    ),
-                    schema_name=obj["table_schema"],
-                    database_name=obj["table_catalog"],
-                    database_qualified_name=build_atlas_qualified_name(
-                        obj["connection_qualified_name"], obj["table_catalog"]
-                    ),
-                    connection_qualified_name=obj["connection_qualified_name"],
-                    table_name=obj["parent_table_name"],
-                    table_qualified_name=build_atlas_qualified_name(
-                        obj["connection_qualified_name"],
-                        obj["table_catalog"],
-                        obj["table_schema"],
-                        obj["parent_table_name"],
-                    ),
+                sql_table_attributes["table_qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                    obj["parent_table_name"],
+                )
+                sql_table_attributes["name"] = obj["table_name"]
+                sql_table_attributes["schema_qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                )
+                sql_table_attributes["schema_name"] = obj["table_schema"]
+                sql_table_attributes["database_name"] = obj["table_catalog"]
+                sql_table_attributes["database_qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"], obj["table_catalog"]
+                )
+                sql_table_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+                sql_table_attributes["table_name"] = obj["parent_table_name"]
+                sql_table_attributes["table_qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                    obj["parent_table_name"],
                 )
                 if obj.get("partitioned_parent_table", None):
-                    sql_table.parent_table_partition = (
+                    sql_table_attributes["parent_table_partition"] = (
                         assets.TablePartition.ref_by_qualified_name(
-                            qualified_name=sql_table.table_qualified_name
+                            qualified_name=sql_table_attributes["table_qualified_name"]
                         )
                     )
                 else:
-                    sql_table.parent_table = Table.ref_by_qualified_name(
-                        qualified_name=sql_table.table_qualified_name
+                    sql_table_attributes["parent_table"] = Table.ref_by_qualified_name(
+                        qualified_name=sql_table_attributes["table_qualified_name"]
                     )
             else:
-                sql_table = table_type.creator(
-                    name=obj["table_name"],
-                    schema_qualified_name=build_atlas_qualified_name(
-                        obj["connection_qualified_name"],
-                        obj["table_catalog"],
-                        obj["table_schema"],
-                    ),
-                    schema_name=obj["table_schema"],
-                    database_name=obj["table_catalog"],
-                    database_qualified_name=build_atlas_qualified_name(
-                        obj["connection_qualified_name"], obj["table_catalog"]
-                    ),
-                    connection_qualified_name=obj["connection_qualified_name"],
+                sql_table_attributes["name"] = obj["table_name"]
+                sql_table_attributes["schema_qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
                 )
-
-            attributes = {}
+                sql_table_attributes["schema_name"] = obj["table_schema"]
+                sql_table_attributes["database_name"] = obj["table_catalog"]
+                sql_table_attributes["database_qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"], obj["table_catalog"]
+                )
+                sql_table_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
 
             if table_type in [assets.View, assets.MaterialisedView]:
-                attributes["definition"] = obj.get("view_definition", "")
+                sql_table_attributes["definition"] = obj.get("view_definition", "")
 
-            attributes["column_count"] = obj.get("column_count", 0)
-            attributes["row_count"] = obj.get("row_count", 0)
-            attributes["size_bytes"] = obj.get("size_bytes", 0)
+            sql_table_attributes["column_count"] = obj.get("column_count", 0)
+            sql_table_attributes["row_count"] = obj.get("row_count", 0)
+            sql_table_attributes["size_bytes"] = obj.get("size_bytes", 0)
 
-            if hasattr(sql_table, "external_location"):
-                attributes["external_location"] = obj.get("location", "")
+            # TODO: Figure out another way
+            temp = table_type()
+            if hasattr(temp, "external_location"):
+                sql_table_attributes["external_location"] = obj.get("location", "")
 
-            if hasattr(sql_table, "external_location_format"):
-                attributes["external_location_format"] = obj.get("file_format_type", "")
+            if hasattr(temp, "external_location_format"):
+                sql_table_attributes["external_location_format"] = obj.get("file_format_type", "")
 
-            if hasattr(sql_table, "external_location_region"):
-                attributes["external_location_region"] = obj.get("stage_region", "")
+            if hasattr(temp, "external_location_region"):
+                sql_table_attributes["external_location_region"] = obj.get("stage_region", "")
 
             # Applicable only for Materialised Views
             if obj.get("refresh_mode", "") != "":
-                attributes["refresh_mode"] = obj.get("refresh_mode")
+                sql_table_attributes["refresh_mode"] = obj.get("refresh_mode")
 
             # Applicable only for Materialised Views
             if obj.get("staleness", "") != "":
-                attributes["staleness"] = obj.get("staleness")
+                sql_table_attributes["staleness"] = obj.get("staleness")
 
             # Applicable only for Materialised Views
             if obj.get("stale_since_date", "") != "":
-                attributes["stale_since_date"] = obj.get("stale_since_date")
+                sql_table_attributes["stale_since_date"] = obj.get("stale_since_date")
 
             # Applicable only for Materialised Views
             if obj.get("refresh_method", "") != "":
-                attributes["refresh_method"] = obj.get("refresh_method")
+                sql_table_attributes["refresh_method"] = obj.get("refresh_method")
 
             custom_attributes = {}
 
             # Applicable only for Materialised Views
-            if not sql_table.custom_attributes:
+            if not temp.custom_attributes:
                 custom_attributes["table_type"] = table_type_value
 
             if obj.get("is_transient", "") != "":
@@ -359,10 +370,10 @@ class Table(assets.Table):
             if obj.get("auto_increment", "") != "":
                 custom_attributes["auto_increment"] = obj.get("auto_increment")
 
-            sql_table.attributes = sql_table.attributes.copy(update=attributes)
-            sql_table.custom_attributes = custom_attributes
-
-            return sql_table
+            return {
+                "attributes": sql_table_attributes,
+                "custom_attributes": custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Table Entity: {str(e)}")
 
@@ -643,7 +654,7 @@ class Function(assets.Function):
             )
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Function:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         """Parse a dictionary into a Function entity.
 
         Args:
@@ -681,42 +692,46 @@ class Function(assets.Function):
                 "function_schema" in obj and obj["function_schema"] is not None
             ), "Function schema cannot be None"
 
-            function = Function.creator(
-                name=obj["function_name"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["function_catalog"]
-                ),
-                schema_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["function_catalog"],
-                    obj["function_schema"],
-                ),
-                connection_qualified_name=obj["connection_qualified_name"],
-                schema_name=obj["function_schema"],
-                database_name=obj["function_catalog"],
-            )
+            function_attributes = {}
+            function_custom_attributes = {}
 
-            attributes = {}
+            function_attributes["name"] = obj["function_name"]
+            function_attributes["qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], obj["function_catalog"], obj["function_schema"], obj["function_name"]
+            )
+            function_attributes["database_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], obj["function_catalog"]
+            )
+            function_attributes["schema_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["function_catalog"],
+                obj["function_schema"],
+            )
+            function_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+            function_attributes["schema_name"] = obj["function_schema"]
+            function_attributes["database_name"] = obj["function_catalog"]
+
             if "TABLE" in obj.get("data_type", None):
-                attributes["function_type"] = "Tabular"
+                function_attributes["function_type"] = "Tabular"
             else:
-                attributes["function_type"] = "Scalar"
-            attributes["function_return_type"] = obj.get("data_type", None)
-            attributes["function_language"] = obj.get("function_language", None)
-            attributes["function_definition"] = obj.get("function_definition", None)
-            attributes["function_arguments"] = list(
+                function_attributes["function_type"] = "Scalar"
+            function_attributes["function_return_type"] = obj.get("data_type", None)
+            function_attributes["function_language"] = obj.get("function_language", None)
+            function_attributes["function_definition"] = obj.get("function_definition", None)
+            function_attributes["function_arguments"] = list(
                 obj.get("argument_signature", "()")[1:-1].split(",")
             )
-            attributes["function_is_secure"] = obj.get("is_secure", None) == "YES"
-            attributes["function_is_external"] = obj.get("is_external", None) == "YES"
-            attributes["function_is_d_m_f"] = obj.get("is_data_metric", None) == "YES"
-            attributes["function_is_memoizable"] = (
+            function_attributes["function_is_secure"] = obj.get("is_secure", None) == "YES"
+            function_attributes["function_is_external"] = obj.get("is_external", None) == "YES"
+            function_attributes["function_is_d_m_f"] = obj.get("is_data_metric", None) == "YES"
+            function_attributes["function_is_memoizable"] = (
                 obj.get("is_memoizable", None) == "YES"
             )
 
-            function.attributes = function.attributes.copy(update=attributes)
-
-            return function
+            return {
+                "attributes": function_attributes,
+                "custom_attributes": function_custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Function Entity: {str(e)}")
 
