@@ -65,7 +65,7 @@ jobs:
       #----------------------------------------------
       - name: Install dependencies
         if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-        run: poetry install --no-interaction --no-root --extras "iceberg workflows daft"
+        run: poetry install --no-interaction --no-root --extras "iceberg workflows daft langgraph_agent"
 
       - name: Run Unit and Integration Tests with Coverage
         run: |

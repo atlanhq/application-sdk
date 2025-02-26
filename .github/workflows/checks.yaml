@@ -33,7 +33,7 @@ jobs:
     - name: Install dependencies
       run: |
         poetry config virtualenvs.in-project true
-        poetry install --no-root --without dev,test --extras "workflows"
+        poetry install --no-root --without dev,test --extras "workflows langgraph_agent"
     - uses: pre-commit/action@v3.0.1
     - uses: webiny/action-conventional-commits@v1.3.0
       with:
