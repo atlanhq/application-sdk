@@ -1,12 +1,11 @@
 from datetime import timedelta
-from typing import Annotated, Any, Callable, Dict, Sequence, Type, cast
+from typing import Annotated, Any, Callable, Dict, Sequence
 
 from langgraph.graph.message import AnyMessage, add_messages
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from typing_extensions import TypedDict
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.workflows import WorkflowInterface
 
@@ -29,14 +28,16 @@ class LangGraphWorkflow(WorkflowInterface):
         state: The current state of the workflow.
     """
 
-    activities_cls: Type[ActivitiesInterface]
-
     def __init__(self):
         self.state = AgentState(messages=[])
-        # Import at runtime to avoid circular import
+
+    @classmethod
+    def activities_cls(cls):
+        """Returns an instance of the activities class."""
+        # Import inside the method to avoid circular import
         from application_sdk.activities.agents.langgraph import LangGraphActivities
 
-        self.activities_cls = LangGraphActivities
+        return LangGraphActivities()
 
     @staticmethod
     def get_activities(activities: Any) -> Sequence[Callable[..., Any]]:
@@ -65,7 +66,7 @@ class LangGraphWorkflow(WorkflowInterface):
                 including user query, state, and graph_builder_name.
 
         Returns:
-            Dict[str, Any]: Result of the workflow execution.
+            Dict[str, Any]: The result of the LangGraph agent execution.
         """
         # Initialize or update the state
         if "state" in workflow_config:
@@ -94,19 +95,15 @@ class LangGraphWorkflow(WorkflowInterface):
             "graph_builder_name": graph_builder_name,
         }
 
-        # Import LangGraphActivities at runtime for casting
-        from application_sdk.activities.agents.langgraph import LangGraphActivities
+        # Get the activities instance
+        activities_instance = self.activities_cls()
 
-        # Cast to specific activity class to access run_agent method
-        lang_graph_activities = cast(LangGraphActivities, self.activities_cls)
-
-        # Execute the activity but don't return the result directly
+        # Execute the activity
         result = await workflow.execute_activity_method(
-            lang_graph_activities.run_agent,
+            activities_instance.run_agent,
             args=[activity_input],
             retry_policy=retry_policy,
             schedule_to_close_timeout=timedelta(seconds=120),
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
-
         return result

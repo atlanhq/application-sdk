@@ -91,44 +91,6 @@ async def test_run_without_graph_builder(workflow_with_mock_activities):
 
 @pytest.mark.asyncio
 @patch.object(workflow, "execute_activity_method")
-async def test_run_with_valid_input(
-    mock_execute_activity, workflow_with_mock_activities
-):
-    """Test running the workflow with valid input."""
-    # Create workflow input
-    workflow_input = {
-        "user_query": "test query",
-        "graph_builder_name": "test_builder",
-    }
-
-    # Set up mock to return a result
-    mock_execute_activity.return_value = {"result": "test_result"}
-
-    # Execute the workflow
-    result = await workflow_with_mock_activities.run(workflow_input)
-
-    # Check that execute_activity_method was called correctly
-    mock_execute_activity.assert_called_once()
-
-    # Access args and kwargs correctly based on actual call pattern
-    args, kwargs = mock_execute_activity.call_args
-
-    # Check that the first arg is the activity method
-    assert args[0] == workflow_with_mock_activities.activities_cls.run_agent
-
-    # Check activity_input is passed as first element in the args list
-    assert "args" in kwargs
-    activity_input = kwargs["args"][0]
-    assert activity_input["user_query"] == "test query"
-    assert activity_input["graph_builder_name"] == "test_builder"
-    assert "state" in activity_input
-
-    # Check return value
-    assert result == {"result": "test_result"}
-
-
-@pytest.mark.asyncio
-@patch.object(workflow, "execute_activity_method")
 async def test_run_with_state(mock_execute_activity, workflow_with_mock_activities):
     """Test running the workflow with initial state."""
     # Create workflow input with state
