@@ -307,13 +307,13 @@ class TemporalClient(ClientInterface):
             run_id (str): The run ID of the workflow.
         """
         try:
-            workflow_handle = self.client.get_workflow_handle(
+            workflow_handle = await self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
             )
             await workflow_handle.terminate()
         except Exception as e:
             logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
-            raise e
+            raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
 
     def create_worker(
         self,
@@ -380,13 +380,30 @@ class TemporalClient(ClientInterface):
         if not self.client:
             raise ValueError("Client is not loaded")
 
-        workflow_handle = self.client.get_workflow_handle(workflow_id, run_id=run_id)
         try:
+            workflow_handle = await self.client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            )
             workflow_execution = await workflow_handle.describe()
             execution_info = workflow_execution.raw_description.workflow_execution_info
+
+            workflow_info = {
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "status": WorkflowExecutionStatus(execution_info.status).name,
+                "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
+            }
+            if include_last_executed_run_id:
+                workflow_info["last_executed_run_id"] = (
+                    execution_info.root_execution.run_id
+                )
+            return workflow_info
         except Exception as e:
-            # if the workflow is not found, return the status as not found
-            if e.grpc_status.details[0].type_url == TEMPORAL_NOT_FOUND_FAILURE:
+            if (
+                hasattr(e, "grpc_status")
+                and hasattr(e.grpc_status, "details")
+                and e.grpc_status.details[0].type_url == TEMPORAL_NOT_FOUND_FAILURE
+            ):
                 return {
                     "workflow_id": workflow_id,
                     "run_id": run_id,
@@ -397,13 +414,3 @@ class TemporalClient(ClientInterface):
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
             )
-
-        workflow_info = {
-            "workflow_id": workflow_id,
-            "run_id": run_id,
-            "status": WorkflowExecutionStatus(execution_info.status).name,
-            "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
-        }
-        if include_last_executed_run_id:
-            workflow_info["last_executed_run_id"] = execution_info.root_execution.run_id
-        return workflow_info

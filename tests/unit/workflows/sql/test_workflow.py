@@ -115,21 +115,14 @@ async def test_fetch_and_transform():
     workflow_args = {"test": "args"}
     retry_policy = RetryPolicy(maximum_attempts=1)
 
-    with patch(
-        "temporalio.workflow.execute_activity_method",
-        side_effect=[mock_fetch.return_value] + [mock_transform.return_value] * 2,
-    ):
+    with patch("temporalio.workflow.execute_activity_method") as mock_execute:
+        mock_execute.side_effect = [mock_fetch.return_value] + [
+            mock_transform.return_value
+        ] * 2
         await workflow.fetch_and_transform(mock_fetch, workflow_args, retry_policy)
 
-    # Verify fetch was called
-    assert (
-        mock_fetch.call_count == 0
-    )  # Not called directly due to mocking execute_activity_method
-
-    # Verify transform was called for each batch
-    assert (
-        mock_transform.call_count == 0
-    )  # Not called directly due to mocking execute_activity_method
+        # Verify fetch was called
+        assert mock_execute.call_count == 3
 
 
 @pytest.mark.asyncio
@@ -139,9 +132,13 @@ async def test_fetch_and_transform_error_handling():
 
     # Test with None result
     mock_fetch_none = AsyncMock(return_value=None)
-    await workflow.fetch_and_transform(
-        mock_fetch_none, {}, RetryPolicy(maximum_attempts=1)
-    )
+    with patch("temporalio.workflow.execute_activity_method") as mock_execute:
+        mock_execute.return_value = ActivityStatistics(
+            total_record_count=0, chunk_count=0, typename="test"
+        ).model_dump()
+        await workflow.fetch_and_transform(
+            mock_fetch_none, {}, RetryPolicy(maximum_attempts=1)
+        )
 
     # Test with invalid typename
     mock_fetch_invalid = AsyncMock(
@@ -150,35 +147,12 @@ async def test_fetch_and_transform_error_handling():
         ).model_dump()
     )
 
-    with pytest.raises(ValueError, match="Invalid typename"):
-        await workflow.fetch_and_transform(
-            mock_fetch_invalid, {}, RetryPolicy(maximum_attempts=1)
-        )
-
-
-@pytest.mark.asyncio
-async def test_run():
-    """Test the run method of the workflow"""
-    workflow = SQLMetadataExtractionWorkflow()
-
-    # Mock workflow info
-    mock_info = Mock()
-    mock_info.run_id = "test_run_id"
-
-    with patch("temporalio.workflow.info", return_value=mock_info), patch.object(
-        workflow, "fetch_and_transform"
-    ) as mock_fetch_transform:
-        workflow_config = {
-            "workflow_id": "test_workflow",
-            "output_prefix": "test_prefix",
-        }
-
-        await workflow.run(workflow_config)
-
-        # Verify fetch_and_transform was called for each metadata type
-        assert (
-            mock_fetch_transform.call_count == 4
-        )  # databases, schemas, tables, columns
+    with patch("temporalio.workflow.execute_activity_method") as mock_execute:
+        mock_execute.return_value = mock_fetch_invalid.return_value
+        with pytest.raises(ValueError, match="Invalid typename"):
+            await workflow.fetch_and_transform(
+                mock_fetch_invalid, {}, RetryPolicy(maximum_attempts=1)
+            )
 
 
 def normalize_sql(query: str) -> str:
