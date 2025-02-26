@@ -237,13 +237,13 @@ class TemporalClient(ClientInterface):
         return
 
     async def start_workflow(
-        self, workflow_class: Type[WorkflowInterface], workflow_args: Dict[str, Any]
+        self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
     ) -> Dict[str, Any]:
         """Start a workflow execution.
 
         Args:
-            workflow_class (Type[WorkflowInterface]): The workflow class to execute.
             workflow_args (Dict[str, Any]): Arguments for the workflow.
+            workflow_class (Type[WorkflowInterface]): The workflow class to execute.
 
         Returns:
             Dict[str, Any]: A dictionary containing:
