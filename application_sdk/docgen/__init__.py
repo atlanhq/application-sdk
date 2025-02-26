@@ -1,16 +1,14 @@
-import logging
 import os
 from datetime import datetime
 from typing import List
 
-from mkdocs import config
-from mkdocs.commands import build
-
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.parsers.directory import DirectoryParser
 from application_sdk.docgen.parsers.manifest import ManifestParser
+
+logger = get_logger(__name__)
 
 
 class AtlanDocsGenerator:
@@ -25,8 +23,6 @@ class AtlanDocsGenerator:
     """
 
     def __init__(self, docs_directory_path: str, export_path: str) -> None:
-        self.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
-
         self.docs_directory_path = docs_directory_path
         self.export_path = export_path
 
@@ -62,6 +58,16 @@ class AtlanDocsGenerator:
         Raises:
             Exception: Any exception that occurs during manifest parsing or export process.
         """
+
+        try:
+            from mkdocs import config
+            from mkdocs.commands import build
+        except ImportError:
+            logger.warning(
+                "mkdocs is not installed. Please install it using 'pip install mkdocs'"
+            )
+            return
+
         try:
             manifest = self.manifest_parser.parse_manifest()
         except Exception as e:
@@ -69,7 +75,7 @@ class AtlanDocsGenerator:
 
         directory_parser_result = self.directory_parser.parse()
         for attr, value in directory_parser_result:
-            self.logger.info(f"Directory validation - {attr}: {value}")
+            logger.info(f"Directory validation - {attr}: {value}")
 
         pages: List[Page] = []
 
@@ -127,4 +133,4 @@ class AtlanDocsGenerator:
         finally:
             cfg.plugins.on_shutdown()
 
-        self.logger.info(f"Documentation exported to {self.export_path}")
+        logger.info(f"Documentation exported to {self.export_path}")
