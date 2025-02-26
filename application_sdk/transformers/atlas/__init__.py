@@ -4,6 +4,7 @@ This module provides the Atlas transformer implementation for converting metadat
 into Atlas entities using the pyatlan library.
 """
 
+import random
 from datetime import datetime
 from typing import Any, Dict, Optional, Type
 
@@ -177,6 +178,11 @@ class AtlasTransformer(TransformerInterface):
         attributes["last_sync_run"] = workflow_run_id
         attributes["last_sync_run_at"] = datetime.now()
         attributes["connection_name"] = data.get("connection_name", "")
+
+        if "guid" not in attributes:
+            attributes["guid"] = str(
+                -int(random.random() * 10000000000000000)  # noqa: S311
+            )
 
         if remarks := data.get("remarks", None) or data.get("comment", None):
             attributes["description"] = process_text(remarks)

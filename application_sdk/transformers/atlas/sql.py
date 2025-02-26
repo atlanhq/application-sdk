@@ -106,8 +106,14 @@ class Database(assets.Database):
             )
 
             database_attributes["name"] = obj["database_name"]
-            database_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+            database_attributes["connection_qualified_name"] = obj[
+                "connection_qualified_name"
+            ]
             database_attributes["schema_count"] = obj.get("schema_count", 0)
+
+            database_attributes["connector_name"] = (
+                AtlanConnectorType.get_connector_name(obj["connection_qualified_name"])
+            )
 
             if catalog_id := obj.get("catalog_id", None):
                 database_custom_attributes["catalog_id"] = catalog_id
@@ -151,7 +157,9 @@ class Schema(assets.Schema):
             schema_custom_attributes = {}
 
             schema_attributes["qualified_name"] = build_atlas_qualified_name(
-                obj["connection_qualified_name"], obj["catalog_name"], obj["schema_name"]
+                obj["connection_qualified_name"],
+                obj["catalog_name"],
+                obj["schema_name"],
             )
 
             schema_attributes["name"] = obj["schema_name"]
@@ -159,7 +167,9 @@ class Schema(assets.Schema):
                 obj["connection_qualified_name"], obj["catalog_name"]
             )
             schema_attributes["database_name"] = obj["catalog_name"]
-            schema_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+            schema_attributes["connection_qualified_name"] = obj[
+                "connection_qualified_name"
+            ]
             schema_attributes["table_count"] = obj.get("table_count", 0)
             schema_attributes["views_count"] = obj.get("views_count", 0)
 
@@ -185,9 +195,7 @@ class Table(assets.Table):
     """
 
     @classmethod
-    def get_attributes(
-        cls, obj: Dict[str, Any]
-    ) -> dict[str, Any]:
+    def get_attributes(cls, obj: Dict[str, Any]) -> dict[str, Any]:
         """Parse a dictionary into a Table entity.
 
         Args:
@@ -236,30 +244,40 @@ class Table(assets.Table):
                 obj["parent_table_name"],
             )
             if table_type == assets.TablePartition:
-                sql_table_attributes["table_qualified_name"] = build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                    obj["parent_table_name"],
+                sql_table_attributes["table_qualified_name"] = (
+                    build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                        obj["parent_table_name"],
+                    )
                 )
                 sql_table_attributes["name"] = obj["table_name"]
-                sql_table_attributes["schema_qualified_name"] = build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
+                sql_table_attributes["schema_qualified_name"] = (
+                    build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                    )
                 )
                 sql_table_attributes["schema_name"] = obj["table_schema"]
                 sql_table_attributes["database_name"] = obj["table_catalog"]
-                sql_table_attributes["database_qualified_name"] = build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["table_catalog"]
+                sql_table_attributes["database_qualified_name"] = (
+                    build_atlas_qualified_name(
+                        obj["connection_qualified_name"], obj["table_catalog"]
+                    )
                 )
-                sql_table_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+                sql_table_attributes["connection_qualified_name"] = obj[
+                    "connection_qualified_name"
+                ]
                 sql_table_attributes["table_name"] = obj["parent_table_name"]
-                sql_table_attributes["table_qualified_name"] = build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                    obj["parent_table_name"],
+                sql_table_attributes["table_qualified_name"] = (
+                    build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                        obj["parent_table_name"],
+                    )
                 )
                 if obj.get("partitioned_parent_table", None):
                     sql_table_attributes["parent_table_partition"] = (
@@ -273,17 +291,23 @@ class Table(assets.Table):
                     )
             else:
                 sql_table_attributes["name"] = obj["table_name"]
-                sql_table_attributes["schema_qualified_name"] = build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
+                sql_table_attributes["schema_qualified_name"] = (
+                    build_atlas_qualified_name(
+                        obj["connection_qualified_name"],
+                        obj["table_catalog"],
+                        obj["table_schema"],
+                    )
                 )
                 sql_table_attributes["schema_name"] = obj["table_schema"]
                 sql_table_attributes["database_name"] = obj["table_catalog"]
-                sql_table_attributes["database_qualified_name"] = build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["table_catalog"]
+                sql_table_attributes["database_qualified_name"] = (
+                    build_atlas_qualified_name(
+                        obj["connection_qualified_name"], obj["table_catalog"]
+                    )
                 )
-                sql_table_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+                sql_table_attributes["connection_qualified_name"] = obj[
+                    "connection_qualified_name"
+                ]
 
             if table_type in [assets.View, assets.MaterialisedView]:
                 sql_table_attributes["definition"] = obj.get("view_definition", "")
@@ -298,10 +322,14 @@ class Table(assets.Table):
                 sql_table_attributes["external_location"] = obj.get("location", "")
 
             if hasattr(temp, "external_location_format"):
-                sql_table_attributes["external_location_format"] = obj.get("file_format_type", "")
+                sql_table_attributes["external_location_format"] = obj.get(
+                    "file_format_type", ""
+                )
 
             if hasattr(temp, "external_location_region"):
-                sql_table_attributes["external_location_region"] = obj.get("stage_region", "")
+                sql_table_attributes["external_location_region"] = obj.get(
+                    "stage_region", ""
+                )
 
             # Applicable only for Materialised Views
             if obj.get("refresh_mode", "") != "":
@@ -467,6 +495,14 @@ class Column(assets.Column):
                 obj["table_schema"],
                 obj["table_name"],
             )
+            attributes["table"] = {
+                "typeName": "Table",
+                "attributes": {"qualifiedName": attributes["table_qualified_name"]},
+                "isIncomplete": True,
+                "uniqueAttributes": {
+                    "qualifiedName": attributes["table_qualified_name"]
+                },
+            }
             attributes["connection_qualified_name"] = obj["connection_qualified_name"]
 
             attributes["data_type"] = obj.get("data_type")
@@ -697,7 +733,10 @@ class Function(assets.Function):
 
             function_attributes["name"] = obj["function_name"]
             function_attributes["qualified_name"] = build_atlas_qualified_name(
-                obj["connection_qualified_name"], obj["function_catalog"], obj["function_schema"], obj["function_name"]
+                obj["connection_qualified_name"],
+                obj["function_catalog"],
+                obj["function_schema"],
+                obj["function_name"],
             )
             function_attributes["database_qualified_name"] = build_atlas_qualified_name(
                 obj["connection_qualified_name"], obj["function_catalog"]
@@ -707,7 +746,9 @@ class Function(assets.Function):
                 obj["function_catalog"],
                 obj["function_schema"],
             )
-            function_attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+            function_attributes["connection_qualified_name"] = obj[
+                "connection_qualified_name"
+            ]
             function_attributes["schema_name"] = obj["function_schema"]
             function_attributes["database_name"] = obj["function_catalog"]
 
@@ -716,14 +757,24 @@ class Function(assets.Function):
             else:
                 function_attributes["function_type"] = "Scalar"
             function_attributes["function_return_type"] = obj.get("data_type", None)
-            function_attributes["function_language"] = obj.get("function_language", None)
-            function_attributes["function_definition"] = obj.get("function_definition", None)
+            function_attributes["function_language"] = obj.get(
+                "function_language", None
+            )
+            function_attributes["function_definition"] = obj.get(
+                "function_definition", None
+            )
             function_attributes["function_arguments"] = list(
                 obj.get("argument_signature", "()")[1:-1].split(",")
             )
-            function_attributes["function_is_secure"] = obj.get("is_secure", None) == "YES"
-            function_attributes["function_is_external"] = obj.get("is_external", None) == "YES"
-            function_attributes["function_is_d_m_f"] = obj.get("is_data_metric", None) == "YES"
+            function_attributes["function_is_secure"] = (
+                obj.get("is_secure", None) == "YES"
+            )
+            function_attributes["function_is_external"] = (
+                obj.get("is_external", None) == "YES"
+            )
+            function_attributes["function_is_d_m_f"] = (
+                obj.get("is_data_metric", None) == "YES"
+            )
             function_attributes["function_is_memoizable"] = (
                 obj.get("is_memoizable", None) == "YES"
             )
