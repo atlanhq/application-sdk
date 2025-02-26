@@ -374,7 +374,7 @@ class Column(assets.Column):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Column:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         """Parse a dictionary into a Column entity.
 
         Args:
@@ -418,41 +418,39 @@ class Column(assets.Column):
             else:
                 parent_type = assets.View
 
-            sql_column = assets.Column.creator(
-                name=obj["column_name"],
-                parent_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                    obj["table_name"],
-                ),
-                parent_type=parent_type,
-                order=obj.get(
-                    "ordinal_position",
-                    obj.get("column_id", obj.get("internal_column_id", None)),
-                ),
-                parent_name=obj["table_name"],
-                database_name=obj["table_catalog"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["table_catalog"]
-                ),
-                schema_name=obj["table_schema"],
-                schema_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                ),
-                table_name=obj["table_name"],
-                table_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["table_catalog"],
-                    obj["table_schema"],
-                    obj["table_name"],
-                ),
-                connection_qualified_name=obj["connection_qualified_name"],
-            )
-
             attributes = {}
+            attributes["name"] = obj.get("column_name")
+            attributes["parent_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["table_catalog"],
+                obj["table_schema"],
+                obj["table_name"],
+            )
+            attributes["parent_type"] = parent_type
+            attributes["order"] = obj.get(
+                "ordinal_position",
+                obj.get("column_id", obj.get("internal_column_id", None)),
+            )
+            attributes["parent_name"] = obj["table_name"]
+            attributes["database_name"] = obj["table_catalog"]
+            attributes["database_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"], obj["table_catalog"]
+            )
+            attributes["schema_name"] = obj["table_schema"]
+            attributes["schema_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["table_catalog"],
+                obj["table_schema"],
+            )
+            attributes["table_name"] = obj["table_name"]
+            attributes["table_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["table_catalog"],
+                obj["table_schema"],
+                obj["table_name"],
+            )
+            attributes["connection_qualified_name"] = obj["connection_qualified_name"]
+
             attributes["data_type"] = obj.get("data_type")
             attributes["is_nullable"] = obj.get("is_nullable", "YES") == "YES"
             attributes["is_partition"] = obj.get("is_partition", None) == "YES"
@@ -489,10 +487,10 @@ class Column(assets.Column):
             custom_attributes["buffer_length"] = obj.get("buffer_length")
             custom_attributes["column_size"] = obj.get("column_size")
 
-            sql_column.attributes = sql_column.attributes.copy(update=attributes)
-            sql_column.custom_attributes = custom_attributes
-
-            return sql_column
+            return {
+                "attributes": attributes,
+                "custom_attributes": custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Column Entity: {str(e)}")
 
