@@ -463,18 +463,63 @@ class Column(assets.Column):
             ), "Ordinal position cannot be None"
             assert obj.get("data_type") is not None, "Data type cannot be None"
 
+            attributes = {}
             parent_type = None
             if obj.get("table_type") in ["VIEW"]:
                 parent_type = assets.View
+                attributes["view"] = {
+                    "typeName": "View",
+                    "attributes": {
+                        "qualifiedName": attributes["table_qualified_name"],
+                        "name": "",
+                    },
+                    "isIncomplete": True,
+                    "uniqueAttributes": {
+                        "qualifiedName": attributes["table_qualified_name"]
+                    },
+                }
             elif obj.get("table_type") in ["MATERIALIZED VIEW"]:
                 parent_type = assets.MaterialisedView
+                attributes["materialisedView"] = {
+                    "typeName": "MaterialisedView",
+                    "attributes": {
+                        "qualifiedName": attributes["table_qualified_name"],
+                        "name": "",
+                    },
+                    "isIncomplete": True,
+                    "uniqueAttributes": {
+                        "qualifiedName": attributes["table_qualified_name"]
+                    },
+                }
             elif (
                 obj.get("table_type") in ["DYNAMIC TABLE"]
                 or obj.get("is_dynamic") == "YES"
             ):
                 parent_type = assets.SnowflakeDynamicTable
+                attributes["dynamicTable"] = {
+                    "typeName": "SnowflakeDynamicTable",
+                    "attributes": {
+                        "qualifiedName": attributes["table_qualified_name"],
+                        "name": "",
+                    },
+                    "isIncomplete": True,
+                    "uniqueAttributes": {
+                        "qualifiedName": attributes["table_qualified_name"]
+                    },
+                }
             elif obj.get("belongs_to_partition") == "YES":
                 parent_type = assets.TablePartition
+                attributes["tablePartition"] = {
+                    "typeName": "TablePartition",
+                    "attributes": {
+                        "qualifiedName": attributes["table_qualified_name"],
+                        "name": "",
+                    },
+                    "isIncomplete": True,
+                    "uniqueAttributes": {
+                        "qualifiedName": attributes["table_qualified_name"]
+                    },
+                }
             elif obj.get("table_type") in [
                 "TABLE",
                 "BASE TABLE",
@@ -482,10 +527,31 @@ class Column(assets.Column):
                 "PARTITIONED TABLE",
             ]:
                 parent_type = assets.Table
+                attributes["table"] = {
+                    "typeName": "Table",
+                    "attributes": {
+                        "qualifiedName": attributes["table_qualified_name"],
+                        "name": "",
+                    },
+                    "isIncomplete": True,
+                    "uniqueAttributes": {
+                        "qualifiedName": attributes["table_qualified_name"]
+                    },
+                }
             else:
                 parent_type = assets.View
+                attributes["view"] = {
+                    "typeName": "View",
+                    "attributes": {
+                        "qualifiedName": attributes["table_qualified_name"],
+                        "name": "",
+                    },
+                    "isIncomplete": True,
+                    "uniqueAttributes": {
+                        "qualifiedName": attributes["table_qualified_name"]
+                    },
+                }
 
-            attributes = {}
             attributes["name"] = obj.get("column_name")
             attributes["qualified_name"] = build_atlas_qualified_name(
                 obj["connection_qualified_name"],
@@ -523,17 +589,6 @@ class Column(assets.Column):
                 obj["table_schema"],
                 obj["table_name"],
             )
-            attributes["table"] = {
-                "typeName": "Table",
-                "attributes": {
-                    "qualifiedName": attributes["table_qualified_name"],
-                    "name": "",
-                },
-                "isIncomplete": True,
-                "uniqueAttributes": {
-                    "qualifiedName": attributes["table_qualified_name"]
-                },
-            }
             attributes["connection_qualified_name"] = obj["connection_qualified_name"]
 
             attributes["data_type"] = obj.get("data_type")
