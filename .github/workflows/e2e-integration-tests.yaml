@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        repo_name: ["atlan-postgres-app"] # List of repositories to run the tests on
+        repo_name: ["atlan-postgres-app"] # List of repositories to run the tests
 
     steps:
       - name: Check out repository
