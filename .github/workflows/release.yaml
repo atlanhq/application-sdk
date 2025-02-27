@@ -80,13 +80,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git remote set-url origin https://x-access-token:${GH_TOKEN}@github.com/$GITHUB_REPOSITORY
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          git checkout -b version-update-${{ github.ref_name }}
 
           git add pyproject.toml poetry.lock
           git commit -m "chore(release): bump version"
-          git push origin ${{ github.ref_name }}
+
+          git push origin version-update-${{ github.ref_name }} --force
+          gh pr create --base develop --title "chore(release): version bump" --body "Automated PR to increment version"
+          gh pr merge --squash
 
       - name: Create GitHub Release
         env:
