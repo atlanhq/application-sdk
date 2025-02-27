@@ -26,16 +26,6 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
-      - name: Echo commit hashes
-        run: |
-          echo "Commit hash: ${{ github.sha }}"
-          echo "Base commit hash: ${{ github.event.before }}"
-          echo "Head commit hash: ${{ github.event.after }}"
-          echo "Ref: ${{ github.ref }}"
-          echo "Event name: ${{ github.event_name }}"
-          echo "REV: $(git rev-parse --short HEAD)"
-          git_hash=$(git rev-parse --short "$GITHUB_SHA")
-          echo "Git hash: $git_hash"
 
       - name: Run E2E Integrations Tests
         uses: codex-/return-dispatch@v2
@@ -48,7 +38,7 @@ jobs:
           workflow: "e2e-integration-test.yaml"
           workflow_timeout_seconds: 120
           workflow_job_steps_retry_seconds: 10
-          distinct_id: "${{ github.sha }}"
+          distinct_id: "${{ github.event.after }}"
 
       - name: Get the run ID and run URL
         run: |
