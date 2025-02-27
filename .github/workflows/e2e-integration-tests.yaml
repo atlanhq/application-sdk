@@ -21,6 +21,11 @@ jobs:
         repo_name: ["atlan-postgres-app"] # List of repositories to run the tests on
 
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
       - name: Run E2E Integrations Tests
         uses: codex-/return-dispatch@v2
         id: return_dispatch
