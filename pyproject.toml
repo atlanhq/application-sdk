@@ -54,11 +54,6 @@ iam_auth = [
     "boto3",
 ]
 
-langgraph_agent = [
-    "langchain-core",
-    "langgraph"
-]
-
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^3.8.0"
