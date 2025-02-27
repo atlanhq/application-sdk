@@ -179,6 +179,18 @@ class Schema(assets.Schema):
             if is_managed_access := obj.get("is_managed_access", None):
                 schema_custom_attributes["is_managed_access"] = is_managed_access
 
+            schema_attributes["database"] = {
+                "typeName": "Database",
+                "attributes": {
+                    "qualifiedName": schema_attributes["database_qualified_name"],
+                    "name": "",
+                },
+                "isIncomplete": True,
+                "uniqueAttributes": {
+                    "qualifiedName": schema_attributes["database_qualified_name"]
+                },
+            }
+
             return {
                 "attributes": schema_attributes,
                 "custom_attributes": schema_custom_attributes,
@@ -497,9 +509,11 @@ class Column(assets.Column):
             )
             attributes["table"] = {
                 "typeName": "Table",
-                "attributes": {"qualifiedName": attributes["table_qualified_name"]},
+                "attributes": {
+                    "qualifiedName": attributes["table_qualified_name"],
+                    "name": "",
+                },
                 "isIncomplete": True,
-                "name": "",
                 "uniqueAttributes": {
                     "qualifiedName": attributes["table_qualified_name"]
                 },
