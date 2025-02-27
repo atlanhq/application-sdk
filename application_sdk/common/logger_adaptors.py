@@ -99,18 +99,21 @@ class AtlanLoggerAdapter:
                 self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
 
     def _parse_ot_resource_attributes(self, env_var: str) -> dict[str, str]:
-        # Check if the environment variable is not empty
-        if env_var:
-            # Split the string by commas to get individual key-value pairs
-            attributes = env_var.split(",")
-            # Create a dictionary from the key-value pairs
-            return {
-                item.split("=")[0].strip(): item.split("=")[
-                    1
-                ].strip()  # Strip spaces around the key and value
-                for item in attributes
-                if "=" in item  # Ensure there's an "=" to split
-            }
+        try:
+            # Check if the environment variable is not empty
+            if env_var:
+                # Split the string by commas to get individual key-value pairs
+                attributes = env_var.split(",")
+                # Create a dictionary from the key-value pairs
+                return {
+                    item.split("=")[0].strip(): item.split("=")[
+                        1
+                    ].strip()  # Strip spaces around the key and value
+                    for item in attributes
+                    if "=" in item  # Ensure there's an "=" to split
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
     def _create_log_record(self, record: dict) -> LogRecord:
