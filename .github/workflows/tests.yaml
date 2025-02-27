@@ -71,7 +71,7 @@ jobs:
         run: |
           poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
           poetry run coverage xml
-          poetry run coverage report
+          poetry run coverage report --fail-under=60
 
       - name: Comment Coverage Report on PR
         uses: orgoro/coverage@v3.2

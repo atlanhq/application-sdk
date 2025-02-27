@@ -1,22 +1,28 @@
-import argparse
-import http.server
-import logging
 import os
-import socketserver
 from datetime import datetime
 from typing import List
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.parsers.directory import DirectoryParser
 from application_sdk.docgen.parsers.manifest import ManifestParser
 
+logger = get_logger(__name__)
+
 
 class AtlanDocsGenerator:
-    def __init__(self, docs_directory_path: str, export_path: str) -> None:
-        self.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+    """Docs Generator for Atlan Apps.
 
+    This class handles parsing documentation manifests, validating content,
+    and exporting the documentation to MkDocs format.
+
+    Args:
+        docs_directory_path (str): Path to the directory containing documentation files.
+        export_path (str): Path where the generated documentation will be exported.
+    """
+
+    def __init__(self, docs_directory_path: str, export_path: str) -> None:
         self.docs_directory_path = docs_directory_path
         self.export_path = export_path
 
@@ -24,7 +30,44 @@ class AtlanDocsGenerator:
         self.manifest_parser = ManifestParser(docs_directory=self.docs_directory_path)
         self.directory_parser = DirectoryParser(docs_directory=self.docs_directory_path)
 
+    def verify(self):
+        """Verify the manifest content meets minimum requirements.
+
+        Raises:
+            ValueError: If manifest doesn't contain at least one page or supported feature.
+        """
+        manifest = self.manifest_parser.parse_manifest()
+
+        if len(manifest.customer.pages) == 0:
+            raise ValueError("Manifest must contain at least one page")
+
+        if len(manifest.customer.supported_features) == 0:
+            raise ValueError("Manifest must contain at least one supported feature")
+
     def export(self):
+        """Export the documentation to MkDocs format.
+
+        This method:
+        1. Parses the manifest file
+        2. Validates the directory structure
+        3. Generates an index page with supported features
+        4. Processes all additional pages
+        5. Exports to MkDocs format
+        6. Builds the final MkDocs site
+
+        Raises:
+            Exception: Any exception that occurs during manifest parsing or export process.
+        """
+
+        try:
+            from mkdocs import config
+            from mkdocs.commands import build
+        except ImportError:
+            logger.warning(
+                "mkdocs is not installed. Please install it using 'pip install mkdocs'"
+            )
+            return
+
         try:
             manifest = self.manifest_parser.parse_manifest()
         except Exception as e:
@@ -32,12 +75,9 @@ class AtlanDocsGenerator:
 
         directory_parser_result = self.directory_parser.parse()
         for attr, value in directory_parser_result:
-            self.logger.info(f"Directory validation - {attr}: {value}")
+            logger.info(f"Directory validation - {attr}: {value}")
 
         pages: List[Page] = []
-
-        # Generate index page content
-        # TODO: move this to a separate function
 
         index_page_content = ""
 
@@ -81,39 +121,16 @@ class AtlanDocsGenerator:
         )
         mkdocs_exporter.export(pages=pages)
 
-        self.logger.info(f"Documentation exported to {self.export_path}")
+        # Build the MkDocs site
+        cfg = config.load_config(  # type: ignore
+            config_file=os.path.join(self.export_path, "mkdocs.yml")
+        )
 
+        cfg.plugins.on_startup(command="build", dirty=False)
 
-def create_cli_parser():
-    parser = argparse.ArgumentParser(description="Atlan Documentation Generator CLI")
-    subparsers = parser.add_subparsers(dest="command", help="Commands")
+        try:
+            build.build(cfg, dirty=False)
+        finally:
+            cfg.plugins.on_shutdown()
 
-    # Build command
-    subparsers.add_parser("build", help="Build the documentation")
-
-    # Serve command
-    serve_parser = subparsers.add_parser("serve", help="Serve the documentation")
-    serve_parser.add_argument("--port", type=int, default=8000, help="Port to serve on")
-
-    return parser
-
-
-def setup_docs(docs_directory_path: str, export_path: str):
-    parser = create_cli_parser()
-    args = parser.parse_args()
-
-    generator = AtlanDocsGenerator(docs_directory_path, export_path)
-    generator.export()
-
-    os.chdir(export_path)
-    os.system("mkdocs build")
-
-    if args.command == "build":
-        print("Docs written to", export_path)
-    elif args.command == "serve":
-        print("Serving docs on port", args.port)
-        os.chdir("site")
-        handler = http.server.SimpleHTTPRequestHandler
-        with socketserver.TCPServer(("", args.port), handler) as httpd:
-            print(f"Serving at http://localhost:{args.port}")
-            httpd.serve_forever()
+        logger.info(f"Documentation exported to {self.export_path}")
