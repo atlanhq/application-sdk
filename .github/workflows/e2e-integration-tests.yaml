@@ -26,7 +26,6 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
-
       - name: Run E2E Integrations Tests
         uses: codex-/return-dispatch@v2
         id: return_dispatch
