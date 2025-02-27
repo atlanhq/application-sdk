@@ -2,7 +2,7 @@ from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock
 
 import pytest
-from hypothesis import given, settings, HealthCheck
+from hypothesis import HealthCheck, given, settings
 
 from application_sdk.application.fastapi import (
     EventWorkflowTrigger,
@@ -13,7 +13,7 @@ from application_sdk.application.fastapi import (
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
 from application_sdk.workflows import WorkflowInterface
-from tests.hypothesis.strategies.fastapi import payload_strategy, event_data_strategy
+from tests.hypothesis.strategies.fastapi import event_data_strategy, payload_strategy
 
 
 class SampleWorkflow(WorkflowInterface):
@@ -30,7 +30,9 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(payload=payload_strategy)
-    @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(
+        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
+    )
     async def test_preflight_check_success(
         self,
         payload: Dict[str, Any],
@@ -38,7 +40,7 @@ class TestFastAPIApplication:
         """Test successful preflight check response with hypothesis generated payloads"""
         # Reset mock for each example
         self.mock_handler.preflight_check.reset_mock()
-        
+
         # Arrange
         expected_data: Dict[str, Any] = {
             "example": {
@@ -66,7 +68,9 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(payload=payload_strategy)
-    @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @settings(
+        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
+    )
     async def test_preflight_check_failure(
         self,
         payload: Dict[str, Any],
@@ -74,9 +78,11 @@ class TestFastAPIApplication:
         """Test preflight check with failed handler response using hypothesis generated payloads"""
         # Reset mock for each example
         self.mock_handler.preflight_check.reset_mock()
-        
+
         # Arrange
-        self.mock_handler.preflight_check.side_effect = Exception("Failed to fetch metadata")
+        self.mock_handler.preflight_check.side_effect = Exception(
+            "Failed to fetch metadata"
+        )
 
         # Create request object
         request = PreflightCheckRequest(**payload)
@@ -90,12 +96,12 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(event_data=event_data_strategy)
-    @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    async def test_event_trigger_success(
-        self,
-        event_data: Dict[str, Any]
-    ):
+    @settings(
+        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
+    )
+    async def test_event_trigger_success(self, event_data: Dict[str, Any]):
         """Test event trigger with hypothesis generated event data"""
+
         def should_trigger_workflow(event: AtlanEvent):
             if event.data.event_type == "workflow_end":
                 return True
@@ -128,11 +134,10 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(event_data=event_data_strategy)
-    @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-    async def test_event_trigger_conditions(
-        self,
-        event_data: Dict[str, Any]
-    ):
+    @settings(
+        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
+    )
+    async def test_event_trigger_conditions(self, event_data: Dict[str, Any]):
         """Test event trigger conditions with hypothesis generated event data"""
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()

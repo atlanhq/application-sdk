@@ -470,10 +470,9 @@ class Column(assets.Column):
                 "character_octet_length",
                 "is_auto_increment",
                 "is_generated",
-                "num_prec_radix"
-                "extra_info",
+                "num_prec_radix" "extra_info",
                 "buffer_length",
-                "column_size"
+                "column_size",
             ]
 
             custom_attributes = {
