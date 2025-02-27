@@ -60,7 +60,7 @@ class AtlanLoggerAdapter:
                 # First try to get attributes from OTEL_RESOURCE_ATTRIBUTES
                 resource_attributes = {}
                 if OTEL_RESOURCE_ATTRIBUTES:
-                    resource_attributes = self._parse_ot_resource_attributes(
+                    resource_attributes = self._parse_otel_resource_attributes(
                         OTEL_RESOURCE_ATTRIBUTES
                     )
 
@@ -98,7 +98,7 @@ class AtlanLoggerAdapter:
             except Exception as e:
                 self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
 
-    def _parse_ot_resource_attributes(self, env_var: str) -> dict[str, str]:
+    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         try:
             # Check if the environment variable is not empty
             if env_var:
