@@ -39,7 +39,7 @@ on:
 
 jobs:
   tag-and-release:
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'version-update')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -90,7 +90,7 @@ jobs:
 
           git push origin version-update-${{ github.ref_name }} --force
           gh pr create --base develop --title "chore(release): version bump" --body "Automated PR to increment version"
-          gh pr merge --squash
+          gh pr merge --squash --admin
 
       - name: Create GitHub Release
         env:
