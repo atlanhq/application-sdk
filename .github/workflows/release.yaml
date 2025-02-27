@@ -39,7 +39,7 @@ on:
 
 jobs:
   tag-and-release:
-    if: github.event.pull_request.merged == true
+    if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'version-update')
     runs-on: ubuntu-latest
     permissions:
       contents: write
