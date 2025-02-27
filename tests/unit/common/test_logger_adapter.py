@@ -1,13 +1,17 @@
 from contextlib import contextmanager
-from unittest import mock
 from typing import Dict, Generator
+from unittest import mock
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from loguru import logger
-from hypothesis import given, strategies as st
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logger
-from tests.hypothesis.strategies.logger import workflow_info_strategy, activity_info_strategy
+from tests.hypothesis.strategies.logger import (
+    activity_info_strategy,
+    workflow_info_strategy,
+)
 
 
 @pytest.fixture
@@ -27,10 +31,10 @@ def mock_logger():
 @contextmanager
 def create_logger_adapter() -> Generator[AtlanLoggerAdapter, None, None]:
     """Create a logger adapter instance with mocked environment.
-    
+
     This context manager ensures proper setup and cleanup of the logger adapter
     for each test example.
-    
+
     Yields:
         AtlanLoggerAdapter: A configured logger adapter instance.
     """
@@ -174,8 +178,13 @@ def test_process_with_generated_activity_context(activity_info: mock.Mock):
             assert kwargs["activity_type"] == activity_info.activity_type
             assert kwargs["task_queue"] == activity_info.task_queue
             assert kwargs["attempt"] == activity_info.attempt
-            assert kwargs["schedule_to_close_timeout"] == activity_info.schedule_to_close_timeout
-            assert kwargs["start_to_close_timeout"] == activity_info.start_to_close_timeout
+            assert (
+                kwargs["schedule_to_close_timeout"]
+                == activity_info.schedule_to_close_timeout
+            )
+            assert (
+                kwargs["start_to_close_timeout"] == activity_info.start_to_close_timeout
+            )
 
             expected_msg = "Test message Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
             assert msg == expected_msg
@@ -190,7 +199,7 @@ def test_process_with_generated_request_context(request_id: str):
         ) as mock_context:
             mock_context.get.return_value = {"request_id": request_id}
             msg, kwargs = logger_adapter.process("Test message", {})
-            
+
             # Verify request_id is copied to kwargs
             assert kwargs["request_id"] == request_id
             # Verify the message is preserved

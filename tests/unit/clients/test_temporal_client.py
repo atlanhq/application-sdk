@@ -2,14 +2,14 @@ from typing import Any, Dict
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
-from hypothesis import given, settings, HealthCheck
+from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.workflows import WorkflowInterface
 from tests.hypothesis.strategies.temporal import (
     temporal_config_strategy,
+    worker_config_strategy,
     workflow_args_strategy,
-    worker_config_strategy
 )
 
 
@@ -42,7 +42,7 @@ async def test_load_property_based(mock_connect: AsyncMock, config: Dict[str, An
         host=str(config["host"]),
         port=str(config["port"]),
         application_name=str(config["application_name"]),
-        namespace=str(config["namespace"])
+        namespace=str(config["namespace"]),
     )
 
     # Mock the client connection
@@ -105,7 +105,7 @@ async def test_start_workflow_property_based(
         host=str(config["host"]),
         port=str(config["port"]),
         application_name=str(config["application_name"]),
-        namespace=str(config["namespace"])
+        namespace=str(config["namespace"]),
     )
 
     # Mock the client connection
@@ -240,6 +240,7 @@ async def test_create_worker_without_client(
     temporal_client: TemporalClient,
 ):
     """Test worker creation fails when client is not loaded"""
+
     # Mock workflow class and activities
     class MockWorkflow(WorkflowInterface):
         pass
@@ -275,7 +276,7 @@ async def test_create_worker_property_based(
         host=str(config["host"]),
         port=str(config["port"]),
         application_name=str(config["application_name"]),
-        namespace=str(config["namespace"])
+        namespace=str(config["namespace"]),
     )
 
     # Mock the client connection

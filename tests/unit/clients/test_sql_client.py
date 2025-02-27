@@ -4,16 +4,16 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
 import pytest
-from hypothesis import given, settings, HealthCheck
+from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
 from tests.hypothesis.strategies.sql import (
-    sql_credentials_strategy,
     metadata_args_strategy,
-    sql_query_strategy,
+    sql_credentials_strategy,
     sql_data_strategy,
-    sqlalchemy_connect_args_strategy
+    sql_query_strategy,
+    sqlalchemy_connect_args_strategy,
 )
 
 
@@ -55,7 +55,9 @@ def test_load(mock_create_engine: Any, sql_client: SQLClient):
     assert sql_client.connection == mock_connection
 
 
-@given(credentials=sql_credentials_strategy, connect_args=sqlalchemy_connect_args_strategy)
+@given(
+    credentials=sql_credentials_strategy, connect_args=sqlalchemy_connect_args_strategy
+)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_load_property_based(
     sql_client: SQLClient,
@@ -114,7 +116,9 @@ async def test_fetch_metadata_property_based(
     data: list[Dict[str, Any]],
 ):
     """Property-based test for fetching metadata with various arguments and data"""
-    with patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe") as mock_run_query:
+    with patch(
+        "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe"
+    ) as mock_run_query:
         # Update handler with the test arguments
         if "database_alias_key" in args:
             handler.database_alias_key = args["database_alias_key"]
@@ -130,7 +134,7 @@ async def test_fetch_metadata_property_based(
         for row in data:
             test_row = {
                 handler.database_alias_key: row.get("database", "test_db"),
-                handler.schema_alias_key: row.get("schema", "test_schema")
+                handler.schema_alias_key: row.get("schema", "test_schema"),
             }
             test_data.append(test_row)
 
@@ -237,6 +241,7 @@ async def test_run_query(
     def get_item_gen(arr: list[str]):
         def get_item(idx: int):
             return arr[idx]
+
         return get_item
 
     # Create MagicMock rows with `_fields` and specific attribute values
@@ -294,6 +299,7 @@ async def test_run_query(
 
     # Assertions
     assert results == expected_results
+
 
 @pytest.mark.asyncio
 @patch("application_sdk.clients.sql.text")

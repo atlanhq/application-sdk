@@ -9,10 +9,10 @@ from hypothesis.strategies import DrawFn
 @st.composite
 def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
     """Strategy for generating workflow info test data.
-    
+
     Args:
         draw: Hypothesis draw function for sampling values.
-        
+
     Returns:
         A mock object with workflow information fields populated with random data.
     """
@@ -29,10 +29,10 @@ def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
 @st.composite
 def activity_info_strategy(draw: DrawFn) -> mock.Mock:
     """Strategy for generating activity info test data.
-    
+
     Args:
         draw: Hypothesis draw function for sampling values.
-        
+
     Returns:
         A mock object with activity information fields populated with random data.
     """
@@ -45,4 +45,4 @@ def activity_info_strategy(draw: DrawFn) -> mock.Mock:
         attempt=draw(st.integers(min_value=1, max_value=100)),
         schedule_to_close_timeout=f"{draw(st.integers(min_value=1, max_value=3600))}s",
         start_to_close_timeout=f"{draw(st.integers(min_value=1, max_value=3600))}s",
-    ) 
+    )
