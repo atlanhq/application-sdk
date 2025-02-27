@@ -5,7 +5,7 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-from typing import Any, Dict, List, Optional, TypeVar, Union, overload
+from typing import Any, Dict, List, Optional, TypeVar, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -249,13 +249,13 @@ class Table(assets.Table):
                 table_type = assets.View
 
             sql_table_attributes = {}
-            sql_table_attributes["qualified_name"] = build_atlas_qualified_name(
-                obj["connection_qualified_name"],
-                obj["table_catalog"],
-                obj["table_schema"],
-                obj["parent_table_name"],
-            )
             if table_type == assets.TablePartition:
+                sql_table_attributes["qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                    obj["parent_table_name"],
+                )
                 sql_table_attributes["table_qualified_name"] = (
                     build_atlas_qualified_name(
                         obj["connection_qualified_name"],
@@ -327,6 +327,18 @@ class Table(assets.Table):
             sql_table_attributes["column_count"] = obj.get("column_count", 0)
             sql_table_attributes["row_count"] = obj.get("row_count", 0)
             sql_table_attributes["size_bytes"] = obj.get("size_bytes", 0)
+
+            sql_table_attributes["atlanSchema"] = {
+                "typeName": "Schema",
+                "attributes": {
+                    "qualifiedName": sql_table_attributes["schema_qualified_name"],
+                    "name": "",
+                },
+                "isIncomplete": True,
+                "uniqueAttributes": {
+                    "qualifiedName": sql_table_attributes["schema_qualified_name"]
+                },
+            }
 
             # TODO: Figure out another way
             temp = table_type()
