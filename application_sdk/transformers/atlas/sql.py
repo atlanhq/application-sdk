@@ -499,6 +499,7 @@ class Column(assets.Column):
                 "typeName": "Table",
                 "attributes": {"qualifiedName": attributes["table_qualified_name"]},
                 "isIncomplete": True,
+                "name": "",
                 "uniqueAttributes": {
                     "qualifiedName": attributes["table_qualified_name"]
                 },

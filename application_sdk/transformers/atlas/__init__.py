@@ -135,6 +135,10 @@ class AtlasTransformer(TransformerInterface):
                 entity = creator(
                     attributes=entity_data["attributes"],
                     custom_attributes=entity_data["custom_attributes"],
+                    guid=str(
+                        -int(random.random() * 10000000000000000)  # noqa: S311
+                    ),
+                    status=EntityStatus.ACTIVE,
                 )
 
                 return entity.dict(by_alias=True, exclude_none=True)
@@ -178,11 +182,7 @@ class AtlasTransformer(TransformerInterface):
         attributes["last_sync_run"] = workflow_run_id
         attributes["last_sync_run_at"] = datetime.now()
         attributes["connection_name"] = data.get("connection_name", "")
-
-        if "guid" not in attributes:
-            attributes["guid"] = str(
-                -int(random.random() * 10000000000000000)  # noqa: S311
-            )
+        attributes["connector_name"] = self.connector_name
 
         if remarks := data.get("remarks", None) or data.get("comment", None):
             attributes["description"] = process_text(remarks)
