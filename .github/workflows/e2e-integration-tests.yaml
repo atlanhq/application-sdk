@@ -22,46 +22,45 @@ jobs:
 
     steps:
       - name: Run E2E Integrations Tests
+        uses: codex-/return-dispatch@v2
+        id: return_dispatch
+        with:
+          token: "${{ secrets.ORG_PAT_GITHUB }}"
+          ref: "refs/heads/develop"
+          repo: ${{ matrix.repo_name }}
+          owner: "atlanhq"
+          workflow: "e2e-integration-test.yaml"
+          workflow_timeout_seconds: 120
+          workflow_job_steps_retry_seconds: 10
+          distinct_id: "${{ github.sha }}"
+
+      - name: Get the run ID and run URL
         run: |
-          repo_owner="atlanhq"
-          repo_name="${{ matrix.repo_name }}"
-          event_type="trigger-e2e-test"
-          commit_hash="${{ github.sha }}"
-
-          response=$(curl -L \
-            -X POST \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/repos/$repo_owner/$repo_name/dispatches \
-            -d "{\"event_type\": \"$event_type\", \"client_payload\": {\"commit_hash\": \"$commit_hash\"}}")
-
-          echo "Triggered workflow in $repo_name with $response"
+          echo ${{steps.return_dispatch.outputs.run_id}}
+          echo ${{steps.return_dispatch.outputs.run_url}}
 
       - name: Check Workflow Status
         run: |
           repo_owner="atlanhq"
           repo_name="${{ matrix.repo_name }}"
-          workflow_id=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-            https://api.github.com/repos/$repo_owner/$repo_name/actions/runs \
-            | jq -r '.workflow_runs[] | select(.event == "repository_dispatch") | .id' | head -n 1)
+          run_id="${{steps.return_dispatch.outputs.run_id}}"
 
-          echo "Checking status of workflow run $workflow_id in $repo_name"
+          echo "Checking status of workflow run $run_id in $repo_name"
 
           status="in_progress"
           while [[ "$status" == "in_progress" || "$status" == "queued" ]]; do
             sleep 10
             status=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$workflow_id \
+              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id \
               | jq -r '.status')
             conclusion=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$workflow_id \
+              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id \
               | jq -r '.conclusion')
           done
 
           if [[ "$conclusion" != "success" ]]; then
-            echo "Workflow run $workflow_id in $repo_name failed with conclusion $conclusion"
+            echo "Workflow run $run_id in $repo_name failed with conclusion $conclusion"
             exit 1
           else
-            echo "Workflow run $workflow_id in $repo_name succeeded"
+            echo "Workflow run $run_id in $repo_name succeeded"
           fi
