@@ -26,7 +26,7 @@ class Procedure(assets.Procedure):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Procedure:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         try:
             assert (
                 obj.get("procedure_name") is not None
@@ -44,29 +44,33 @@ class Procedure(assets.Procedure):
                 obj.get("connection_qualified_name") is not None
             ), "Connection qualified name cannot be None"
 
-            procedure = assets.Procedure.creator(
-                name=obj["procedure_name"],
-                definition=obj["procedure_definition"],
-                schema_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["procedure_catalog"],
-                    obj["procedure_schema"],
-                ),
-                schema_name=obj["procedure_schema"],
-                database_name=obj["procedure_catalog"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"],
-                    obj["procedure_catalog"],
-                ),
-                connection_qualified_name=obj["connection_qualified_name"],
+            procedure_attributes = {}
+            procedure_custom_attributes = {}
+
+            procedure_attributes["qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["procedure_catalog"],
+                obj["procedure_schema"],
+                obj["procedure_name"],
             )
+            procedure_attributes["name"] = obj["procedure_name"]
+            procedure_attributes["definition"] = obj["procedure_definition"]
+            procedure_attributes["schema_qualified_name"] = build_atlas_qualified_name(
+                obj["connection_qualified_name"],
+                obj["procedure_catalog"],
+                obj["procedure_schema"],
+            )
+            procedure_attributes["schema_name"] = obj["procedure_schema"]
+            procedure_attributes["database_name"] = obj["procedure_catalog"]
+            procedure_attributes["connection_qualified_name"] = obj[
+                "connection_qualified_name"
+            ]
+            procedure_attributes["sub_type"] = obj.get("procedure_type", "-1")
 
-            attributes = {}
-            attributes["sub_type"] = obj.get("procedure_type", "-1")
-
-            procedure.attributes = procedure.attributes.copy(update=attributes)
-
-            return procedure
+            return {
+                "attributes": procedure_attributes,
+                "custom_attributes": procedure_custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Procedure Entity: {str(e)}")
 
@@ -949,7 +953,7 @@ class TagAttachment(assets.TagAttachment):
             )
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.TagAttachment:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
         """Parse a dictionary into a TagAttachment entity.
 
         Args:
@@ -978,42 +982,56 @@ class TagAttachment(assets.TagAttachment):
                 "object_schema" in obj and obj["object_schema"] is not None
             ), "Object schema cannot be None"
 
-            tag_attachment = TagAttachment.create(
-                name=obj["tag_name"],
-                connection_qualified_name=obj["connection_qualified_name"],
-                database_qualified_name=build_atlas_qualified_name(
-                    obj["connection_qualified_name"], obj["tag_database"]
-                ),
-                schema_qualified_name=build_atlas_qualified_name(
+            tag_attachment_attributes = {}
+            tag_attachment_custom_attributes = {}
+
+            tag_attachment_attributes["name"] = obj["tag_name"]
+            tag_attachment_attributes["connection_qualified_name"] = obj[
+                "connection_qualified_name"
+            ]
+            tag_attachment_attributes["database_qualified_name"] = (
+                build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["tag_database"],
+                )
+            )
+            tag_attachment_attributes["schema_qualified_name"] = (
+                build_atlas_qualified_name(
                     obj["connection_qualified_name"],
                     obj["tag_database"],
                     obj["tag_schema"],
-                ),
+                )
             )
-            tag_attachment.tag_qualified_name = build_atlas_qualified_name(
-                obj["connection_qualified_name"],
-                obj["tag_database"],
-                obj["tag_schema"],
-                obj["tag_name"],
+
+            tag_attachment_attributes["tag_qualified_name"] = (
+                build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["tag_database"],
+                    obj["tag_schema"],
+                    obj["tag_name"],
+                )
             )
             object_cat = obj.get("object_database", "")
             object_schema = obj.get("object_schema", "")
 
-            attributes = {}
-            attributes["object_database_qualified_name"] = build_atlas_qualified_name(
-                obj["connection_qualified_name"], object_cat
+            tag_attachment_attributes["object_database_qualified_name"] = (
+                build_atlas_qualified_name(obj["connection_qualified_name"], object_cat)
             )
-            attributes["object_schema_qualified_name"] = build_atlas_qualified_name(
-                obj["connection_qualified_name"], object_cat, object_schema
+            tag_attachment_attributes["object_schema_qualified_name"] = (
+                build_atlas_qualified_name(
+                    obj["connection_qualified_name"], object_cat, object_schema
+                )
             )
-            attributes["object_database_name"] = object_cat
-            attributes["object_schema_name"] = object_schema
-            attributes["object_domain"] = obj.get("domain", None)
-            attributes["object_name"] = obj.get("object_name", None)
-            attributes["database_name"] = obj["tag_database"]
-            attributes["schema_name"] = obj["tag_schema"]
-            attributes["source_tag_id"] = obj.get("tag_id", None)
-            attributes["tag_attachment_string_value"] = obj.get("tag_value", None)
+            tag_attachment_attributes["object_database_name"] = object_cat
+            tag_attachment_attributes["object_schema_name"] = object_schema
+            tag_attachment_attributes["object_domain"] = obj.get("domain", None)
+            tag_attachment_attributes["object_name"] = obj.get("object_name", None)
+            tag_attachment_attributes["database_name"] = obj["tag_database"]
+            tag_attachment_attributes["schema_name"] = obj["tag_schema"]
+            tag_attachment_attributes["source_tag_id"] = obj.get("tag_id", None)
+            tag_attachment_attributes["tag_attachment_string_value"] = obj.get(
+                "tag_value", None
+            )
 
             if object_domain := obj.get("domain", None):
                 object_cat = obj.get("object_cat", "")
@@ -1049,7 +1067,9 @@ class TagAttachment(assets.TagAttachment):
                         column_name,
                     )
 
-                attributes["object_qualified_name"] = object_qualified_name
+                tag_attachment_attributes["object_qualified_name"] = (
+                    object_qualified_name
+                )
 
             if classification_defs := obj.get("classification_defs", []):
                 tag_name = obj.get("tag_name", "").upper()
@@ -1063,21 +1083,21 @@ class TagAttachment(assets.TagAttachment):
                     oldest_def = min(
                         matching_defs, key=lambda x: x.get("createTime", float("inf"))
                     )
-                    attributes["mapped_classification_name"] = json.dumps(
-                        oldest_def.get("name")
+                    tag_attachment_attributes["mapped_classification_name"] = (
+                        json.dumps(oldest_def.get("name"))
                     )
                 else:
-                    attributes["mapped_classification_name"] = json.dumps(
-                        obj.get("mappedClassificationName", "")
+                    tag_attachment_attributes["mapped_classification_name"] = (
+                        json.dumps(obj.get("mappedClassificationName", ""))
                     )
             else:
-                attributes["mapped_classification_name"] = json.dumps(
+                tag_attachment_attributes["mapped_classification_name"] = json.dumps(
                     obj.get("mappedClassificationName", "")
                 )
 
-            tag_attachment.attributes = tag_attachment.attributes.copy(
-                update=attributes
-            )
-            return tag_attachment
+            return {
+                "attributes": tag_attachment_attributes,
+                "custom_attributes": tag_attachment_custom_attributes,
+            }
         except Exception as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
