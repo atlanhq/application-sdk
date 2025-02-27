@@ -26,7 +26,7 @@ jobs:
         id: return_dispatch
         with:
           token: "${{ secrets.ORG_PAT_GITHUB }}"
-          ref: "refs/pull/155/merge"
+          ref: "refs/heads/e2e_test_fixes"
           repo: ${{ matrix.repo_name }}
           owner: "atlanhq"
           workflow: "e2e-integration-test.yaml"
