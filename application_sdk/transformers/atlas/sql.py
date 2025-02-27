@@ -465,29 +465,25 @@ class Column(assets.Column):
             if obj.get("decimal_digits", "") != "":
                 attributes["precision"] = obj.get("decimal_digits")
 
-            custom_attributes = {}
+            optional_custom_attributes_key = [
+                "numeric_precision",
+                "character_octet_length",
+                "is_auto_increment",
+                "is_generated",
+                "num_prec_radix" "extra_info",
+                "buffer_length",
+                "column_size",
+            ]
 
-            custom_attributes["is_self_referencing"] = obj.get(
-                "is_self_referencing", "NO"
-            )
+            custom_attributes = {
+                "ordinal_position": obj.get("ordinal_position"),
+                "is_self_referencing": obj.get("is_self_referencing", "NO"),
+                "type_name": obj.get("type_name", obj.get("data_type")),
+            }
 
-            if obj.get("numeric_precision", "") != "":
-                custom_attributes["numeric_precision"] = obj.get(
-                    "numeric_precision", ""
-                )
-
-            custom_attributes["catalog_id"] = obj.get("table_catalog_id")
-            custom_attributes["schema_id"] = obj.get("table_schema_id")
-            custom_attributes["table_id"] = obj.get("table_id")
-
-            custom_attributes["character_octet_length"] = obj.get(
-                "character_octet_length", None
-            )
-            custom_attributes["is_auto_increment"] = obj.get("is_autoincrement")
-            custom_attributes["is_generated"] = obj.get("is_generatedcolumn")
-            custom_attributes["extra_info"] = obj.get("extra_info", None)
-            custom_attributes["buffer_length"] = obj.get("buffer_length")
-            custom_attributes["column_size"] = obj.get("column_size")
+            for key in optional_custom_attributes_key:
+                if obj.get(key):
+                    custom_attributes[key] = obj.get(key)
 
             sql_column.attributes = sql_column.attributes.copy(update=attributes)
             sql_column.custom_attributes = custom_attributes

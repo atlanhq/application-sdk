@@ -18,6 +18,7 @@ request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", defa
 
 SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
+OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
@@ -57,11 +58,18 @@ class AtlanLoggerAdapter:
                 # Get workflow node name for Argo environment
                 workflow_node_name = os.getenv("OTEL_WF_NODE_NAME", "")
 
-                # Base resource attributes
-                resource_attributes = {
-                    "service.name": SERVICE_NAME,
-                    "service.version": SERVICE_VERSION,
-                }
+                # First try to get attributes from OTEL_RESOURCE_ATTRIBUTES
+                resource_attributes = {}
+                if OTEL_RESOURCE_ATTRIBUTES:
+                    resource_attributes = self._parse_otel_resource_attributes(
+                        OTEL_RESOURCE_ATTRIBUTES
+                    )
+
+                # Only add default service attributes if they're not already present
+                if "service.name" not in resource_attributes:
+                    resource_attributes["service.name"] = SERVICE_NAME
+                if "service.version" not in resource_attributes:
+                    resource_attributes["service.version"] = SERVICE_VERSION
 
                 # Add workflow node name if running in Argo
                 if workflow_node_name:
@@ -91,7 +99,25 @@ class AtlanLoggerAdapter:
             except Exception as e:
                 self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
 
-    def _create_log_record(self, record: Dict[str, Any]) -> LogRecord:
+    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
+        try:
+            # Check if the environment variable is not empty
+            if env_var:
+                # Split the string by commas to get individual key-value pairs
+                attributes = env_var.split(",")
+                # Create a dictionary from the key-value pairs
+                return {
+                    item.split("=")[0].strip(): item.split("=")[
+                        1
+                    ].strip()  # Strip spaces around the key and value
+                    for item in attributes
+                    if "=" in item  # Ensure there's an "=" to split
+                }
+        except Exception as e:
+            self.logger.error(f"Failed to parse OTLP resource attributes: {str(e)}")
+        return {}
+
+    def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord."""
         severity_number = SEVERITY_MAPPING.get(
             record["level"].name, SeverityNumber.UNSPECIFIED
