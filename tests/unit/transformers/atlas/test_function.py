@@ -49,8 +49,12 @@ def test_function_initialization():
     # Create function with basic attributes
     function = Function()
     function.attributes.name = "test_function"
-    function.attributes.qualified_name = "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/test_function"
-    function.attributes.schema_qualified_name = "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA"
+    function.attributes.qualified_name = (
+        "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/test_function"
+    )
+    function.attributes.schema_qualified_name = (
+        "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA"
+    )
     function.attributes.schema_name = "TEST_SCHEMA"
     function.attributes.database_name = "TEST_DB"
     function.attributes.database_qualified_name = "default/snowflake/1728518400/TEST_DB"
@@ -60,9 +64,17 @@ def test_function_initialization():
     assert function.attributes.name == "test_function"
     assert function.attributes.schema_name == "TEST_SCHEMA"
     assert function.attributes.database_name == "TEST_DB"
-    assert function.attributes.database_qualified_name == "default/snowflake/1728518400/TEST_DB"
-    assert function.attributes.connection_qualified_name == "default/snowflake/1728518400"
-    assert function.attributes.qualified_name == "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/test_function"
+    assert (
+        function.attributes.database_qualified_name
+        == "default/snowflake/1728518400/TEST_DB"
+    )
+    assert (
+        function.attributes.connection_qualified_name == "default/snowflake/1728518400"
+    )
+    assert (
+        function.attributes.qualified_name
+        == "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/test_function"
+    )
 
 
 def test_function_transformation(
@@ -154,7 +166,7 @@ def test_function_from_dict():
         "function_schema": "TEST_SCHEMA",
         "connection_qualified_name": "default/snowflake/1728518400",
         "data_type": "NUMBER",
-        "function_type": "Scalar"
+        "function_type": "Scalar",
     }
 
     function = Function()
@@ -165,10 +177,14 @@ def test_function_from_dict():
     function.attributes.function_is_memoizable = valid_data["is_memoizable"] == "YES"
     function.attributes.function_return_type = valid_data["data_type"]
     function.attributes.function_type = valid_data["function_type"]
-    function.attributes.function_arguments = {valid_data["argument_signature"].strip("()")}
+    function.attributes.function_arguments = {
+        valid_data["argument_signature"].strip("()")
+    }
     function.attributes.database_name = valid_data["function_catalog"]
     function.attributes.schema_name = valid_data["function_schema"]
-    function.attributes.connection_qualified_name = valid_data["connection_qualified_name"]
+    function.attributes.connection_qualified_name = valid_data[
+        "connection_qualified_name"
+    ]
 
     # Verify the function attributes
     assert function.attributes.name == "test_function"
@@ -181,14 +197,16 @@ def test_function_from_dict():
     assert function.attributes.function_arguments == {"arg1 type1"}
     assert function.attributes.database_name == "TEST_DB"
     assert function.attributes.schema_name == "TEST_SCHEMA"
-    assert function.attributes.connection_qualified_name == "default/snowflake/1728518400"
+    assert (
+        function.attributes.connection_qualified_name == "default/snowflake/1728518400"
+    )
 
     # Test with invalid data (missing required fields)
-    invalid_data = {
-        "connection_qualified_name": "default/snowflake/1728518400"
-    }
+    invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
 
     function = Function()
-    function.attributes.connection_qualified_name = invalid_data["connection_qualified_name"]
+    function.attributes.connection_qualified_name = invalid_data[
+        "connection_qualified_name"
+    ]
     assert function.attributes.name is None
     assert function.attributes.function_definition is None

@@ -8,6 +8,11 @@ from application_sdk.clients.temporal import TEMPORAL_NOT_FOUND_FAILURE, Tempora
 from application_sdk.workflows import WorkflowInterface
 
 
+# Mock workflow class for testing
+class MockWorkflow(WorkflowInterface):
+    pass
+
+
 @pytest.fixture
 def temporal_client() -> TemporalClient:
     return TemporalClient(
@@ -76,10 +81,6 @@ async def test_start_workflow(
     credentials = {"username": "test_username", "password": "test_password"}
     workflow_args = {"param1": "value1", "credentials": credentials}
 
-    # Create a mock workflow class that inherits from WorkflowInterface
-    class MockWorkflow(WorkflowInterface):
-        pass
-
     workflow_class = MockWorkflow
 
     # Run start_workflow and capture the result
@@ -134,10 +135,6 @@ async def test_start_workflow_with_workflow_id(
         "workflow_id": "test_workflow_id",
     }
 
-    # Create a mock workflow class that inherits from WorkflowInterface
-    class MockWorkflow(WorkflowInterface):
-        pass
-
     workflow_class = MockWorkflow
 
     # Run start_workflow and capture the result
@@ -179,10 +176,6 @@ async def test_start_workflow_failure(
     # Sample workflow arguments
     credentials = {"username": "test_username", "password": "test_password"}
     workflow_args = {"param1": "value1", "credentials": credentials}
-
-    # Create a mock workflow class that inherits from WorkflowInterface
-    class MockWorkflow(WorkflowInterface):
-        pass
 
     workflow_class = MockWorkflow
 

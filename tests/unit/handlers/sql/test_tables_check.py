@@ -1,114 +1,86 @@
-from typing import Dict, List
+from typing import Any, Optional, Type
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pandas as pd
 import pytest
+from sqlalchemy.engine import Engine
 
+from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
-class TestExtractAllowedSchemas:
-    @pytest.fixture
-    def handler(self) -> SQLHandler:
-        handler = SQLHandler()
-        handler.database_result_key = "TABLE_CATALOG"
-        handler.schema_result_key = "TABLE_SCHEMA"
-        return handler
+class MockSQLClient(SQLClient):
+    def __init__(self):
+        super().__init__()
+        self.run_query = AsyncMock()
+        self.connect = AsyncMock()
+        self.disconnect = AsyncMock()
+        self.engine: Engine = MagicMock(spec=Engine)
+        self.engine.connect = MagicMock()
+        self.engine.connect.return_value.__enter__ = MagicMock()
+        self.engine.connect.return_value.__exit__ = MagicMock()
+        self.engine.connect.return_value.connection = MagicMock()
 
-    def test_single_schema(self, handler: SQLHandler) -> None:
-        """Test extraction with a single schema"""
-        schemas_results: List[Dict[str, str]] = [
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
-        ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
+    async def __aenter__(self) -> "MockSQLClient":
+        return self
 
-        assert allowed_databases == {"db1"}
-        assert allowed_schemas == {"db1.schema1"}
+    async def __aexit__(
+        self,
+        exc_type: Optional[Type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Any,
+    ) -> None:
+        pass
 
-    def test_multiple_schemas_same_database(self, handler: SQLHandler) -> None:
-        """Test extraction with multiple schemas in the same database"""
-        schemas_results: List[Dict[str, str]] = [
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},
-        ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
 
-        assert allowed_databases == {"db1"}
-        assert allowed_schemas == {"db1.schema1", "db1.schema2"}
+@pytest.fixture
+def sql_handler() -> SQLHandler:
+    sql_client = MockSQLClient()
+    handler = SQLHandler(sql_client)
+    handler.tables_check_sql = "SELECT COUNT(*) as count FROM tables"
+    return handler
 
-    def test_multiple_databases(self, handler: SQLHandler) -> None:
-        """Test extraction with multiple databases"""
-        schemas_results: List[Dict[str, str]] = [
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": "schema1"},
-        ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
 
-        assert allowed_databases == {"db1", "db2"}
-        assert allowed_schemas == {"db1.schema1", "db2.schema1"}
+# Note: The tables_check method is decorated with @transform which transforms the input
+# from a DataFrame to Dict[str, Any] internally. While the linter shows type errors,
+# the actual runtime behavior is correct.
+async def test_tables_check_success(sql_handler: SQLHandler) -> None:
+    """Test tables check with successful response."""
+    # Create a mock DataFrame with table count
+    mock_df = pd.DataFrame([{"count": 5}])
+    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+        MagicMock()
+    )  # type: ignore
+    with patch("pandas.read_sql_query", return_value=mock_df):
+        result = await sql_handler.tables_check()
+        assert result["success"] is True
+        assert "Table count: 5" in result["successMessage"]
 
-    def test_empty_results(self, handler: SQLHandler) -> None:
-        """Test extraction with empty results"""
-        schemas_results: List[Dict[str, str]] = []
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
 
-        assert allowed_databases == set()
-        assert allowed_schemas == set()
+async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
+    """Test tables check with empty response."""
+    # Create a mock DataFrame with zero count
+    mock_df = pd.DataFrame([{"count": 0}])
+    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+        MagicMock()
+    )  # type: ignore
+    with patch("pandas.read_sql_query", return_value=mock_df):
+        result = await sql_handler.tables_check()
+        assert result["success"] is True
+        assert "Table count: 0" in result["successMessage"]
 
-    def test_complex_scenario(self, handler: SQLHandler) -> None:
-        """Test extraction with a complex mix of databases and schemas"""
-        schemas_results: List[Dict[str, str]] = [
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},
-            {"TABLE_CATALOG": "db2", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "db3", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "db3", "TABLE_SCHEMA": "schema2"},
-        ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
 
-        assert allowed_databases == {"db1", "db2", "db3"}
-        assert allowed_schemas == {
-            "db1.schema1",
-            "db1.schema2",
-            "db2.schema1",
-            "db3.schema1",
-            "db3.schema2",
-        }
-
-    def test_custom_result_keys(self, handler: SQLHandler) -> None:
-        """Test extraction with custom database and schema result keys"""
-        handler.database_result_key = "DATABASE"
-        handler.schema_result_key = "SCHEMA"
-
-        schemas_results: List[Dict[str, str]] = [
-            {"DATABASE": "db1", "SCHEMA": "schema1"},
-            {"DATABASE": "db1", "SCHEMA": "schema2"},
-        ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
-
-        assert allowed_databases == {"db1"}
-        assert allowed_schemas == {"db1.schema1", "db1.schema2"}
-
-    def test_duplicate_entries(self, handler: SQLHandler) -> None:
-        """Test extraction with duplicate entries (should be deduplicated by set)"""
-        schemas_results: List[Dict[str, str]] = [
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"},  # Duplicate entry
-            {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema2"},
-        ]
-        allowed_databases, allowed_schemas = handler.extract_allowed_schemas(
-            schemas_results
-        )
-
-        assert allowed_databases == {"db1"}
-        assert allowed_schemas == {"db1.schema1", "db1.schema2"}
+async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
+    """Test tables check with failure response."""
+    # Create a DataFrame with invalid data that will cause an error
+    mock_df = pd.DataFrame([{"wrong_column": "invalid"}])  # Missing 'count' column
+    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+        MagicMock()
+    )  # type: ignore
+    with patch("pandas.read_sql_query", return_value=mock_df):
+        result = await sql_handler.tables_check()
+        assert result["success"] is False
+        assert "Tables check failed" in result["failureMessage"]
+        assert (
+            "'count'" in result["error"]
+        )  # KeyError's string representation includes quotes

@@ -27,28 +27,32 @@ def test_procedure_parse_obj_valid():
         "procedure_catalog": "TEST_DB",
         "procedure_schema": "TEST_SCHEMA",
         "connection_qualified_name": "default/snowflake/1728518400",
-        "procedure_type": "SQL"
+        "procedure_type": "SQL",
     }
 
     procedure = Procedure.parse_obj(valid_data)
 
     # Verify basic attributes
     assert procedure.attributes.name == "TEST_PROC"
-    assert procedure.attributes.definition == "CREATE PROCEDURE TEST_PROC() RETURNS STRING LANGUAGE SQL AS 'SELECT 1'"
+    assert (
+        procedure.attributes.definition
+        == "CREATE PROCEDURE TEST_PROC() RETURNS STRING LANGUAGE SQL AS 'SELECT 1'"
+    )
     assert procedure.attributes.database_name == "TEST_DB"
     assert procedure.attributes.schema_name == "TEST_SCHEMA"
-    assert procedure.attributes.connection_qualified_name == "default/snowflake/1728518400"
+    assert (
+        procedure.attributes.connection_qualified_name == "default/snowflake/1728518400"
+    )
     assert procedure.sub_type == "SQL"
 
     # Verify qualified names are built correctly
     expected_schema_qualified_name = build_atlas_qualified_name(
         valid_data["connection_qualified_name"],
         valid_data["procedure_catalog"],
-        valid_data["procedure_schema"]
+        valid_data["procedure_schema"],
     )
     expected_db_qualified_name = build_atlas_qualified_name(
-        valid_data["connection_qualified_name"],
-        valid_data["procedure_catalog"]
+        valid_data["connection_qualified_name"], valid_data["procedure_catalog"]
     )
     assert procedure.attributes.schema_qualified_name == expected_schema_qualified_name
     assert procedure.attributes.database_qualified_name == expected_db_qualified_name
@@ -57,20 +61,57 @@ def test_procedure_parse_obj_valid():
 def test_procedure_parse_obj_missing_required_fields():
     """Test parsing a procedure object with missing required fields."""
     invalid_data_cases = [
-        ({"procedure_definition": "test", "procedure_catalog": "test", "procedure_schema": "test", "connection_qualified_name": "test"},
-         "Procedure name cannot be None"),
-        ({"procedure_name": "test", "procedure_catalog": "test", "procedure_schema": "test", "connection_qualified_name": "test"},
-         "Procedure definition cannot be None"),
-        ({"procedure_name": "test", "procedure_definition": "test", "procedure_schema": "test", "connection_qualified_name": "test"},
-         "Procedure catalog cannot be None"),
-        ({"procedure_name": "test", "procedure_definition": "test", "procedure_catalog": "test", "connection_qualified_name": "test"},
-         "Procedure schema cannot be None"),
-        ({"procedure_name": "test", "procedure_definition": "test", "procedure_catalog": "test", "procedure_schema": "test"},
-         "Connection qualified name cannot be None"),
+        (
+            {
+                "procedure_definition": "test",
+                "procedure_catalog": "test",
+                "procedure_schema": "test",
+                "connection_qualified_name": "test",
+            },
+            "Procedure name cannot be None",
+        ),
+        (
+            {
+                "procedure_name": "test",
+                "procedure_catalog": "test",
+                "procedure_schema": "test",
+                "connection_qualified_name": "test",
+            },
+            "Procedure definition cannot be None",
+        ),
+        (
+            {
+                "procedure_name": "test",
+                "procedure_definition": "test",
+                "procedure_schema": "test",
+                "connection_qualified_name": "test",
+            },
+            "Procedure catalog cannot be None",
+        ),
+        (
+            {
+                "procedure_name": "test",
+                "procedure_definition": "test",
+                "procedure_catalog": "test",
+                "connection_qualified_name": "test",
+            },
+            "Procedure schema cannot be None",
+        ),
+        (
+            {
+                "procedure_name": "test",
+                "procedure_definition": "test",
+                "procedure_catalog": "test",
+                "procedure_schema": "test",
+            },
+            "Connection qualified name cannot be None",
+        ),
     ]
 
     for invalid_data, expected_error in invalid_data_cases:
-        with pytest.raises(ValueError, match=f"Error creating Procedure Entity: {expected_error}"):
+        with pytest.raises(
+            ValueError, match=f"Error creating Procedure Entity: {expected_error}"
+        ):
             Procedure.parse_obj(invalid_data)
 
 
@@ -83,7 +124,7 @@ def test_procedure_parse_obj_optional_fields():
         "procedure_schema": "TEST_SCHEMA",
         "connection_qualified_name": "default/snowflake/1728518400",
         # Optional field
-        "procedure_type": "STORED_PROCEDURE"
+        "procedure_type": "STORED_PROCEDURE",
     }
 
     procedure = Procedure.parse_obj(data)
@@ -103,7 +144,7 @@ def test_procedure_transformation(transformer: AtlasTransformer):
         "procedure_catalog": "TEST_DB",
         "procedure_schema": "TEST_SCHEMA",
         "connection_qualified_name": "default/snowflake/1728518400",
-        "procedure_type": "SQL"
+        "procedure_type": "SQL",
     }
 
     transformed_data = transformer.transform_metadata(
@@ -118,8 +159,14 @@ def test_procedure_transformation(transformer: AtlasTransformer):
     assert transformed_data is not None
     assert transformed_data["typeName"] == "Procedure"
     assert transformed_data["attributes"]["name"] == "TEST_PROC"
-    assert transformed_data["attributes"]["definition"] == "CREATE PROCEDURE TEST_PROC() RETURNS STRING LANGUAGE SQL AS 'SELECT 1'"
+    assert (
+        transformed_data["attributes"]["definition"]
+        == "CREATE PROCEDURE TEST_PROC() RETURNS STRING LANGUAGE SQL AS 'SELECT 1'"
+    )
     assert transformed_data["attributes"]["databaseName"] == "TEST_DB"
     assert transformed_data["attributes"]["schemaName"] == "TEST_SCHEMA"
-    assert transformed_data["attributes"]["connectionQualifiedName"] == "default/snowflake/1728518400"
+    assert (
+        transformed_data["attributes"]["connectionQualifiedName"]
+        == "default/snowflake/1728518400"
+    )
     assert transformed_data["attributes"]["subType"] == "SQL"

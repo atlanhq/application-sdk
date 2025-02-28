@@ -116,6 +116,16 @@ class TestPrepareFilters:
         assert "db1\\.*" == include_regex
         assert "^$" == exclude_regex
 
+    def test_prepare_filters_with_empty_include_and_filled_exclude(self) -> None:
+        """Test prepare_filters with empty include filter but filled exclude filter"""
+        include_filter = "{}"
+        exclude_filter = '{"db1": ["schema1"], "db2": ["schema2"]}'
+
+        include_regex, exclude_regex = prepare_filters(include_filter, exclude_filter)
+
+        assert ".*" == include_regex
+        assert "db1\\.schema1|db2\\.schema2" == exclude_regex
+
 
 class TestNormalizeFilters:
     def test_normalize_filters_with_specific_schemas(self) -> None:
@@ -160,8 +170,10 @@ class TestWorkflowConfig:
         expected_config = {"key": "value"}
         mock_extract.return_value = expected_config
 
+        # Call the function
         result = get_workflow_config("test_config_id")
 
+        # Assertions
         assert result == expected_config
         mock_extract.assert_called_once_with("test_config_id")
 

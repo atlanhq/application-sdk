@@ -37,7 +37,9 @@ class TestValidateFilters:
         self, allowed_databases: Set[str], allowed_schemas: Set[str]
     ) -> None:
         """Test validation with invalid database"""
-        include_filter: Dict[str, List[str] | str] = {"^invalid_db$": ["^schema1$"]}
+        include_filter: Dict[str, List[str] | str] = {
+            "^invalid_db$": ["^schema1$"]
+        }  # invlid because invalid_db is not in allowed_databases
         success, message = SQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
@@ -48,7 +50,9 @@ class TestValidateFilters:
         self, allowed_databases: Set[str], allowed_schemas: Set[str]
     ) -> None:
         """Test validation with valid database but invalid schema"""
-        include_filter: Dict[str, List[str] | str] = {"^db1$": ["^invalid_schema$"]}
+        include_filter: Dict[str, List[str] | str] = {
+            "^db1$": ["^invalid_schema$"]
+        }  # invalid because invalid_schema is not in allowed_schemas
         success, message = SQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
