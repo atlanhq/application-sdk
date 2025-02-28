@@ -239,7 +239,7 @@ files = [
     {file = "attrs-25.1.0-py3-none-any.whl", hash = "sha256:c75a69e28a550a7e93789579c22aa26b0f5b83b75dc4e08fe092980051e1090a"},
     {file = "attrs-25.1.0.tar.gz", hash = "sha256:1c97078a80c814273a76b2a298a932eb681c87415c11dee0a6921de7f1b02c3e"},
 ]
-markers = {main = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"workflows\"", test = "python_version >= \"3.12\" or python_version == \"3.11\""}
+markers = {main = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"workflows\" or extra == \"tests\")", test = "python_version >= \"3.12\" or python_version == \"3.11\""}
 
 [package.extras]
 benchmark = ["cloudpickle", "hypothesis", "mypy (>=1.11.1)", "pympler", "pytest (>=4.3.0)", "pytest-codspeed", "pytest-mypy-plugins", "pytest-xdist[psutil]"]
@@ -295,6 +295,8 @@ version = "25.1.0"
 description = "The uncompromising code formatter."
 optional = true
 python-versions = ">=3.9"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "black-25.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:759e7ec1e050a15f89b770cefbf91ebee8917aac5c20483bc2d80a6c3a04df32"},
     {file = "black-25.1.0-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:0e519ecf93120f34243e6b0054db49c00a35f84f195d5bce7e9f5cfc578fc2da"},
@@ -946,6 +948,8 @@ version = "5.2.0"
 description = "Universal encoding detector for Python 3"
 optional = true
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "chardet-5.2.0-py3-none-any.whl", hash = "sha256:e1cf59446890a00105fe7b7912492ea04b6e6f06d4b742b2c788469e34c82970"},
     {file = "chardet-5.2.0.tar.gz", hash = "sha256:1b3b6ff479a8c414bc3fa2c0852995695c4a026dcd6d0633b2dd092ca39c1cf7"},
@@ -1534,6 +1538,8 @@ version = "4.40.8"
 description = "Data management framework for Python that provides functionality to describe, extract, validate, and transform tabular data"
 optional = true
 python-versions = "*"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "frictionless-4.40.8-py2.py3-none-any.whl", hash = "sha256:87b71da5ba5f694b2091aabc6f705cf1c00bb44395964735d57aec00a89c555f"},
     {file = "frictionless-4.40.8.tar.gz", hash = "sha256:324061d754525adfe8f6be56af12660a40966c0c4e01eccfc993dc82b9e9e623"},
@@ -2215,7 +2221,7 @@ version = "2.0.0"
 description = "brain-dead simple config-ini parsing"
 optional = false
 python-versions = ">=3.7"
-groups = ["test"]
+groups = ["main", "test"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
     {file = "iniconfig-2.0.0-py3-none-any.whl", hash = "sha256:b6a85871a79d2e3b22d2d1b94ac2824226a63c6b741c88f7ae975f18b6778374"},
@@ -2228,6 +2234,8 @@ version = "0.7.2"
 description = "An ISO 8601 date/time/duration parser and formatter"
 optional = true
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "isodate-0.7.2-py3-none-any.whl", hash = "sha256:28009937d8031054830160fce6d409ed342816b543597cece116d966c6d99e15"},
     {file = "isodate-0.7.2.tar.gz", hash = "sha256:4cd1aa0f43ca76f4a6c6c0292a85f40b35ec2e43e315b59f06e6d32171a953e6"},
@@ -2282,41 +2290,6 @@ files = [
 ]
 
 [[package]]
-name = "jsonschema"
-version = "4.23.0"
-description = "An implementation of JSON Schema validation for Python"
-optional = true
-python-versions = ">=3.8"
-files = [
-    {file = "jsonschema-4.23.0-py3-none-any.whl", hash = "sha256:fbadb6f8b144a8f8cf9f0b89ba94501d143e50411a1278633f56a7acf7fd5566"},
-    {file = "jsonschema-4.23.0.tar.gz", hash = "sha256:d71497fef26351a33265337fa77ffeb82423f3ea21283cd9467bb03999266bc4"},
-]
-
-[package.dependencies]
-attrs = ">=22.2.0"
-jsonschema-specifications = ">=2023.03.6"
-referencing = ">=0.28.4"
-rpds-py = ">=0.7.1"
-
-[package.extras]
-format = ["fqdn", "idna", "isoduration", "jsonpointer (>1.13)", "rfc3339-validator", "rfc3987", "uri-template", "webcolors (>=1.11)"]
-format-nongpl = ["fqdn", "idna", "isoduration", "jsonpointer (>1.13)", "rfc3339-validator", "rfc3986-validator (>0.1.0)", "uri-template", "webcolors (>=24.6.0)"]
-
-[[package]]
-name = "jsonschema-specifications"
-version = "2024.10.1"
-description = "The JSON Schema meta-schemas and vocabularies, exposed as a Registry"
-optional = true
-python-versions = ">=3.9"
-files = [
-    {file = "jsonschema_specifications-2024.10.1-py3-none-any.whl", hash = "sha256:a09a0680616357d9a0ecf05c12ad234479f549239d0f5b55f3deea67475da9bf"},
-    {file = "jsonschema_specifications-2024.10.1.tar.gz", hash = "sha256:0f38b83639958ce1152d02a7f062902c41c8fd20d558b0c34344292d417ae272"},
-]
-
-[package.dependencies]
-referencing = ">=0.31.0"
-
-[[package]]
 name = "jsonpatch"
 version = "1.33"
 description = "Apply JSON-Patches (RFC 6902)"
@@ -2344,6 +2317,45 @@ files = [
     {file = "jsonpointer-3.0.0-py2.py3-none-any.whl", hash = "sha256:13e088adc14fca8b6aa8177c044e12701e6ad4b28ff10e65f2267a90109c9942"},
     {file = "jsonpointer-3.0.0.tar.gz", hash = "sha256:2b2d729f2091522d61c3b31f82e11870f60b68f43fbc705cb76bf4b832af59ef"},
 ]
+
+[[package]]
+name = "jsonschema"
+version = "4.23.0"
+description = "An implementation of JSON Schema validation for Python"
+optional = true
+python-versions = ">=3.8"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
+files = [
+    {file = "jsonschema-4.23.0-py3-none-any.whl", hash = "sha256:fbadb6f8b144a8f8cf9f0b89ba94501d143e50411a1278633f56a7acf7fd5566"},
+    {file = "jsonschema-4.23.0.tar.gz", hash = "sha256:d71497fef26351a33265337fa77ffeb82423f3ea21283cd9467bb03999266bc4"},
+]
+
+[package.dependencies]
+attrs = ">=22.2.0"
+jsonschema-specifications = ">=2023.03.6"
+referencing = ">=0.28.4"
+rpds-py = ">=0.7.1"
+
+[package.extras]
+format = ["fqdn", "idna", "isoduration", "jsonpointer (>1.13)", "rfc3339-validator", "rfc3987", "uri-template", "webcolors (>=1.11)"]
+format-nongpl = ["fqdn", "idna", "isoduration", "jsonpointer (>1.13)", "rfc3339-validator", "rfc3986-validator (>0.1.0)", "uri-template", "webcolors (>=24.6.0)"]
+
+[[package]]
+name = "jsonschema-specifications"
+version = "2024.10.1"
+description = "The JSON Schema meta-schemas and vocabularies, exposed as a Registry"
+optional = true
+python-versions = ">=3.9"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
+files = [
+    {file = "jsonschema_specifications-2024.10.1-py3-none-any.whl", hash = "sha256:a09a0680616357d9a0ecf05c12ad234479f549239d0f5b55f3deea67475da9bf"},
+    {file = "jsonschema_specifications-2024.10.1.tar.gz", hash = "sha256:0f38b83639958ce1152d02a7f062902c41c8fd20d558b0c34344292d417ae272"},
+]
+
+[package.dependencies]
+referencing = ">=0.31.0"
 
 [[package]]
 name = "langchain-core"
@@ -2541,6 +2553,8 @@ version = "2.1.2"
 description = "A markdown parser with high extensibility."
 optional = true
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "marko-2.1.2-py3-none-any.whl", hash = "sha256:c14aa7a77468aaaf53cf056dcd3d32398b9df4c3fb81f5e120dd37cbb9f8c859"},
     {file = "marko-2.1.2.tar.gz", hash = "sha256:a9170006b879376e6845c91b1ae3dce2992772954b99b70175ff888537186011"},
@@ -3079,6 +3093,8 @@ version = "1.0.0"
 description = "Type system extensions for programs checked with the mypy type checker."
 optional = true
 python-versions = ">=3.5"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "mypy_extensions-1.0.0-py3-none-any.whl", hash = "sha256:4392f6c0eb8a5668a69e23d168ffa70f0be9ccfd32b5cc2d26a34ae5b844552d"},
     {file = "mypy_extensions-1.0.0.tar.gz", hash = "sha256:75dbf8955dc00442a438fc4d0666508a9a97b6bd41aa2f0ffe9d2f2725af0782"},
@@ -3145,7 +3161,7 @@ description = "Fundamental package for array computing in Python"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"scale-data-generator\" or extra == \"daft\" or extra == \"workflows\")"
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"scale-data-generator\" or extra == \"daft\" or extra == \"workflows\" or extra == \"tests\")"
 files = [
     {file = "numpy-1.26.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9ff0f4f29c51e2803569d7a51c2304de5554655a60c5d776e35b4a41413830d0"},
     {file = "numpy-1.26.4-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:2e4ee3380d6de9c9ec04745830fd9e2eccb3e6cf790d39d7b98ffd19b0dd754a"},
@@ -3337,7 +3353,7 @@ description = "Fast, correct Python JSON library supporting dataclasses, datetim
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "python_version >= \"3.12\" or python_version == \"3.11\""
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"langgraph-agent\" or extra == \"tests\")"
 files = [
     {file = "orjson-3.10.15-cp310-cp310-macosx_10_15_x86_64.macosx_11_0_arm64.macosx_10_15_universal2.whl", hash = "sha256:552c883d03ad185f720d0c09583ebde257e41b9521b74ff40e08b7dec4559c04"},
     {file = "orjson-3.10.15-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:616e3e8d438d02e4854f70bfdc03a6bcdb697358dbaa6bcd19cbe24d24ece1f8"},
@@ -3457,7 +3473,7 @@ description = "Powerful data structures for data analysis, time series, and stat
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"workflows\" or extra == \"scale-data-generator\")"
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"workflows\" or extra == \"scale-data-generator\" or extra == \"tests\")"
 files = [
     {file = "pandas-2.2.3-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:1948ddde24197a0f7add2bdc4ca83bf2b1ef84a1bc8ccffd95eda17fd836ecb5"},
     {file = "pandas-2.2.3-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:381175499d3802cde0eabbaf6324cce0c4f5d52ca6f8c377c29ad442f50f6348"},
@@ -3543,6 +3559,8 @@ version = "0.22.1"
 description = "A light-weight and flexible data validation and testing tool for statistical data objects."
 optional = true
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "pandera-0.22.1-py3-none-any.whl", hash = "sha256:2a35531b4b533ac83e606a6dcc3cd41561774ff3d872117228e931f22e72f330"},
     {file = "pandera-0.22.1.tar.gz", hash = "sha256:091ebc353383ba642e5a20ee0df763ed2059ab99cb4b2ac3e83f482de8493645"},
@@ -3580,12 +3598,12 @@ version = "0.12.1"
 description = "Utility library for gitignore style pattern matching of file paths."
 optional = false
 python-versions = ">=3.8"
-groups = ["dev"]
-markers = "python_version >= \"3.12\" or python_version == \"3.11\""
+groups = ["main", "dev"]
 files = [
     {file = "pathspec-0.12.1-py3-none-any.whl", hash = "sha256:a0d503e138a4c123b27490a4f7beda6a01c6f288df0e4a8b79c7eb0dc7b4cc08"},
     {file = "pathspec-0.12.1.tar.gz", hash = "sha256:a482d51503a1ab33b1c67a6c3813a26953dbdc71c31dacaef9a838c4e29f5712"},
 ]
+markers = {main = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\"", dev = "python_version >= \"3.12\" or python_version == \"3.11\""}
 
 [[package]]
 name = "petl"
@@ -3593,6 +3611,8 @@ version = "1.7.15"
 description = "A Python package for extracting, transforming and loading tables of data."
 optional = true
 python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "petl-1.7.15.tar.gz", hash = "sha256:8e31438380ad51552539865ad3b1ab655de1b531bd03980c871ec2cff4a8c414"},
 ]
@@ -3619,8 +3639,7 @@ version = "4.3.6"
 description = "A small Python package for determining appropriate platform-specific dirs, e.g. a `user data dir`."
 optional = false
 python-versions = ">=3.8"
-groups = ["dev", "examples"]
-markers = "python_version >= \"3.12\" or python_version == \"3.11\""
+groups = ["main", "dev", "examples"]
 files = [
     {file = "platformdirs-4.3.6-py3-none-any.whl", hash = "sha256:73e575e1408ab8103900836b97580d5307456908a03e92031bab39e4554cc3fb"},
     {file = "platformdirs-4.3.6.tar.gz", hash = "sha256:357fb2acbc885b0419afd3ce3ed34564c13c9b95c89360cd9563f73aa5e2b907"},
@@ -3638,7 +3657,7 @@ version = "1.5.0"
 description = "plugin and hook calling mechanisms for python"
 optional = false
 python-versions = ">=3.8"
-groups = ["test"]
+groups = ["main", "test"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
     {file = "pluggy-1.5.0-py3-none-any.whl", hash = "sha256:44e1ad92c8ca002de6377e165f3e0f1be63266ab4d554740532335b9d75ea669"},
@@ -4386,7 +4405,7 @@ version = "8.3.4"
 description = "pytest: simple powerful testing with Python"
 optional = false
 python-versions = ">=3.8"
-groups = ["test"]
+groups = ["main", "test"]
 markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
     {file = "pytest-8.3.4-py3-none-any.whl", hash = "sha256:50e16d954148559c9a74109af1eaf0c945ba2d8f30f0a3d3335edde19788b6f6"},
@@ -4428,6 +4447,8 @@ version = "1.3.0"
 description = "pytest plugin to run your tests in a specific order"
 optional = true
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "pytest_order-1.3.0-py3-none-any.whl", hash = "sha256:2cd562a21380345dd8d5774aa5fd38b7849b6ee7397ca5f6999bbe6e89f07f6e"},
     {file = "pytest_order-1.3.0.tar.gz", hash = "sha256:51608fec3d3ee9c0adaea94daa124a5c4c1d2bb99b00269f098f414307f23dde"},
@@ -4487,6 +4508,8 @@ version = "8.0.4"
 description = "A Python slugify application that also handles Unicode"
 optional = true
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "python-slugify-8.0.4.tar.gz", hash = "sha256:59202371d1d05b54a9e7720c5e038f928f45daaffe41dd10822f3907b937c856"},
     {file = "python_slugify-8.0.4-py2.py3-none-any.whl", hash = "sha256:276540b79961052b66b7d116620b36518847f52d5fd9e3a70164fc8c50faa6b8"},
@@ -4597,6 +4620,8 @@ version = "0.36.2"
 description = "JSON Referencing + Python"
 optional = true
 python-versions = ">=3.9"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "referencing-0.36.2-py3-none-any.whl", hash = "sha256:e8699adbbf8b5c7de96d8ffa0eb5c158b3beafce084968e2ea8bb08c6794dcd0"},
     {file = "referencing-0.36.2.tar.gz", hash = "sha256:df2e89862cd09deabbdba16944cc3f10feb6b3e6f18e902f7cc25609a34775aa"},
@@ -4736,20 +4761,6 @@ socks = ["PySocks (>=1.5.6,!=1.5.7)"]
 use-chardet-on-py3 = ["chardet (>=3.0.2,<6)"]
 
 [[package]]
-name = "rfc3986"
-version = "2.0.0"
-description = "Validating URI References per RFC 3986"
-optional = true
-python-versions = ">=3.7"
-files = [
-    {file = "rfc3986-2.0.0-py2.py3-none-any.whl", hash = "sha256:50b1502b60e289cb37883f3dfd34532b8873c7de9f49bb546641ce9cbd256ebd"},
-    {file = "rfc3986-2.0.0.tar.gz", hash = "sha256:97aacf9dbd4bfd829baad6e6309fa6573aaf1be3f6fa735c8ab05e46cecb261c"},
-]
-
-[package.extras]
-idna2008 = ["idna"]
-
-[[package]]
 name = "requests-toolbelt"
 version = "1.0.0"
 description = "A utility belt for advanced users of python-requests"
@@ -4764,6 +4775,22 @@ files = [
 
 [package.dependencies]
 requests = ">=2.0.1,<3.0.0"
+
+[[package]]
+name = "rfc3986"
+version = "2.0.0"
+description = "Validating URI References per RFC 3986"
+optional = true
+python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
+files = [
+    {file = "rfc3986-2.0.0-py2.py3-none-any.whl", hash = "sha256:50b1502b60e289cb37883f3dfd34532b8873c7de9f49bb546641ce9cbd256ebd"},
+    {file = "rfc3986-2.0.0.tar.gz", hash = "sha256:97aacf9dbd4bfd829baad6e6309fa6573aaf1be3f6fa735c8ab05e46cecb261c"},
+]
+
+[package.extras]
+idna2008 = ["idna"]
 
 [[package]]
 name = "rich"
@@ -4826,6 +4853,8 @@ version = "0.23.1"
 description = "Python bindings to Rust's persistent data structures (rpds)"
 optional = true
 python-versions = ">=3.9"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "rpds_py-0.23.1-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:2a54027554ce9b129fc3d633c92fa33b30de9f08bc61b32c053dc9b537266fed"},
     {file = "rpds_py-0.23.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:b5ef909a37e9738d146519657a1aab4584018746a18f71c692f2f22168ece40c"},
@@ -4970,6 +4999,8 @@ version = "1.0.3"
 description = "A simple, safe single expression evaluator library."
 optional = true
 python-versions = ">=3.9"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "simpleeval-1.0.3-py3-none-any.whl", hash = "sha256:e3bdbb8c82c26297c9a153902d0fd1858a6c3774bf53ff4f134788c3f2035c38"},
     {file = "simpleeval-1.0.3.tar.gz", hash = "sha256:67bbf246040ac3b57c29cf048657b9cf31d4e7b9d6659684daa08ca8f1e45829"},
@@ -5422,6 +5453,8 @@ version = "1.2.0"
 description = "String case converter."
 optional = true
 python-versions = "*"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "stringcase-1.2.0.tar.gz", hash = "sha256:48a06980661908efe8d9d34eab2b6c13aefa2163b3ced26972902e3bdfd87008"},
 ]
@@ -5432,6 +5465,8 @@ version = "0.9.0"
 description = "Pretty-print tabular data"
 optional = true
 python-versions = ">=3.7"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "tabulate-0.9.0-py3-none-any.whl", hash = "sha256:024ca478df22e9340661486f85298cff5f6dcdba14f3813e8830015b9ed1948f"},
     {file = "tabulate-0.9.0.tar.gz", hash = "sha256:0095b12bf5966de529c0feb1fa08671671b3368eec77d7ef7ab114be2c068b3c"},
@@ -5490,7 +5525,7 @@ description = "The most basic Text::Unidecode port"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"scale-data-generator\""
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"scale-data-generator\" or extra == \"tests\")"
 files = [
     {file = "text-unidecode-1.3.tar.gz", hash = "sha256:bad6603bb14d279193107714b288be206cac565dfa49aa5b105294dd5c4aab93"},
     {file = "text_unidecode-1.3-py2.py3-none-any.whl", hash = "sha256:1311f10e8b895935241623731c2ba64f4c455287888b18189350b67134a822e8"},
@@ -5538,6 +5573,8 @@ version = "4.4.2"
 description = "Run-time type checker for Python"
 optional = true
 python-versions = ">=3.9"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "typeguard-4.4.2-py3-none-any.whl", hash = "sha256:77a78f11f09777aeae7fa08585f33b5f4ef0e7335af40005b0c422ed398ff48c"},
     {file = "typeguard-4.4.2.tar.gz", hash = "sha256:a6f1065813e32ef365bc3b3f503af8a96f9dd4e0033a02c28c4a4983de8c6c49"},
@@ -5627,6 +5664,8 @@ version = "0.9.0"
 description = "Runtime inspection utilities for typing module."
 optional = true
 python-versions = "*"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "typing_inspect-0.9.0-py3-none-any.whl", hash = "sha256:9ee6fc59062311ef8547596ab6b955e1b8aa46242d854bfc78f4f6b0eff35f9f"},
     {file = "typing_inspect-0.9.0.tar.gz", hash = "sha256:b23fc42ff6f6ef6954e4852c1fb512cdd18dbea03134f91f856a95ccc9461f78"},
@@ -5647,7 +5686,7 @@ files = [
     {file = "tzdata-2025.1-py2.py3-none-any.whl", hash = "sha256:7e127113816800496f027041c570f50bcd464a020098a3b6b199517772303639"},
     {file = "tzdata-2025.1.tar.gz", hash = "sha256:24894909e88cdb28bd1636c6887801df64cb485bd593f2fd83ef29075a81d694"},
 ]
-markers = {main = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"workflows\" or extra == \"scale-data-generator\")", examples = "(python_version >= \"3.12\" or python_version == \"3.11\") and sys_platform == \"win32\""}
+markers = {main = "(python_version >= \"3.12\" or python_version == \"3.11\") and (extra == \"workflows\" or extra == \"scale-data-generator\" or extra == \"tests\")", examples = "(python_version >= \"3.12\" or python_version == \"3.11\") and sys_platform == \"win32\""}
 
 [[package]]
 name = "urllib3"
@@ -5754,6 +5793,8 @@ version = "0.34.0"
 description = "Python Data Validation for Humans™"
 optional = true
 python-versions = ">=3.8"
+groups = ["main"]
+markers = "(python_version >= \"3.12\" or python_version == \"3.11\") and extra == \"tests\""
 files = [
     {file = "validators-0.34.0-py3-none-any.whl", hash = "sha256:c804b476e3e6d3786fa07a30073a4ef694e617805eb1946ceee3fe5a9b8b1321"},
     {file = "validators-0.34.0.tar.gz", hash = "sha256:647fe407b45af9a74d245b943b18e6a816acf4926974278f6dd617778e1e781f"},
@@ -6345,5 +6386,4 @@ workflows = ["dapr", "pandas", "temporalio"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "784ae518c4cfe6aa634f46ca771c67592b3272dcb54e92adfbd940d1490ea903"
-content-hash = "9af15c2d0be2561b04133c509eaf69b772c16f76e5e316c84a0626676aa20354"
+content-hash = "958b4ecf323cd45f37c1567181bbac7d17dc8260d9cd178d4ced3bc3c221640a"
