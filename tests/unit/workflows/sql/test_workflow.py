@@ -24,7 +24,6 @@ def workflow():
 def test_workflow_initialization():
     workflow = SQLMetadataExtractionWorkflow()
     assert workflow.application_name == "default"
-    assert SQLMetadataExtractionWorkflow.max_transform_concurrency == 5
     assert workflow.activities_cls == SQLMetadataExtractionActivities
 
 
@@ -53,23 +52,23 @@ def test_get_transform_batches():
         {
             "chunk_count": 10,
             "typename": "test",
-            "expected_batch_count": 5,  # Limited by max_transform_concurrency
+            "expected_batch_count": 10,  # One batch per chunk
             "expected_total_files": 10,
-            "description": "Normal case with max concurrency",
+            "description": "Multiple chunks",
         },
         {
             "chunk_count": 3,
             "typename": "test",
             "expected_batch_count": 3,
             "expected_total_files": 3,
-            "description": "Fewer chunks than max concurrency",
+            "description": "Few chunks",
         },
         {
-            "chunk_count": 7,
+            "chunk_count": 1,
             "typename": "test",
-            "expected_batch_count": 5,  # Limited by max_transform_concurrency
-            "expected_total_files": 7,
-            "description": "Uneven distribution",
+            "expected_batch_count": 1,
+            "expected_total_files": 1,
+            "description": "Single chunk",
         },
     ]
 
@@ -79,18 +78,27 @@ def test_get_transform_batches():
         )
 
         # Verify number of batches
-        assert len(batches) == case["expected_batch_count"], case["description"]
-        assert len(chunk_starts) == case["expected_batch_count"], case["description"]
+        assert len(batches) == case["chunk_count"], case["description"]
+        assert len(chunk_starts) == case["chunk_count"], case["description"]
 
         # Verify total number of files
         total_files = sum(len(batch) for batch in batches)
         assert total_files == case["expected_total_files"], case["description"]
 
-        # Verify file naming format
-        for batch in batches:
-            for file in batch:
-                assert file.startswith(f"{case['typename']}/")
-                assert file.endswith(".json")
+        # Verify file naming format and batch size
+        for i, batch in enumerate(batches):
+            assert (
+                len(batch) == 1
+            ), f"Each batch should contain exactly one file: {case['description']}"
+            file = batch[0]
+            assert file.startswith(f"{case['typename']}/")
+            assert file.endswith(".json")
+            assert file == f"{case['typename']}/{i+1}.json"
+
+        # Verify chunk start numbers are sequential
+        assert chunk_starts == list(
+            range(int(case["chunk_count"]))
+        ), f"Chunk starts should be sequential: {case['description']}"
 
 
 @pytest.mark.asyncio
