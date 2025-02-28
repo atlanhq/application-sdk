@@ -24,7 +24,7 @@ def workflow():
 def test_workflow_initialization():
     workflow = SQLMetadataExtractionWorkflow()
     assert workflow.application_name == "default"
-    assert workflow.max_transform_concurrency == 5
+    assert SQLMetadataExtractionWorkflow.max_transform_concurrency == 5
     assert workflow.activities_cls == SQLMetadataExtractionActivities
 
 
@@ -53,7 +53,7 @@ def test_get_transform_batches():
         {
             "chunk_count": 10,
             "typename": "test",
-            "expected_batch_count": 5,
+            "expected_batch_count": 5,  # Limited by max_transform_concurrency
             "expected_total_files": 10,
             "description": "Normal case with max concurrency",
         },
@@ -67,7 +67,7 @@ def test_get_transform_batches():
         {
             "chunk_count": 7,
             "typename": "test",
-            "expected_batch_count": 5,
+            "expected_batch_count": 5,  # Limited by max_transform_concurrency
             "expected_total_files": 7,
             "description": "Uneven distribution",
         },
