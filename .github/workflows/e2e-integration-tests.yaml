@@ -1,0 +1,71 @@
+name: E2E Integration Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    types:
+      - opened
+      - synchronize
+    branches:
+      - main
+      - develop
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo_name: ["atlan-postgres-app"] # List of repositories to run the tests
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+
+      - name: Run E2E Integrations Tests
+        uses: codex-/return-dispatch@v2
+        id: return_dispatch
+        with:
+          token: "${{ secrets.ORG_PAT_GITHUB }}"
+          ref: "refs/heads/develop"
+          repo: ${{ matrix.repo_name }}
+          owner: "atlanhq"
+          workflow: "e2e-integration-test.yaml"
+          workflow_timeout_seconds: 120
+          workflow_job_steps_retry_seconds: 10
+          distinct_id: "${{ github.event.after }}"
+
+      - name: Get the run ID and run URL
+        run: |
+          echo ${{steps.return_dispatch.outputs.run_id}}
+          echo ${{steps.return_dispatch.outputs.run_url}}
+
+      - name: Check Workflow Status
+        run: |
+          repo_owner="atlanhq"
+          repo_name="${{ matrix.repo_name }}"
+          run_id="${{steps.return_dispatch.outputs.run_id}}"
+
+          echo "Checking status of workflow run $run_id in $repo_name"
+
+          status="in_progress"
+          while [[ "$status" == "in_progress" || "$status" == "queued" ]]; do
+            sleep 10
+            status=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
+              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id \
+              | jq -r '.status')
+            conclusion=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
+              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id \
+              | jq -r '.conclusion')
+          done
+
+          if [[ "$conclusion" != "success" ]]; then
+            echo "Workflow run $run_id in $repo_name failed with conclusion $conclusion"
+            exit 1
+          else
+            echo "Workflow run $run_id in $repo_name succeeded"
+          fi
