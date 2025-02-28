@@ -14,7 +14,6 @@ class ApplicationSDKSettings(BaseSettings):
 
     Environment Variables:
         ATLAN_APP_SDK_CHUNK_SIZE: Chunk size for SQL | JSON | Parquet | Iceberg I/0 query operations
-        ATLAN_APP_SDK_MAX_TRANSFORM_CONCURRENCY: Maximum concurrent transformations
     """
 
     model_config = SettingsConfigDict(
@@ -26,9 +25,6 @@ class ApplicationSDKSettings(BaseSettings):
 
     # chunk size will apply for Iceber, Parquet, JSON and SQL I/O
     chunk_size: int = 100000
-
-    # Workflow settings
-    max_transform_concurrency: int = 5
 
     def model_dump(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         """Get settings as a dictionary."""
@@ -65,7 +61,7 @@ def configure_settings(**kwargs: Any) -> None:
         **kwargs: Keyword arguments to override default settings.
 
     Example:
-        >>> configure_settings(chunk_size=50000, max_transform_concurrency=10)
+        >>> configure_settings(chunk_size=50000)
     """
     global settings
     settings = ApplicationSDKSettings.get_settings(**kwargs)

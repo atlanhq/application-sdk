@@ -16,7 +16,6 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.config import get_settings
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
@@ -35,8 +34,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         activities_cls (Type[SQLMetadataExtractionActivities]): The activities class
             containing the implementation of metadata extraction operations.
         application_name (str): Name of the application, set to "sql-connector".
-        max_transform_concurrency (int): Maximum number of concurrent transformations.
-            Can be overridden via config.
     """
 
     activities_cls: Type[SQLMetadataExtractionActivities] = (
