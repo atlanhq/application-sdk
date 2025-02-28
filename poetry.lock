@@ -267,17 +267,17 @@ lxml = ["lxml"]
 
 [[package]]
 name = "boto3"
-version = "1.37.0"
+version = "1.37.2"
 description = "The AWS SDK for Python"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "boto3-1.37.0-py3-none-any.whl", hash = "sha256:03bd8c93b226f07d944fd6b022e11a307bff94ab6a21d51675d7e3ea81ee8424"},
-    {file = "boto3-1.37.0.tar.gz", hash = "sha256:01015b38017876d79efd7273f35d9a4adfba505237159621365bed21b9b65eca"},
+    {file = "boto3-1.37.2-py3-none-any.whl", hash = "sha256:e58136d52d79425ce26c3c1578bf94d4b2e91ead55fed9f6950406ee9713e6af"},
+    {file = "boto3-1.37.2.tar.gz", hash = "sha256:d64491bd4142c2c6dfe44479bf89c4ab7fa8d00210c2aaa7361931e61898b608"},
 ]
 
 [package.dependencies]
-botocore = ">=1.37.0,<1.38.0"
+botocore = ">=1.37.2,<1.38.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.11.0,<0.12.0"
 
@@ -286,13 +286,13 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "boto3-stubs"
-version = "1.37.0"
-description = "Type annotations for boto3 1.37.0 generated with mypy-boto3-builder 8.9.2"
+version = "1.37.2"
+description = "Type annotations for boto3 1.37.2 generated with mypy-boto3-builder 8.9.2"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "boto3_stubs-1.37.0-py3-none-any.whl", hash = "sha256:07c4e941a50aa4c34d975e9e29b729c91ff931d8aad544495bb2d06d4ef35a20"},
-    {file = "boto3_stubs-1.37.0.tar.gz", hash = "sha256:30599eecca0c11cff406a7de77871967661a349d56610ccec8716e56af89320d"},
+    {file = "boto3_stubs-1.37.2-py3-none-any.whl", hash = "sha256:2b4bb1fb2dd03a9a0c0b8fce09a463096f6ddec6fce686d916e3e8e32f553223"},
+    {file = "boto3_stubs-1.37.2.tar.gz", hash = "sha256:36c90a4f62f74c2d4337a83ccaf71128ab0acaa19d4eb15636ad0106e03bb801"},
 ]
 
 [package.dependencies]
@@ -348,7 +348,7 @@ bedrock-data-automation-runtime = ["mypy-boto3-bedrock-data-automation-runtime (
 bedrock-runtime = ["mypy-boto3-bedrock-runtime (>=1.37.0,<1.38.0)"]
 billing = ["mypy-boto3-billing (>=1.37.0,<1.38.0)"]
 billingconductor = ["mypy-boto3-billingconductor (>=1.37.0,<1.38.0)"]
-boto3 = ["boto3 (==1.37.0)"]
+boto3 = ["boto3 (==1.37.2)"]
 braket = ["mypy-boto3-braket (>=1.37.0,<1.38.0)"]
 budgets = ["mypy-boto3-budgets (>=1.37.0,<1.38.0)"]
 ce = ["mypy-boto3-ce (>=1.37.0,<1.38.0)"]
@@ -710,13 +710,13 @@ xray = ["mypy-boto3-xray (>=1.37.0,<1.38.0)"]
 
 [[package]]
 name = "botocore"
-version = "1.37.0"
+version = "1.37.2"
 description = "Low-level, data-driven core of boto 3."
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "botocore-1.37.0-py3-none-any.whl", hash = "sha256:d01661f38c0edac87424344cdf4169f3ab9bc1bf1b677c8b230d025eb66c54a3"},
-    {file = "botocore-1.37.0.tar.gz", hash = "sha256:b129d091a8360b4152ab65327186bf4e250de827c4a9b7ddf40a72b1acf1f3c1"},
+    {file = "botocore-1.37.2-py3-none-any.whl", hash = "sha256:5f59b966f3cd0c8055ef6f7c2600f7db5f8218071d992e5f95da3f9156d4370f"},
+    {file = "botocore-1.37.2.tar.gz", hash = "sha256:3f460f3c32cd6d747d5897a9cbde011bf1715abc7bf0a6ea6fdb0b812df63287"},
 ]
 
 [package.dependencies]
@@ -729,13 +729,13 @@ crt = ["awscrt (==0.23.8)"]
 
 [[package]]
 name = "botocore-stubs"
-version = "1.36.26"
+version = "1.37.1"
 description = "Type annotations and code completion for botocore"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "botocore_stubs-1.36.26-py3-none-any.whl", hash = "sha256:7f755b92521a9897b2de931ebcf268e28b2a2837da21fa054f55ac428e2a07cd"},
-    {file = "botocore_stubs-1.36.26.tar.gz", hash = "sha256:a6a989096c44f172a4e0a9714a6a7d3f12fa653bbb0395b7a71a5ce27e954091"},
+    {file = "botocore_stubs-1.37.1-py3-none-any.whl", hash = "sha256:52119b15e1dc6f6f5d2ea714177384a37ba877fac4f14b1cf787230562a04643"},
+    {file = "botocore_stubs-1.37.1.tar.gz", hash = "sha256:fad2ac52f815d71841c66b0d97f884376456db0cd5917d44f474ac29eef34a19"},
 ]
 
 [package.dependencies]
@@ -1232,7 +1232,7 @@ files = [
 name = "duckdb"
 version = "1.2.0"
 description = "DuckDB in-process database"
-optional = false
+optional = true
 python-versions = ">=3.7.0"
 files = [
     {file = "duckdb-1.2.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:7452d3655063cc3062504b5b22f8968acb96ffcdc6c2b8207bbec9da1de1f884"},
@@ -1292,7 +1292,7 @@ files = [
 name = "duckdb-engine"
 version = "0.14.2"
 description = "SQLAlchemy driver for duckdb"
-optional = false
+optional = true
 python-versions = "<4,>=3.8"
 files = [
     {file = "duckdb_engine-0.14.2-py3-none-any.whl", hash = "sha256:9c0634e53b91a2b43bbd74b06f275eca80acd7ad02ebb0193ef6d9a22ed29b49"},
@@ -1323,7 +1323,7 @@ idna = ">=2.0.0"
 name = "faker"
 version = "8.16.0"
 description = "Faker is a Python package that generates fake data for you."
-optional = false
+optional = true
 python-versions = ">=3.6"
 files = [
     {file = "Faker-8.16.0-py3-none-any.whl", hash = "sha256:bb10913b9d3ac2aa37180f816c82040e81f9e0c32cb08445533f293cec8930bf"},
@@ -2598,7 +2598,7 @@ files = [
 
 [[package]]
 name = "numpy"
-version = "2.2.3"
+version = "1.26.4"
 description = "Fundamental package for array computing in Python"
 optional = true
 python-versions = ">=3.10"
@@ -4082,13 +4082,13 @@ test = ["pytest (>=8)"]
 
 [[package]]
 name = "s3transfer"
-version = "0.11.2"
+version = "0.11.3"
 description = "An Amazon S3 Transfer Manager"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "s3transfer-0.11.2-py3-none-any.whl", hash = "sha256:be6ecb39fadd986ef1701097771f87e4d2f821f27f6071c872143884d2950fbc"},
-    {file = "s3transfer-0.11.2.tar.gz", hash = "sha256:3b39185cb72f5acc77db1a58b6e25b977f28d20496b6e58d6813d75f464d632f"},
+    {file = "s3transfer-0.11.3-py3-none-any.whl", hash = "sha256:ca855bdeb885174b5ffa95b9913622459d4ad8e331fc98eb01e6d5eb6a30655d"},
+    {file = "s3transfer-0.11.3.tar.gz", hash = "sha256:edae4977e3a122445660c7c114bba949f9d191bae3b34a096f18a1c8c354527a"},
 ]
 
 [package.dependencies]
@@ -4466,18 +4466,18 @@ sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
 name = "sqlglot"
-version = "26.6.0"
+version = "26.7.0"
 description = "An easily customizable SQL parser and transpiler"
 optional = true
 python-versions = ">=3.7"
 files = [
-    {file = "sqlglot-26.6.0-py3-none-any.whl", hash = "sha256:8c90ebcace2629f7d67c308d9fd148e0906b331357213d9b8905758e67da113f"},
-    {file = "sqlglot-26.6.0.tar.gz", hash = "sha256:b73af723ee2d239b0ba544dc71b0f33ff6c99817dadb8994f399c144b2d9d46c"},
+    {file = "sqlglot-26.7.0-py3-none-any.whl", hash = "sha256:684f86fc1c678b6d778b7683275194451ed52264a32ea12cc84e0daf4f2dc6ce"},
+    {file = "sqlglot-26.7.0.tar.gz", hash = "sha256:4a6f7c6211fa6c76d8c6ce2ba897f7f769f1898b0d7440ad842150201e905c41"},
 ]
 
 [package.extras]
 dev = ["duckdb (>=0.6)", "maturin (>=1.4,<2.0)", "mypy", "pandas", "pandas-stubs", "pdoc", "pre-commit", "python-dateutil", "pytz", "ruff (==0.7.2)", "types-python-dateutil", "types-pytz", "typing-extensions"]
-rs = ["sqlglotrs (==0.3.14)"]
+rs = ["sqlglotrs (==0.4.0)"]
 
 [[package]]
 name = "starlette"
@@ -4553,7 +4553,7 @@ doc = ["reno", "sphinx", "tornado (>=4.5)"]
 name = "text-unidecode"
 version = "1.3"
 description = "The most basic Text::Unidecode port"
-optional = false
+optional = true
 python-versions = "*"
 files = [
     {file = "text-unidecode-1.3.tar.gz", hash = "sha256:bad6603bb14d279193107714b288be206cac565dfa49aa5b105294dd5c4aab93"},
@@ -4633,13 +4633,13 @@ files = [
 
 [[package]]
 name = "types-s3transfer"
-version = "0.11.2"
+version = "0.11.3"
 description = "Type annotations and code completion for s3transfer"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "types_s3transfer-0.11.2-py3-none-any.whl", hash = "sha256:09c31cff8c79a433fcf703b840b66d1f694a6c70c410ef52015dd4fe07ee0ae2"},
-    {file = "types_s3transfer-0.11.2.tar.gz", hash = "sha256:3ccb8b90b14434af2fb0d6c08500596d93f3a83fb804a2bb843d9bf4f7c2ca60"},
+    {file = "types_s3transfer-0.11.3-py3-none-any.whl", hash = "sha256:953491bc834b171d4a477130e80aecd87dc27c4ba71b9d339c178deaad3fd517"},
+    {file = "types_s3transfer-0.11.3.tar.gz", hash = "sha256:48b90c1f9950dafd9816d0d1476e3323fbcd3202b74f2908b8a28c58e08e75b9"},
 ]
 
 [[package]]
@@ -5190,10 +5190,11 @@ type = ["pytest-mypy"]
 daft = ["getdaft"]
 iam-auth = ["boto3"]
 iceberg = ["pyiceberg"]
+scale-data-generator = ["duckdb", "duckdb-engine", "faker", "numpy", "pandas", "pyarrow", "pyyaml"]
 sqlalchemy = ["sqlalchemy"]
 workflows = ["dapr", "pandas", "temporalio"]
 
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "374cad417a32d19f33f58a9f1773cd42a90cecf46a1ddd681a668c71dc9c597d"
+content-hash = "92a2a56d6e6bfe444cc28ae2ab4462bd6ef4d5e3c0f4bd187b234a873f3c53e6"
