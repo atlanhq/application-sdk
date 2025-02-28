@@ -1,14 +1,11 @@
 import os
-import types
-from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, Optional
 
 import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.config import get_settings
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -34,35 +31,39 @@ class ParquetOutput(Output):
 
     def __init__(
         self,
-        local_file_prefix: str,
-        upload_file_prefix: str,
-        chunk_size: Optional[int] = None,
-        buffer_size: int = 1024 * 1024 * 10,
-        start_file_number: int = 0,
-    ):  # 10MB buffer by default
-        """Initialize the chunked object store writer.
+        output_path: str,
+        output_suffix: str,
+        output_prefix: str,
+        typename: Optional[str] = None,
+        mode: str = "append",
+        chunk_size: int = 100000,
+        total_record_count: int = 0,
+        chunk_count: int = 0,
+        state: Optional[ActivitiesState] = None,
+        **kwargs: Dict[str, Any],
+    ):
+        """Initialize the Parquet output handler.
 
         Args:
-            local_file_prefix (str): Prefix for local file paths.
-            upload_file_prefix (str): Prefix for files when uploading to object store.
-            chunk_size (Optional[int], optional): Maximum records per chunk. If None, uses config value.
-            buffer_size (int, optional): Buffer size in bytes. Defaults to 10MB.
-            start_file_number (int, optional): Starting chunk number. Defaults to 0.
+            output_path (str): Base path where Parquet files will be written.
+            output_suffix (str): Suffix for output files.
+            output_prefix (str): Prefix for files when uploading to object store.
+            typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
+            mode (str, optional): Write mode for parquet files. Defaults to "append".
+            chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
+            total_record_count (int, optional): Initial total record count. Defaults to 0.
+            chunk_count (int, optional): Initial chunk count. Defaults to 0.
+            state (Optional[ActivitiesState], optional): State object for the activity.
         """
-        self.local_file_prefix = local_file_prefix
-        self.upload_file_prefix = upload_file_prefix
-        settings = get_settings()
-        self.chunk_size = chunk_size or settings.chunk_size
-        self.lock = asyncio.Lock()
-        self.current_file = None
-        self.current_file_name = None
-        self.current_file_number = start_file_number
-        self.current_record_count = 0
-        self.total_record_count = 0
-
-        self.buffer: List[str] = []
-        self.buffer_size = buffer_size
-        self.current_buffer_size = 0
+        self.output_path = output_path
+        self.output_suffix = output_suffix
+        self.output_prefix = output_prefix
+        self.typename = typename
+        self.mode = mode
+        self.chunk_size = chunk_size
+        self.total_record_count = total_record_count
+        self.chunk_count = chunk_count
+        self.state = state
 
         # Create output directory
         full_path = f"{output_path}{output_suffix}"
@@ -147,32 +148,5 @@ class ParquetOutput(Output):
             f"Uploading file: {local_file_path} to {self.output_prefix}"
         )
         await ObjectStoreOutput.push_file_to_object_store(
-            self.upload_file_prefix, local_file_path
+            self.output_prefix, local_file_path
         )
-
-    async def __aenter__(self):
-        """Enter the async context.
-
-        Returns:
-            ChunkedObjectStoreWriterInterface: The writer instance.
-        """
-        return self
-
-    async def __aexit__(
-        self,
-        exc_type: Optional[Type[BaseException]],
-        exc_value: Optional[BaseException],
-        traceback: Optional[types.TracebackType],
-    ) -> bool:
-        """Exit the async context.
-
-        Args:
-            exc_type: Type of the exception that occurred, if any.
-            exc_value: The exception instance that occurred, if any.
-            traceback: The traceback of the exception that occurred, if any.
-
-        Returns:
-            bool: False to propagate exceptions, if any.
-        """
-        await self.close()
-        return False
