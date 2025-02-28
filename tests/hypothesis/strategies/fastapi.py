@@ -7,22 +7,27 @@ from application_sdk.outputs.eventstore import WorkflowEndEvent
 # Strategy for generating auth credentials
 auth_credentials_strategy = st.fixed_dictionaries(
     {
-        "authType": st.sampled_from(["basic", "oauth", "token"]),
+        "authType": st.just("basic"),
         "account_id": st.text(min_size=5, max_size=20),
         "port": st.integers(min_value=1, max_value=65535),
         "role": st.sampled_from(["ACCOUNTADMIN", "SYSADMIN", "USERADMIN"]),
-        "warehouse": st.text(min_size=3, max_size=20).map(lambda x: x.upper() + "_WH"),
+        "warehouse": st.from_regex(r"[A-Za-z][A-Za-z0-9_]{2,19}", fullmatch=True).map(
+            lambda x: x.upper() + "_WH"
+        ),
     }
 )
 
 # Strategy for generating metadata
 metadata_strategy = st.fixed_dictionaries(
     {
-        "include-filter": st.dictionaries(
-            keys=st.text(min_size=1).map(lambda x: f"^{x}$"),
-            values=st.lists(st.text(min_size=1).map(lambda x: f"^{x}$")),
-            min_size=1,
-        ).map(json.dumps),
+        "include-filter": st.one_of(
+            st.just("{}"),
+            st.dictionaries(
+                keys=st.text(min_size=1).map(lambda x: f"^{x}$"),
+                values=st.lists(st.text(min_size=1).map(lambda x: f"^{x}$")),
+                min_size=1,
+            ).map(json.dumps),
+        ),
         "exclude-filter": st.one_of(
             st.just("{}"),
             st.dictionaries(

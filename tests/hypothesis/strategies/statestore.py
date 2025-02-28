@@ -1,4 +1,5 @@
-from typing import Dict, Any
+from typing import Any, Dict
+
 from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
@@ -7,9 +8,9 @@ safe_string_strategy = st.text(
     min_size=1,
     max_size=100,
     alphabet=st.characters(
-        blacklist_categories=('Cs',),  # Exclude surrogate characters
-        blacklist_characters=['\x00']  # Exclude null bytes
-    )
+        blacklist_categories=("Cs",),  # Exclude surrogate characters
+        blacklist_characters=["\x00"],  # Exclude null bytes
+    ),
 )
 
 # Strategy for generating credential values
@@ -17,19 +18,35 @@ credential_value_strategy = st.one_of(
     safe_string_strategy,
     st.integers(min_value=-1000000, max_value=1000000),
     st.booleans(),
-    st.none()
+    st.none(),
 )
 
 # Strategy for common credential keys
-common_credential_keys = st.sampled_from([
-    "username", "password", "host", "port", "database",
-    "schema", "warehouse", "role", "account", "token",
-    "api_key", "secret_key", "access_key", "region",
-    "cluster", "project", "organization"
-])
+common_credential_keys = st.sampled_from(
+    [
+        "username",
+        "password",
+        "host",
+        "port",
+        "database",
+        "schema",
+        "warehouse",
+        "role",
+        "account",
+        "token",
+        "api_key",
+        "secret_key",
+        "access_key",
+        "region",
+        "cluster",
+        "project",
+        "organization",
+    ]
+)
 
 # Strategy for generating UUIDs
 uuid_strategy = st.uuids().map(str)
+
 
 @composite
 def credentials_strategy(draw) -> Dict[str, Any]:
@@ -37,25 +54,27 @@ def credentials_strategy(draw) -> Dict[str, Any]:
     # Always include username and password as they're most common
     num_fields = draw(st.integers(min_value=2, max_value=10))
     required_keys = ["username", "password"]
-    optional_keys = draw(st.lists(
-        common_credential_keys,
-        min_size=num_fields - 2,
-        max_size=num_fields - 2,
-        unique=True
-    ))
-    
+    optional_keys = draw(
+        st.lists(
+            common_credential_keys,
+            min_size=num_fields - 2,
+            max_size=num_fields - 2,
+            unique=True,
+        )
+    )
+
     credentials = {
-        key: draw(credential_value_strategy)
-        for key in required_keys + optional_keys
+        key: draw(credential_value_strategy) for key in required_keys + optional_keys
     }
     return credentials
+
 
 @composite
 def configuration_strategy(draw) -> Dict[str, Any]:
     """Generate a configuration dictionary that might include nested structures."""
     # Generate base configuration with credentials
     config = draw(credentials_strategy())
-    
+
     # Add some common configuration fields
     extra_fields = {
         "connection_timeout": draw(st.integers(min_value=1, max_value=3600)),
@@ -65,28 +84,29 @@ def configuration_strategy(draw) -> Dict[str, Any]:
         "debug_mode": draw(st.booleans()),
         "environment": draw(st.sampled_from(["dev", "staging", "prod"])),
     }
-    
+
     # Optionally add nested configuration
     if draw(st.booleans()):
         extra_fields["advanced_settings"] = {
             "pool_size": draw(st.integers(min_value=1, max_value=100)),
             "retry_interval": draw(st.integers(min_value=1, max_value=60)),
-            "timeout_policy": draw(st.sampled_from(["strict", "lenient", "adaptive"]))
+            "timeout_policy": draw(st.sampled_from(["strict", "lenient", "adaptive"])),
         }
-    
+
     config.update(extra_fields)
     return config
+
 
 # Strategy for generating state store keys
 state_store_key_strategy = st.builds(
     lambda prefix, uuid: f"{prefix}_{uuid}",
     prefix=st.sampled_from(["credential", "config"]),
-    uuid=uuid_strategy
+    uuid=uuid_strategy,
 )
 
 # Strategy for generating complete state store entries
 state_store_entry_strategy = st.builds(
     lambda key, value: {"key": key, "value": value},
     key=state_store_key_strategy,
-    value=st.one_of(credentials_strategy(), configuration_strategy())
-) 
+    value=st.one_of(credentials_strategy(), configuration_strategy()),
+)

@@ -38,8 +38,8 @@ class TestFastAPIApplication:
         payload: Dict[str, Any],
     ) -> None:
         """Test successful preflight check response with hypothesis generated payloads"""
-        # Reset mock for each example
-        self.mock_handler.preflight_check.reset_mock()
+
+        self.mock_handler.preflight_check.reset_mock()  # Resets call history for preflight_check so that assert_called_once_with works correctly ( since hypothesis will create multiple calls, one for each example)
 
         # Arrange
         expected_data: Dict[str, Any] = {

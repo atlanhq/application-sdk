@@ -12,7 +12,6 @@ from tests.hypothesis.strategies.sql import (
     metadata_args_strategy,
     sql_credentials_strategy,
     sql_data_strategy,
-    sql_query_strategy,
     sqlalchemy_connect_args_strategy,
 )
 

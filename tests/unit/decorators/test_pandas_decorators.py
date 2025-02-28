@@ -1,14 +1,12 @@
-import os
 from concurrent.futures import Future
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, Optional, Type, TypeVar
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 import sqlalchemy
 from hypothesis import HealthCheck, given, settings
-from sqlalchemy.sql import text
 
 from application_sdk.decorators import transform
 from application_sdk.inputs.json import JsonInput

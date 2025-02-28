@@ -1,5 +1,3 @@
-from typing import Any, Dict
-
 from hypothesis import strategies as st
 
 # Strategy for generating temporal client configuration
