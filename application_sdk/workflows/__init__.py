@@ -36,7 +36,7 @@ class WorkflowInterface(ABC):
 
     default_heartbeat_timeout: timedelta | None = timedelta(seconds=10)
     default_start_to_close_timeout: timedelta | None = timedelta(hours=2)
-    default_schedule_to_start_timeout: timedelta | None = None
+    default_schedule_to_start_timeout: timedelta | None = timedelta(hours=6)
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
