@@ -204,8 +204,12 @@ class AtlanLoggerAdapter:
                         activity_info.schedule_to_close_timeout or 0
                     ),
                     "start_to_close_timeout": str(
-                        activity_info.start_to_close_timeout or 0
+                        activity_info.start_to_close_timeout or None
                     ),
+                    "schedule_to_start_timeout": str(
+                        activity_info.schedule_to_start_timeout or None
+                    ),
+                    "heartbeat_timeout": str(activity_info.heartbeat_timeout or None),
                 }
                 kwargs.update(activity_context)
 
