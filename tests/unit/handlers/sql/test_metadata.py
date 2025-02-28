@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
-from tests.hypothesis.strategies.sql_metadata import (
+from application_sdk.test_utils.hypothesis.strategies.sql_metadata import (
     database_list_strategy,
     database_name_strategy,
     metadata_entry_strategy,

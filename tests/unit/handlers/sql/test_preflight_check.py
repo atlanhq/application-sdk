@@ -7,7 +7,7 @@ from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
-from tests.hypothesis.strategies.sql_preflight import (
+from application_sdk.test_utils.hypothesis.strategies.sql_preflight import (
     metadata_list_strategy,
     mixed_mapping_strategy,
 )

@@ -9,7 +9,7 @@ from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
-from tests.hypothesis.strategies.statestore import (
+from application_sdk.test_utils.hypothesis.strategies.statestore import (
     configuration_strategy,
     credentials_strategy,
     uuid_strategy,

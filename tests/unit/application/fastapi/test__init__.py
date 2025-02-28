@@ -12,8 +12,11 @@ from application_sdk.application.fastapi import (
 )
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
+from application_sdk.test_utils.hypothesis.strategies.fastapi import (
+    event_data_strategy,
+    payload_strategy,
+)
 from application_sdk.workflows import WorkflowInterface
-from tests.hypothesis.strategies.fastapi import event_data_strategy, payload_strategy
 
 
 class SampleWorkflow(WorkflowInterface):

@@ -8,7 +8,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.outputs.json import JsonOutput
-from tests.hypothesis.strategies.json_output import (
+from application_sdk.test_utils.hypothesis.strategies.json_output import (
     chunk_size_strategy,
     dataframe_strategy,
     json_output_config_strategy,
