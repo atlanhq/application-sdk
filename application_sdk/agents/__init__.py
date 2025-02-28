@@ -1,3 +1,4 @@
+import os
 from datetime import timedelta
 from typing import Any, Callable, Dict, List, Sequence
 
@@ -11,6 +12,7 @@ from application_sdk.workflows import WorkflowInterface
 logger = get_logger(__name__)
 
 try:
+    from langchain_openai import AzureChatOpenAI
     from langgraph.graph.message import AnyMessage, add_messages
 
     LANGGRAPH_AVAILABLE = True
@@ -139,3 +141,23 @@ class LangGraphWorkflow(WorkflowInterface):
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
         return result
+
+
+def get_llm() -> Any:
+    """
+    Get an LLM instance
+    Future: Add support for other LLM Clients as well.
+    """
+    if not LANGGRAPH_AVAILABLE:
+        raise ImportError(
+            "LangGraph is not installed, agent functionality will be limited"
+        )
+
+    llm = AzureChatOpenAI(
+        api_key=os.environ["APP_AZURE_OPENAI_API_KEY"],
+        api_version=os.environ["APP_AZURE_OPENAI_API_VERSION"],
+        azure_endpoint=os.environ["APP_AZURE_OPENAI_ENDPOINT"],
+        azure_deployment=os.environ["APP_AZURE_OPENAI_DEPLOYMENT_NAME"],
+        temperature=0.0,
+    )
+    return llm

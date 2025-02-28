@@ -1,28 +1,20 @@
 # type: ignore
 import json
-import os
 from typing import Annotated, List, TypedDict
 
 from dotenv import load_dotenv
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
-from langchain_openai import AzureChatOpenAI
 from langgraph.graph import END, START, StateGraph, add_messages
 from langgraph.graph.message import AnyMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
 
+from application_sdk.agents import get_llm
+
 load_dotenv()
-
-llm = AzureChatOpenAI(
-    api_key=os.environ["AZURE_OPENAI_API_KEY"],
-    api_version=os.environ["AZURE_OPENAI_API_VERSION"],
-    azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
-    azure_deployment=os.environ["AZURE_OPENAI_DEPLOYMENT_NAME"],
-    temperature=0.0,
-)
-
+llm = get_llm()
 state = {
     "messages": [],
     "enriched_query": "",
@@ -163,7 +155,7 @@ tools = [search_comics_tool, search_horror_tool, search_encyclopedia_tool]
 tool_node = ToolNode(tools=tools)
 
 
-def get_workflow():
+def get_state_graph():
     workflow = StateGraph(AtlanAgentState)
     workflow.add_node("enrichment_node", enrichment_node)
     workflow.add_node("planner_agent", planner_agent)
