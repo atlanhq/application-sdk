@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "application-sdk"
-version = "0.1.0"
+version = "0.1.1-rc.5"
 description = "Python Application SDK is a Python library for developing applications on the Atlan Platform"
 authors = ["Atlan App Team <apps@atlan.com>"]
 readme = "README.md"
@@ -28,6 +28,8 @@ boto3 = {version = "^1.31.3", optional = true} # For iam auth support
 pydantic = "^2.10.6"
 loguru = "^0.7.3"
 uvloop = "^0.21.0" # in worker module for managing Temporal workers.
+pandera = {extras = ["io"], version = "^0.22.1", optional = true}
+pytest-order = {version = "^1.3.0", optional = true}
 
 [tool.poetry.extras]
 workflows = [
@@ -51,6 +53,12 @@ sqlalchemy = [
 # contains boto3
 iam_auth = [
     "boto3",
+]
+# Dependencies for the tests framework
+tests = [
+    "orjson",
+    "pytest-order",
+    "pandera"
 ]
 # scale_data_generator module to be used when dealing with snowflake app for now
 scale_data_generator = [
@@ -83,7 +91,6 @@ pytest = "^8.3.3"
 coverage = "^7.6.1"
 pytest-asyncio = "^0.24.0"
 hypothesis = "^6.114.0"
-
 
 [tool.poetry.group.examples.dependencies]
 snowflake-sqlalchemy = "^1.7.0"
