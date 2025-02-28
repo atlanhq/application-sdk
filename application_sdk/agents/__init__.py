@@ -1,7 +1,6 @@
 from datetime import timedelta
-from typing import Annotated, Any, Callable, Dict, Sequence
+from typing import Any, Callable, Dict, List, Sequence
 
-from langgraph.graph.message import AnyMessage, add_messages
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 from typing_extensions import TypedDict
@@ -11,9 +10,24 @@ from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 
+try:
+    from langgraph.graph.message import AnyMessage, add_messages
+
+    LANGGRAPH_AVAILABLE = True
+except ImportError:
+    logger.warning("LangGraph is not installed, agent functionality will be limited")
+    LANGGRAPH_AVAILABLE = False
+    # Define dummy types when LangGraph is not available
+    AnyMessage = Dict[str, Any]
+
+    def add_messages(x):
+        return x
+
 
 class AgentState(TypedDict):
-    messages: Annotated[list[AnyMessage], add_messages]
+    """State for agent operations, works with or without LangGraph."""
+
+    messages: List[AnyMessage]  # Type will be different based on LangGraph availability
 
 
 @workflow.defn
@@ -34,6 +48,12 @@ class LangGraphWorkflow(WorkflowInterface):
     @classmethod
     def activities_cls(cls):
         """Returns an instance of the activities class."""
+        if not LANGGRAPH_AVAILABLE:
+            logger.warning(
+                "LangGraph is not installed, agent functionality will be limited"
+            )
+            return None
+
         # Import inside the method to avoid circular import
         from application_sdk.activities.agents.langgraph import LangGraphActivities
 
@@ -49,6 +69,9 @@ class LangGraphWorkflow(WorkflowInterface):
         Returns:
             Sequence[Callable[..., Any]]: List of activity methods to be executed.
         """
+        if not activities:
+            return []
+
         return [
             activities.run_agent,
         ]
@@ -68,6 +91,11 @@ class LangGraphWorkflow(WorkflowInterface):
         Returns:
             Dict[str, Any]: The result of the LangGraph agent execution.
         """
+        if not LANGGRAPH_AVAILABLE:
+            return {
+                "error": "LangGraph is not installed. Please install the package with 'pip install langgraph' or use the langgraph_agent extra."
+            }
+
         # Initialize or update the state
         if "state" in workflow_config:
             self.state = workflow_config["state"]
@@ -89,14 +117,18 @@ class LangGraphWorkflow(WorkflowInterface):
             workflow.logger.error("No graph builder name provided")
             return {"error": "No graph builder name provided"}
 
+        # Get the activities instance
+        activities_instance = self.activities_cls()
+        if not activities_instance:
+            return {
+                "error": "LangGraph activities are not available. Please install the package with 'pip install langgraph' or use the langgraph_agent extra."
+            }
+
         activity_input: Dict[str, Any] = {
             "user_query": user_query,
             "state": self.state,
             "graph_builder_name": graph_builder_name,
         }
-
-        # Get the activities instance
-        activities_instance = self.activities_cls()
 
         # Execute the activity
         result = await workflow.execute_activity_method(

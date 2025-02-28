@@ -152,15 +152,15 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         """
         batches: List[List[str]] = []
         chunk_start_numbers: List[int] = []
-        
+
         for i in range(chunk_count):
             # Track starting chunk number (which is just i)
             chunk_start_numbers.append(i)
-            
+
             # Each batch contains exactly one chunk
             batches.append([f"{typename}/{i+1}.json"])
-            
-        return batches, chunk_start_numbers    
+
+        return batches, chunk_start_numbers
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:

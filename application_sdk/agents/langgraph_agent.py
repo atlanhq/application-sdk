@@ -1,13 +1,28 @@
 import uuid
-from typing import Any, Dict, Optional
-
-from langchain_core.messages import HumanMessage
-from langchain_core.runnables.config import RunnableConfig
-from langgraph.graph import StateGraph
-from langgraph.graph.state import CompiledStateGraph
+from typing import Any, Dict, Optional, Union
 
 from application_sdk.agents.agent import AgentInterface
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logger
+
+logger = get_logger(__name__)
+
+try:
+    from langchain_core.messages import HumanMessage
+    from langchain_core.runnables.config import RunnableConfig
+    from langgraph.graph import StateGraph
+    from langgraph.graph.state import CompiledStateGraph
+
+    LANGGRAPH_AVAILABLE = True
+except ImportError:
+    logger.warning(
+        "LangGraph dependencies not installed, agent functionality will be limited"
+    )
+    LANGGRAPH_AVAILABLE = False
+    # Define dummy types when LangGraph is not available
+    HumanMessage = Dict[str, Any]
+    RunnableConfig = Dict[str, Any]
+    StateGraph = Any
+    CompiledStateGraph = Any
 
 
 class LangGraphAgent(AgentInterface):
@@ -37,7 +52,7 @@ class LangGraphAgent(AgentInterface):
         self,
         state_graph: Optional[StateGraph],
         state: Optional[Dict[str, Any]] = None,
-        config: Optional[RunnableConfig] = None,
+        config: Optional[Union[RunnableConfig, Dict[str, Any]]] = None,
         logger: Optional[AtlanLoggerAdapter] = None,
     ):
         """
@@ -49,6 +64,11 @@ class LangGraphAgent(AgentInterface):
             config (optional): The configuration of the workflow
             logger (optional): Logger instance for the agent
         """
+        if not LANGGRAPH_AVAILABLE:
+            raise ImportError(
+                "LangGraph dependencies are not installed. Please install the package with 'pip install langgraph' or use the langgraph_agent extra."
+            )
+
         self.state_graph = state_graph
         self._state = state
         self._config = config or RunnableConfig(
@@ -56,10 +76,14 @@ class LangGraphAgent(AgentInterface):
         )
         self.logger = logger or AtlanLoggerAdapter(__name__)
 
-    def compile_graph(self) -> CompiledStateGraph:
+    def compile_graph(self) -> Optional[CompiledStateGraph]:
         """
         Compile the langgraph StateGraph into an executable graph.
         """
+        if not LANGGRAPH_AVAILABLE:
+            self.logger.warning("LangGraph is not installed, cannot compile graph")
+            return None
+
         if not self.state_graph:
             raise ValueError("StateGraph not initialized")
         self.graph = self.state_graph.compile()
@@ -69,6 +93,10 @@ class LangGraphAgent(AgentInterface):
         """
         Run the langgraph StateGraph with the given initial state, and task.
         """
+        if not LANGGRAPH_AVAILABLE:
+            self.logger.warning("LangGraph is not installed, cannot run agent")
+            return None
+
         if self._state is None:
             self._state = {"messages": []}
 
@@ -91,13 +119,17 @@ class LangGraphAgent(AgentInterface):
     def state(self) -> Optional[Dict[str, Any]]:
         return self._state
 
-    def visualize(self) -> bytes:
+    def visualize(self) -> Optional[bytes]:
         """
         Visualize the graph and return the raw bytes of the PNG visualization.
 
         Returns:
             bytes: The raw bytes of the graph visualization in PNG format.
         """
+        if not LANGGRAPH_AVAILABLE:
+            self.logger.warning("LangGraph is not installed, cannot visualize graph")
+            return None
+
         try:
             if not self.graph:
                 raise ValueError("Graph not compiled")
