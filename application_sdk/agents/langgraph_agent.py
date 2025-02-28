@@ -12,17 +12,16 @@ try:
     from langgraph.graph import StateGraph
     from langgraph.graph.state import CompiledStateGraph
 
-    LANGGRAPH_AVAILABLE = True
+    HAS_LANGGRAPH = True
 except ImportError:
     logger.warning(
         "LangGraph dependencies not installed, agent functionality will be limited"
     )
-    LANGGRAPH_AVAILABLE = False
-    # Define dummy types when LangGraph is not available
-    HumanMessage = Dict[str, Any]
-    RunnableConfig = Dict[str, Any]
-    StateGraph = Any
-    CompiledStateGraph = Any
+    HAS_LANGGRAPH = False
+    HumanMessage = Dict[str, Any]  # type: ignore
+    RunnableConfig = Dict[str, Any]  # type: ignore
+    StateGraph = Any  # type: ignore
+    CompiledStateGraph = Any  # type: ignore
 
 
 class LangGraphAgent(AgentInterface):
@@ -64,7 +63,7 @@ class LangGraphAgent(AgentInterface):
             config (optional): The configuration of the workflow
             logger (optional): Logger instance for the agent
         """
-        if not LANGGRAPH_AVAILABLE:
+        if not HAS_LANGGRAPH:
             raise ImportError(
                 "LangGraph dependencies are not installed. Please install the package with 'pip install langgraph' or use the langgraph_agent extra."
             )
@@ -75,12 +74,13 @@ class LangGraphAgent(AgentInterface):
             configurable={"thread_id": uuid.uuid4()}
         )
         self.logger = logger or AtlanLoggerAdapter(__name__)
+        self.graph = None  # Initialize graph attribute
 
     def compile_graph(self) -> Optional[CompiledStateGraph]:
         """
         Compile the langgraph StateGraph into an executable graph.
         """
-        if not LANGGRAPH_AVAILABLE:
+        if not HAS_LANGGRAPH:
             self.logger.warning("LangGraph is not installed, cannot compile graph")
             return None
 
@@ -93,7 +93,7 @@ class LangGraphAgent(AgentInterface):
         """
         Run the langgraph StateGraph with the given initial state, and task.
         """
-        if not LANGGRAPH_AVAILABLE:
+        if not HAS_LANGGRAPH:
             self.logger.warning("LangGraph is not installed, cannot run agent")
             return None
 
@@ -126,7 +126,7 @@ class LangGraphAgent(AgentInterface):
         Returns:
             bytes: The raw bytes of the graph visualization in PNG format.
         """
-        if not LANGGRAPH_AVAILABLE:
+        if not HAS_LANGGRAPH:
             self.logger.warning("LangGraph is not installed, cannot visualize graph")
             return None
 

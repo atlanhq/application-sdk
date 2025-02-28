@@ -1,119 +1,74 @@
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
 import pytest
-from temporalio import workflow
+from langgraph.graph import StateGraph
 
-# Import AgentState directly
-from application_sdk.agents import AgentState
-
-
-@pytest.fixture
-def mock_activity_class():
-    """Create a mock LangGraphActivities class."""
-    mock_cls = MagicMock()
-    mock_cls.run_agent = AsyncMock(return_value={"result": "test_result"})
-    return mock_cls
+from application_sdk.agents.langgraph_agent import LangGraphAgent
 
 
 @pytest.fixture
-def workflow_with_mock_activities(mock_activity_class):
-    """Create a LangGraphWorkflow instance with mock activities."""
-    # Import locally to avoid circular import
-    from application_sdk.agents import LangGraphWorkflow
-
-    # Create a subclass that overrides the activities_cls
-    class TestWorkflow(LangGraphWorkflow):
-        activities_cls = mock_activity_class
-
-    return TestWorkflow()
+def mock_state_graph() -> StateGraph:
+    """Create a mock StateGraph."""
+    return MagicMock(spec=StateGraph)
 
 
-def test_init():
-    """Test initialization of LangGraphWorkflow."""
-    # Import locally to avoid circular import
-    from application_sdk.agents import LangGraphWorkflow
+@pytest.fixture
+def agent_with_mock_graph(mock_state_graph: StateGraph) -> LangGraphAgent:
+    """Create a LangGraphAgent instance with mock state graph."""
+    return LangGraphAgent(state_graph=mock_state_graph)
 
-    workflow_instance = LangGraphWorkflow()
+
+def test_init() -> None:
+    """Test initialization of LangGraphAgent."""
+    agent = LangGraphAgent(state_graph=MagicMock(spec=StateGraph))
 
     # Check that the state is initialized correctly
-    assert isinstance(workflow_instance.state, dict)
-    assert "messages" in workflow_instance.state
-    assert workflow_instance.state["messages"] == []
+    assert agent.state is None
 
 
-def test_get_activities():
-    """Test get_activities method."""
-    # Import locally to avoid circular import
-    from application_sdk.agents import LangGraphWorkflow
-
-    # Create a mock activities instance
-    mock_activities = MagicMock()
-
-    # Get the activities
-    activities = LangGraphWorkflow.get_activities(mock_activities)
-
-    # Should return a list containing the run_agent method
-    assert len(activities) == 1
-    assert activities[0] == mock_activities.run_agent
+def test_init_with_state() -> None:
+    """Test initialization with state."""
+    initial_state: Dict[str, List[Any]] = {"messages": []}
+    agent = LangGraphAgent(state_graph=MagicMock(spec=StateGraph), state=initial_state)
+    assert agent.state == initial_state
 
 
 @pytest.mark.asyncio
-async def test_run_without_user_query(workflow_with_mock_activities):
-    """Test running the workflow without a user query."""
-    # Create workflow input with no user_query
-    workflow_input = {
-        "graph_builder_name": "test_builder",
-    }
-
-    # Execute the workflow
-    result = await workflow_with_mock_activities.run(workflow_input)
-
-    # Should return error
-    assert "error" in result
-    assert "No user query provided" in result["error"]
+async def test_run_without_task(agent_with_mock_graph: LangGraphAgent) -> None:
+    """Test running the agent without a task."""
+    # Run without task
+    result = agent_with_mock_graph.run(None)
+    assert result is None
 
 
 @pytest.mark.asyncio
-async def test_run_without_graph_builder(workflow_with_mock_activities):
-    """Test running the workflow without a graph builder name."""
-    # Create workflow input with no graph_builder_name
-    workflow_input = {
-        "user_query": "test query",
-    }
+async def test_run_without_graph() -> None:
+    """Test running without a state graph."""
+    # Create agent without state graph
+    agent = LangGraphAgent(state_graph=None)
 
-    # Execute the workflow
-    result = await workflow_with_mock_activities.run(workflow_input)
-
-    # Should return error
-    assert "error" in result
-    assert "No graph builder name provided" in result["error"]
+    with pytest.raises(ValueError, match="StateGraph not initialized"):
+        agent.run("test task")
 
 
 @pytest.mark.asyncio
-@patch.object(workflow, "execute_activity_method")
-async def test_run_with_state(mock_execute_activity, workflow_with_mock_activities):
-    """Test running the workflow with initial state."""
-    # Create workflow input with state
-    initial_state = AgentState(messages=[])
-    workflow_input = {
-        "user_query": "test query",
-        "graph_builder_name": "test_builder",
-        "state": initial_state,
-    }
+async def test_run_with_state() -> None:
+    """Test running the agent with initial state."""
+    # Create initial state
+    initial_state: Dict[str, List[Any]] = {"messages": []}
 
-    # Set up mock to return a result
-    mock_execute_activity.return_value = {"result": "test_result"}
+    # Create mock state graph that returns chunks
+    mock_graph = MagicMock()
+    mock_graph.stream.return_value = [{"messages": []}]
 
-    # Execute the workflow
-    await workflow_with_mock_activities.run(workflow_input)
+    # Create agent
+    agent = LangGraphAgent(state_graph=MagicMock(spec=StateGraph), state=initial_state)
+    agent.graph = mock_graph
 
-    # Check that the workflow state was updated
-    assert workflow_with_mock_activities.state == initial_state
+    # Run agent
+    agent.run("test task")
 
-    # Check that the activity was called with the correct state
-    args, kwargs = mock_execute_activity.call_args
-
-    # Access activity_input from kwargs["args"]
-    assert "args" in kwargs
-    activity_input = kwargs["args"][0]
-    assert activity_input["state"] == initial_state
+    # Check that the state was updated
+    assert agent.state is not None
+    assert "messages" in agent.state
