@@ -78,13 +78,15 @@ parquet_output_config_strategy = st.builds(
     mode=output_mode_strategy,
 )
 
+
 # Helper function to convert test data to DataFrame
 def create_test_dataframe(data: List[Dict[str, int]]) -> pd.DataFrame:
     """Convert test data list to pandas DataFrame"""
     return pd.DataFrame(data)
 
+
 # Strategy for generating test DataFrames
 test_dataframe_strategy = st.builds(
     create_test_dataframe,
     data=test_data_list_strategy,
-) 
+)
