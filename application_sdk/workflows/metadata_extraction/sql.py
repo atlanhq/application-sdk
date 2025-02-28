@@ -5,7 +5,6 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
@@ -42,7 +41,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     )
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
-    max_transform_concurrency: int = 5
 
     @staticmethod
     def get_activities(
@@ -73,7 +71,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
-        start_to_close_timeout_seconds: int = 1000,
     ) -> None:
         """Fetch and transform metadata using the provided fetch function.
 
@@ -84,8 +81,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn (Callable): The function to fetch metadata.
             workflow_args (Dict[str, Any]): Arguments for the workflow execution.
             retry_policy (RetryPolicy): The retry policy for activity execution.
-            start_to_close_timeout_seconds (int): The start to close timeout for the
-                activity execution.
 
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
@@ -94,8 +89,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn,
             workflow_args,
             retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
+            start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            schedule_to_start_timeout=self.default_schedule_to_start_timeout,
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -122,10 +118,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                         **workflow_args,
                     },
                     retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(
-                        seconds=start_to_close_timeout_seconds
-                    ),
+                    start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,
+                    schedule_to_start_timeout=self.default_schedule_to_start_timeout,
                 )
             )
 
@@ -142,9 +137,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     def get_transform_batches(self, chunk_count: int, typename: str):
         """Get batches for parallel transformation processing.
 
-        This method divides the total chunks into batches for parallel processing,
-        considering the maximum concurrency level.
-
         Args:
             chunk_count (int): Total number of chunks to process.
             typename (str): Type name for the chunks.
@@ -154,32 +146,15 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 - List of batches, where each batch is a list of file paths
                 - List of starting chunk numbers for each batch
         """
-        # concurrency logic
-        concurrency_level = min(
-            self.max_transform_concurrency,
-            chunk_count,
-        )
-
         batches: List[List[str]] = []
         chunk_start_numbers: List[int] = []
-        start = 0
-        for i in range(concurrency_level):
-            current_batch_start = start
-            chunk_start_numbers.append(current_batch_start)
-            current_batch_count = int(chunk_count / concurrency_level)
-            if i < chunk_count % concurrency_level and chunk_count > concurrency_level:
-                current_batch_count += 1
 
-            batches.append(
-                [
-                    f"{typename}/{i}.json"
-                    for i in range(
-                        current_batch_start + 1,
-                        current_batch_start + current_batch_count + 1,
-                    )
-                ]
-            )
-            start += current_batch_count
+        for i in range(chunk_count):
+            # Track starting chunk number (which is just i)
+            chunk_start_numbers.append(i)
+
+            # Each batch contains exactly one chunk
+            batches.append([f"{typename}/{i+1}.json"])
 
         return batches, chunk_start_numbers
 
