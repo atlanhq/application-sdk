@@ -110,9 +110,15 @@ async def test_check_schemas_and_databases_mixed_format(handler: SQLHandler):
 
 
 async def test_preflight_check_success(handler: SQLHandler):
-    payload = {"metadata": {"include-filter": json.dumps({"db1": ["schema1"]})}}
+    payload = {
+        "metadata": {"include-filter": json.dumps({"db1": ["schema1"]})},
+        "credentials": {"username": "test", "password": "test"},
+    }
 
-    with patch.object(handler, "tables_check") as mock_tables_check:
+    with patch.object(handler, "tables_check") as mock_tables_check, patch.object(
+        handler, "load"
+    ) as mock_load:
+        mock_load.return_value = None
         mock_tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful",
@@ -121,15 +127,22 @@ async def test_preflight_check_success(handler: SQLHandler):
 
         result = await handler.preflight_check(payload)
 
+        mock_load.assert_called_once_with(payload["credentials"])
         assert "error" not in result
         assert result["databaseSchemaCheck"]["success"] is True
         assert result["tablesCheck"]["success"] is True
 
 
 async def test_preflight_check_with_wildcard_success(handler: SQLHandler):
-    payload = {"metadata": {"include-filter": json.dumps({"^db1$": "*"})}}
+    payload = {
+        "metadata": {"include-filter": json.dumps({"^db1$": "*"})},
+        "credentials": {"username": "test", "password": "test"},
+    }
 
-    with patch.object(handler, "tables_check") as mock_tables_check:
+    with patch.object(handler, "tables_check") as mock_tables_check, patch.object(
+        handler, "load"
+    ) as mock_load:
+        mock_load.return_value = None
         mock_tables_check.return_value = {
             "success": True,
             "successMessage": "Tables check successful",
@@ -138,15 +151,40 @@ async def test_preflight_check_with_wildcard_success(handler: SQLHandler):
 
         result = await handler.preflight_check(payload)
 
+        mock_load.assert_called_once_with(payload["credentials"])
         assert "error" not in result
         assert result["databaseSchemaCheck"]["success"] is True
         assert result["tablesCheck"]["success"] is True
 
 
 async def test_preflight_check_failure(handler: SQLHandler):
-    payload = {"metadata": {"include-filter": json.dumps({"invalid_db": ["schema1"]})}}
+    payload = {
+        "metadata": {"include-filter": json.dumps({"invalid_db": ["schema1"]})},
+        "credentials": {"username": "test", "password": "test"},
+    }
 
-    result = await handler.preflight_check(payload)
+    with patch.object(handler, "load") as mock_load:
+        mock_load.return_value = None
 
-    assert "error" in result
-    assert "Preflight check failed" in result["error"]
+        with pytest.raises(ValueError, match="Preflight check failed"):
+            await handler.preflight_check(payload)
+
+
+async def test_preflight_check_tables_check_failure(handler: SQLHandler):
+    payload = {
+        "metadata": {"include-filter": json.dumps({"db1": ["schema1"]})},
+        "credentials": {"username": "test", "password": "test"},
+    }
+
+    with patch.object(handler, "tables_check") as mock_tables_check, patch.object(
+        handler, "load"
+    ) as mock_load:
+        mock_load.return_value = None
+        mock_tables_check.return_value = {
+            "success": False,
+            "successMessage": "",
+            "failureMessage": "Tables check failed",
+        }
+
+        with pytest.raises(ValueError, match="Preflight check failed"):
+            await handler.preflight_check(payload)
