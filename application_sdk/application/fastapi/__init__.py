@@ -512,6 +512,9 @@ class FastAPIAgentApplication(FastAPIApplication):
 
         Args:
             request: The agent request containing the user query and optional workflow state.
+                In the request:
+                - user_query: The user's query
+                - workflow_state: The state of the workflow
 
         Returns:
             Dict containing the workflow ID and run ID.

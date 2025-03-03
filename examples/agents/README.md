@@ -115,14 +115,14 @@ Once the server is running, you can:
 
 1. Access the API documentation at `/docs`
 2. Send requests to the agent endpoints:
-   - POST `/agent/query` - Run a single agent query
-   - GET `/agent/result/{workflow_id}` - Get the result of an agent workflow
+   - POST `/api/v1/agent/query` - Run a single agent query
+   - GET `/api/v1/agent/result/{workflow_id}` - Get the result of an agent workflow
 
 Example request:
 ```bash
-curl -X POST "http://localhost:8000/agent/query" \
+curl -X POST "http://localhost:8000/api/v1/agent/query" \
      -H "Content-Type: application/json" \
-     -d '{"query": "What is the capital of France?"}'
+     -d '{"user_query": "What is the capital of France?", "workflow_state": {"messages": []}}'
 ```
 
 ## Additional Resources
