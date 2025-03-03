@@ -7,6 +7,7 @@ from temporalio import activity
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
+from application_sdk.inputs.secretstore import SecretStoreInput
 
 activity.logger = get_logger(__name__)
 
@@ -106,13 +107,17 @@ class ActivitiesInterface(ABC):
             state: ActivitiesState = await self._get_state(workflow_args)
             handler = state.handler
 
+            credentials = SecretStoreInput.extract_credentials(
+                workflow_args["credential_guid"]
+            )
+
             if not handler:
                 raise ValueError("Preflight check handler not found")
 
             result = await handler.preflight_check(
                 {
                     "metadata": workflow_args["metadata"],
-                    "credentials": workflow_args["credentials"],
+                    "credentials": credentials,
                 }
             )
 
