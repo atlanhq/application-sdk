@@ -196,10 +196,11 @@ class SQLHandler(HandlerInterface):
                 )
 
             logger.info("Preflight check completed successfully")
+            return results
         except Exception as exc:
             logger.error("Error during preflight check", exc_info=True)
             results["error"] = f"Preflight check failed: {str(exc)}"
-        return results
+            raise exc
 
     async def check_schemas_and_databases(
         self, payload: Dict[str, Any]
