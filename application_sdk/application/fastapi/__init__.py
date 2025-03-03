@@ -40,6 +40,15 @@ try:
 
     langgraph_available = True
 except ImportError:
+    # Create placeholders for type checking when langgraph is not available
+    StateGraph = Any  # type: ignore
+    AgentState = Any  # type: ignore
+    LangGraphWorkflow = Any  # type: ignore
+
+    def register_graph_builder(name: str, builder_func: Any) -> None:
+        """Placeholder for register_graph_builder when langgraph is not available."""
+        pass
+
     langgraph_available = False
 
 logger = get_logger(__name__)
