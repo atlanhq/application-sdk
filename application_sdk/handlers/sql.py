@@ -176,7 +176,7 @@ class SQLHandler(HandlerInterface):
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
-            # check if the credentials are valid
+            # check if the credentials are valid or not
             await self.load(payload["credentials"])
 
             (
