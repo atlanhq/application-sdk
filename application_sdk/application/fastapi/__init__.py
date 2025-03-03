@@ -483,7 +483,7 @@ class FastAPIAgentApplication(FastAPIApplication):
         if not langgraph_available:
             raise ImportError(
                 "LangGraph is required for FastAPIAgentApplication. "
-                "Please install it with 'pip install langgraph' or use the langgraph_agent extra."
+                "Please install it with 'pip install application-sdk[langgraph_agent]' or use the langgraph_agent extra."
             )
         super().__init__(*args, **kwargs)
 

@@ -17,7 +17,7 @@ The LangGraph agent system combines LangChain's capabilities with Temporal workf
 - Temporal server running locally or accessible
 - Required Python packages (install via pip):
   ```bash
-  pip install temporalio langchain langgraph
+  pip install application-sdk[langgraph_agent]
   ```
 
 ### Basic Usage

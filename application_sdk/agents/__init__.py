@@ -125,7 +125,7 @@ class LangGraphWorkflow(WorkflowInterface):
         activities_instance = self.activities_cls()
         if not activities_instance:
             return {
-                "error": "LangGraph activities are not available. Please install the package with 'pip install application-sdk[langgraph]' or use the langgraph_agent extra."
+                "error": "LangGraph activities are not available. Please install the package with 'pip install application-sdk[langgraph_agent]' or use the langgraph_agent extra."
             }
 
         activity_input: Dict[str, Any] = {
@@ -154,7 +154,7 @@ class LangGraphWorkflow(WorkflowInterface):
         """
         if not LANGGRAPH_AVAILABLE:
             raise ValueError(
-                "LangGraph is not installed. Please install it with `pip install application-sdk[langgraph]` or use the langgraph_agent extra."
+                "LangGraph is not installed. Please install it with `pip install application-sdk[langgraph_agent]` or use the langgraph_agent extra."
             )
 
 
