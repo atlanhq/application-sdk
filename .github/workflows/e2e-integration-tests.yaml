@@ -26,7 +26,7 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
-      - name: Run E2E Integrations Tests
+      - name: Trigger E2E Integrations Tests
         uses: codex-/return-dispatch@v2
         id: return_dispatch
         with:
@@ -39,7 +39,7 @@ jobs:
           workflow_job_steps_retry_seconds: 10
           distinct_id: "${{ github.event.after }}"
 
-      - name: Get the run ID and run URL
+      - name: Check the test logs using the below run URL
         run: |
           echo ${{steps.return_dispatch.outputs.run_id}}
           echo ${{steps.return_dispatch.outputs.run_url}}
@@ -53,14 +53,22 @@ jobs:
           echo "Checking status of workflow run $run_id in $repo_name"
 
           status="in_progress"
+          start_time=$(date +%s)
+          timeout=180
           while [[ "$status" == "in_progress" || "$status" == "queued" ]]; do
             sleep 10
-            status=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id \
-              | jq -r '.status')
-            conclusion=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id \
-              | jq -r '.conclusion')
+            response=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
+              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id)
+            status=$(echo $response | jq -r '.status')
+            conclusion=$(echo $response | jq -r '.conclusion')
+
+            current_time=$(date +%s)
+            elapsed_time=$((current_time - start_time))
+
+            if [[ $elapsed_time -ge $timeout ]]; then
+              echo "Run timeout reached after $timeout seconds"
+              exit 1
+            fi
           done
 
           if [[ "$conclusion" != "success" ]]; then
