@@ -1,4 +1,3 @@
-import os
 from datetime import timedelta
 from typing import Any, Callable, Dict, List, Sequence
 
@@ -22,14 +21,16 @@ except ImportError:
     # Define dummy types when LangGraph is not available
     AnyMessage = Dict[str, Any]
 
-    def add_messages(x):
+    def add_messages(x: List[AnyMessage]) -> List[AnyMessage]:
         return x
 
 
 class AgentState(TypedDict):
     """State for agent operations, works with or without LangGraph."""
 
-    messages: List[AnyMessage]  # Type will be different based on LangGraph availability
+    messages: (
+        "List[AnyMessage]"  # Type will be different based on LangGraph availability
+    )
 
 
 @workflow.defn
@@ -50,10 +51,10 @@ class LangGraphWorkflow(WorkflowInterface):
     @classmethod
     def activities_cls(cls):
         """Returns an instance of the activities class."""
-        if not LANGGRAPH_AVAILABLE:
-            logger.warning(
-                "LangGraph is not installed, agent functionality will be limited"
-            )
+        try:
+            cls._validate_langgraph_installed()
+        except ValueError as e:
+            logger.warning(str(e))
             return None
 
         # Import inside the method to avoid circular import
@@ -93,10 +94,11 @@ class LangGraphWorkflow(WorkflowInterface):
         Returns:
             Dict[str, Any]: The result of the LangGraph agent execution.
         """
-        if not LANGGRAPH_AVAILABLE:
-            return {
-                "error": "LangGraph is not installed. Please install the package with 'pip install langgraph' or use the langgraph_agent extra."
-            }
+        try:
+            self._validate_langgraph_installed()
+        except ValueError as e:
+            workflow.logger.error(str(e))
+            return {"error": str(e)}
 
         # Initialize or update the state
         if "state" in workflow_config:
@@ -123,7 +125,7 @@ class LangGraphWorkflow(WorkflowInterface):
         activities_instance = self.activities_cls()
         if not activities_instance:
             return {
-                "error": "LangGraph activities are not available. Please install the package with 'pip install langgraph' or use the langgraph_agent extra."
+                "error": "LangGraph activities are not available. Please install the package with 'pip install application-sdk[langgraph]' or use the langgraph_agent extra."
             }
 
         activity_input: Dict[str, Any] = {
@@ -142,22 +144,45 @@ class LangGraphWorkflow(WorkflowInterface):
         )
         return result
 
+    @staticmethod
+    def _validate_langgraph_installed() -> None:
+        """
+        Validate that LangGraph is installed.
 
-def get_llm() -> Any:
-    """
-    Get an LLM instance
-    Future: Add support for other LLM Clients as well.
-    """
-    if not LANGGRAPH_AVAILABLE:
-        raise ImportError(
-            "LangGraph is not installed, agent functionality will be limited"
+        Raises:
+            ValueError: If LangGraph is not installed.
+        """
+        if not LANGGRAPH_AVAILABLE:
+            raise ValueError(
+                "LangGraph is not installed. Please install it with `pip install application-sdk[langgraph]` or use the langgraph_agent extra."
+            )
+
+
+class LLM:
+    """LLM class to get an LLM instance."""
+
+    @staticmethod
+    def get_llm(
+        api_key: str,
+        api_version: str,
+        azure_endpoint: str,
+        azure_deployment: str,
+        temperature: float = 0.0,
+    ) -> "AzureChatOpenAI":
+        """
+        Get an LLM instance
+        Future: Add support for other LLM Clients as well.
+        """
+        if not LANGGRAPH_AVAILABLE:
+            raise ImportError(
+                "LangGraph is not installed, agent functionality will be limited"
+            )
+
+        llm = AzureChatOpenAI(
+            api_key=api_key,
+            api_version=api_version,
+            azure_endpoint=azure_endpoint,
+            azure_deployment=azure_deployment,
+            temperature=temperature,
         )
-
-    llm = AzureChatOpenAI(
-        api_key=os.environ["APP_AZURE_OPENAI_API_KEY"],
-        api_version=os.environ["APP_AZURE_OPENAI_API_VERSION"],
-        azure_endpoint=os.environ["APP_AZURE_OPENAI_ENDPOINT"],
-        azure_deployment=os.environ["APP_AZURE_OPENAI_DEPLOYMENT_NAME"],
-        temperature=0.0,
-    )
-    return llm
+        return llm

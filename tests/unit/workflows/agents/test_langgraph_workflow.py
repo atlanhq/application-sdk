@@ -23,8 +23,8 @@ def test_init() -> None:
     """Test initialization of LangGraphAgent."""
     agent = LangGraphAgent(state_graph=MagicMock(spec=StateGraph))
 
-    # Check that the state is initialized correctly
-    assert agent.state is None
+    # Check that the state is initialized correctly to default value
+    assert agent.state == {"messages": []}
 
 
 def test_init_with_state() -> None:

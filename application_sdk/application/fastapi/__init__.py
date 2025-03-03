@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type, cast
 
 from fastapi import APIRouter, FastAPI, status
 from fastapi.responses import JSONResponse
@@ -38,16 +38,9 @@ try:
     from application_sdk.activities.agents.langgraph import register_graph_builder
     from application_sdk.agents import AgentState, LangGraphWorkflow
 
-    LANGGRAPH_AVAILABLE = True
+    langgraph_available = True
 except ImportError:
-    StateGraph = Any  # type: ignore
-    AgentState = Dict[str, Any]  # type: ignore
-    LangGraphWorkflow = Any  # type: ignore
-
-    def register_graph_builder(*args, **kwargs):
-        pass  # type: ignore
-
-    LANGGRAPH_AVAILABLE = False
+    langgraph_available = False
 
 logger = get_logger(__name__)
 
@@ -477,21 +470,21 @@ class FastAPIAgentApplication(FastAPIApplication):
     workflow_handles: Dict[str, Any] = {}
     graph_builder_name: str
 
-    def __init__(self, *args, **kwargs):
-        if not LANGGRAPH_AVAILABLE:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        if not langgraph_available:
             raise ImportError(
                 "LangGraph is required for FastAPIAgentApplication. "
                 "Please install it with 'pip install langgraph' or use the langgraph_agent extra."
             )
         super().__init__(*args, **kwargs)
 
-    def register_routers(self):
+    def register_routers(self) -> None:
         """Register all routers including the agent router."""
         self.register_routes()
-        self.app.include_router(self.agent_router, prefix="/agent")
+        self.app.include_router(self.agent_router, prefix="api/v1/agent")
         super().register_routers()
 
-    def register_routes(self):
+    def register_routes(self) -> None:
         """Register agent-specific routes."""
         self.agent_router.add_api_route(
             "/query",
@@ -526,8 +519,9 @@ class FastAPIAgentApplication(FastAPIApplication):
             "graph_builder_name": self.graph_builder_name,
         }
 
+        # Use cast to assure the type checker that LangGraphWorkflow is a valid workflow class
         response = await self.temporal_client.start_workflow(
-            workflow_class=LangGraphWorkflow,
+            workflow_class=cast(Type[WorkflowInterface], LangGraphWorkflow),
             workflow_args=workflow_input,
         )
 
@@ -587,7 +581,7 @@ class FastAPIAgentApplication(FastAPIApplication):
         """
         self.worker = Worker(
             temporal_client=temporal_client,
-            workflow_classes=[LangGraphWorkflow],
+            workflow_classes=[cast(Type[WorkflowInterface], LangGraphWorkflow)],
             temporal_activities=LangGraphWorkflow.get_activities(
                 LangGraphWorkflow.activities_cls()
             ),

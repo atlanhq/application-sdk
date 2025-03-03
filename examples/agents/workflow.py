@@ -1,5 +1,6 @@
 # type: ignore
 import json
+import os
 from typing import Annotated, List, TypedDict
 
 from dotenv import load_dotenv
@@ -11,10 +12,16 @@ from langgraph.graph.message import AnyMessage
 from langgraph.prebuilt import ToolNode, tools_condition
 from pydantic import BaseModel
 
-from application_sdk.agents import get_llm
+from application_sdk.agents import LLM
 
 load_dotenv()
-llm = get_llm()
+llm = LLM.get_llm(
+    api_key=os.environ["APP_AZURE_OPENAI_API_KEY"],
+    api_version=os.environ["APP_AZURE_OPENAI_API_VERSION"],
+    azure_endpoint=os.environ["APP_AZURE_OPENAI_ENDPOINT"],
+    azure_deployment=os.environ["APP_AZURE_OPENAI_DEPLOYMENT_NAME"],
+)
+
 state = {
     "messages": [],
     "enriched_query": "",

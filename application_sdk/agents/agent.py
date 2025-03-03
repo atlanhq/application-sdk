@@ -19,7 +19,7 @@ class AgentInterface(ABC):
         pass
 
     @abstractmethod
-    def visualize(self) -> None:
+    def visualize(self) -> Optional[bytes]:
         """Visualize the agent's workflow/graph structure."""
         pass
 
