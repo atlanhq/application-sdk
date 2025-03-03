@@ -481,7 +481,7 @@ class FastAPIAgentApplication(FastAPIApplication):
     def register_routers(self) -> None:
         """Register all routers including the agent router."""
         self.register_routes()
-        self.app.include_router(self.agent_router, prefix="api/v1/agent")
+        self.app.include_router(self.agent_router, prefix="/api/v1/agent")
         super().register_routers()
 
     def register_routes(self) -> None:
