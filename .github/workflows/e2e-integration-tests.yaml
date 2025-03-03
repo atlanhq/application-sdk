@@ -26,6 +26,14 @@ jobs:
         with:
           ref: ${{ github.ref }}
 
+      - name: Get the application-sdk commit SHA
+        run: |
+          if [ "${{ github.event.pull_request.head.sha }}" ]; then
+            echo "distinct_id=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
+          else
+            echo "distinct_id=${{ github.sha }}" >> $GITHUB_ENV
+          fi
+
       - name: Trigger E2E Integrations Tests
         uses: codex-/return-dispatch@v2
         id: return_dispatch
@@ -37,7 +45,7 @@ jobs:
           workflow: "e2e-integration-test.yaml"
           workflow_timeout_seconds: 120
           workflow_job_steps_retry_seconds: 10
-          distinct_id: "${{ github.event.after }}"
+          distinct_id: "${{ env.distinct_id }}"
 
       - name: Check the test logs using the below run URL
         run: |
