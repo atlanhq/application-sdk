@@ -1,4 +1,5 @@
 import json
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -17,6 +18,8 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
 
         # Setup mock for handler.prepare_metadata
         handler.prepare_metadata.return_value = [
@@ -55,6 +58,7 @@ class TestSQLPreflightCheck:
 
         # Verify that preflight_check was called with correct args
         handler.prepare_metadata.assert_called_once()
+        handler.load.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -77,6 +81,8 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
         handler.prepare_metadata.call_count = 0
 
         # Setup mock for handler.prepare_metadata
@@ -114,8 +120,8 @@ class TestSQLPreflightCheck:
         assert "data" in response_data
 
         # Verify that preflight_check was called with correct args
-
         handler.prepare_metadata.assert_called_once()
+        handler.load.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -139,6 +145,8 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the /check endpoint with empty filters"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
 
         handler.prepare_metadata.return_value = []
 
@@ -166,6 +174,9 @@ class TestSQLPreflightCheck:
         response = client.post("/workflows/v1/check", json=payload)
         assert response.status_code == 200
 
+        # Verify load was called
+        handler.load.assert_called_once()
+
         expected_sql = """
             SELECT count(*) as "count"
             FROM ACCOUNT_USAGE.TABLES
@@ -186,6 +197,8 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the /check endpoint with both filters"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
 
         handler.prepare_metadata.return_value = [
             {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
@@ -215,6 +228,9 @@ class TestSQLPreflightCheck:
 
         response = client.post("/workflows/v1/check", json=payload)
         assert response.status_code == 200
+
+        # Verify load was called
+        handler.load.assert_called_once()
 
         expected_sql = """
            SELECT count(*) as "count"
