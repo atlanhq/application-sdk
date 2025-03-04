@@ -1,0 +1,84 @@
+site_name: application-sdk
+site_url: https://k.atlan.dev/application-sdk
+repo_url: https://github.com/atlanhq/application-sdk
+repo_name: application-sdk
+site_description: Docs for application-sdk
+site_author: App Framework Team
+copyright: App Framework Team © 2025
+
+theme:
+  name: material
+  font:
+    text: Inter
+    code: JetBrains Mono
+  palette:
+    primary: indigo
+  logo: static/assets/logo.svg
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.top
+    - navigation.tracking
+    - navigation.path
+
+extra:
+  homepage: https://k.atlan.dev/application-sdk
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/atlanhq/application-sdk
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - def_list
+  - tables
+  - footnotes
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.critic
+  - pymdownx.caret
+  - pymdownx.keys
+  - pymdownx.mark
+  - pymdownx.tilde
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.arithmatex:
+      generic: true
+
+extra_css:
+  - static/stylesheets/extra.css
+
+extra_javascript:
+  - static/javascripts/mathjax.js
+  - https://polyfill.io/v3/polyfill.min.js?features=es6
+  - https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+
+nav:
+  - Home: index.md
+  - Getting Started: getting_started.md
+  - Guides:
+      - Overview: guides/index.md
+      - Getting Started: guides/getting_started.md
+      - Basic Application Guide: guides/basic_application_guide.md
+      - SQL Application Guide: guides/sql_application_guide.md
+      - Usage: guides/usage.md
+      - Development: guides/development.md
+  - Explanations:
+      - Overview: explanations/index.md
+      - Architecture: explanations/architecture.md
+      - Best Practices: explanations/best_practices.md
+      - Configuration: explanations/configuration.md
+  - Configuration Reference: configuration.md
+  - API Reference: /api

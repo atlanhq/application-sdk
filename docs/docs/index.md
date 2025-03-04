@@ -1,12 +1,3 @@
-```{toctree}
-:maxdepth: 3
-:hidden:
-
-Guides<guides/index>
-Explanations<explanations/index>
-Library Reference<reference/index>
-```
-
 # Python Application SDK
 
 Python Application SDK is a Python library for developing applications on the Atlan Platform and is a PaaS system that provides a set of tools and services to build, test and manage applications.
@@ -18,7 +9,6 @@ The SDK also focuses on empowering developers to build applications that are sca
 
 The SDK once integrated will automatically generate API routes for the application and provide a set of features that are common across all applications on Atlan Platform.
 
-![SDK Features](_static/images/phoenix-sdk-featureset.png)
 
 - Observability and Supportability. The SDK integrated with [OTel](https://opentelemetry.io/) and provides the below features out of the box:
 - Application health checks
@@ -30,7 +20,7 @@ Head over to the [Architecture doc](https://k.atlan.dev/application-sdk/explanat
 
 ## Usage
 
-A production grade SQL application built using Phoenix Application SDK can be found [here](https://github.com/atlanhq/phoenix-postgres-app)
+A production grade SQL application built using Phoenix Application SDK can be found [here](https://github.com/atlanhq/atlan-postgres-app)
 
 For using the SDK in your project from scratch:
 
@@ -39,6 +29,7 @@ Install `application-sdk` as a dependency in your project using the following co
 ```bash
 poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 ```
+
 - Refer to the [Detailed Usage Guide](https://k.atlan.dev/application-sdk/guides/USAGE.html) to see how to use the SDK and all its features
 - Refer to the [Examples](https://github.com/atlanhq/application-sdk/blob/main/examples/README.md) section to see how to use the SDK for various use cases
 

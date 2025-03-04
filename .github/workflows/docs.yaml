@@ -50,7 +50,7 @@ jobs:
           git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}".insteadOf "ssh://git";
           poetry install --with "dev, test" --all-extras
           source .venv/bin/activate
-          make sphinx_docs
+          make apidocs
           pyreverse -o html application_sdk
 
       - name: Setup AWS Credentials
@@ -62,14 +62,14 @@ jobs:
       - name: Upload Docs to Kryptonite Bucket
         if: ${{ github.event_name == 'push' }}
         run: |
-          aws s3 sync ./docs/_build/html s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }} --delete
+          aws s3 sync ./docs/site s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }} --delete
           aws s3 cp packages.html s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }}/packages.html
           aws s3 cp classes.html s3://kryptonite-store/application-sdk/${{ steps.get_branch.outputs.branch }}/classes.html
 
       - name: Upload Docs to Kryptonite Bucket
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          aws s3 sync ./docs/_build/html s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
+          aws s3 sync ./docs/site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
           aws s3 cp packages.html s3://kryptonite-store/application-sdk/${{ github.head_ref }}/packages.html
           aws s3 cp classes.html s3://kryptonite-store/application-sdk/${{ github.head_ref }}/classes.html
 

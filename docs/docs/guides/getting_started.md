@@ -1,8 +1,8 @@
 # Getting Started
 
-```{tip}
-We use specific tools in this guide to streamline the process, you can use any tooling of your choice. for example: In this guide we use `poetry` to manage your python project.
-```
+!!! tip
+    We use specific tools in this guide to streamline the process, you can use any tooling of your choice. for example: In this guide we use `poetry` to manage your python project.
+
 
 ## 0. Skip the line
 
