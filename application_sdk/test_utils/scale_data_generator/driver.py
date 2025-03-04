@@ -1,14 +1,13 @@
 import argparse
-import logging
 import os
 import shutil
 import time
 from dataclasses import dataclass
 
+from loguru import logger
+
 from application_sdk.test_utils.scale_data_generator.config_loader import ConfigLoader
 from application_sdk.test_utils.scale_data_generator.data_generator import DataGenerator
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass

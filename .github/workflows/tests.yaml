@@ -16,6 +16,12 @@ on:
     branches:
       - main
       - develop
+
+permissions:
+  pull-requests: write
+  contents: write
+  id-token: write  # Required for AWS credentials
+
 jobs:
   tests:
     runs-on: ubuntu-latest
@@ -26,6 +32,7 @@ jobs:
     permissions:
       pull-requests: write
       contents: write
+      id-token: write  # Required for AWS credentials
 
     steps:
       - uses: actions/checkout@v3
@@ -37,6 +44,16 @@ jobs:
         uses: actions/setup-python@v1
         with:
           python-version: "3.11"
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Get branch name
+        run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
+        id: get_branch
 
       #----------------------------------------------
       #  -----  install & configure poetry  -----
@@ -71,10 +88,15 @@ jobs:
         run: |
           poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
           poetry run coverage xml
-          poetry run coverage report
+          poetry run coverage html
+          poetry run coverage report --fail-under=60
 
       - name: Comment Coverage Report on PR
         uses: orgoro/coverage@v3.2
         with:
           coverageFile: coverage.xml
           token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Upload Coverage Report to S3
+        run: |
+          aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/${{ steps.get_branch.outputs.branch }} --delete

@@ -1,4 +1,4 @@
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type
 
 import pandas as pd
 from temporalio import activity
@@ -8,7 +8,7 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
+from application_sdk.decorators import run_sync, transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -116,16 +116,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         sql_client = self.sql_client_class()
 
+        handler = self.handler_class(sql_client)
+        self._state[workflow_id].handler = handler
+
         if "credential_guid" in workflow_args:
             credentials = SecretStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
 
-        handler = self.handler_class(sql_client)
-
         self._state[workflow_id].sql_client = sql_client
-        self._state[workflow_id].handler = handler
         self._state[workflow_id].transformer = self.transformer_class(
             connector_name=ApplicationConstants.APPLICATION_NAME.value,
             connector_type="sql",
@@ -147,45 +147,32 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._clean_state()
 
-    async def _transform_batch(
+    @run_sync
+    def _process_rows(
         self,
-        results,
+        results: pd.DataFrame,
         typename: str,
         workflow_id: str,
         workflow_run_id: str,
-        workflow_args: Dict[str, Any],
-    ):
-        """Transform a batch of results into metadata.
+        state: SQLMetadataExtractionActivitiesState,
+        connection_name: Optional[str],
+        connection_qualified_name: Optional[str],
+    ) -> List[Optional[Dict[str, Any]]]:
+        """Process DataFrame rows and transform them into metadata.
 
         Args:
-            results: The DataFrame containing the batch of results to transform.
-            typename: The type of data being transformed (e.g., 'database', 'schema', 'table').
-            workflow_id: The ID of the current workflow.
-            workflow_run_id: The run ID of the current workflow.
-            workflow_args: Dictionary containing workflow arguments and configuration.
+            results: DataFrame containing the rows to process
+            typename: Type of data being transformed
+            workflow_id: Current workflow ID
+            workflow_run_id: Current workflow run ID
+            state: Current activity state
+            connection_name: Name of the connection
+            connection_qualified_name: Qualified name of the connection
 
         Returns:
-            None
-
-        Raises:
-            ValueError: If the transformer is not properly set.
+            list: List of transformed metadata dictionaries
         """
-
-        state: SQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
-        )
-
-        connection_name = workflow_args.get("connection", {}).get(
-            "connection_name", None
-        )
-        connection_qualified_name = workflow_args.get("connection", {}).get(
-            "connection_qualified_name", None
-        )
-
         transformed_metadata_list = []
-        # Replace NaN with None to avoid issues with JSON serialization
-        results = results.replace({float("nan"): None})
-
         for row in results.to_dict(orient="records"):
             try:
                 if not state.transformer:
@@ -209,6 +196,40 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 activity.logger.error(
                     f"Error processing row for {typename}: {row_error}"
                 )
+        return transformed_metadata_list
+
+    async def _transform_batch(
+        self,
+        results,
+        typename: str,
+        workflow_id: str,
+        workflow_run_id: str,
+        workflow_args: Dict[str, Any],
+    ):
+        state: SQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+
+        connection_name = workflow_args.get("connection", {}).get(
+            "connection_name", None
+        )
+        connection_qualified_name = workflow_args.get("connection", {}).get(
+            "connection_qualified_name", None
+        )
+
+        # Replace NaN with None to avoid issues with JSON serialization
+        results = results.replace({float("nan"): None})
+
+        transformed_metadata_list = await self._process_rows(
+            results,
+            typename,
+            workflow_id,
+            workflow_run_id,
+            state,
+            connection_name,
+            connection_qualified_name,
+        )
+
         return pd.DataFrame(transformed_metadata_list)
 
     @activity.defn
@@ -234,7 +255,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="database")
+        return await raw_output.get_statistics(typename="database")
 
     @activity.defn
     @auto_heartbeater
@@ -259,7 +280,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="schema")
+        return await raw_output.get_statistics(typename="schema")
 
     @activity.defn
     @auto_heartbeater
@@ -287,7 +308,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="table")
+        return await raw_output.get_statistics(typename="table")
 
     @activity.defn
     @auto_heartbeater
@@ -315,41 +336,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             Dict containing chunk count, typename, and total record count.
         """
         await raw_output.write_batched_dataframe(batch_input)
-        return raw_output.get_metadata(typename="column")
-
-    @activity.defn
-    @auto_heartbeater
-    @transform(metadata_output=JsonOutput(output_suffix="/transformed"))
-    async def write_type_metadata(
-        self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
-    ):
-        """Write transformed metadata to output.
-
-        Args:
-            metadata_output: JsonOutput instance for writing metadata.
-            batch_input: Optional DataFrame containing input data.
-            **kwargs: Additional keyword arguments.
-        """
-        await metadata_output.write_metadata()
-
-    @activity.defn
-    @auto_heartbeater
-    @transform(metadata_output=JsonOutput(output_suffix="/raw"))
-    async def write_raw_type_metadata(
-        self, metadata_output: JsonOutput, **kwargs: Dict[str, Any]
-    ):
-        """Write raw metadata to the specified output destination.
-
-        This activity writes the metadata of raw entities to the configured output path.
-        It is typically used to store raw data fetched from the source database before
-        any transformations are applied.
-
-        Args:
-            metadata_output (JsonOutput): Output handler for metadata.
-            batch_input (Optional[Any], optional): Input data. Defaults to None.
-            **kwargs: Additional keyword arguments.
-        """
-        await metadata_output.write_metadata()
+        return await raw_output.get_statistics(typename="column")
 
     @activity.defn
     @auto_heartbeater
@@ -384,4 +371,4 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 kwargs,
             )
             await transformed_output.write_dataframe(transformed_chunk)
-        return transformed_output.get_metadata()
+        return await transformed_output.get_statistics()

@@ -229,6 +229,7 @@ async def test_create_worker(
         activities=activities,
         workflow_runner=ANY,
         interceptors=ANY,
+        max_concurrent_activities=ANY,
     )
 
     assert worker == mock_worker_class.return_value

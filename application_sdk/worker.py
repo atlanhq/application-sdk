@@ -6,14 +6,16 @@ including their initialization, configuration, and execution.
 
 import asyncio
 import threading
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
 
+import uvloop
 from temporalio.types import CallableType
 
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 
 class Worker:
@@ -28,6 +30,7 @@ class Worker:
         temporal_activities (Sequence[CallableType]): List of activity functions.
         workflow_classes (List[Any]): List of workflow classes.
         passthrough_modules (List[str]): List of module names to pass through.
+        max_concurrent_activities (int | None): Maximum number of concurrent activities.
     """
 
     def __init__(
@@ -36,6 +39,7 @@ class Worker:
         temporal_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = ["application_sdk", "os"],
         workflow_classes: List[Any] = [],
+        max_concurrent_activities: Optional[int] = None,
     ):
         """Initialize the Worker.
 
@@ -54,6 +58,7 @@ class Worker:
         self.temporal_activities = temporal_activities
         self.workflow_classes = workflow_classes
         self.passthrough_modules = passthrough_modules
+        self.max_concurrent_activities = max_concurrent_activities
 
     async def start(self, daemon: bool = False, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
@@ -89,6 +94,7 @@ class Worker:
                 activities=self.temporal_activities,
                 workflow_classes=self.workflow_classes,
                 passthrough_modules=self.passthrough_modules,
+                max_concurrent_activities=self.max_concurrent_activities,
             )
 
             logger.info(

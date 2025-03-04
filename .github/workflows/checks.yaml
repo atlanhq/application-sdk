@@ -3,9 +3,9 @@
 name: Pre-commit Checks
 on:
   workflow_call:
-  push:
   pull_request:
     types: [ opened, synchronize, labeled, reopened ]
+    branches: [ main, master, develop ]
 
 jobs:
   pre-commit:

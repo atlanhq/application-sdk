@@ -5,7 +5,6 @@ databases. It handles batch processing of queries and manages the workflow state
 """
 
 import asyncio
-from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
@@ -98,7 +97,9 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             self.activities_cls.get_query_batches,
             workflow_args,
             retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=1000),
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+            schedule_to_start_timeout=self.default_schedule_to_start_timeout,
         )
 
         miner_activities: List[Coroutine[Any, Any, None]] = []
@@ -115,7 +116,9 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
                     self.activities_cls.fetch_queries,
                     activity_args,
                     retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(seconds=1000),
+                    start_to_close_timeout=self.default_start_to_close_timeout,
+                    heartbeat_timeout=self.default_heartbeat_timeout,
+                    schedule_to_start_timeout=self.default_schedule_to_start_timeout,
                 )
             )
 
