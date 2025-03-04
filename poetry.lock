@@ -271,6 +271,8 @@ version = "5.8"
 description = "A wrapper around re and regex that adds additional back references."
 optional = false
 python-versions = ">=3.9"
+groups = ["dev"]
+markers = "python_version >= \"3.12\" or python_version == \"3.11\""
 files = [
     {file = "backrefs-5.8-py310-none-any.whl", hash = "sha256:c67f6638a34a5b8730812f5101376f9d41dc38c43f1fdc35cb54700f6ed4465d"},
     {file = "backrefs-5.8-py311-none-any.whl", hash = "sha256:2e1c15e4af0e12e45c8701bd5da0902d326b2e200cafcd25e49d9f06d44bb61b"},
@@ -6305,4 +6307,4 @@ workflows = ["dapr", "pandas", "temporalio"]
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "d58551ea9a7ee5fc2d855f8e33c7d351626df30a3bd6d410eb686a2997a4e03a"
+content-hash = "4a84a234ea18e1f072227ba613103992bca31128eb9a4c489163077f89fa1c61"
