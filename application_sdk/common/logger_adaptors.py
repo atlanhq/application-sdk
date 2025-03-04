@@ -49,9 +49,6 @@ class AtlanLoggerAdapter:
             sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
         )
 
-        # Store the color-enabled logger instance
-        self.logger = self.logger.opt(colors=True)
-
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:
             try:
