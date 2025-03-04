@@ -208,7 +208,7 @@ class TestFastAPIApplication:
 
         # Assert
         assert temporal_client.start_workflow.call_count == 1
-        assert temporal_client.start_workflow.called_with(
+        temporal_client.start_workflow.assert_called_with(
             workflow_args=event_data,
             workflow_class=SampleWorkflow,
         )

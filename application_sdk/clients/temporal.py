@@ -278,22 +278,20 @@ class TemporalClient(ClientInterface):
             logger.info(f"Created workflow config with ID: {workflow_id}")
 
         try:
+            # Pass the full workflow_args to the workflow
             handle = await self.client.start_workflow(
                 workflow_class,
-                {
-                    "workflow_id": workflow_id,
-                },
+                workflow_args,  # Pass the full workflow_args here
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
             )
-            workflow.logger.info(
-                f"Workflow started: {handle.id} {handle.result_run_id}"
-            )
+            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
             return {
                 "workflow_id": handle.id,
                 "run_id": handle.result_run_id,
+                "handle": handle,  # Return the handle so it can be used to get the result
             }
         except WorkflowFailureError as e:
             logger.error(f"Workflow failure: {e}")
