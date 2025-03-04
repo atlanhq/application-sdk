@@ -329,17 +329,17 @@ uvloop = ["uvloop (>=0.15.2)"]
 
 [[package]]
 name = "boto3"
-version = "1.37.4"
+version = "1.37.5"
 description = "The AWS SDK for Python"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "boto3-1.37.4-py3-none-any.whl", hash = "sha256:1bbf8bbacb3932956b7020d9a2c49d72c64e21bae9397ba6d3aadffab5e192eb"},
-    {file = "boto3-1.37.4.tar.gz", hash = "sha256:024c37c2f85f4b907f5fc817d0db6fda7fd6ab3c6148ee4ed35fe7cecdf7db0c"},
+    {file = "boto3-1.37.5-py3-none-any.whl", hash = "sha256:12166353519aca0cc8d9dcfbbb0d38f8915955a5912b8cb241b2b2314f0dbc14"},
+    {file = "boto3-1.37.5.tar.gz", hash = "sha256:ae6e7048beeaa4478368e554a4b290e3928beb0ae8d8767d108d72381a81af30"},
 ]
 
 [package.dependencies]
-botocore = ">=1.37.4,<1.38.0"
+botocore = ">=1.37.5,<1.38.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.11.0,<0.12.0"
 
@@ -348,13 +348,13 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "boto3-stubs"
-version = "1.37.4"
-description = "Type annotations for boto3 1.37.4 generated with mypy-boto3-builder 8.10.0"
+version = "1.37.5"
+description = "Type annotations for boto3 1.37.5 generated with mypy-boto3-builder 8.10.0"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "boto3_stubs-1.37.4-py3-none-any.whl", hash = "sha256:550a8578ca2cf5d498fd685e8ef7f018b3d16947c615f9631de093586909b56f"},
-    {file = "boto3_stubs-1.37.4.tar.gz", hash = "sha256:35c28114e98e74b32b44792264a8fd4ee3703a0e2dd6c7168e7d4da5ebfb0e39"},
+    {file = "boto3_stubs-1.37.5-py3-none-any.whl", hash = "sha256:c36571bb582d3ace0009a8aefde087e2378c991accb2b343015a2023a129850a"},
+    {file = "boto3_stubs-1.37.5.tar.gz", hash = "sha256:11d3a8bdce0e305951141762e2f861eedb53af7e3b04df10af44c9ced1961883"},
 ]
 
 [package.dependencies]
@@ -410,7 +410,7 @@ bedrock-data-automation-runtime = ["mypy-boto3-bedrock-data-automation-runtime (
 bedrock-runtime = ["mypy-boto3-bedrock-runtime (>=1.37.0,<1.38.0)"]
 billing = ["mypy-boto3-billing (>=1.37.0,<1.38.0)"]
 billingconductor = ["mypy-boto3-billingconductor (>=1.37.0,<1.38.0)"]
-boto3 = ["boto3 (==1.37.4)"]
+boto3 = ["boto3 (==1.37.5)"]
 braket = ["mypy-boto3-braket (>=1.37.0,<1.38.0)"]
 budgets = ["mypy-boto3-budgets (>=1.37.0,<1.38.0)"]
 ce = ["mypy-boto3-ce (>=1.37.0,<1.38.0)"]
@@ -772,13 +772,13 @@ xray = ["mypy-boto3-xray (>=1.37.0,<1.38.0)"]
 
 [[package]]
 name = "botocore"
-version = "1.37.4"
+version = "1.37.5"
 description = "Low-level, data-driven core of boto 3."
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "botocore-1.37.4-py3-none-any.whl", hash = "sha256:89130998c82d53f875a42646b692da507c9871b580fd1aea0f861bf9da36e41a"},
-    {file = "botocore-1.37.4.tar.gz", hash = "sha256:7e15cd487617440e9eac3144044b6a2bd833d7f3e2bed6a2865693cc11489cc3"},
+    {file = "botocore-1.37.5-py3-none-any.whl", hash = "sha256:e5cfbb8026d5b4fadd9b3a18b61d238a41a8b8f620ab75873dc1467d456150d6"},
+    {file = "botocore-1.37.5.tar.gz", hash = "sha256:f8f526d33ae74d242c577e0440b57b9ec7d53edd41db211155ec8087fe7a5a21"},
 ]
 
 [package.dependencies]
@@ -1711,13 +1711,13 @@ dev = ["flake8", "markdown", "twine", "wheel"]
 
 [[package]]
 name = "googleapis-common-protos"
-version = "1.68.0"
+version = "1.69.0"
 description = "Common protobufs used in Google APIs"
 optional = false
 python-versions = ">=3.7"
 files = [
-    {file = "googleapis_common_protos-1.68.0-py2.py3-none-any.whl", hash = "sha256:aaf179b2f81df26dfadac95def3b16a95064c76a5f45f07e4c68a21bb371c4ac"},
-    {file = "googleapis_common_protos-1.68.0.tar.gz", hash = "sha256:95d38161f4f9af0d9423eed8fb7b64ffd2568c3464eb542ff02c5bfa1953ab3c"},
+    {file = "googleapis_common_protos-1.69.0-py2.py3-none-any.whl", hash = "sha256:17835fdc4fa8da1d61cfe2d4d5d57becf7c61d4112f8d81c67eaa9d7ce43042d"},
+    {file = "googleapis_common_protos-1.69.0.tar.gz", hash = "sha256:5a46d58af72846f59009b9c4710425b9af2139555c71837081706b213b298187"},
 ]
 
 [package.dependencies]
@@ -3594,25 +3594,25 @@ test = ["cffi", "hypothesis", "pandas", "pytest", "pytz"]
 
 [[package]]
 name = "pyatlan"
-version = "4.1.0"
+version = "5.0.1"
 description = "Atlan Python Client"
 optional = false
 python-versions = ">=3.8"
 files = [
-    {file = "pyatlan-4.1.0-py3-none-any.whl", hash = "sha256:fc51fd54ec74939be036cbb34bc9b5a85c4edb59250a6cb7ded261fa50904900"},
-    {file = "pyatlan-4.1.0.tar.gz", hash = "sha256:7c2cea6b789798637b5888a4e6fe5f78ad5474cceb8cec119a1e1c7200465532"},
+    {file = "pyatlan-5.0.1-py3-none-any.whl", hash = "sha256:2b35ab218d0ca8ea963c05db82e5e05d88306eb080bc8a0e200f39e08d7983fc"},
+    {file = "pyatlan-5.0.1.tar.gz", hash = "sha256:bbd87759e2bc21dce5a10eb7a38eaf4e30b42468b4ac61cdccb48545749155ab"},
 ]
 
 [package.dependencies]
-jinja2 = "3.1.5"
+jinja2 = ">=3.1.5,<3.2.0"
 lazy_loader = ">=0.4,<1.0"
-nanoid = "2.0.0"
-pydantic = ">=2.0.0,<3.0.0"
-python-dateutil = "2.9.0.post0"
-pytz = "2024.2"
+nanoid = ">=2.0.0,<2.1.0"
+pydantic = ">=2.10.6,<2.11.0"
+python-dateutil = ">=2.9.0.post0,<2.10.0"
+pytz = ">=2025.1,<2026.0"
 PyYAML = ">=6.0.2,<6.1.0"
-requests = ">=2.24"
-tenacity = "8.2.3"
+requests = ">=2.32.3,<2.33.0"
+tenacity = ">=9.0.0,<9.1.0"
 urllib3 = ">=1.26.0,<3"
 
 [[package]]
@@ -4071,13 +4071,13 @@ unidecode = ["Unidecode (>=1.1.1)"]
 
 [[package]]
 name = "pytz"
-version = "2024.2"
+version = "2025.1"
 description = "World timezone definitions, modern and historical"
 optional = false
 python-versions = "*"
 files = [
-    {file = "pytz-2024.2-py2.py3-none-any.whl", hash = "sha256:31c7c1817eb7fae7ca4b8c7ee50c72f93aa2dd863de768e1ef4245d426aa0725"},
-    {file = "pytz-2024.2.tar.gz", hash = "sha256:2aa355083c50a0f93fa581709deac0c9ad65cca8a9e9beac660adcbd493c798a"},
+    {file = "pytz-2025.1-py2.py3-none-any.whl", hash = "sha256:89dd22dca55b46eac6eda23b2d72721bf1bdfef212645d81513ef5d03038de57"},
+    {file = "pytz-2025.1.tar.gz", hash = "sha256:c2db42be2a2518b28e65f9207c4d05e6ff547d1efa4086469ef855e4ab70178e"},
 ]
 
 [[package]]
@@ -4765,13 +4765,13 @@ sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
 name = "sqlglot"
-version = "26.7.0"
+version = "26.8.0"
 description = "An easily customizable SQL parser and transpiler"
 optional = true
 python-versions = ">=3.7"
 files = [
-    {file = "sqlglot-26.7.0-py3-none-any.whl", hash = "sha256:684f86fc1c678b6d778b7683275194451ed52264a32ea12cc84e0daf4f2dc6ce"},
-    {file = "sqlglot-26.7.0.tar.gz", hash = "sha256:4a6f7c6211fa6c76d8c6ce2ba897f7f769f1898b0d7440ad842150201e905c41"},
+    {file = "sqlglot-26.8.0-py3-none-any.whl", hash = "sha256:ef2959ab81f7c8e920e14b3a2538f0488456f07ef31ee4f8a68d9dff76509550"},
+    {file = "sqlglot-26.8.0.tar.gz", hash = "sha256:d67e4e136198f103b793c8c3347f0068b9d9ee3393682fff9a1f8077edd8e8e3"},
 ]
 
 [package.extras]
@@ -4860,17 +4860,18 @@ pydantic = ["pydantic (>=2.0.0,<3.0.0)"]
 
 [[package]]
 name = "tenacity"
-version = "8.2.3"
+version = "9.0.0"
 description = "Retry code until it succeeds"
 optional = false
-python-versions = ">=3.7"
+python-versions = ">=3.8"
 files = [
-    {file = "tenacity-8.2.3-py3-none-any.whl", hash = "sha256:ce510e327a630c9e1beaf17d42e6ffacc88185044ad85cf74c0a8887c6a0f88c"},
-    {file = "tenacity-8.2.3.tar.gz", hash = "sha256:5398ef0d78e63f40007c1fb4c0bff96e1911394d2fa8d194f77619c05ff6cc8a"},
+    {file = "tenacity-9.0.0-py3-none-any.whl", hash = "sha256:93de0c98785b27fcf659856aa9f54bfbd399e29969b0621bc7f762bd441b4539"},
+    {file = "tenacity-9.0.0.tar.gz", hash = "sha256:807f37ca97d62aa361264d497b0e31e92b8027044942bfa756160d908320d73b"},
 ]
 
 [package.extras]
-doc = ["reno", "sphinx", "tornado (>=4.5)"]
+doc = ["reno", "sphinx"]
+test = ["pytest", "tornado (>=4.5)", "typeguard"]
 
 [[package]]
 name = "text-unidecode"
@@ -5579,4 +5580,4 @@ workflows = ["dapr", "pandas", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "784ae518c4cfe6aa634f46ca771c67592b3272dcb54e92adfbd940d1490ea903"
+content-hash = "d58551ea9a7ee5fc2d855f8e33c7d351626df30a3bd6d410eb686a2997a4e03a"
