@@ -126,7 +126,7 @@ class AtlasTransformer(TransformerInterface):
                     entity, workflow_id, workflow_run_id, data
                 )
 
-                return entity.dict(by_alias=True, exclude_none=True)
+                return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
             except Exception as e:
                 logger.error(
                     "Error transforming {} entity: {}",
