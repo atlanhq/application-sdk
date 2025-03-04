@@ -45,7 +45,6 @@ async def prepare_fn_kwargs(
     state: Optional[ActivitiesState],
     get_dataframe_fn: Callable[..., Any],
     get_batched_dataframe_fn: Callable[..., Any],
-    args: Dict[str, Any],
     kwargs: Dict[str, Any],
     fn_args: Dict[str, Any],
     fn_kwargs: Dict[str, Any],
@@ -151,7 +150,6 @@ async def run_process(
         state=state,
         get_dataframe_fn=get_dataframe_fn,
         get_batched_dataframe_fn=get_batched_dataframe_fn,
-        args=args,
         kwargs=kwargs,
         fn_args=fn_args,
         fn_kwargs=fn_kwargs,
@@ -164,8 +162,86 @@ async def run_process(
 
 def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
     """
-    Decorator to be used for activity functions that read data from a source and write to a sink
-    It uses pandas dataframes as input and output
+    Decorator that reads data from an Input source and returns the data as a pandas DataFrame to be written to an Output.
+
+    Args:
+        *args (Dict[str, Any]): Positional arguments to pass to the decorated function.
+        **kwargs (Dict[str, Any]): Keyword arguments to pass to the decorated function.
+
+    Returns:
+        Callable: A decorator that wraps the function with the necessary processing.
+
+    Use Cases:
+    1. Read the data from a SQL source and write into JSON files.
+        engine = sqlalchemy.create_engine("sqlite:///:memory:")
+        workflow_id = "322342798"
+        output_prefix = "/tmp/output/"
+        output_path = f"{output_prefix}{workflow_id}"
+        @transform(
+            batch_input=SQLQueryInput(engine=engine, query="SELECT * from table_a"),
+            output=JsonOutput(
+                output_prefix=output_prefix, # Prefix output path
+                output_path=output_path, # Base output path
+                output_suffix="/raw/table", # Suffix for the output_path
+                chunk_size=10, # Number of records per chunk
+            )
+        )
+        async def fetch_table(batch_input: pd.DataFrame, output: JsonOutput, **kwargs):
+            # Write any custom logic to process the Dataframe here if required
+            custom_process_logic(batch_input)
+            # Write the processed Dataframe to the output
+            await output.write_batched_dataframe(batch_input)
+
+        await fetch_table()
+
+        # In this case the data extracted from the sql source will be written to below path in a json file
+        # /tmp/output/322342798/raw/table/1.json
+
+        # If in case the total records fetched from query is 30 then data will be written in 3 chunks with 10 records each
+        # as we have specified chunk_size=10. Data will be structured as below
+        # /tmp/output/322342798/raw/table
+        #   - 1.json
+        #   - 2.json
+        #   - 3.json
+
+    2.  Read the data from a SQL source and write the raw and transformed data into a JSON file using classes.
+        This showcases how to use the decorator if the method is part of a class.
+
+        Notice the use of the `sql_query` attribute in the class to input the query into the `SQLQueryInput`.
+        In the case of a class attribute, the name of the attribute should be passed as a string.
+        When the decorator runs, it'll re-initialize the `SQLQueryInput` with the correct value of the `sql_query` attribute.
+
+        Also, when the arguments are not static and are dynamic, the arguments can be passed to the method as kwargs.
+
+        class DemoActivity:
+            sql_query = "SELECT * from table_a"
+
+            async def run(self):
+                workflow_id = "322342798"
+                output_prefix = "/tmp/output/"
+                args = {
+                    "output_prefix": output_prefix,
+                    "output_path": f"{output_prefix}{workflow_id}"
+                }
+                await self.transform_table(args)
+
+            @transform(
+                batch_input=SQLQueryInput(engine=sqlalchemy.create_engine("sqlite:///:memory:"), query="sql_query"),
+                raw_output=JsonOutput(output_suffix="/raw/"),
+                transformed_output=JsonOutput(output_suffix="/transformed/")
+            )
+            async def transform_table(self, batch_input: pd.DataFrame, raw_output: JsonOutput, transformed_output: JsonOutput, **kwargs):
+                # Write the raw Dataframe to the output
+                await raw_output.write_batched_dataframe(batch_input)
+
+                # Write the transformation logic here
+                transformer(batch_input)
+
+                # Write the transformed Dataframe to the output
+                await transformed_output.write_batched_dataframe(batch_input)
+
+        activity = DemoActivity()
+        await activity.run()
     """
 
     def wrapper(fn: Callable[..., Any]):
@@ -188,8 +264,86 @@ def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
 
 def transform_daft(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
     """
-    Decorator to be used for activity functions that read data from a source and write to a sink
-    It uses daft dataframes as input and output
+    Decorator that reads data from an Input source and returns the data as a daft DataFrame to be written to an Output.
+
+    Args:
+        *args (Dict[str, Any]): Positional arguments to pass to the decorated function.
+        **kwargs (Dict[str, Any]): Keyword arguments to pass to the decorated function.
+
+    Returns:
+        Callable: A decorator that wraps the function with the necessary processing.
+
+    Use Cases:
+    1. Read the data from a SQL source and write into JSON files.
+        engine = sqlalchemy.create_engine("sqlite:///:memory:")
+        workflow_id = "322342798"
+        output_prefix = "/tmp/output/"
+        output_path = f"{output_prefix}{workflow_id}"
+        @transform_daft(
+            batch_input=SQLQueryInput(engine=engine, query="SELECT * from table_a"),
+            output=JsonOutput(
+                output_prefix=output_prefix, # Prefix output path
+                output_path=output_path, # Base output path
+                output_suffix="/raw/table", # Suffix for the output_path
+                chunk_size=10, # Number of records per chunk
+            )
+        )
+        async def fetch_table(batch_input: daft.DataFrame, output: JsonOutput, **kwargs):
+            # Write any custom logic to process the Dataframe here if required
+            custom_process_logic(batch_input)
+            # Write the processed Dataframe to the output
+            await output.write_batched_dataframe(batch_input)
+
+        await fetch_table()
+
+        # In this case the data extracted from the sql source will be written to below path in a json file
+        # /tmp/output/322342798/raw/table/1.json
+
+        # If in case the total records fetched from query is 30 then data will be written in 3 chunks with 10 records each
+        # as we have specified chunk_size=10. Data will be structured as below
+        # /tmp/output/322342798/raw/table
+        #   - 1.json
+        #   - 2.json
+        #   - 3.json
+
+    2.  Read the data from a SQL source and write the raw and transformed data into a JSON file using classes.
+        This showcases how to use the decorator if the method is part of a class.
+
+        Notice the use of the `sql_query` attribute in the class to input the query into the `SQLQueryInput`.
+        In the case of a class attribute, the name of the attribute should be passed as a string.
+        When the decorator runs, it'll re-initialize the `SQLQueryInput` with the correct value of the `sql_query` attribute.
+
+        Also, when the arguments are not static and are dynamic, the arguments can be passed to the method as kwargs.
+
+        class DemoActivity:
+            sql_query = "SELECT * from table_a"
+
+            async def run(self):
+                workflow_id = "322342798"
+                output_prefix = "/tmp/output/"
+                args = {
+                    "output_prefix": output_prefix,
+                    "output_path": f"{output_prefix}{workflow_id}"
+                }
+                await self.transform_table(args)
+
+            @transform_daft(
+                batch_input=SQLQueryInput(engine=sqlalchemy.create_engine("sqlite:///:memory:"), query="sql_query"),
+                raw_output=JsonOutput(output_suffix="/raw/"),
+                transformed_output=JsonOutput(output_suffix="/transformed/")
+            )
+            async def transform_table(self, batch_input: daft.DataFrame, raw_output: JsonOutput, transformed_output: JsonOutput, **kwargs):
+                # Write the raw Dataframe to the output
+                await raw_output.write_batched_daft_dataframe(batch_input)
+
+                # Write the transformation logic here
+                transformer(batch_input)
+
+                # Write the transformed Dataframe to the output
+                await transformed_output.write_batched_daft_dataframe(batch_input)
+
+        activity = DemoActivity()
+        await activity.run()
     """
 
     def wrapper(fn):
