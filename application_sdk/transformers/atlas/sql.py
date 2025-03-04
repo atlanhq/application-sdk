@@ -5,7 +5,7 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-from typing import Any, Dict, List, Optional, TypeVar, Union, overload
+from typing import Any, Dict, List, Optional, TypeVar, Union, overload, Tuple
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -26,7 +26,7 @@ class Procedure(assets.Procedure):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Procedure:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Procedure, Dict[str, Any]]:
         try:
             assert (
                 obj.get("procedure_name") is not None
@@ -64,9 +64,10 @@ class Procedure(assets.Procedure):
             attributes = {}
             attributes["sub_type"] = obj.get("procedure_type", "-1")
 
-            procedure.attributes = procedure.attributes.copy(update=attributes)
-
-            return procedure
+            return procedure, {
+                "attributes": attributes,
+                "custom_attributes": {},
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Procedure Entity: {str(e)}")
 
@@ -78,7 +79,7 @@ class Database(assets.Database):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Database:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Database, Dict[str, Any]]:
         """Parse a dictionary into a Database entity.
 
         Args:
@@ -106,9 +107,10 @@ class Database(assets.Database):
             attributes = {}
             attributes["schema_count"] = obj.get("schema_count", 0)
 
-            database.attributes = database.attributes.copy(update=attributes)
-
-            return database
+            return database, {
+                "attributes": attributes,
+                "custom_attributes": {},
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Database Entity: {str(e)}")
 
@@ -120,7 +122,7 @@ class Schema(assets.Schema):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Schema:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Schema, Dict[str, Any]]:
         """Parse a dictionary into a Schema entity.
 
         Args:
@@ -153,8 +155,6 @@ class Schema(assets.Schema):
             attributes["table_count"] = obj.get("table_count", 0)
             attributes["views_count"] = obj.get("views_count", 0)
 
-            schema.attributes = schema.attributes.copy(update=attributes)
-
             if not schema.custom_attributes:
                 schema.custom_attributes = {}
 
@@ -164,7 +164,10 @@ class Schema(assets.Schema):
             if is_managed_access := obj.get("is_managed_access", None):
                 schema.custom_attributes["is_managed_access"] = is_managed_access
 
-            return schema
+            return schema, {
+                "attributes": attributes,
+                "custom_attributes": custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Schema Entity: {str(e)}")
 
@@ -177,14 +180,17 @@ class Table(assets.Table):
     """
 
     @classmethod
-    def parse_obj(
+    def get_attributes(
         cls, obj: Dict[str, Any]
-    ) -> Union[
-        assets.Table,
-        assets.View,
-        assets.MaterialisedView,
-        assets.SnowflakeDynamicTable,
-        assets.TablePartition,
+    ) -> Tuple[
+        Union[
+            assets.Table,
+            assets.View,
+            assets.MaterialisedView,
+            assets.SnowflakeDynamicTable,
+            assets.TablePartition,
+        ],
+        Dict[str, Any],
     ]:
         """Parse a dictionary into a Table entity.
 
@@ -359,10 +365,10 @@ class Table(assets.Table):
             if obj.get("auto_increment", "") != "":
                 custom_attributes["auto_increment"] = obj.get("auto_increment")
 
-            sql_table.attributes = sql_table.attributes.copy(update=attributes)
-            sql_table.custom_attributes = custom_attributes
-
-            return sql_table
+            return sql_table, {
+                "attributes": attributes,
+                "custom_attributes": custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Table Entity: {str(e)}")
 
@@ -374,7 +380,7 @@ class Column(assets.Column):
     """
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Column:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Column, Dict[str, Any]]:
         """Parse a dictionary into a Column entity.
 
         Args:
@@ -485,10 +491,10 @@ class Column(assets.Column):
                 if obj.get(key):
                     custom_attributes[key] = obj.get(key)
 
-            sql_column.attributes = sql_column.attributes.copy(update=attributes)
-            sql_column.custom_attributes = custom_attributes
-
-            return sql_column
+            return sql_column, {
+                "attributes": attributes,
+                "custom_attributes": custom_attributes,
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Column Entity: {str(e)}")
 
@@ -634,7 +640,7 @@ class Function(assets.Function):
             )
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.Function:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Function, Dict[str, Any]]:
         """Parse a dictionary into a Function entity.
 
         Args:
@@ -705,9 +711,10 @@ class Function(assets.Function):
                 obj.get("is_memoizable", None) == "YES"
             )
 
-            function.attributes = function.attributes.copy(update=attributes)
-
-            return function
+            return function, {
+                "attributes": attributes,
+                "custom_attributes": {},
+            }
         except AssertionError as e:
             raise ValueError(f"Error creating Function Entity: {str(e)}")
 
@@ -847,7 +854,7 @@ class TagAttachment(assets.TagAttachment):
             )
 
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> assets.TagAttachment:
+    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.TagAttachment, Dict[str, Any]] :
         """Parse a dictionary into a TagAttachment entity.
 
         Args:
@@ -860,6 +867,9 @@ class TagAttachment(assets.TagAttachment):
             ValueError: If required fields are missing or invalid.
         """
         try:
+            attributes = {}
+            custom_attributes = {}
+
             assert (
                 "tag_name" in obj and obj["tag_name"] is not None
             ), "Tag name cannot be None"
@@ -897,7 +907,6 @@ class TagAttachment(assets.TagAttachment):
             object_cat = obj.get("object_database", "")
             object_schema = obj.get("object_schema", "")
 
-            attributes = {}
             attributes["object_database_qualified_name"] = build_atlas_qualified_name(
                 obj["connection_qualified_name"], object_cat
             )
@@ -973,9 +982,9 @@ class TagAttachment(assets.TagAttachment):
                     obj.get("mappedClassificationName", "")
                 )
 
-            tag_attachment.attributes = tag_attachment.attributes.copy(
-                update=attributes
-            )
-            return tag_attachment
+            return tag_attachment, {
+                "attributes": attributes,
+                "custom_attributes": custom_attributes,
+            }
         except Exception as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")

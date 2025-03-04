@@ -119,12 +119,20 @@ class AtlasTransformer(TransformerInterface):
         creator = self.entity_class_definitions.get(typename)
         if creator:
             try:
-                entity = creator.parse_obj(data)
+                entity, additional_data = creator.get_attributes(data)
+                attributes = additional_data.get("attributes", {})
+                custom_attributes = additional_data.get("custom_attributes", {})
 
                 # enrich the entity with workflow metadata
-                entity = self._enrich_entity_with_metadata(
-                    entity, workflow_id, workflow_run_id, data
+                enriched_data = self._enrich_entity_with_metadata(
+                    workflow_id, workflow_run_id, data
                 )
+
+                attributes.update(enriched_data.get("attributes", {}))
+                custom_attributes.update(enriched_data.get("custom_attributes", {}))
+
+                entity.attributes = entity.attributes.copy(update=attributes)
+                entity.custom_attributes = custom_attributes
 
                 return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
             except Exception as e:
@@ -141,11 +149,10 @@ class AtlasTransformer(TransformerInterface):
 
     def _enrich_entity_with_metadata(
         self,
-        entity: Asset,
         workflow_id: str,
         workflow_run_id: str,
         data: Dict[str, Any],
-    ) -> Any:
+    ) -> Dict[str, Any]:
         """Enrich an entity with additional metadata.
 
         This method adds workflow metadata and other attributes to the entity.
@@ -159,29 +166,33 @@ class AtlasTransformer(TransformerInterface):
         Returns:
             Any: The enriched entity.
         """
-        entity.status = EntityStatus.ACTIVE
-        entity.tenant_id = self.tenant_id
-        entity.last_sync_workflow_name = workflow_id
-        entity.last_sync_run = workflow_run_id
-        entity.last_sync_run_at = datetime.now()
-        entity.connection_name = data.get("connection_name", "")
+
+        attributes = {}
+        custom_attributes = {}
+
+        attributes["status"] = EntityStatus.ACTIVE
+        attributes["tenant_id"] = self.tenant_id
+        attributes["last_sync_workflow_name"] = workflow_id
+        attributes["last_sync_run"] = workflow_run_id
+        attributes["last_sync_run_at"] = datetime.now()
+        attributes["connection_name"] = data.get("connection_name", "")
 
         if remarks := data.get("remarks", None) or data.get("comment", None):
-            entity.description = process_text(remarks)
+            attributes["description"] = process_text(remarks)
 
         if source_created_by := data.get("source_owner", None):
-            entity.source_created_by = source_created_by
+            attributes["source_created_by"] = source_created_by
 
         if created := data.get("created"):
-            entity.source_created_at = datetime.fromtimestamp(created / 1000)
+            attributes["source_created_at"] = datetime.fromtimestamp(created / 1000)
 
         if last_altered := data.get("last_altered", None):
-            entity.source_updated_at = datetime.fromtimestamp(last_altered / 1000)
-
-        if not entity.custom_attributes:
-            entity.custom_attributes = {}
+            attributes["source_updated_at"] = datetime.fromtimestamp(last_altered / 1000)
 
         if source_id := data.get("source_id", None):
-            entity.custom_attributes["source_id"] = source_id
+            custom_attributes["source_id"] = source_id
 
-        return entity
+        return {
+            "attributes": attributes,
+            "custom_attributes": custom_attributes,
+        }
