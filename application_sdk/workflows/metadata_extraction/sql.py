@@ -5,7 +5,6 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
@@ -72,7 +71,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
-        start_to_close_timeout_seconds: int = 1000,
     ) -> None:
         """Fetch and transform metadata using the provided fetch function.
 
@@ -83,8 +81,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn (Callable): The function to fetch metadata.
             workflow_args (Dict[str, Any]): Arguments for the workflow execution.
             retry_policy (RetryPolicy): The retry policy for activity execution.
-            start_to_close_timeout_seconds (int): The start to close timeout for the
-                activity execution.
 
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
@@ -93,8 +89,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             fetch_fn,
             workflow_args,
             retry_policy=retry_policy,
-            start_to_close_timeout=timedelta(seconds=start_to_close_timeout_seconds),
+            start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            schedule_to_start_timeout=self.default_schedule_to_start_timeout,
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -121,10 +118,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                         **workflow_args,
                     },
                     retry_policy=retry_policy,
-                    start_to_close_timeout=timedelta(
-                        seconds=start_to_close_timeout_seconds
-                    ),
+                    start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,
+                    schedule_to_start_timeout=self.default_schedule_to_start_timeout,
                 )
             )
 

@@ -49,9 +49,6 @@ class AtlanLoggerAdapter:
             sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
         )
 
-        # Store the color-enabled logger instance
-        self.logger = self.logger.opt(colors=True)
-
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:
             try:
@@ -204,8 +201,12 @@ class AtlanLoggerAdapter:
                         activity_info.schedule_to_close_timeout or 0
                     ),
                     "start_to_close_timeout": str(
-                        activity_info.start_to_close_timeout or 0
+                        activity_info.start_to_close_timeout or None
                     ),
+                    "schedule_to_start_timeout": str(
+                        activity_info.schedule_to_start_timeout or None
+                    ),
+                    "heartbeat_timeout": str(activity_info.heartbeat_timeout or None),
                 }
                 kwargs.update(activity_context)
 
