@@ -70,15 +70,13 @@ nav:
   - Getting Started: getting_started.md
   - Guides:
       - Overview: guides/index.md
-      - Getting Started: guides/getting_started.md
-      - Basic Application Guide: guides/basic_application_guide.md
-      - SQL Application Guide: guides/sql_application_guide.md
       - Usage: guides/usage.md
-      - Development: guides/development.md
-  - Explanations:
-      - Overview: explanations/index.md
-      - Architecture: explanations/architecture.md
-      - Best Practices: explanations/best_practices.md
-      - Configuration: explanations/configuration.md
+      - Architecture: guides/architecture.md
+      - AI Agent Apps: guides/ai-agents.md
+      - Test Framework: guides/test-framework.md
+      - Custom Frontends with Atlantis: guides/atlantis.md
+      - Basic Application Guide: guides/basic-application-guide.md
+      - SQL Application Gudie: guides/sql-application-guide.md
+      - Best Practices: guides/best-practices.md]
   - Configuration Reference: configuration.md
   - API Reference: /api
