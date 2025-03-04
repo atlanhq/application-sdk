@@ -5,7 +5,7 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-from typing import Any, Dict, List, Optional, TypeVar, Union, overload, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -26,7 +26,9 @@ class Procedure(assets.Procedure):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Procedure, Dict[str, Any]]:
+    def get_attributes(
+        cls, obj: Dict[str, Any]
+    ) -> Tuple[assets.Procedure, Dict[str, Any]]:
         try:
             assert (
                 obj.get("procedure_name") is not None
@@ -79,7 +81,9 @@ class Database(assets.Database):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Database, Dict[str, Any]]:
+    def get_attributes(
+        cls, obj: Dict[str, Any]
+    ) -> Tuple[assets.Database, Dict[str, Any]]:
         """Parse a dictionary into a Database entity.
 
         Args:
@@ -122,7 +126,9 @@ class Schema(assets.Schema):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Schema, Dict[str, Any]]:
+    def get_attributes(
+        cls, obj: Dict[str, Any]
+    ) -> Tuple[assets.Schema, Dict[str, Any]]:
         """Parse a dictionary into a Schema entity.
 
         Args:
@@ -155,14 +161,12 @@ class Schema(assets.Schema):
             attributes["table_count"] = obj.get("table_count", 0)
             attributes["views_count"] = obj.get("views_count", 0)
 
-            if not schema.custom_attributes:
-                schema.custom_attributes = {}
-
+            custom_attributes = {}
             if catalog_id := obj.get("catalog_id", None):
-                schema.custom_attributes["catalog_id"] = catalog_id
+                custom_attributes["catalog_id"] = catalog_id
 
             if is_managed_access := obj.get("is_managed_access", None):
-                schema.custom_attributes["is_managed_access"] = is_managed_access
+                custom_attributes["is_managed_access"] = is_managed_access
 
             return schema, {
                 "attributes": attributes,
@@ -380,7 +384,9 @@ class Column(assets.Column):
     """
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Column, Dict[str, Any]]:
+    def get_attributes(
+        cls, obj: Dict[str, Any]
+    ) -> Tuple[assets.Column, Dict[str, Any]]:
         """Parse a dictionary into a Column entity.
 
         Args:
@@ -640,7 +646,9 @@ class Function(assets.Function):
             )
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.Function, Dict[str, Any]]:
+    def get_attributes(
+        cls, obj: Dict[str, Any]
+    ) -> Tuple[assets.Function, Dict[str, Any]]:
         """Parse a dictionary into a Function entity.
 
         Args:
@@ -854,7 +862,9 @@ class TagAttachment(assets.TagAttachment):
             )
 
     @classmethod
-    def get_attributes(cls, obj: Dict[str, Any]) -> Tuple[assets.TagAttachment, Dict[str, Any]] :
+    def get_attributes(
+        cls, obj: Dict[str, Any]
+    ) -> Tuple[assets.TagAttachment, Dict[str, Any]]:
         """Parse a dictionary into a TagAttachment entity.
 
         Args:
