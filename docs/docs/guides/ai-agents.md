@@ -42,7 +42,7 @@ state = {
 
 2. Create your workflow using StateGraph:
 
-- You can check the examples on how to build the workflow: https://langchain-ai.github.io/langgraph/tutorials/introduction/
+- You can check the examples on how to build the workflow: [langchain-ai.github.io/langgraph/tutorials/introduction/](https://langchain-ai.github.io/langgraph/tutorials/introduction/)
 
 ```python
 from langgraph.graph import StateGraph, START, END
