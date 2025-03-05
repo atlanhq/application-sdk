@@ -81,4 +81,4 @@ nav:
       - Best Practices: guides/best-practices.md
       - Test Framework: guides/test-framework.md
   - Configuration Reference: configuration.md
-  - API Reference: application-sdk/main/api
+  - API Reference: /application-sdk/main/api
