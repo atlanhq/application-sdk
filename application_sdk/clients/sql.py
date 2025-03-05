@@ -87,7 +87,6 @@ class SQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-
             raise ValueError(str(e))
 
     async def close(self) -> None:
@@ -172,7 +171,7 @@ class AsyncSQLClient(SQLClient):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            ValueError: If connection fails due to connection issues
+            ValueError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
         try:
@@ -183,10 +182,10 @@ class AsyncSQLClient(SQLClient):
             )
             self.connection = await self.engine.connect()
         except Exception as e:
+            activity.logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-
             raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
