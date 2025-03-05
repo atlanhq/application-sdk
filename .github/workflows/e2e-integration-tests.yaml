@@ -34,12 +34,18 @@ jobs:
             echo "distinct_id=${{ github.sha }}" >> $GITHUB_ENV
           fi
 
+          if [ "${{ github.base_ref }}" ]; then
+            echo "base_branch=refs/heads/${{ github.base_ref }}" >> $GITHUB_ENV
+          else
+            echo "base_branch=${{ github.ref }}" >> $GITHUB_ENV
+          fi
+
       - name: Trigger E2E Integrations Tests
         uses: codex-/return-dispatch@v2
         id: return_dispatch
         with:
           token: "${{ secrets.ORG_PAT_GITHUB }}"
-          ref: "refs/heads/develop"
+          ref: ${{ env.base_branch }}
           repo: ${{ matrix.repo_name }}
           owner: "atlanhq"
           workflow: "e2e-integration-test.yaml"
