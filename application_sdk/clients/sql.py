@@ -10,6 +10,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Dict, List
+import re
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
@@ -24,6 +25,11 @@ activity.logger = get_logger(__name__)
 
 class SQLConstants(Enum):
     USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
+
+
+class SQLAuthenticationError(Exception):
+    """Exception raised for authentication errors with the SQL database."""
+    pass
 
 
 class SQLClient(ClientInterface):
@@ -88,8 +94,15 @@ class SQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            if isinstance(e, OperationalError):
-                raise e
+                
+            # Use regex pattern to check for authentication errors
+            error_msg = str(e).lower()
+            auth_error_pattern = re.compile(
+                r"(?i)(authentication\s+failed|password\s+authentication|permission\s+denied|role\s+(?:\"[^\"]*\"\s+)?(?:does\s+not\s+exist|not\s+found)|access\s+denied|login\s+failed|database\s+(?:\"[^\"]*\"\s+)?does\s+not\s+exist)"
+            )
+            
+            if auth_error_pattern.search(error_msg):
+                raise SQLAuthenticationError(f"Database authentication error: {str(e)}")
             else:
                 raise ValueError(str(e))
 
@@ -175,7 +188,8 @@ class AsyncSQLClient(SQLClient):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            ValueError: If connection fails due to authentication or connection issues
+            SQLAuthenticationError: If authentication fails
+            ValueError: If connection fails due to other connection issues
         """
         self.credentials = credentials
         try:
@@ -190,8 +204,15 @@ class AsyncSQLClient(SQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            if isinstance(e, OperationalError):
-                raise e
+            
+            # Use regex pattern to check for authentication errors
+            error_msg = str(e).lower()
+            auth_error_pattern = re.compile(
+                r"(?i)(authentication\s+failed|password\s+authentication|permission\s+denied|role\s+(?:\"[^\"]*\"\s+)?(?:does\s+not\s+exist|not\s+found)|access\s+denied|login\s+failed|database\s+(?:\"[^\"]*\"\s+)?does\s+not\s+exist)"
+            )
+            
+            if auth_error_pattern.search(error_msg):
+                raise SQLAuthenticationError(f"Database authentication error: {str(e)}")
             else:
                 raise ValueError(str(e))
 
