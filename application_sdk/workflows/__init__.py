@@ -84,8 +84,7 @@ class WorkflowInterface(ABC):
 
             retry_policy = RetryPolicy(
                 maximum_attempts=2,
-                backoff_coefficient=2,
-                non_retryable_error_types=["OperationalError"],
+                backoff_coefficient=2
             )
 
             result = await workflow.execute_activity_method(
