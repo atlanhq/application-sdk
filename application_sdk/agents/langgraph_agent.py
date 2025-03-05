@@ -25,24 +25,30 @@ except ImportError:
 
 
 class LangGraphAgent(AgentInterface):
-    """
-    Base agent class that can compile a langgraph workflow and run it.
-    The workflow is a langgraph StateGraph object.
+    """Base agent class that can compile a langgraph workflow and run it.
+
+    The workflow is represented as a langgraph StateGraph object that can be compiled
+    and executed.
+
+    Attributes:
+        state_graph: The langgraph StateGraph to be compiled
+        _state: The initial state dictionary for the workflow
+        _config: Configuration dictionary for the workflow
+        logger: Logger instance for the agent
+        graph: The compiled graph instance
 
     Example:
-    ```python
-    state = {
-        "messages": [],
-        "answer": "",
-    }
-    state_graph = StateGraph()
-    state_graph.add_node("node1", node1)
-    state_graph.add_edge(START, "node1")
-    state_graph.add_edge("node1", END)
-    agent = LangGraphAgent(state_graph=state_graph, state=state)
-    agent.compile_graph()
-    agent.run("What is the capital of France?")
-    ```
+        >>> state = {
+        ...     "messages": [],
+        ...     "answer": "",
+        ... }
+        >>> state_graph = StateGraph()
+        >>> state_graph.add_node("node1", node1)
+        >>> state_graph.add_edge(START, "node1")
+        >>> state_graph.add_edge("node1", END)
+        >>> agent = LangGraphAgent(state_graph=state_graph, state=state)
+        >>> agent.compile_graph()
+        >>> agent.run("What is the capital of France?")
     """
 
     def __init__(
@@ -52,8 +58,7 @@ class LangGraphAgent(AgentInterface):
         config: Optional[Dict[str, Any]] = None,
         logger: Optional[AtlanLoggerAdapter] = None,
     ):
-        """
-        Initialize a langgraph agent with a workflow configuration.
+        """Initialize a langgraph agent with a workflow configuration.
 
         Args:
             state_graph: The langgraphs' StateGraph to compile
@@ -71,8 +76,7 @@ class LangGraphAgent(AgentInterface):
 
     @staticmethod
     def _validate_langgraph_installed() -> None:
-        """
-        Validate that LangGraph is installed.
+        """Validate that LangGraph is installed.
 
         Raises:
             ValueError: If LangGraph is not installed.
@@ -86,8 +90,7 @@ class LangGraphAgent(AgentInterface):
         _ = StateGraph  # Reference StateGraph to satisfy linter
 
     def compile_graph(self) -> Any:
-        """
-        Compile the langgraph StateGraph into an executable graph.
+        """Compile the langgraph StateGraph into an executable graph.
 
         Returns:
             The compiled graph
@@ -104,8 +107,7 @@ class LangGraphAgent(AgentInterface):
         return self.graph
 
     def run(self, task: Optional[str] = None) -> None:
-        """
-        Run the langgraph StateGraph with the given initial state and task.
+        """Run the langgraph StateGraph with the given initial state and task.
 
         Args:
             task: Optional task/query to process
@@ -136,8 +138,7 @@ class LangGraphAgent(AgentInterface):
         return self._state  # type: ignore
 
     def visualize(self) -> Optional[bytes]:
-        """
-        Visualize the graph and return the raw bytes of the PNG visualization.
+        """Visualize the graph and return the raw bytes of the PNG visualization.
 
         Returns:
             bytes: The raw bytes of the graph visualization in PNG format.

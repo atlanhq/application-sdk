@@ -51,9 +51,11 @@ def auto_heartbeater(fn: F) -> F:
         F: The decorated activity function.
 
     Note:
-        * We have activities that can run for a long time, in case of a failure (say: worker crash)
+        We have activities that can run for a long time, in case of a failure (say: worker crash).
+
         Temporal will not retry the activity until the configured timeout is reached.
-        * We add auto_heartbeater to activities to ensure an failure is detected earlier
+
+        We add auto_heartbeater to activities to ensure an failure is detected earlier
         and the activity is retried.
 
         - https://temporal.io/blog/activity-timeouts
@@ -63,7 +65,7 @@ def auto_heartbeater(fn: F) -> F:
         >>> @activity.defn
         >>> @auto_heartbeater
         >>> async def my_activity():
-        >>>     pass
+        ...     pass
     """
 
     @wraps(fn)
