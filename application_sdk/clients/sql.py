@@ -14,6 +14,7 @@ from typing import Any, Dict, List
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
+from sqlalchemy.exc import OperationalError
 
 from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import get_logger
@@ -87,7 +88,10 @@ class SQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise
+            if isinstance(e, OperationalError):
+                raise e
+            else:
+                raise ValueError(str(e))
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -186,7 +190,10 @@ class AsyncSQLClient(SQLClient):
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e))
+            if isinstance(e, OperationalError):
+                raise e
+            else:
+                raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """
