@@ -1,10 +1,9 @@
 """Router for handling server-related API endpoints.
 
 Note:
-- The shutdown endpoint is currently used only by the Argo compatible workflow to
-  stop the application and exit with a status code of 0 after checking the status
-  of the workflow.
-- The force flag is used to force the application to stop immediately.
+    * The shutdown endpoint is currently used only by the Argo compatible workflow to stop the application
+        and exit with a status code of 0 after checking the status of the workflow.
+    * The force flag is used to force the application to stop immediately.
 """
 
 import asyncio
