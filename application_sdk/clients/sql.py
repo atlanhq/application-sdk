@@ -72,6 +72,29 @@ class SQLClient(ClientInterface):
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
+    def _handle_connection_error(self, error: Exception) -> None:
+        """Check if an exception is an authentication error and raise appropriate exception.
+        
+        Args:
+            error: The exception that occurred during connection
+            
+        Raises:
+            SQLAuthenticationError: If the error appears to be authentication-related
+            ValueError: For other types of errors
+        """
+        activity.logger.error(f"Error establishing database connection: {str(error)}")
+        
+        # Use regex pattern to check for authentication errors
+        error_msg = str(error).lower()
+        auth_error_pattern = re.compile(
+            r"(?i)(authentication\s+failed|password\s+authentication|permission\s+denied|role\s+(?:\"[^\"]*\"\s+)?(?:does\s+not\s+exist|not\s+found)|access\s+denied|login\s+failed|database\s+(?:\"[^\"]*\"\s+)?does\s+not\s+exist)"
+        )
+        
+        if auth_error_pattern.search(error_msg):
+            raise SQLAuthenticationError(f"Database authentication error: {str(error)}")
+        else:
+            raise ValueError(str(error))
+
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish the database connection.
 
@@ -94,17 +117,8 @@ class SQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-                
-            # Use regex pattern to check for authentication errors
-            error_msg = str(e).lower()
-            auth_error_pattern = re.compile(
-                r"(?i)(authentication\s+failed|password\s+authentication|permission\s+denied|role\s+(?:\"[^\"]*\"\s+)?(?:does\s+not\s+exist|not\s+found)|access\s+denied|login\s+failed|database\s+(?:\"[^\"]*\"\s+)?does\s+not\s+exist)"
-            )
             
-            if auth_error_pattern.search(error_msg):
-                raise SQLAuthenticationError(f"Database authentication error: {str(e)}")
-            else:
-                raise ValueError(str(e))
+            self._handle_connection_error(e)
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -200,21 +214,11 @@ class AsyncSQLClient(SQLClient):
             )
             self.connection = await self.engine.connect()
         except Exception as e:
-            activity.logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
             
-            # Use regex pattern to check for authentication errors
-            error_msg = str(e).lower()
-            auth_error_pattern = re.compile(
-                r"(?i)(authentication\s+failed|password\s+authentication|permission\s+denied|role\s+(?:\"[^\"]*\"\s+)?(?:does\s+not\s+exist|not\s+found)|access\s+denied|login\s+failed|database\s+(?:\"[^\"]*\"\s+)?does\s+not\s+exist)"
-            )
-            
-            if auth_error_pattern.search(error_msg):
-                raise SQLAuthenticationError(f"Database authentication error: {str(e)}")
-            else:
-                raise ValueError(str(e))
+            self._handle_connection_error(e)
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """
