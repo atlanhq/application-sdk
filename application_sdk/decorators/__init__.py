@@ -210,10 +210,32 @@ def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
             ...     )
             ... )
             ... async def fetch_table(batch_input: pd.DataFrame, output: JsonOutput, **kwargs):
+            ...     # Write any custom logic to process the Dataframe here if required
             ...     custom_process_logic(batch_input)
+            ...     # Write the processed Dataframe to the output
             ...     await output.write_batched_dataframe(batch_input)
+            >>>
+            >>> await fetch_table()
+            >>>
+            >>> # In this case the data extracted from the sql source will be written to below path in a json file
+            >>> # /tmp/output/322342798/raw/table/1.json
+            >>> # If in case the total records fetched from query is 30 then data will be written in 3 chunks with 10 records each
+            >>> # as we have specified chunk_size=10. Data will be structured as below
+            >>> # /tmp/output/322342798/raw/table
+            >>> #   - 1.json
+            >>> #   - 2.json
+            >>> #   - 3.json
 
         Class-based transformation:
+            >>> # Read the data from a SQL source and write the raw and transformed data into a JSON file using classes.
+            >>> # This showcases how to use the decorator if the method is part of a class.
+            >>>
+            >>> # Notice the use of the `sql_query` attribute in the class to input the query into the `SQLQueryInput`.
+            >>> # In the case of a class attribute, the name of the attribute should be passed as a string.
+            >>>
+            >>> # When the decorator runs, it'll re-initialize the `SQLQueryInput` with the correct value of the `sql_query` attribute.
+            >>> # Also, when the arguments are not static and are dynamic, the arguments can be passed to the method as kwargs.
+            >>>
             >>> class DemoActivity:
             ...     sql_query = "SELECT * from table_a"
             ...
@@ -284,10 +306,33 @@ def transform_daft(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
             ...     )
             ... )
             ... async def fetch_table(batch_input: daft.DataFrame, output: JsonOutput, **kwargs):
+            ...     # Write any custom logic to process the Dataframe here if required
             ...     custom_process_logic(batch_input)
+            ...     # Write the processed Dataframe to the output
             ...     await output.write_batched_dataframe(batch_input)
+            >>>
+            >>> await fetch_table()
+            >>>
+            >>> # In this case the data extracted from the sql source will be written to below path in a json file
+            >>> # /tmp/output/322342798/raw/table/1.json
+            >>>
+            >>> # If in case the total records fetched from query is 30 then data will be written in 3 chunks with 10 records each
+            >>> # as we have specified chunk_size=10. Data will be structured as below
+            >>> # /tmp/output/322342798/raw/table
+            >>> #   - 1.json
+            >>> #   - 2.json
+            >>> #   - 3.json
 
         Class-based transformation:
+            >>> # Read the data from a SQL source and write the raw and transformed data into a JSON file using classes.
+            >>> # This showcases how to use the decorator if the method is part of a class.
+            >>>
+            >>> # Notice the use of the `sql_query` attribute in the class to input the query into the `SQLQueryInput`.
+            >>> # In the case of a class attribute, the name of the attribute should be passed as a string.
+            >>>
+            >>> # When the decorator runs, it'll re-initialize the `SQLQueryInput` with the correct value of the `sql_query` attribute.
+            >>> # Also, when the arguments are not static and are dynamic, the arguments can be passed to the method as kwargs.
+            >>>
             >>> class DemoActivity:
             ...     sql_query = "SELECT * from table_a"
             ...
