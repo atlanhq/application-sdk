@@ -42,8 +42,6 @@ state = {
 
 2. Create your workflow using StateGraph:
 
-- You can check the examples on how to build the workflow: https://langchain-ai.github.io/langgraph/tutorials/introduction/
-
 ```python
 from langgraph.graph import StateGraph, START, END
 
@@ -61,19 +59,6 @@ def get_state_graph():
     workflow.add_edge("planner_agent", END)
 
     return workflow
-```
-
-3. Initialize and run the agent:
-
-```python
-from application_sdk.agents import LangGraphAgent
-
-agent = LangGraphAgent(
-    workflow=get_state_graph(),
-    state=state
-)
-agent.compile_graph()
-result = agent.run("What is the capital of France?")
 ```
 
 ## FastAPI Integration
@@ -118,11 +103,34 @@ Once the server is running, you can:
    - POST `/api/v1/agent/query` - Run a single agent query
    - GET `/api/v1/agent/result/{workflow_id}` - Get the result of an agent workflow
 
-Example request:
+#### Basic Query (Default Timeouts)
 ```bash
 curl -X POST "http://localhost:8000/api/v1/agent/query" \
      -H "Content-Type: application/json" \
-     -d '{"user_query": "What is the capital of France?", "workflow_state": {"messages": []}}'
+     -d '{
+       "user_query": "What is the capital of France?",
+       "workflow_state": {"messages": []}
+     }'
+```
+
+#### Complex Query (Extended Timeouts)
+```bash
+curl -X POST "http://localhost:8000/api/v1/agent/query" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "user_query": "Analyze the entire history of French politics",
+       "workflow_state": {"messages": []},
+       "schedule_to_close_timeout": 600,  # 10 minutes
+       "heartbeat_timeout": 60            # 1 minute
+     }'
+```
+
+### Getting Results
+
+To retrieve the results of a workflow:
+
+```bash
+curl -X GET "http://localhost:8000/api/v1/agent/result/{workflow_id}"
 ```
 
 ## Additional Resources
