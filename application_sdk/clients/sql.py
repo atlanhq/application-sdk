@@ -25,12 +25,6 @@ class SQLConstants(Enum):
     USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
 
 
-class SQLAuthenticationError(Exception):
-    """Exception raised for authentication errors with the SQL database."""
-
-    pass
-
-
 class SQLClient(ClientInterface):
     """SQL client for database operations.
 
@@ -178,8 +172,7 @@ class AsyncSQLClient(SQLClient):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            SQLAuthenticationError: If authentication fails
-            ValueError: If connection fails due to other connection issues
+            ValueError: If connection fails due to connection issues
         """
         self.credentials = credentials
         try:
