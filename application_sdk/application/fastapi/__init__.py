@@ -335,6 +335,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         Returns:
             PreflightCheckResponse: Response containing preflight check results.
         """
+        await self.handler.load(body.model_dump())
         preflight_check = await self.handler.preflight_check(body.model_dump())
         return PreflightCheckResponse(success=True, data=preflight_check)
 
