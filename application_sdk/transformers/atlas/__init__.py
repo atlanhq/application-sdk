@@ -119,20 +119,22 @@ class AtlasTransformer(TransformerInterface):
         creator = self.entity_class_definitions.get(typename)
         if creator:
             try:
-                entity, additional_data = creator.get_attributes(data)
-                attributes = additional_data.get("attributes", {})
-                custom_attributes = additional_data.get("custom_attributes", {})
-
+                entity_attributes = creator.get_attributes(data)
                 # enrich the entity with workflow metadata
                 enriched_data = self._enrich_entity_with_metadata(
                     workflow_id, workflow_run_id, data
                 )
 
-                attributes.update(enriched_data.get("attributes", {}))
-                custom_attributes.update(enriched_data.get("custom_attributes", {}))
+                entity_attributes["attributes"].update(enriched_data["attributes"])
+                entity_attributes["custom_attributes"].update(
+                    enriched_data["custom_attributes"]
+                )
 
-                entity.attributes = entity.attributes.copy(update=attributes)
-                entity.custom_attributes = custom_attributes
+                entity = creator(
+                    attributes=entity_attributes["attributes"],
+                    custom_attributes=entity_attributes["custom_attributes"],
+                    status=EntityStatus.ACTIVE,
+                )
 
                 return entity.dict(by_alias=True, exclude_none=True, exclude_unset=True)
             except Exception as e:
@@ -187,7 +189,9 @@ class AtlasTransformer(TransformerInterface):
             attributes["source_created_at"] = datetime.fromtimestamp(created / 1000)
 
         if last_altered := data.get("last_altered", None):
-            attributes["source_updated_at"] = datetime.fromtimestamp(last_altered / 1000)
+            attributes["source_updated_at"] = datetime.fromtimestamp(
+                last_altered / 1000
+            )
 
         if source_id := data.get("source_id", None):
             custom_attributes["source_id"] = source_id
