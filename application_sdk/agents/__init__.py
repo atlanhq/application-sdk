@@ -134,13 +134,27 @@ class LangGraphWorkflow(WorkflowInterface):
             "graph_builder_name": graph_builder_name,
         }
 
+        # Get timeout configurations with defaults
+        schedule_to_close_timeout = workflow_config.get("schedule_to_close_timeout")
+        heartbeat_timeout = workflow_config.get("heartbeat_timeout")
+
+        # Use timedelta with default values if None
+        schedule_to_close = timedelta(
+            seconds=300
+            if schedule_to_close_timeout is None
+            else schedule_to_close_timeout
+        )
+        heartbeat = timedelta(
+            seconds=30 if heartbeat_timeout is None else heartbeat_timeout
+        )
+
         # Execute the activity
         result = await workflow.execute_activity_method(
             activities_instance.run_agent,
             args=[activity_input],
             retry_policy=retry_policy,
-            schedule_to_close_timeout=timedelta(seconds=120),
-            heartbeat_timeout=self.default_heartbeat_timeout,
+            schedule_to_close_timeout=schedule_to_close,
+            heartbeat_timeout=heartbeat,
         )
         return result
 

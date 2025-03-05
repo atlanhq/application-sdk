@@ -73,6 +73,8 @@ class AgentRequest(BaseModel):
 
     user_query: str
     workflow_state: Optional[Dict[str, Any]] = None
+    schedule_to_close_timeout: Optional[int] = None  # timeout in seconds
+    heartbeat_timeout: Optional[int] = None  # timeout in seconds
 
 
 class FastAPIApplication(AtlanApplicationInterface):
@@ -515,6 +517,8 @@ class FastAPIAgentApplication(FastAPIApplication):
                 In the request:
                 - user_query: The user's query
                 - workflow_state: The state of the workflow
+                - schedule_to_close_timeout: Optional timeout in seconds for activity completion
+                - heartbeat_timeout: Optional timeout in seconds for activity heartbeat
 
         Returns:
             Dict containing the workflow ID and run ID.
@@ -529,6 +533,8 @@ class FastAPIAgentApplication(FastAPIApplication):
             "user_query": request.user_query,
             "state": state,
             "graph_builder_name": self.graph_builder_name,
+            "schedule_to_close_timeout": request.schedule_to_close_timeout,
+            "heartbeat_timeout": request.heartbeat_timeout,
         }
 
         # Use cast to assure the type checker that LangGraphWorkflow is a valid workflow class
