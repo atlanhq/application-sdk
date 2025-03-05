@@ -82,10 +82,7 @@ class WorkflowInterface(ABC):
             workflow_run_id = workflow.info().run_id
             workflow_args["workflow_run_id"] = workflow_run_id
 
-            retry_policy = RetryPolicy(
-                maximum_attempts=2,
-                backoff_coefficient=2
-            )
+            retry_policy = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
             result = await workflow.execute_activity_method(
                 self.activities_cls.preflight_check,
