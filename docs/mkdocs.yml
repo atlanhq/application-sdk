@@ -67,16 +67,18 @@ extra_javascript:
 
 nav:
   - Home: index.md
-  - Getting Started: getting_started.md
   - Guides:
-      - Overview: guides/index.md
-      - Usage: guides/usage.md
+      # Core concepts
       - Architecture: guides/architecture.md
-      - AI Agent Apps: guides/ai-agents.md
-      - Test Framework: guides/test-framework.md
+      - Usage: guides/usage.md
+
+      # Development guides
+      - Creating an SQL Application: guides/sql-application-guide.md
+      - Creating Agentic Apps: guides/ai-agents.md
       - Custom Frontends with Atlantis: guides/atlantis.md
-      - Basic Application Guide: guides/basic-application-guide.md
-      - SQL Application Gudie: guides/sql-application-guide.md
-      - Best Practices: guides/best-practices.md]
+
+      # Best practices & testing
+      - Best Practices: guides/best-practices.md
+      - Test Framework: guides/test-framework.md
   - Configuration Reference: configuration.md
   - API Reference: /api
