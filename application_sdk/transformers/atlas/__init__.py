@@ -129,7 +129,7 @@ class AtlasTransformer(TransformerInterface):
                     enriched_data["custom_attributes"]
                 )
 
-                entity = creator(
+                entity = entity_attributes["creator"](
                     attributes=entity_attributes["attributes"],
                     custom_attributes=entity_attributes["custom_attributes"],
                     status=EntityStatus.ACTIVE,
