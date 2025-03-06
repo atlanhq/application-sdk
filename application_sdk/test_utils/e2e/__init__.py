@@ -31,33 +31,20 @@ def check_record_count_ge(df: pd.DataFrame, *, expected_record_count) -> bool:
 
 
 class TestInterface:
-    """
-    Interface for end-to-end tests.
+    """Interface for end-to-end tests.
+
+    This class provides an interface for running end-to-end tests, including methods for
+    health checks, authentication, metadata validation, and workflow execution.
+
     Attributes:
-        config_file_path (str): Path to the configuration file.
-        extracted_output_base_path (str): Base path for extracted output.
-        expected_output_base_path (str): Base path for expected output.
-        credentials (Dict[str, Any]): Credentials for the test.
-        metadata (Dict[str, Any]): Metadata for the test.
-        connection (Dict[str, Any]): Connection details for the test.
-        workflow_timeout (int): Timeout for the workflow, default is 300 seconds.
-    Methods:
-        setup_class(cls):
-            Sets up the class by preparing directory paths and loading configuration.
-        test_health_check():
-            Abstract method for health check test.
-        test_auth():
-            Abstract method for authentication test.
-        metadata():
-            Abstract method for metadata test.
-        preflight_check():
-            Abstract method for preflight check test.
-        run_workflow():
-            Abstract method for running the workflow.
-        prepare_dir_paths(cls):
-            Prepares directory paths for the test.
-        validate_data():
-            Validates the data against the schema.
+        config_file_path: Path to the configuration file.
+        extracted_output_base_path: Base path for extracted output.
+        expected_output_base_path: Base path for expected output.
+        credentials: Credentials dictionary for the test.
+        metadata: Metadata dictionary for the test.
+        connection: Connection details dictionary for the test.
+        workflow_timeout: Timeout in seconds for the workflow. Defaults to 300.
+        polling_interval: Interval in seconds between polling attempts. Defaults to 10.
     """
 
     config_file_path: str

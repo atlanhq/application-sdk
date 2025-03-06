@@ -1,5 +1,5 @@
 import json
-from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
@@ -12,36 +12,34 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 def prepare_query(
     query: str, workflow_args: Dict[str, Any], temp_table_regex_sql: str = ""
-) -> str:
+) -> Optional[str]:
     """
     Prepares a SQL query by applying include and exclude filters, and optional
     configurations for temporary table regex, empty tables, and views.
 
     This function modifies the provided SQL query using filters and settings
-    defined in the `workflow_args` dictionary. The include and exclude filters
+    defined in the workflow_args dictionary. The include and exclude filters
     determine which data should be included or excluded from the query. If no
     filters are specified, it fetches all metadata. Temporary table exclusion
     logic is also applied if a regex is provided.
 
     Args:
         query (str): The base SQL query string to modify with filters.
-        workflow_args (Dict[str, Any]): A dictionary containing metadata and
-            workflow-related arguments. Expected keys include:
-            - "metadata": A dictionary with the following keys:
-                - "include-filter" (str): Regex pattern to include tables/data.
-                - "exclude-filter" (str): Regex pattern to exclude tables/data.
-                - "temp-table-regex" (str): Regex for temporary tables.
-                - "exclude_empty_tables" (bool): Whether to exclude empty tables.
-                - "exclude_views" (bool): Whether to exclude views.
-        temp_table_regex_sql (str, optional): SQL snippet for excluding temporary
-            tables. Defaults to an empty string.
+        workflow_args (Dict[str, Any]): A dictionary containing metadata and workflow-related arguments.
+            Expected keys include:
+            metadata (dict): A dictionary with the following keys:
+            include-filter (str): Regex pattern to include tables/data,
+            exclude-filter (str): Regex pattern to exclude tables/data,
+            temp-table-regex (str): Regex for temporary tables,
+            exclude_empty_tables (bool): Whether to exclude empty tables,
+            exclude_views (bool): Whether to exclude views.
+        temp_table_regex_sql (str): SQL snippet for excluding temporary tables. Defaults to "".
 
     Returns:
-        str: The prepared SQL query with filters applied, or `None` if an error
-        occurs during preparation.
+        Optional[str]: The prepared SQL query with filters applied, or None if an error occurs during preparation.
 
     Raises:
-        Exception: Logs the error message and returns `None` if query preparation fails.
+        Exception: If query preparation fails. Error is logged and None is returned.
     """
     try:
         metadata = workflow_args.get("metadata", {})
