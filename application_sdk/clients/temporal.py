@@ -281,7 +281,9 @@ class TemporalClient(ClientInterface):
             # Pass the full workflow_args to the workflow
             handle = await self.client.start_workflow(
                 workflow_class,
-                workflow_args,  # Pass the full workflow_args here
+                {
+                    "workflow_id": workflow_id,
+                },
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),

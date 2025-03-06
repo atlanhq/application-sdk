@@ -6,6 +6,7 @@ from temporalio.common import RetryPolicy
 from typing_extensions import TypedDict
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -88,8 +89,9 @@ class LangGraphWorkflow(WorkflowInterface):
         2. Executes the LangGraph agent using the configured builder
 
         Args:
-            workflow_config: Arguments for the workflow,
-                including user query, state, and graph_builder_name.
+            workflow_config (Dict[str, Any]): Includes workflow_id and other parameters
+                workflow_id is used to extract the workflow configuration from the
+                state store.
 
         Returns:
             Dict[str, Any]: The result of the LangGraph agent execution.
@@ -100,23 +102,28 @@ class LangGraphWorkflow(WorkflowInterface):
             workflow.logger.error(str(e))
             return {"error": str(e)}
 
+        workflow_id = workflow_config["workflow_id"]
+        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+            workflow_id
+        )
+
         # Initialize or update the state
-        if "state" in workflow_config:
-            self.state = workflow_config["state"]
+        if "state" in workflow_args:
+            self.state = workflow_args["state"]
         else:
-            workflow_config["state"] = self.state
+            workflow_args["state"] = self.state
 
         retry_policy = RetryPolicy(
             maximum_attempts=3,
             backoff_coefficient=2,
         )
 
-        user_query = workflow_config.get("user_query")
+        user_query = workflow_args.get("user_query")
         if not user_query:
             workflow.logger.error("No user query provided")
             return {"error": "No user query provided"}
 
-        graph_builder_name = workflow_config.get("graph_builder_name")
+        graph_builder_name = workflow_args.get("graph_builder_name")
         if not graph_builder_name:
             workflow.logger.error("No graph builder name provided")
             return {"error": "No graph builder name provided"}
@@ -135,8 +142,8 @@ class LangGraphWorkflow(WorkflowInterface):
         }
 
         # Get timeout configurations with defaults
-        schedule_to_close_timeout = workflow_config.get("schedule_to_close_timeout")
-        heartbeat_timeout = workflow_config.get("heartbeat_timeout")
+        schedule_to_close_timeout = workflow_args.get("schedule_to_close_timeout")
+        heartbeat_timeout = workflow_args.get("heartbeat_timeout")
 
         # Use timedelta with default values if None
         schedule_to_close = timedelta(
