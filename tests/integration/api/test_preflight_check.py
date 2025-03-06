@@ -1,5 +1,5 @@
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -18,19 +18,19 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
 
         # Setup mock for handler.prepare_metadata
-        handler.prepare_metadata = AsyncMock(
-            return_value=[{"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}]
-        )
+        handler.prepare_metadata.return_value = [
+            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
+        ]
 
-        handler.tables_check = AsyncMock(
-            return_value={
-                "success": True,
-                "successMessage": "Tables check successful. Table count: 1",
-                "failureMessage": "",
-            }
-        )
+        handler.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
 
         payload = {
             "credentials": {
@@ -58,6 +58,7 @@ class TestSQLPreflightCheck:
 
         # Verify that preflight_check was called with correct args
         handler.prepare_metadata.assert_called_once()
+        handler.load.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -80,20 +81,20 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the complete flow from /check endpoint through to SQL generation"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
         handler.prepare_metadata.call_count = 0
 
         # Setup mock for handler.prepare_metadata
-        handler.prepare_metadata = AsyncMock(
-            return_value=[{"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}]
-        )
+        handler.prepare_metadata.return_value = [
+            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
+        ]
 
-        handler.tables_check = AsyncMock(
-            return_value={
-                "success": True,
-                "successMessage": "Tables check successful. Table count: 1",
-                "failureMessage": "",
-            }
-        )
+        handler.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
 
         payload = {
             "credentials": {
@@ -119,8 +120,8 @@ class TestSQLPreflightCheck:
         assert "data" in response_data
 
         # Verify that preflight_check was called with correct args
-
         handler.prepare_metadata.assert_called_once()
+        handler.load.assert_called_once()
 
         # Verify the SQL query was generated correctly
         expected_sql = """
@@ -144,16 +145,16 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the /check endpoint with empty filters"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
 
-        handler.prepare_metadata = AsyncMock(return_value=[])
+        handler.prepare_metadata.return_value = []
 
-        handler.tables_check = AsyncMock(
-            return_value={
-                "success": True,
-                "successMessage": "Tables check successful. Table count: 1",
-                "failureMessage": "",
-            }
-        )
+        handler.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
 
         payload = {
             "credentials": {
@@ -172,6 +173,9 @@ class TestSQLPreflightCheck:
 
         response = client.post("/workflows/v1/check", json=payload)
         assert response.status_code == 200
+
+        # Verify load was called
+        handler.load.assert_called_once()
 
         expected_sql = """
             SELECT count(*) as "count"
@@ -193,21 +197,19 @@ class TestSQLPreflightCheck:
         handler: SQLHandler,
     ):
         """Test the /check endpoint with both filters"""
+        # Make sure load is properly mocked as AsyncMock
+        handler.load = AsyncMock()
 
-        handler.prepare_metadata = AsyncMock(
-            return_value=[
-                {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
-                {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
-            ]
-        )
+        handler.prepare_metadata.return_value = [
+            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
+            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
+        ]
 
-        handler.tables_check = AsyncMock(
-            return_value={
-                "success": True,
-                "successMessage": "Tables check successful. Table count: 1",
-                "failureMessage": "",
-            }
-        )
+        handler.tables_check.return_value = {
+            "success": True,
+            "successMessage": "Tables check successful. Table count: 1",
+            "failureMessage": "",
+        }
 
         payload = {
             "credentials": {
@@ -226,6 +228,9 @@ class TestSQLPreflightCheck:
 
         response = client.post("/workflows/v1/check", json=payload)
         assert response.status_code == 200
+
+        # Verify load was called
+        handler.load.assert_called_once()
 
         expected_sql = """
            SELECT count(*) as "count"
