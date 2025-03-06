@@ -5,11 +5,10 @@ This guide will walk you through the process of creating an SQL application usin
 When we say "SQL application," we mean an application that interacts with an SQL database, extracts metadata from the database, (optionally) processes the metadata to provide capabilities (like lineage, popularity metrics, etc.) and stores the metadata in a specified format in the configured object store. The use case can be extended by adding more steps to the workflow, such as data validation, transformation, and more.
 
 
-```{tip}
-In simple terms, a workflow is a series of steps or tasks that are executed in a specific order to achieve a goal. In the context of an SQL application, these steps could include connecting to the database, extracting metadata, running validation checks, and processing data.
+!!! tip
+    In simple terms, a workflow is a series of steps or tasks that are executed in a specific order to achieve a goal. In the context of an SQL application, these steps could include connecting to the database, extracting metadata, running validation checks, and processing data.
 
 Activities are the individual tasks that make up the workflow. Each activity performs a specific job, such as querying a database for schema details or validating table data. These activities are linked together to form the complete workflow.
-```
 
 At a high level, creating an SQL application involves the following steps:
 
@@ -63,24 +62,23 @@ To interact with the database, we need to configure
 
 The `SQLWorkflowAuthInterface` class is used to authenticate the SQL workflow. The default implementation of `SQLWorkflowAuthInterface` runs a simple SQL query(defined by `TEST_AUTHENTICATION_SQL`) on the source database.
 
-```{tip}
-You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
+!!! tip
+    You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
 
-If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
-```
+    If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
 
 When overriding this class, you can either provide your own implementation of `TEST_AUTHENTICATION_SQL` SQL query and use the default implementation of testing authentication, where it creates a connection to the source database, and checks if the query completes successfully.
 
 For example -
 
-```
+```python
 class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 ```
 
 Or you can also choose to override the `test_auth` method and provide your own implementation -
 
-```
+```python
 class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
     TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
 
