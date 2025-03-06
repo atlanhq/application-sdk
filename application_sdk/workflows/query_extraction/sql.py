@@ -71,17 +71,18 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         """Run the workflow.
 
         Args:
-            workflow_config (Dict[str, Any]): The workflow configuration dictionary.
+            workflow_config (Dict[str, Any]): Includes workflow_id and other parameters
+                workflow_id is used to extract the workflow configuration from the
+                state store.
 
         Returns:
             None
         """
         await super().run(workflow_config)
 
-        workflow_guid = workflow_config["workflow_id"]
-        workflow_args = StateStoreInput.extract_configuration(workflow_guid)
+        workflow_id = workflow_config["workflow_id"]
+        workflow_args = StateStoreInput.extract_configuration(workflow_id)
 
-        workflow_id = workflow_args["workflow_id"]
         workflow.logger.info(f"Starting miner workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,

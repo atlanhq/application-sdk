@@ -14,6 +14,7 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.agents.langgraph import LangGraphActivities
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -69,17 +70,23 @@ class LangGraphWorkflow(WorkflowInterface):
         3. Executes the user's task
 
         Args:
-            workflow_config (Dict[str, Any]): Configuration for the workflow,
-                including user query and configuration.
+            workflow_config (Dict[str, Any]): Includes workflow_id and other parameters
+                workflow_id is used to extract the workflow configuration from the
+                state store.
         """
-        workflow_config["state"] = self.state
+        workflow_id = workflow_config["workflow_id"]
+        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+            workflow_id
+        )
+
+        workflow_args["state"] = self.state
 
         retry_policy = RetryPolicy(
             maximum_attempts=3,
             backoff_coefficient=2,
         )
 
-        user_query = workflow_config.get("user_query")
+        user_query = workflow_args.get("user_query")
         if not user_query:
             logger.warning("No user query provided")
             return
@@ -87,7 +94,7 @@ class LangGraphWorkflow(WorkflowInterface):
         activity_input: Dict[str, Any] = {
             "user_query": user_query,
             "state": self.state,
-            "state_graph": workflow_config.get("state_graph"),
+            "state_graph": workflow_args.get("state_graph"),
         }
 
         activities = cast(Type[LangGraphActivities], self.activities_cls)
