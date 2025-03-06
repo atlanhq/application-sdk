@@ -82,7 +82,7 @@ class Procedure(assets.Procedure):
             return {
                 "attributes": procedure_attributes,
                 "custom_attributes": procedure_custom_attributes,
-                "creator": Procedure
+                "entity_class": Procedure
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Procedure Entity: {str(e)}")
@@ -134,7 +134,7 @@ class Database(assets.Database):
             return {
                 "attributes": database_attributes,
                 "custom_attributes": database_custom_attributes,
-                "creator": Database
+                "entity_class": Database
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Database Entity: {str(e)}")
@@ -203,7 +203,7 @@ class Schema(assets.Schema):
             return {
                 "attributes": schema_attributes,
                 "custom_attributes": schema_custom_attributes,
-                "creator": Schema
+                "entity_class": Schema
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Schema Entity: {str(e)}")
@@ -436,7 +436,7 @@ class Table(assets.Table):
             return {
                 "attributes": sql_table_attributes,
                 "custom_attributes": custom_attributes,
-                "creator": table_type
+                "entity_class": table_type
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Table Entity: {str(e)}")
@@ -593,7 +593,7 @@ class Column(assets.Column):
             return {
                 "attributes": attributes,
                 "custom_attributes": custom_attributes,
-                "creator": Column
+                "entity_class": Column
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Column Entity: {str(e)}")
@@ -832,7 +832,7 @@ class Function(assets.Function):
             return {
                 "attributes": function_attributes,
                 "custom_attributes": function_custom_attributes,
-                "creator": Function
+                "entity_class": Function
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Function Entity: {str(e)}")
@@ -1118,7 +1118,7 @@ class TagAttachment(assets.TagAttachment):
             return {
                 "attributes": tag_attachment_attributes,
                 "custom_attributes": tag_attachment_custom_attributes,
-                "creator": TagAttachment,
+                "entity_class": TagAttachment,
             }
         except Exception as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
