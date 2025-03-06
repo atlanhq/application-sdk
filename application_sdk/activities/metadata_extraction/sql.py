@@ -254,7 +254,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_batch_dataframe(batch_input)
         return await raw_output.get_statistics(typename="database")
 
     @activity.defn
@@ -279,7 +279,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_batch_dataframe(batch_input)
         return await raw_output.get_statistics(typename="schema")
 
     @activity.defn
@@ -307,7 +307,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_batch_dataframe(batch_input)
         return await raw_output.get_statistics(typename="table")
 
     @activity.defn
@@ -335,7 +335,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_batch_dataframe(batch_input)
         return await raw_output.get_statistics(typename="column")
 
     @activity.defn
