@@ -140,10 +140,10 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     workflow_args = {
         "credentials": {
             "authType": "basic",
-            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "host": os.getenv("POSTGRES_HOST", "se-demo-postgres.cluster-c9vry54uacic.us-east-1.rds.amazonaws.com"),
             "port": os.getenv("POSTGRES_PORT", "5432"),
             "username": os.getenv("POSTGRES_USER", "postgres"),
-            "password": os.getenv("POSTGRES_PASSWORD", "password"),
+            "password": os.getenv("POSTGRES_PASSWORD", "ir96Yqk2VyVbXcpD@@jg"),
             "database": os.getenv("POSTGRES_DATABASE", "postgres"),
         },
         "connection": {
