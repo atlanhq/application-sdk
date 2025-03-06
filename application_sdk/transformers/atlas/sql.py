@@ -60,12 +60,24 @@ class Procedure(assets.Procedure):
                 obj["procedure_catalog"],
                 obj["procedure_schema"],
             )
+            procedure_attributes["database_qualified_name"] = (
+                build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["procedure_catalog"],
+                )
+            )
             procedure_attributes["schema_name"] = obj["procedure_schema"]
             procedure_attributes["database_name"] = obj["procedure_catalog"]
             procedure_attributes["connection_qualified_name"] = obj[
                 "connection_qualified_name"
             ]
             procedure_attributes["sub_type"] = obj.get("procedure_type", "-1")
+            procedure_attributes["atlanSchema"] = {
+                "typeName": "Schema",
+                "uniqueAttributes": {
+                    "qualifiedName": procedure_attributes["schema_qualified_name"]
+                },
+            }
 
             return {
                 "attributes": procedure_attributes,
@@ -114,10 +126,6 @@ class Database(assets.Database):
                 "connection_qualified_name"
             ]
             database_attributes["schema_count"] = obj.get("schema_count", 0)
-
-            database_attributes["connector_name"] = (
-                AtlanConnectorType.get_connector_name(obj["connection_qualified_name"])
-            )
 
             if catalog_id := obj.get("catalog_id", None):
                 database_custom_attributes["catalog_id"] = catalog_id
@@ -185,11 +193,6 @@ class Schema(assets.Schema):
 
             schema_attributes["database"] = {
                 "typeName": "Database",
-                "attributes": {
-                    "qualifiedName": schema_attributes["database_qualified_name"],
-                    "name": "",
-                },
-                "isIncomplete": True,
                 "uniqueAttributes": {
                     "qualifiedName": schema_attributes["database_qualified_name"]
                 },
@@ -307,6 +310,12 @@ class Table(assets.Table):
                     )
             else:
                 sql_table_attributes["name"] = obj["table_name"]
+                sql_table_attributes["qualified_name"] = build_atlas_qualified_name(
+                    obj["connection_qualified_name"],
+                    obj["table_catalog"],
+                    obj["table_schema"],
+                    obj["table_name"],
+                )
                 sql_table_attributes["schema_qualified_name"] = (
                     build_atlas_qualified_name(
                         obj["connection_qualified_name"],
@@ -334,11 +343,6 @@ class Table(assets.Table):
 
             sql_table_attributes["atlanSchema"] = {
                 "typeName": "Schema",
-                "attributes": {
-                    "qualifiedName": sql_table_attributes["schema_qualified_name"],
-                    "name": "",
-                },
-                "isIncomplete": True,
                 "uniqueAttributes": {
                     "qualifiedName": sql_table_attributes["schema_qualified_name"]
                 },
@@ -475,22 +479,12 @@ class Column(assets.Column):
                 parent_type = assets.View
                 attributes["view"] = {
                     "typeName": "View",
-                    "attributes": {
-                        "qualifiedName": table_qualified_name,
-                        "name": "",
-                    },
-                    "isIncomplete": True,
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
             elif obj.get("table_type") in ["MATERIALIZED VIEW"]:
                 parent_type = assets.MaterialisedView
                 attributes["materialisedView"] = {
                     "typeName": "MaterialisedView",
-                    "attributes": {
-                        "qualifiedName": table_qualified_name,
-                        "name": "",
-                    },
-                    "isIncomplete": True,
                     "uniqueAttributes": {
                         "qualifiedName": table_qualified_name,
                     },
@@ -502,22 +496,12 @@ class Column(assets.Column):
                 parent_type = assets.SnowflakeDynamicTable
                 attributes["dynamicTable"] = {
                     "typeName": "SnowflakeDynamicTable",
-                    "attributes": {
-                        "qualifiedName": table_qualified_name,
-                        "name": "",
-                    },
-                    "isIncomplete": True,
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
             elif obj.get("belongs_to_partition") == "YES":
                 parent_type = assets.TablePartition
                 attributes["tablePartition"] = {
                     "typeName": "TablePartition",
-                    "attributes": {
-                        "qualifiedName": table_qualified_name,
-                        "name": "",
-                    },
-                    "isIncomplete": True,
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
             elif obj.get("table_type") in [
@@ -529,22 +513,12 @@ class Column(assets.Column):
                 parent_type = assets.Table
                 attributes["table"] = {
                     "typeName": "Table",
-                    "attributes": {
-                        "qualifiedName": table_qualified_name,
-                        "name": "",
-                    },
-                    "isIncomplete": True,
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
             else:
                 parent_type = assets.View
                 attributes["view"] = {
                     "typeName": "View",
-                    "attributes": {
-                        "qualifiedName": table_qualified_name,
-                        "name": "",
-                    },
-                    "isIncomplete": True,
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
             attributes["name"] = obj.get("column_name")

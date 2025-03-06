@@ -7,8 +7,7 @@ into Atlas entities using the pyatlan library.
 from datetime import datetime
 from typing import Any, Dict, Optional, Type
 
-from pyatlan.model.assets import Asset
-from pyatlan.model.enums import EntityStatus
+from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -178,6 +177,9 @@ class AtlasTransformer(TransformerInterface):
         attributes["last_sync_run"] = workflow_run_id
         attributes["last_sync_run_at"] = datetime.now()
         attributes["connection_name"] = data.get("connection_name", "")
+        attributes["connector_name"] = AtlanConnectorType.get_connector_name(
+            data.get("connection_qualified_name", "")
+        )
 
         if remarks := data.get("remarks", None) or data.get("comment", None):
             attributes["description"] = process_text(remarks)
