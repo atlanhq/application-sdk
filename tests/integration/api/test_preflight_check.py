@@ -1,4 +1,5 @@
 import json
+from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
@@ -19,15 +20,17 @@ class TestSQLPreflightCheck:
         """Test the complete flow from /check endpoint through to SQL generation"""
 
         # Setup mock for handler.prepare_metadata
-        handler.prepare_metadata.return_value = [
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
-        ]
+        handler.prepare_metadata = AsyncMock(
+            return_value=[{"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}]
+        )
 
-        handler.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
+        handler.tables_check = AsyncMock(
+            return_value={
+                "success": True,
+                "successMessage": "Tables check successful. Table count: 1",
+                "failureMessage": "",
+            }
+        )
 
         payload = {
             "credentials": {
@@ -80,15 +83,17 @@ class TestSQLPreflightCheck:
         handler.prepare_metadata.call_count = 0
 
         # Setup mock for handler.prepare_metadata
-        handler.prepare_metadata.return_value = [
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}
-        ]
+        handler.prepare_metadata = AsyncMock(
+            return_value=[{"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"}]
+        )
 
-        handler.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
+        handler.tables_check = AsyncMock(
+            return_value={
+                "success": True,
+                "successMessage": "Tables check successful. Table count: 1",
+                "failureMessage": "",
+            }
+        )
 
         payload = {
             "credentials": {
@@ -140,13 +145,15 @@ class TestSQLPreflightCheck:
     ):
         """Test the /check endpoint with empty filters"""
 
-        handler.prepare_metadata.return_value = []
+        handler.prepare_metadata = AsyncMock(return_value=[])
 
-        handler.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
+        handler.tables_check = AsyncMock(
+            return_value={
+                "success": True,
+                "successMessage": "Tables check successful. Table count: 1",
+                "failureMessage": "",
+            }
+        )
 
         payload = {
             "credentials": {
@@ -187,16 +194,20 @@ class TestSQLPreflightCheck:
     ):
         """Test the /check endpoint with both filters"""
 
-        handler.prepare_metadata.return_value = [
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
-            {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
-        ]
+        handler.prepare_metadata = AsyncMock(
+            return_value=[
+                {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PUBLIC"},
+                {"TABLE_CATALOG": "TESTDB", "TABLE_SCHEMA": "PRIVATE"},
+            ]
+        )
 
-        handler.tables_check.return_value = {
-            "success": True,
-            "successMessage": "Tables check successful. Table count: 1",
-            "failureMessage": "",
-        }
+        handler.tables_check = AsyncMock(
+            return_value={
+                "success": True,
+                "successMessage": "Tables check successful. Table count: 1",
+                "failureMessage": "",
+            }
+        )
 
         payload = {
             "credentials": {
