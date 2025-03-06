@@ -59,8 +59,6 @@ class JsonOutput(Output):
         state: Optional[ActivitiesState] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 1024 * 1024 * 10,
-        chunk_size: int = 100000,
-        total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
         **kwargs: Dict[str, Any],
