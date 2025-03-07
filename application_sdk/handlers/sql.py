@@ -34,6 +34,7 @@ class SQLHandler(HandlerInterface):
     sql_client: SQLClient
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
+    version_check_sql: str = "SELECT version();"
     # Variables for fetching metadata
     metadata_sql: str | None = None
     tables_check_sql: str | None = None
@@ -318,21 +319,36 @@ class SQLHandler(HandlerInterface):
                 "error": str(exc),
             }
 
-    async def _check_client_version(self) -> Dict[str, Any]:
+    @transform(sql_input=SQLQueryInput(query="version_check_sql", chunk_size=None))
+    async def _check_client_version(self, sql_input: pd.DataFrame) -> Dict[str, Any]:
         """
         Check if the client version meets the minimum required version.
 
         Returns:
             Dict[str, Any]: Result of the version check
         """
+        
+        logger.info(f"sql_input: {sql_input}")
         import os
-
+        import re
         from packaging import version
 
         logger.info("Checking client version")
         try:
             min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
-            client_version = await self.sql_client.get_version()
+            
+            # Get the full version string from the result
+            version_string = sql_input.to_dict(orient="records")[0]["version"]
+            
+            # Extract the version number using regex
+            # This will extract patterns like "15.4" from the full PostgreSQL version string
+            version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
+            if version_match:
+                client_version = version_match.group(1)
+            else:
+                # Fallback if no version number is found
+                client_version = "0.0.0"
+                logger.warning(f"Could not extract version number from: {version_string}")
 
             is_valid = version.parse(client_version) >= version.parse(min_version)
 
