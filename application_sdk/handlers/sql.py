@@ -67,7 +67,7 @@ class SQLHandler(HandlerInterface):
         """
         result: List[Dict[Any, Any]] = []
         try:
-            for row in sql_input.to_pydict():
+            for row in sql_input.to_pylist():
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
