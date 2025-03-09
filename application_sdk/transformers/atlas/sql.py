@@ -484,6 +484,8 @@ class Column(assets.Column):
                     "typeName": "View",
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
+                attributes["view_name"] = obj["table_name"]
+                attributes["view_qualified_name"] = table_qualified_name
             elif obj.get("table_type") in ["MATERIALIZED VIEW"]:
                 parent_type = assets.MaterialisedView
                 attributes["materialisedView"] = {
@@ -492,6 +494,8 @@ class Column(assets.Column):
                         "qualifiedName": table_qualified_name,
                     },
                 }
+                attributes["view_name"] = obj["table_name"]
+                attributes["view_qualified_name"] = table_qualified_name
             elif (
                 obj.get("table_type") in ["DYNAMIC TABLE"]
                 or obj.get("is_dynamic") == "YES"
@@ -501,12 +505,16 @@ class Column(assets.Column):
                     "typeName": "SnowflakeDynamicTable",
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
+                attributes["table_name"] = obj["table_name"]
+                attributes["table_qualified_name"] = table_qualified_name
             elif obj.get("belongs_to_partition") == "YES":
                 parent_type = assets.TablePartition
                 attributes["tablePartition"] = {
                     "typeName": "TablePartition",
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
+                attributes["table_name"] = obj["table_name"]
+                attributes["table_qualified_name"] = table_qualified_name
             elif obj.get("table_type") in [
                 "TABLE",
                 "BASE TABLE",
@@ -518,12 +526,16 @@ class Column(assets.Column):
                     "typeName": "Table",
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
+                attributes["table_name"] = obj["table_name"]
+                attributes["table_qualified_name"] = table_qualified_name
             else:
                 parent_type = assets.View
                 attributes["view"] = {
                     "typeName": "View",
                     "uniqueAttributes": {"qualifiedName": table_qualified_name},
                 }
+                attributes["table_name"] = obj["table_name"]
+                attributes["table_qualified_name"] = table_qualified_name
             attributes["name"] = obj.get("column_name")
             attributes["qualified_name"] = build_atlas_qualified_name(
                 obj["connection_qualified_name"],
@@ -554,8 +566,6 @@ class Column(assets.Column):
                 obj["table_catalog"],
                 obj["table_schema"],
             )
-            attributes["table_name"] = obj["table_name"]
-            attributes["table_qualified_name"] = table_qualified_name
             attributes["connection_qualified_name"] = obj["connection_qualified_name"]
             attributes["data_type"] = obj.get("data_type")
             attributes["is_nullable"] = obj.get("is_nullable", "YES") == "YES"
