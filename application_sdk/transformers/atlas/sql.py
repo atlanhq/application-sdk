@@ -351,17 +351,16 @@ class Table(assets.Table):
                 },
             }
 
-            # TODO: Figure out another way
-            temp = table_type()
-            if hasattr(temp, "external_location"):
+            table = table_type()
+            if hasattr(table, "external_location"):
                 sql_table_attributes["external_location"] = obj.get("location", "")
 
-            if hasattr(temp, "external_location_format"):
+            if hasattr(table, "external_location_format"):
                 sql_table_attributes["external_location_format"] = obj.get(
                     "file_format_type", ""
                 )
 
-            if hasattr(temp, "external_location_region"):
+            if hasattr(table, "external_location_region"):
                 sql_table_attributes["external_location_region"] = obj.get(
                     "stage_region", ""
                 )
@@ -385,7 +384,7 @@ class Table(assets.Table):
             custom_attributes = {}
 
             # Applicable only for Materialised Views
-            if not temp.custom_attributes:
+            if not table.custom_attributes:
                 custom_attributes["table_type"] = table_type_value
 
             if obj.get("is_transient", "") != "":
