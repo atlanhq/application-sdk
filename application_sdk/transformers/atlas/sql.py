@@ -264,7 +264,7 @@ class Table(assets.Table):
                     obj["connection_qualified_name"],
                     obj["table_catalog"],
                     obj["table_schema"],
-                    obj["parent_table_name"],
+                    obj["table_name"],
                 )
                 sql_table_attributes["table_qualified_name"] = (
                     build_atlas_qualified_name(
