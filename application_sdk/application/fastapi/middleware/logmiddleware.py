@@ -29,7 +29,7 @@ class LogMiddleware(BaseHTTPMiddleware):
         start_time = time.time()
 
         self.logger.info(
-            f"Request started for <g>{request.method}</g> <e>{request.url.path}</e>",
+            f"Request started for {request.method} {request.url.path}",
             extra={
                 "method": request.method,
                 "path": request.url.path,
@@ -44,7 +44,7 @@ class LogMiddleware(BaseHTTPMiddleware):
             duration = time.time() - start_time
 
             self.logger.info(
-                f"Request completed for <g>{request.method}</g> <e>{request.url.path}</e> <g>{response.status_code}</g>",
+                f"Request completed for {request.method} {request.url.path} {response.status_code}",
                 extra={
                     "method": request.method,
                     "path": request.url.path,

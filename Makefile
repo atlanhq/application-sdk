@@ -28,9 +28,7 @@ stop-all:
 	@echo "All detached processes stopped."
 
 
-# Generate Sphinx documentation
-sphinx_docs:
-	mkdir -p docs/reference
-	sphinx-apidoc -o ./docs/reference ./application_sdk --tocfile index --module-first --separate --force
-	cd docs && make html
-
+# Generate documentation
+apidocs:
+	cd docs && mkdocs build
+	cd docs && pydoctor --html-output=site/api ../application_sdk --docformat=google
