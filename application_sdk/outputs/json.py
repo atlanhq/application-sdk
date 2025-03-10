@@ -35,8 +35,11 @@ class JsonOutput(Output):
     and automatic uploading to object store.
 
     Attributes:
+        output_suffix (str): Suffix for files when uploading to object store.
         output_path (str): Path where JSON files will be written.
-        upload_file_prefix (str): Prefix for files when uploading to object store.
+        output_prefix (str): Prefix for files when uploading to object store.
+        typename (Optional[str]): Type name of the entity e.g database, schema, table.
+        state (Optional[ActivitiesState]): State object for tracking activity statistics.
         chunk_start (Optional[int]): Starting index for chunk numbering.
         buffer_size (int): Size of the buffer in bytes.
         chunk_size (int): Maximum number of records per chunk.
