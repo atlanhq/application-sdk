@@ -5,6 +5,8 @@ from unittest.mock import patch
 import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
+from hypothesis import given, strategies as st
+from hypothesis.strategies import integers, lists
 
 from application_sdk.decorators import transform
 from application_sdk.inputs.json import JsonInput
@@ -35,15 +37,23 @@ class TestPandasDecorators:
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
-    async def test_query_batch_basic(self, _):
+    @given(value=integers(min_value=-1000, max_value=1000))
+    async def test_query_batch_basic(self, _, value):
         """
-        Basic test to read the SQL data
+        Basic test to read the SQL data with hypothesis generated values
         """
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
+        with engine.connect() as conn:
+            conn.execute(text("CREATE TABLE IF NOT EXISTS test_values (value INTEGER)"))
+            conn.execute(text("DELETE FROM test_values"))
+            conn.execute(text(f"INSERT INTO test_values (value) VALUES ({value})"))
+            conn.commit()
 
-        @transform(batch_input=SQLQueryInput(engine=engine, query="SELECT 1 as value"))
+        @transform(batch_input=SQLQueryInput(engine=engine, query="SELECT * FROM test_values"))
         async def func(batch_input: pd.DataFrame, **kwargs):
-            assert len(list(batch_input)) == 1
+            for df in batch_input:
+                assert len(df) == 1
+                assert df['value'].iloc[0] == value
 
         await func()
 
