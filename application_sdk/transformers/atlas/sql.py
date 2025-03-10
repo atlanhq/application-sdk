@@ -51,6 +51,7 @@ class Procedure(assets.Procedure):
                 obj["connection_qualified_name"],
                 obj["procedure_catalog"],
                 obj["procedure_schema"],
+                "_procedures_",
                 obj["procedure_name"],
             )
             procedure_attributes["name"] = obj["procedure_name"]
