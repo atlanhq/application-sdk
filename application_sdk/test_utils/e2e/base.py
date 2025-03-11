@@ -28,7 +28,7 @@ class BaseTest(TestInterface):
         """
         Check if the server is up and running and is responding to requests
         """
-        response = self.client.app.get("/")
+        response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
 
     @pytest.mark.order(2)
@@ -67,7 +67,7 @@ class BaseTest(TestInterface):
             "connection": self.connection,
             "metadata": self.metadata,
         }
-        response = self.client.app.update_workflow_config(
+        response = self.client.update_workflow_config(
             config_id=self.config_id, workflow_config=config_payload
         )
         self.assertEqual(response, config_payload)
@@ -81,7 +81,7 @@ class BaseTest(TestInterface):
             "connection": self.connection,
             "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
         }
-        response = self.client.app.update_workflow_config(
+        response = self.client.update_workflow_config(
             config_id=self.config_id, workflow_config=update_payload
         )
         self.assertEqual(response, update_payload)
@@ -95,7 +95,7 @@ class BaseTest(TestInterface):
             "connection": self.connection,
             "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
         }
-        response = self.client.app.get_workflow_config(config_id=self.config_id)
+        response = self.client.get_workflow_config(config_id=self.config_id)
         self.assertEqual(response, update_payload)
 
     @pytest.mark.order(8)
