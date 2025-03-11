@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
 import pytest
+import requests
 from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -28,7 +29,7 @@ class BaseTest(TestInterface):
         """
         Check if the server is up and running and is responding to requests
         """
-        response = self.client.get("/")
+        response = requests.get(self.client.host)
         self.assertEqual(response.status_code, 200)
 
     @pytest.mark.order(2)
@@ -67,10 +68,13 @@ class BaseTest(TestInterface):
             "connection": self.connection,
             "metadata": self.metadata,
         }
-        response = self.client.update_workflow_config(
-            config_id=self.config_id, workflow_config=config_payload
+        response = requests.post(
+            f"{self.client.host}/workflows/v1/config/{self.config_id}",
+            json=config_payload,
         )
-        self.assertEqual(response, config_payload)
+        self.assertEqual(response.status_code, 200)
+        response_data = response.json()
+        self.assertEqual(response_data, config_payload)
 
     @pytest.mark.order(6)
     def test_configuration_update(self):
@@ -81,10 +85,13 @@ class BaseTest(TestInterface):
             "connection": self.connection,
             "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
         }
-        response = self.client.update_workflow_config(
-            config_id=self.config_id, workflow_config=update_payload
+        response = requests.post(
+            f"{self.client.host}/workflows/v1/config/{self.config_id}",
+            json=update_payload,
         )
-        self.assertEqual(response, update_payload)
+        self.assertEqual(response.status_code, 200)
+        response_data = response.json()
+        self.assertEqual(response_data, update_payload)
 
     @pytest.mark.order(7)
     def test_configuration_get(self):
@@ -95,8 +102,12 @@ class BaseTest(TestInterface):
             "connection": self.connection,
             "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
         }
-        response = self.client.get_workflow_config(config_id=self.config_id)
-        self.assertEqual(response, update_payload)
+        response = requests.get(
+            f"{self.client.host}/workflows/v1/config/{self.config_id}"
+        )
+        self.assertEqual(response.status_code, 200)
+        response_data = response.json()
+        self.assertEqual(response_data, update_payload)
 
     @pytest.mark.order(8)
     def test_run_workflow(self):
