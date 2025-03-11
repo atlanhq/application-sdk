@@ -20,9 +20,11 @@ def get_commits_since_last_tag() -> List[str]:
         last_tag = subprocess.check_output(last_tag_cmd, shell=True).decode().strip()
         logging.info(f"Last tag found: {last_tag}")
 
-        # Get all commits since that reference
-        cmd = f"git log {last_tag}..HEAD --pretty=format:%s"
+        # Get all commits since that reference, including both subject and description
+        cmd = f"git log {last_tag}..HEAD --pretty=format:%s%n%b"
         commits = subprocess.check_output(cmd, shell=True).decode().strip().split("\n")
+        # Filter out empty lines that may appear between commits
+        commits = [commit for commit in commits if commit.strip()]
         logging.info(f"Found {len(commits)} commits since last tag: {last_tag}")
         return commits
 
@@ -123,13 +125,14 @@ def calculate_version_bump(
             logging.info(f"Feature detected - bumping minor version to {new_version}")
         elif is_fix:
             # Patch was already bumped in the develop branch
-            version.prerelease = None
-            new_version = version
+            new_version = version.next_version(part="patch")
             logging.info(f"Fix detected - bumping version to {new_version}")
         else:
             # No changes were detected in the commits, remove the prerelease, as patch was already bumped in the develop branch
-            version.prerelease = None
-            new_version = version
+            new_version = version.next_version(part="patch")
+            logging.info(
+                f"No changes detected - bumping patch version to {new_version}"
+            )
 
         return str(new_version)
     else:
