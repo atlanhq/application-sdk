@@ -1,7 +1,6 @@
 from typing import Any, Dict
 
 import pytest
-import requests
 from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -22,13 +21,14 @@ class BaseTest(TestInterface):
     credentials: Dict[str, Any]
     metadata: Dict[str, Any]
     connection: Dict[str, Any]
+    config_id: str = "1234"  # Default config ID for testing
 
     @pytest.mark.order(1)
     def test_health_check(self):
         """
         Check if the server is up and running and is responding to requests
         """
-        response = requests.get(self.client.host)
+        response = self.client.app.get("/")
         self.assertEqual(response.status_code, 200)
 
     @pytest.mark.order(2)
@@ -58,6 +58,47 @@ class BaseTest(TestInterface):
         self.assertEqual(response, self.expected_api_responses["preflight_check"])
 
     @pytest.mark.order(5)
+    def test_configuration_creation(self):
+        """
+        Test configuration creation
+        """
+        config_payload = {
+            "credential_guid": self.credentials.get("credential_guid", "test-guid"),
+            "connection": self.connection,
+            "metadata": self.metadata,
+        }
+        response = self.client.app.update_workflow_config(
+            config_id=self.config_id, workflow_config=config_payload
+        )
+        self.assertEqual(response, config_payload)
+
+    @pytest.mark.order(6)
+    def test_configuration_update(self):
+        """
+        Test configuration update
+        """
+        update_payload = {
+            "connection": self.connection,
+            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+        }
+        response = self.client.app.update_workflow_config(
+            config_id=self.config_id, workflow_config=update_payload
+        )
+        self.assertEqual(response, update_payload)
+
+    @pytest.mark.order(7)
+    def test_configuration_get(self):
+        """
+        Test configuration retrieval
+        """
+        update_payload = {
+            "connection": self.connection,
+            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+        }
+        response = self.client.app.get_workflow_config(config_id=self.config_id)
+        self.assertEqual(response, update_payload)
+
+    @pytest.mark.order(8)
     def test_run_workflow(self):
         """
         Test running the metadata extraction workflow
@@ -83,7 +124,7 @@ class BaseTest(TestInterface):
 
         logger.info("Workflow completed successfully")
 
-    @pytest.mark.order(6)
+    @pytest.mark.order(9)
     def test_data_validation(self):
         """
         Test for validating the extracted source data
