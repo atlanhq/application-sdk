@@ -60,7 +60,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
 
-    fetch_database_sql = None
+    fetch_database_sql = None1
     fetch_schema_sql = None
     fetch_table_sql = None
     fetch_column_sql = None
