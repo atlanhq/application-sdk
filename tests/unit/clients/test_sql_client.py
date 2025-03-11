@@ -1,5 +1,5 @@
 import asyncio
-from typing import Any, Dict
+from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pandas as pd
@@ -13,6 +13,12 @@ from application_sdk.test_utils.hypothesis.strategies.sql import (
     sql_credentials_strategy,
     sql_data_strategy,
     sqlalchemy_connect_args_strategy,
+)
+from application_sdk.test_utils.hypothesis.strategies.sql_client import (
+    mock_sql_query_result_strategy,
+    sql_engine_config_strategy,
+    sql_connection_string_strategy,
+    sql_error_strategy,
 )
 
 
@@ -112,7 +118,7 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
 async def test_fetch_metadata_property_based(
     handler: SQLHandler,
     args: Dict[str, Any],
-    data: list[Dict[str, Any]],
+    data: List[Dict[str, Any]],
 ):
     """Property-based test for fetching metadata with various arguments and data"""
     with patch(
@@ -129,7 +135,7 @@ async def test_fetch_metadata_property_based(
             handler.schema_result_key = args["schema_result_key"]
 
         # Create test data with the required keys
-        test_data = []
+        test_data: List[Dict[str, str]] = []
         for row in data:
             test_row = {
                 handler.database_alias_key: row.get("database", "test_db"),
@@ -341,3 +347,114 @@ async def test_run_query_with_error(
     with pytest.raises(Exception, match="Simulated query failure"):
         async for batch in sql_client.run_query(query):
             results.extend(batch)
+
+
+@given(connection_string=sql_connection_string_strategy)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
+def test_connection_string_property_based(sql_client: SQLClient, connection_string: str):
+    """Property-based test for various connection string formats"""
+    with patch("application_sdk.clients.sql.create_engine") as mock_create_engine:
+        # Mock the engine and connection
+        mock_engine = MagicMock()
+        mock_connection = MagicMock()
+        mock_create_engine.return_value = mock_engine
+        mock_engine.connect.return_value = mock_connection
+
+        # Override the connection string method
+        sql_client.get_sqlalchemy_connection_string = lambda: connection_string
+
+        # Set up credentials
+        credentials = {"username": "test_user", "password": "test_password"}
+
+        # Run the load function
+        asyncio.run(sql_client.load(credentials))
+
+        # Assertions to verify behavior
+        mock_create_engine.assert_called_once_with(
+            connection_string,
+            connect_args=sql_client.sql_alchemy_connect_args,
+            pool_pre_ping=True,
+        )
+        assert sql_client.engine == mock_engine
+        assert sql_client.connection == mock_connection
+
+
+@given(query_result=mock_sql_query_result_strategy)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@pytest.mark.asyncio
+async def test_run_query_property_based(
+    sql_client: SQLClient,
+    query_result: Dict[str, Any],
+):
+    """Property-based test for query execution with various result structures"""
+    with patch("application_sdk.clients.sql.text") as mock_text, patch(
+        "application_sdk.clients.sql.asyncio.get_running_loop",
+        new_callable=MagicMock,
+    ) as mock_get_running_loop:
+        # Mock the query text
+        query = "SELECT * FROM test_table"
+        mock_text.return_value = query
+
+        # Create mock cursor with dynamic column descriptions
+        mock_cursor = MagicMock()
+        mock_cursor.cursor.description = [
+            MagicMock(name=col["name"]) for col in query_result["columns"]
+        ]
+
+        # Set up the connection
+        sql_client.connection = MagicMock()
+        sql_client.connection.execute.return_value = mock_cursor
+
+        # Mock run_in_executor to return cursor and then batches
+        mock_get_running_loop.return_value.run_in_executor = AsyncMock(
+            side_effect=[mock_cursor] + query_result["batches"] + [[]]
+        )
+
+        # Run run_query and collect all results
+        results: List[Dict[str, Any]] = []
+        async for batch in sql_client.run_query(query):
+            results.extend(batch)
+
+        # Verify the results
+        expected_results: List[Dict[str, Any]] = []
+        for batch in query_result["batches"]:
+            expected_results.extend(batch)
+
+        assert len(results) == len(expected_results)
+        for result_row, expected_row in zip(results, expected_results):
+            assert all(result_row[key] == value for key, value in expected_row.items())
+
+
+@given(error_type=sql_error_strategy)
+@settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@pytest.mark.asyncio
+async def test_run_query_error_property_based(
+    sql_client: SQLClient,
+    error_type: str,
+):
+    """Property-based test for query execution with various error scenarios"""
+    with patch("application_sdk.clients.sql.text") as mock_text, patch(
+        "application_sdk.clients.sql.asyncio.get_running_loop",
+        new_callable=MagicMock,
+    ) as mock_get_running_loop:
+        # Mock the query text
+        query = "SELECT * FROM test_table"
+        mock_text.return_value = query
+
+        # Create mock cursor
+        mock_cursor = MagicMock()
+        mock_cursor.cursor.description = [MagicMock(name="col1")]
+
+        # Set up the connection
+        sql_client.connection = MagicMock()
+        sql_client.connection.execute.return_value = mock_cursor
+
+        # Mock run_in_executor to return cursor and then raise an error
+        mock_get_running_loop.return_value.run_in_executor = AsyncMock(
+            side_effect=[mock_cursor, Exception(f"Simulated {error_type}")]
+        )
+
+        # Run run_query and expect it to raise an exception
+        with pytest.raises(Exception, match=f"Simulated {error_type}"):
+            async for _ in sql_client.run_query(query):
+                pass

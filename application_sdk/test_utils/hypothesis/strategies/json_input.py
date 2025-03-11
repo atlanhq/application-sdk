@@ -2,19 +2,14 @@ from hypothesis import strategies as st
 
 # Strategy for generating safe file path components
 safe_path_strategy = st.text(
-    min_size=1,
-    max_size=30,
-    alphabet=st.characters(
-        whitelist_categories=("Lu", "Ll", "Nd"),  # Only letters and numbers
-        blacklist_characters=["/", "\\", ".", " ", "\t", "\n", "\r"],
-    ),
+    alphabet=st.characters(),
 )
 
 # Strategy for generating file names
 file_name_strategy = st.builds(lambda name: f"{name}.json", name=safe_path_strategy)
 
 # Strategy for generating lists of file names
-file_names_strategy = st.lists(file_name_strategy, min_size=1, max_size=10, unique=True)
+file_names_strategy = st.lists(file_name_strategy, unique=True)
 
 # Strategy for generating download file prefixes
 download_prefix_strategy = safe_path_strategy

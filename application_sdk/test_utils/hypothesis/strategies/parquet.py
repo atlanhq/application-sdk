@@ -4,7 +4,7 @@ import pandas as pd
 from hypothesis import strategies as st
 
 # Strategy for generating simple numeric values
-numeric_value_strategy = st.integers(min_value=0, max_value=1000)
+numeric_value_strategy = st.integers()
 
 # Strategy for generating test data dictionaries
 test_data_dict_strategy = st.builds(
@@ -15,18 +15,11 @@ test_data_dict_strategy = st.builds(
 # Strategy for generating lists of test data
 test_data_list_strategy = st.lists(
     test_data_dict_strategy,
-    min_size=1,
-    max_size=20,
 )
 
 # Strategy for generating temporary file paths
 file_name_strategy = st.text(
-    min_size=1,
-    max_size=30,
-    alphabet=st.characters(
-        whitelist_categories=("Lu", "Ll", "Nd"),  # Letters and numbers
-        blacklist_characters=["/", "\\", " ", "\t", "\n", "\r"],
-    ),
+    alphabet=st.characters(),
 )
 
 # Strategy for generating file extensions
@@ -42,7 +35,7 @@ file_path_strategy = st.builds(
 # Strategy for generating chunk sizes
 chunk_size_strategy = st.one_of(
     st.none(),  # No chunking
-    st.integers(min_value=1, max_value=10),  # Chunk sizes from 1 to 10
+    st.integers(),  # Chunk sizes from 1 to 10
 )
 
 # Strategy for generating ParquetInput configurations

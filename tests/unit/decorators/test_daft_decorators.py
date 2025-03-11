@@ -53,7 +53,7 @@ class TestDaftDecorators:
         os.remove("/tmp/test_connectorx.db")
 
     @given(
-        value=st.integers(min_value=-(2**31), max_value=2**31 - 1)  # SQLite INTEGER limits
+        value=st.integers()
     )
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -86,9 +86,7 @@ class TestDaftDecorators:
 
     @given(
         values=st.lists(
-            st.integers(min_value=-(2**31), max_value=2**31 - 1),  # SQLite INTEGER limits
-            min_size=1,
-            max_size=100,
+            st.integers(),
         )
     )
     @patch(
@@ -128,18 +126,18 @@ class TestDaftDecorators:
 
     @given(
         values=st.lists(
-            st.integers(min_value=-(2**31), max_value=2**31 - 1),  # SQLite INTEGER limits
-            min_size=1,
-            max_size=100,
+            st.integers(),
         ),
-        chunk_size=st.integers(min_value=1, max_value=10),
+        chunk_size=st.integers(),
     )
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
     @settings(deadline=None)
-    async def test_query_batch_multiple_chunks(self, _, values: List[int], chunk_size: int) -> None:
+    async def test_query_batch_multiple_chunks(
+        self, _, values: List[int], chunk_size: int
+    ) -> None:
         """
         Test to read the SQL data in multiple chunks with hypothesis-generated data and chunk sizes
         """
@@ -227,7 +225,9 @@ class TestDaftDecorators:
                 output_suffix="transformed/schema",
             ),
         )
-        async def func(batch_input: Iterator[daft.DataFrame], out1: JsonOutput, **kwargs: Any) -> None:
+        async def func(
+            batch_input: Iterator[daft.DataFrame], out1: JsonOutput, **kwargs: Any
+        ) -> None:
             async for chunk in batch_input:
                 await out1.write_daft_dataframe(chunk.transform(add_1))
 

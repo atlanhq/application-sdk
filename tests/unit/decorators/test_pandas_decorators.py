@@ -4,9 +4,9 @@ from unittest.mock import patch
 
 import pandas as pd
 import sqlalchemy
+from hypothesis import given
+from hypothesis.strategies import integers
 from sqlalchemy.sql import text
-from hypothesis import given, strategies as st
-from hypothesis.strategies import integers, lists
 
 from application_sdk.decorators import transform
 from application_sdk.inputs.json import JsonInput
@@ -37,7 +37,7 @@ class TestPandasDecorators:
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
     )
-    @given(value=integers(min_value=-1000, max_value=1000))
+    @given(value=integers())
     async def test_query_batch_basic(self, _, value):
         """
         Basic test to read the SQL data with hypothesis generated values
@@ -49,11 +49,13 @@ class TestPandasDecorators:
             conn.execute(text(f"INSERT INTO test_values (value) VALUES ({value})"))
             conn.commit()
 
-        @transform(batch_input=SQLQueryInput(engine=engine, query="SELECT * FROM test_values"))
+        @transform(
+            batch_input=SQLQueryInput(engine=engine, query="SELECT * FROM test_values")
+        )
         async def func(batch_input: pd.DataFrame, **kwargs):
             for df in batch_input:
                 assert len(df) == 1
-                assert df['value'].iloc[0] == value
+                assert df["value"].iloc[0] == value
 
         await func()
 

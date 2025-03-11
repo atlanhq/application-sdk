@@ -22,7 +22,7 @@ def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
         workflow_type=draw(st.text()),
         namespace=draw(st.text()),
         task_queue=draw(st.text()),
-        attempt=draw(st.integers(min_value=1, max_value=100)),
+        attempt=draw(st.integers()),
     )
 
 
@@ -42,7 +42,7 @@ def activity_info_strategy(draw: DrawFn) -> mock.Mock:
         activity_id=draw(st.text()),
         activity_type=draw(st.text()),
         task_queue=draw(st.text()),
-        attempt=draw(st.integers(min_value=1, max_value=100)),
-        schedule_to_close_timeout=f"{draw(st.integers(min_value=1, max_value=3600))}s",
-        start_to_close_timeout=f"{draw(st.integers(min_value=1, max_value=3600))}s",
+        attempt=draw(st.integers()),
+        schedule_to_close_timeout=f"{draw(st.integers())}s",
+        start_to_close_timeout=f"{draw(st.integers())}s",
     )

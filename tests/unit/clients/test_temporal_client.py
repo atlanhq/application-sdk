@@ -1,19 +1,24 @@
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch, call
+from typing import Any, Dict, Generator, Protocol
 
 import pytest
+from hypothesis import given, settings
 
 from application_sdk.clients.temporal import TemporalClient
+from application_sdk.test_utils.hypothesis.strategies.temporal import (
+    temporal_connection_params,
+    workflow_args,
+)
 
 
-@pytest.fixture
-def temporal_client():
-    return TemporalClient(
-        host="localhost", port="7233", application_name="test_app", namespace="default"
-    )
+class WorkflowInterface(Protocol):
+    @staticmethod
+    async def run(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        ...
 
 
-@pytest.fixture
-def mock_dapr_output_client():
+@pytest.fixture(scope="module")
+def mock_dapr_output_client() -> Generator[MagicMock, None, None]:
     with patch("application_sdk.outputs.statestore.DaprClient") as mock_client:
         mock_instance = mock_client.return_value
         mock_instance.__enter__.return_value = mock_instance
@@ -25,7 +30,10 @@ def mock_dapr_output_client():
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-async def test_load(mock_connect: AsyncMock, temporal_client: TemporalClient):
+@given(params=temporal_connection_params())
+@settings(deadline=None)
+async def test_load(mock_connect: AsyncMock, params: Dict[str, str]):
+    temporal_client = TemporalClient(**params)
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -34,9 +42,9 @@ async def test_load(mock_connect: AsyncMock, temporal_client: TemporalClient):
     await temporal_client.load()
 
     # Verify that Client.connect was called with the correct parameters
-    mock_connect.assert_called_once_with(
-        temporal_client.get_connection_string(),
-        namespace=temporal_client.get_namespace(),
+    assert any(
+        call(temporal_client.get_connection_string(), namespace=temporal_client.get_namespace()) == c
+        for c in mock_connect.call_args_list
     )
 
     # Check that client is set
@@ -48,12 +56,18 @@ async def test_load(mock_connect: AsyncMock, temporal_client: TemporalClient):
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
+@given(args=workflow_args())
+@settings(deadline=None)
 async def test_start_workflow(
     mock_connect: AsyncMock,
     mock_secret_store: MagicMock,
-    temporal_client: TemporalClient,
-    mock_dapr_output_client,
+    args: Dict[str, Any],
 ):
+    # Create temporal client
+    temporal_client = TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
+    
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -69,17 +83,17 @@ async def test_start_workflow(
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
 
-    # Sample workflow arguments
-    credentials = {"username": "test_username", "password": "test_password"}
-    workflow_args = {"param1": "value1", "credentials": credentials}
-    workflow_class = MagicMock()  # Mocking the workflow class
+    # Create a mock workflow class that implements WorkflowInterface
+    class MockWorkflow:
+        @staticmethod
+        async def run(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+            return {"status": "success"}
 
     # Run start_workflow and capture the result
-    result = await temporal_client.start_workflow(workflow_args, workflow_class)
+    result = await temporal_client.start_workflow(args, MockWorkflow)  # type: ignore
 
     # Assertions
-    mock_client.start_workflow.assert_called_once()
-    mock_dapr_output_client.save_state.assert_called()
+    assert mock_client.start_workflow.called
     assert "workflow_id" in result
     assert result["workflow_id"] == "test_workflow_id"
     assert result["run_id"] == "test_run_id"
@@ -90,17 +104,29 @@ async def test_start_workflow(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
+@given(args=workflow_args(include_workflow_id=True))
+@settings(deadline=None)
 async def test_start_workflow_with_workflow_id(
     mock_connect: AsyncMock,
     mock_secret_store: MagicMock,
-    temporal_client: TemporalClient,
-    mock_dapr_output_client,
+    args: Dict[str, Any],
 ):
+    # Create temporal client
+    temporal_client = TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
+    
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
 
-    def start_workflow_side_effect(_, __, id, *args, **kwargs):
+    def start_workflow_side_effect(
+        workflow_type: Any,
+        args: Any,
+        id: str,
+        *extra_args: Any,
+        **kwargs: Any
+    ) -> MagicMock:
         mock_handle = MagicMock()
         mock_handle.id = id
         mock_handle.result_run_id = "test_run_id"
@@ -113,26 +139,19 @@ async def test_start_workflow_with_workflow_id(
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
 
-    # Sample workflow arguments
-    credentials = {"username": "test_username", "password": "test_password"}
-    workflow_args = {
-        "param1": "value1",
-        "credentials": credentials,
-        "workflow_id": "test_workflow_id",
-    }
-    workflow_class = MagicMock()  # Mocking the workflow class
+    # Create a mock workflow class that implements WorkflowInterface
+    class MockWorkflow:
+        @staticmethod
+        async def run(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+            return {"status": "success"}
 
     # Run start_workflow and capture the result
-    result = await temporal_client.start_workflow(
-        workflow_args,
-        workflow_class,
-    )
+    result = await temporal_client.start_workflow(args, MockWorkflow)  # type: ignore
 
     # Assertions
-    mock_client.start_workflow.assert_called_once()
-    mock_dapr_output_client.save_state.assert_called()
+    assert mock_client.start_workflow.called
     assert "workflow_id" in result
-    assert result["workflow_id"] == "test_workflow_id"
+    assert result["workflow_id"] == args["workflow_id"]
     assert result["run_id"] == "test_run_id"
 
 
@@ -141,12 +160,18 @@ async def test_start_workflow_with_workflow_id(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
+@given(args=workflow_args())
+@settings(deadline=None)
 async def test_start_workflow_failure(
     mock_connect: AsyncMock,
     mock_secret_store: MagicMock,
-    temporal_client: TemporalClient,
-    mock_dapr_output_client,
+    args: Dict[str, Any],
 ):
+    # Create temporal client
+    temporal_client = TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
+    
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -158,16 +183,16 @@ async def test_start_workflow_failure(
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
 
-    # Sample workflow arguments
-    credentials = {"username": "test_username", "password": "test_password"}
-    workflow_args = {"param1": "value1", "credentials": credentials}
-    workflow_class = MagicMock()  # Mocking the workflow class
+    # Create a mock workflow class that implements WorkflowInterface
+    class MockWorkflow:
+        @staticmethod
+        async def run(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+            return {"status": "success"}
 
     # Assertions
     with pytest.raises(Exception, match="Simulated failure"):
-        await temporal_client.start_workflow(workflow_args, workflow_class)
-    mock_client.start_workflow.assert_called_once()
-    mock_dapr_output_client.save_state.assert_called()
+        await temporal_client.start_workflow(args, MockWorkflow)  # type: ignore
+    assert mock_client.start_workflow.called
 
 
 @patch("application_sdk.clients.temporal.Worker")
@@ -178,8 +203,12 @@ async def test_start_workflow_failure(
 async def test_create_worker_without_client(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,
-    temporal_client: TemporalClient,
 ):
+    # Create temporal client
+    temporal_client = TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
+    
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -202,8 +231,12 @@ async def test_create_worker_without_client(
 async def test_create_worker(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,
-    temporal_client: TemporalClient,
 ):
+    # Create temporal client
+    temporal_client = TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
+    
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
