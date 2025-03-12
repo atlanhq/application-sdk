@@ -5,26 +5,12 @@ import duckdb
 from application_sdk.activities import ActivitiesInterface, ActivitiesState, get_workflow_id
 from temporalio import activity
 
+from application_sdk.common.logger_adaptors import get_logger
 
-class DiffActivitiesState(ActivitiesState):
-    circuit_breaker_check: bool = True
-
-
-class DiffActivities(ActivitiesInterface):
-
-    def __init__(self, workflow_args: dict):
-        super().__init__()
-        self.workflow_args = workflow_args
-
-    async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
-        workflow_id = get_workflow_id()
-        if not self._state.get(workflow_id):
-            circuit_breaker_check = workflow_args.get("circuit_breaker_check", True)
-            self._state[workflow_id] = DiffActivitiesState(workflow_args=workflow_args,
-                                                           circuit_breaker_check=circuit_breaker_check)
-        return
+logger = get_logger(__name__)
 
 
+class DiffAtlanActivities:
     @staticmethod
     def _compute_row_hash(df: daft.DataFrame, columns_order: list[str], ignore_columns: list[str] = None) -> daft.DataFrame:
         """
@@ -108,6 +94,10 @@ class DiffActivities(ActivitiesInterface):
         if delete_percentage > threshold:
             return True
         return False
+
+    @activity.defn
+    def calculate_diff_test(self):
+        logger.info("Calculating diff")
 
 
     @activity.defn

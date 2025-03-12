@@ -4,23 +4,15 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState, get
 from temporalio import activity
 import aiohttp
 
+from application_sdk.common.logger_adaptors import get_logger
 
-class AtlasPublishActivitiesState(ActivitiesState):
+logger = get_logger(__name__)
+
+class AtlasPublishAtlanActivitiesState(ActivitiesState):
     access_token: str
 
-class AtlasPublishActivities(ActivitiesInterface):
 
-    def __init__(self, host: str, port: int, client_id: str, client_secret: str, token_url: str,
-                 impersonate_user: Optional[str]):
-        super().__init__()
-        self.host = host
-        self.port = port
-        self.client_id = client_id
-        self.client_secret = client_secret
-        self.token_url = token_url
-        self.impersonate_user = impersonate_user
-
-
+class AtlasPublishAtlanActivities:
     async def get_impersonation_token(self) -> str:
         async with aiohttp.ClientSession() as session:
             async with session.post(self.token_url, data={
@@ -50,19 +42,23 @@ class AtlasPublishActivities(ActivitiesInterface):
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
-            self._state[workflow_id] = AtlasPublishActivitiesState()
+            self._state[workflow_id] = AtlasPublishAtlanActivitiesState()
 
         if self._state.get("access_token") is not None:
             return
 
         self._state[workflow_id].access_token = await self.get_impersonation_token()
 
+    @activity.defn
+    async def publish(self):
+        logger.info("Publishing to Atlas")
 
-    async def publish_attributes(self):
+    @activity.defn
+    async def publish_bulk(self, file_prefix: str):
         with aiohttp.ClientSession(
                 headers={"Authorization": f"Bearer {self._state[get_workflow_id()].access_token}"}
         ) as session:
-            async with session.post(f"http://{self.host}:{self.port}/api/v1/attributes", data={}) as response:
+            async with session.post(f"http://{self.host}:{self.port}/api/v1/bulk", data={}) as response:
                 if response.status != 200:
                     raise Exception(f"Failed to publish attributes: {response.status}")
 

@@ -10,6 +10,8 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
+from application_sdk.activities.atlan.atlas_publish import AtlasPublishAtlanActivities
+from application_sdk.activities.atlan.diff import DiffAtlanActivities
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
@@ -17,6 +19,8 @@ from application_sdk.activities.metadata_extraction.sql import (
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.workers.atlan.atlas_publish import AtlasPublishAtlanWorker
+from application_sdk.workers.atlan.utilities import UtilitiesAtlanWorker
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 workflow.logger = get_logger(__name__)
@@ -39,6 +43,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     activities_cls: Type[SQLMetadataExtractionActivities] = (
         SQLMetadataExtractionActivities
     )
+    atlan_publish_activities_cls = AtlasPublishAtlanActivities
 
     application_name: str = ApplicationConstants.APPLICATION_NAME.value
 
@@ -220,5 +225,63 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         ]
 
         await asyncio.gather(*fetch_and_transforms)
+        workflow.logger.info(f"Metadata extraction and transformation completed for {workflow_id}")
 
-        workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
+        if workflow_args.get(self.E2E_WORKFLOW_ARGS_KEY):
+            await self.run_atlan_utility_activities(workflow_args)
+            await self.run_atlan_publish_activities(workflow_args)
+
+        workflow.logger.info(f"Workflow completed for {workflow_id}")
+
+    async def run_atlan_utility_activities(self, workflow_args: Dict[str, Any]) -> None:
+        """Run the Atlan utilities activities.
+
+        This method executes the Atlan utilities activities, including calculating
+        the diff and publishing metadata to Atlas.
+
+        Args:
+            workflow_args (Dict[str, Any]): Configuration for the workflow execution
+        """
+        workflow.logger.info("Running Atlan utilities activities")
+
+        retry_policy = RetryPolicy(
+            maximum_attempts=2,
+            backoff_coefficient=2,
+        )
+
+        await workflow.execute_activity_method(
+            DiffAtlanActivities.calculate_diff_test,
+            args=[],
+            retry_policy=retry_policy,
+            task_queue=UtilitiesAtlanWorker.TASK_QUEUE,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+            schedule_to_start_timeout=self.default_schedule_to_start_timeout,
+        )
+        workflow.logger.info("Atlan utilities activities completed")
+
+    async def run_atlan_publish_activities(self, workflow_args: Dict[str, Any]) -> None:
+        """Run the Atlan publish activities.
+
+        This method executes the Atlan publish activities.
+
+        Args:
+            workflow_args (Dict[str, Any]): Configuration for the workflow execution
+        """
+        workflow.logger.info("Running Atlan publish activities")
+
+        retry_policy = RetryPolicy(
+            maximum_attempts=2,
+            backoff_coefficient=2,
+        )
+
+        await workflow.execute_activity_method(
+            self.atlan_publish_activities_cls.publish,
+            args=[],
+            retry_policy=retry_policy,
+            task_queue=AtlasPublishAtlanWorker.TASK_QUEUE,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+            schedule_to_start_timeout=self.default_schedule_to_start_timeout,
+        )
+        workflow.logger.info("Atlan publish activities completed")

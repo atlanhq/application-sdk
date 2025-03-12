@@ -321,6 +321,7 @@ class TemporalClient(ClientInterface):
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = None,
+            *args: Any, **kwargs: Any
     ) -> Worker:
         """Create a Temporal worker.
 
@@ -335,9 +336,6 @@ class TemporalClient(ClientInterface):
         Raises:
             ValueError: If the client is not loaded.
         """
-        if not self.client:
-            raise ValueError("Client is not loaded")
-
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -352,6 +350,8 @@ class TemporalClient(ClientInterface):
             # Disabled EventInterceptor for now
             # interceptors=[EventInterceptor()],
             interceptors=[],
+            *args,
+            **kwargs
         )
 
     async def get_workflow_run_status(
