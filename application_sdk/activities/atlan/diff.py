@@ -1,8 +1,5 @@
-from typing import Dict, Any
-
 import daft
 import duckdb
-from application_sdk.activities import ActivitiesInterface, ActivitiesState, get_workflow_id
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -11,8 +8,49 @@ logger = get_logger(__name__)
 
 
 class DiffAtlanActivities:
+    IGNORE_COLUMNS = ["lastSyncWorkflowName", "lastSyncRunAt", "lastSyncRun"]
+
+    @classmethod
+    def create_current_state_hash(cls, df: daft.DataFrame) -> daft.DataFrame:
+        """
+        Create a hash of the current state of the metadata
+        Args:
+            df: DataFrame to create hash
+        Returns:
+            DataFrame with hashed columns for attributes, customAttributes, terms and classifications
+            Columns - typeName, qualifiedName, attributes_hash, custom_attributes_hash, classifications_hash, terms_hash
+        """
+        logger.debug(f"Creating current state hash")
+
+        # Create hashes for attributes, customAttributes, terms and classifications
+        attributes_df = df.select("typeName", "attributes.*")
+        attributes_hash_df = cls._compute_row_hash(
+            attributes_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
+        attributes_hash_df = attributes_hash_df.with_column_renamed("row_hash", "attributes_hash")
+
+        custom_attributes_df = df.select("typeName", "attributes.qualifiedName", "customAttributes.*")
+        custom_attributes_hash_df = cls._compute_row_hash(
+            custom_attributes_df).select("typeName", "qualifiedName", "row_hash")
+        custom_attributes_hash_df = custom_attributes_hash_df.with_column_renamed("row_hash", "custom_attributes_hash")
+
+        classifications_df = df.select("typeName", "attributes.qualifiedName", "classifications.*")
+        classifications_hash_df = cls._compute_row_hash(
+            classifications_df).select("typeName", "qualifiedName", "row_hash")
+        classifications_hash_df = classifications_hash_df.with_column_renamed("row_hash", "classifications_hash")
+
+        terms_df = df.select("typeName", "attributes.qualifiedName", "terms.*")
+        terms_hash_df = cls._compute_row_hash(
+            terms_df).select("typeName", "qualifiedName", "row_hash")
+        terms_hash_df = terms_hash_df.with_column_renamed("row_hash", "terms_hash")
+
+        hash_df = attributes_hash_df.join(custom_attributes_hash_df, on=["typeName", "qualifiedName"]) \
+            .join(classifications_hash_df, on=["typeName", "qualifiedName"]) \
+            .join(terms_hash_df, on=["typeName", "qualifiedName"])
+
+        return hash_df
+
     @staticmethod
-    def _compute_row_hash(df: daft.DataFrame, columns_order: list[str], ignore_columns: list[str] = None) -> daft.DataFrame:
+    def _compute_row_hash(df: daft.DataFrame, columns_order: list[str] = None, ignore_columns: list[str] = None) -> daft.DataFrame:
         """
         Create a hashed column for the dataframe
         Args:
@@ -22,6 +60,10 @@ class DiffAtlanActivities:
         Returns:
             DataFrame with hashed column
         """
+        if columns_order is None:
+            columns_order = [col.name() for col in df.columns]
+            columns_order.sort()
+
         if ignore_columns is None:
             ignore_columns = []
 
@@ -36,108 +78,8 @@ class DiffAtlanActivities:
         results = duckdb.sql(f"SELECT *, md5(concat({concat_expr})) as row_hash FROM arrow_df").arrow()
         return daft.from_arrow(results)
 
-    def calculate_diff(self,
-                       old_df: daft.DataFrame,
-                       new_df: daft.DataFrame,
-                       key_columns: list[str],
-                       ignore_columns: list[str] = None,
-                       ) -> dict[str, daft.DataFrame]:
-
-        column_order = [col.name() for col in old_df.columns]
-        df1_with_hash = self._compute_row_hash(old_df, column_order, ignore_columns).to_arrow()
-        df2_with_hash = self._compute_row_hash(new_df, column_order, ignore_columns).to_arrow()
-
-        # Perform outer join on key columns
-        new_entries_df = duckdb.sql(f"""
-            SELECT df2.* EXCLUDE(row_hash) FROM df2_with_hash as df2
-            LEFT JOIN df1_with_hash
-            ON {f" AND ".join([f"df1_with_hash.{col} = df2.{col}" for col in key_columns])}
-            WHERE df1_with_hash.row_hash IS NULL
-        """).arrow()
-
-        removed_entries_df = duckdb.sql(f"""
-            SELECT df1.* EXCLUDE(row_hash) FROM df1_with_hash as df1
-            LEFT JOIN df2_with_hash
-            ON {f" AND ".join([f"df1.{col} = df2_with_hash.{col}" for col in key_columns])}
-            WHERE df2_with_hash.row_hash IS NULL
-        """).arrow()
-
-        modified_entries_df = duckdb.sql(f"""
-            SELECT df2.* EXCLUDE(row_hash) FROM df1_with_hash as df1
-            JOIN df2_with_hash df2
-            ON {f" AND ".join([f"df1.{col} = df2.{col}" for col in key_columns])}
-            WHERE df1.row_hash != df2.row_hash
-        """).arrow()
-
-        changes = {
-            "added": daft.from_arrow(new_entries_df),
-            "removed": daft.from_arrow(removed_entries_df),
-            "modified": daft.from_arrow(modified_entries_df),
-            "original": old_df,
-        }
-        return changes
-
-    def delete_circuit_breaker_check(self, changes: Dict[str, daft.DataFrame],
-                                     threshold: float=80.0) -> bool:
-
-        check = self._get_state(self.workflow_args).circut_breaker_check
-        if not check:
-            return False
-
-        delete_changes = changes["removed"]
-        original_count = changes["original"].count_rows()
-        delete_count = delete_changes.count_rows()
-        if original_count == 0:
-            return False
-
-        delete_percentage = (delete_count / original_count) * 100
-        if delete_percentage > threshold:
-            return True
-        return False
-
     @activity.defn
     def calculate_diff_test(self):
         logger.info("Calculating diff")
 
-
-    @activity.defn
-    def calculate_atlas_diff(self, old_df: daft.DataFrame, new_df: daft.DataFrame) -> dict:
-        attribute_changes = self.calculate_diff(
-            old_df.select("typeName", "attributes.*"),
-            new_df.select("typeName", "attributes.*"),
-            ["typeName", "qualifiedName"],
-            ["lastSyncWorkflowName", "lastSyncRunAt", "lastSyncRun"]
-        )
-
-        custom_attribute_changes = self.calculate_diff(
-            old_df.select("typeName", "customAttributes.*"),
-            new_df.select("typeName", "customAttributes.*"),
-            ["typeName", "qualifiedName"],
-            ["lastWorkflowName"]
-        )
-
-        classification_changes = self.calculate_diff(
-            old_df.select("typeName", "classifications.*"),
-            new_df.select("typeName", "classifications.*"),
-            ["typeName", "qualifiedName"],
-            ["lastWorkflowName"]
-        )
-
-        return {
-            "attributes": {
-                "added": attribute_changes["added"].count_rows(),
-                "removed": attribute_changes["removed"].count_rows(),
-                "modified": attribute_changes["modified"].count_rows(),
-            },
-            "customAttributes": {
-                "added": custom_attribute_changes["added"].count_rows(),
-                "removed": custom_attribute_changes["removed"].count_rows(),
-                "modified": custom_attribute_changes["modified"].count_rows(),
-            },
-            "classifications": {
-                "added": classification_changes["added"].count_rows(),
-                "removed": classification_changes["removed"].count_rows(),
-                "modified": classification_changes["modified"].count_rows(),
-            }
-        }
 
