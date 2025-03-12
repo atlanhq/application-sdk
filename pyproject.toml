@@ -26,6 +26,7 @@ getdaft = {extras = ["sql"], version = "^0.3.15", optional = true}
 pyiceberg = {version = "^0.8.1", optional = true} # For iceberg input and output support
 boto3 = {version = "^1.31.3", optional = true} # For iam auth support
 pydantic = "^2.10.6"
+pydantic-settings = "^2.2.1"
 loguru = "^0.7.3"
 uvloop = "^0.21.0" # in worker module for managing Temporal workers.
 langchain-core = {version = "^0.3.28", optional = true}
