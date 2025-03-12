@@ -144,6 +144,254 @@ def test_materialized_view_column_transformation(
         ]
     )
 
+def test_column_with_view_parent(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+):
+    """Test column transformation with custom attributes"""
+
+    transformed_data = transformer.transform_metadata(
+        "COLUMN",
+        raw_data["column_with_view_parent"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/postgres/1741637459",
+    )
+
+    assert transformed_data is not None
+    expected_column = expected_data["column_with_view_parent"]
+
+    custom_attributes = [
+        "ordinal_position",
+        "is_self_referencing",
+        "type_name",
+        "is_auto_increment",
+        "is_generated",
+        "column_size",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
+    )
+
+    # Test view relationship
+    assert "view" in transformed_data["attributes"]
+    assert (
+        transformed_data["attributes"]["view"]["uniqueAttributes"]["qualifiedName"]
+        == expected_column["attributes"]["view"]["uniqueAttributes"]["qualifiedName"]
+    )
+
+def test_column_with_materialized_view_parent(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+):
+    """Test column transformation with custom attributes"""
+
+    transformed_data = transformer.transform_metadata(
+        "COLUMN",
+        raw_data["column_with_materialized_view_parent"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/postgres/1741637459",
+    )
+
+    assert transformed_data is not None
+    expected_column = expected_data["column_with_materialized_view_parent"]
+
+    custom_attributes = [
+        "ordinal_position",
+        "is_self_referencing",
+        "type_name",
+        "is_auto_increment",
+        "is_generated",
+        "column_size",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
+    )
+
+    # Test materialized view relationship
+    assert "materialisedView" in transformed_data["attributes"]
+    assert (
+        transformed_data["attributes"]["materialisedView"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+        == expected_column["attributes"]["materialisedView"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+    )
+
+def test_column_with_foreign_table_parent(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+):
+    """Test column transformation with custom attributes"""
+
+    transformed_data = transformer.transform_metadata(
+        "COLUMN",
+        raw_data["column_with_foreign_table_parent"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/postgres/1741637459",
+    )
+
+    assert transformed_data is not None
+    expected_column = expected_data["column_with_foreign_table_parent"]
+
+    custom_attributes = [
+        "ordinal_position",
+        "is_self_referencing",
+        "type_name",
+        "is_auto_increment",
+        "is_generated",
+        "column_size",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
+    )
+
+    # Test materialized view relationship
+    assert "table" in transformed_data["attributes"]
+    assert (
+        transformed_data["attributes"]["table"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+        == expected_column["attributes"]["table"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+    )
+
+def test_column_with_partitioned_table_parent(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+):
+    """Test column transformation with custom attributes"""
+
+    transformed_data = transformer.transform_metadata(
+        "COLUMN",
+        raw_data["column_partitioned_table"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/postgres/1741637459",
+    )
+
+    assert transformed_data is not None
+    expected_column = expected_data["column_partitioned_table"]
+
+    custom_attributes = [
+        "ordinal_position",
+        "is_self_referencing",
+        "type_name",
+        "is_auto_increment",
+        "is_generated",
+        "column_size",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
+    )
+
+    # Test materialized view relationship
+    assert "tablePartition" in transformed_data["attributes"]
+    assert (
+        transformed_data["attributes"]["tablePartition"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+        == expected_column["attributes"]["tablePartition"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+    )
+
+def test_column_variation_1(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+):
+    """Test column transformation with custom attributes"""
+
+    transformed_data = transformer.transform_metadata(
+        "COLUMN",
+        raw_data["column_variation_1"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/postgres/1741637459",
+    )
+
+    assert transformed_data is not None
+    expected_column = expected_data["column_variation_1"]
+
+    custom_attributes = [
+        "ordinal_position",
+        "is_self_referencing",
+        "type_name",
+        "is_auto_increment",
+        "is_generated",
+        "column_size",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
+    )
+
+    # Test materialized view relationship
+    assert "table" in transformed_data["attributes"]
+    assert (
+        transformed_data["attributes"]["table"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+        == expected_column["attributes"]["table"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+    )
+
+def test_column_variation_2(
+    transformer: AtlasTransformer,
+    raw_data: Dict[str, Any],
+    expected_data: Dict[str, Any],
+):
+    """Test column transformation with custom attributes"""
+
+    transformed_data = transformer.transform_metadata(
+        "COLUMN",
+        raw_data["column_variation_2"],
+        "test_workflow_id",
+        "test_run_id",
+        connection_name="test-connection",
+        connection_qualified_name="default/postgres/1741637459",
+    )
+
+    assert transformed_data is not None
+    expected_column = expected_data["column_variation_2"]
+
+    custom_attributes = [
+        "ordinal_position",
+        "is_self_referencing",
+        "type_name",
+        "is_auto_increment",
+        "is_generated",
+        "column_size",
+    ]
+    assert_attributes(
+        transformed_data, expected_column, custom_attributes, is_custom=True
+    )
+
+    # Test materialized view relationship
+    assert "table" in transformed_data["attributes"]
+    assert (
+        transformed_data["attributes"]["table"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+        == expected_column["attributes"]["table"]["uniqueAttributes"][
+            "qualifiedName"
+        ]
+    )
+
 
 def test_column_with_custom_attributes(
     transformer: AtlasTransformer,
