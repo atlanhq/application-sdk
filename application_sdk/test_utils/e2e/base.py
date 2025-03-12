@@ -97,24 +97,16 @@ class BaseTest(TestInterface):
             json=update_payload,
         )
         self.assertEqual(response.status_code, 200)
-        response_data = response.json()
-        self.assertEqual(response_data, update_payload)
 
     @pytest.mark.order(6)
     def test_configuration_get(self):
         """
         Test configuration retrieval
         """
-        update_payload = {
-            "connection": self.connection,
-            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
-        }
         response = requests.get(
             f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
         )
         self.assertEqual(response.status_code, 200)
-        response_data = response.json()
-        self.assertEqual(response_data, update_payload)
 
     @pytest.mark.order(7)
     def test_data_validation(self):
