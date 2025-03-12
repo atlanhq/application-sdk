@@ -88,7 +88,7 @@ async def shutdown(force: bool = False):
     """
     logger.info("Stopping application")
 
-    async def shutdown():
+    async def shutdown():  # pyright: ignore
         # Wait for existing requests to complete
         await asyncio.sleep(2)
 
@@ -116,7 +116,6 @@ async def shutdown(force: bool = False):
                 logger.error(f"Error during task cancellation: {e}")
 
     # TO BE IMPLEMENTED - currently graceful shutdown is dysfunctional
-    # asyncio.create_task(shutdown())
 
     threading.Thread(target=terminate_process, daemon=True).start()
 

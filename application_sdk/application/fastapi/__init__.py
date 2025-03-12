@@ -4,6 +4,7 @@ from fastapi import APIRouter, FastAPI, status
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from starlette.types import Lifespan
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
@@ -116,7 +117,7 @@ class FastAPIApplication(AtlanApplicationInterface):
 
     def __init__(
         self,
-        lifespan=None,
+        lifespan: Optional[Lifespan[FastAPI]] = None,
         handler: Optional[HandlerInterface] = None,
         temporal_client: Optional[TemporalClient] = None,
     ):
@@ -321,6 +322,12 @@ class FastAPIApplication(AtlanApplicationInterface):
                     event,
                 )
 
+                if trigger.workflow_class is None:
+                    logger.warning(
+                        "Skipping workflow trigger - no workflow class defined"
+                    )
+                    continue
+
                 await self.temporal_client.start_workflow(
                     workflow_args=event, workflow_class=trigger.workflow_class
                 )
@@ -334,7 +341,10 @@ class FastAPIApplication(AtlanApplicationInterface):
         Returns:
             TestAuthResponse: Response indicating authentication success.
         """
-        await self.handler.load(body.model_dump())
+        if not self.handler:
+            raise Exception("Handler not initialized")
+
+        await self.handler.load(**body.model_dump())
         await self.handler.test_auth()
         return TestAuthResponse(success=True, message="Authentication successful")
 
@@ -347,7 +357,10 @@ class FastAPIApplication(AtlanApplicationInterface):
         Returns:
             FetchMetadataResponse: Response containing the requested metadata.
         """
-        await self.handler.load(body.model_dump())
+        if not self.handler:
+            raise Exception("Handler not initialized")
+
+        await self.handler.load(**body.model_dump())
         metadata = await self.handler.fetch_metadata(
             metadata_type=body.root["type"], database=body.root["database"]
         )
@@ -364,6 +377,10 @@ class FastAPIApplication(AtlanApplicationInterface):
         Returns:
             PreflightCheckResponse: Response containing preflight check results.
         """
+        if not self.handler:
+            raise Exception("Handler not initialized")
+
+        await self.handler.load(**body.model_dump())
         preflight_check = await self.handler.preflight_check(body.model_dump())
         return PreflightCheckResponse(success=True, data=preflight_check)
 

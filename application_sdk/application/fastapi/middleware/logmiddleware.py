@@ -17,7 +17,7 @@ class LogMiddleware(BaseHTTPMiddleware):
         # Use the existing logger instead of creating a new one
         self.logger = logger
         # Remove any existing handlers to prevent duplicate logging
-        self.logger.logger.handlers = []
+        self.logger.logger.remove()
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -57,7 +57,7 @@ class LogMiddleware(BaseHTTPMiddleware):
 
         except Exception as e:
             duration = time.time() - start_time
-            self.logger.error(
+            self.logger.logger.error(
                 f"Request failed for {request.method} path: {request.url.path} with request_id: {request_id}",
                 extra={
                     "method": request.method,

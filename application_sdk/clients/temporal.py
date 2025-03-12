@@ -65,17 +65,21 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
             Any: The result of the activity execution.
         """
         EventStore.create_event(
-            ActivityStartEvent(
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
+            ActivityStartEvent().model_copy(
+                update={
+                    "activity_id": activity.info().activity_id,
+                    "activity_type": activity.info().activity_type,
+                }
             ),
             topic_name=EventStore.TOPIC_NAME,
         )
         output = await super().execute_activity(input)
         EventStore.create_event(
-            ActivityEndEvent(
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
+            ActivityEndEvent().model_copy(
+                update={
+                    "activity_id": activity.info().activity_id,
+                    "activity_type": activity.info().activity_type,
+                }
             ),
             topic_name=EventStore.TOPIC_NAME,
         )
@@ -225,7 +229,7 @@ class TemporalClient(ClientInterface):
         """
         return self.namespace
 
-    async def load(self) -> None:
+    async def load(self, **kwargs: Any) -> None:
         """Connect to the Temporal server."""
         self.client = await Client.connect(
             self.get_connection_string(),

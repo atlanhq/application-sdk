@@ -6,6 +6,7 @@ to external services and data sources.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class ClientInterface(ABC):
@@ -16,7 +17,7 @@ class ClientInterface(ABC):
     """
 
     @abstractmethod
-    async def load(self) -> None:
+    async def load(self, **kwargs: Any) -> None:
         """Establish the client connection.
 
         This method should handle the initialization and connection setup

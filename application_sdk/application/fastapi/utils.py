@@ -4,18 +4,18 @@ This module provides utility functions for FastAPI application, including
 error handlers and response formatters.
 """
 
-from fastapi import status
+from fastapi import Request, status
 from fastapi.responses import JSONResponse
 
 
-def internal_server_error_handler(_, exc: Exception) -> JSONResponse:
+def internal_server_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Handle internal server errors in FastAPI applications.
 
     This function provides a standardized way to handle internal server errors (500)
     by formatting them into a consistent JSON response structure.
 
     Args:
-        _ (Request): The FastAPI request object (unused).
+        request (Request): The FastAPI request object.
         exc (Exception): The exception that triggered the error handler.
 
     Returns:

@@ -65,7 +65,7 @@ class SQLClient(ClientInterface):
         self.credentials = credentials
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
-    async def load(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, **kwargs: Any) -> None:
         """Load and establish the database connection.
 
         Args:
@@ -74,7 +74,7 @@ class SQLClient(ClientInterface):
         Raises:
             ValueError: If connection fails due to authentication or connection issues
         """
-        self.credentials = credentials
+        self.credentials = kwargs.get("credentials", {})
         try:
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
@@ -116,6 +116,9 @@ class SQLClient(ClientInterface):
             Exception: If the query fails.
         """
         loop = asyncio.get_running_loop()
+
+        if not self.connection:
+            raise ValueError("Connection is not established")
 
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
@@ -164,7 +167,7 @@ class AsyncSQLClient(SQLClient):
     connection: AsyncConnection | None = None
     engine: AsyncEngine | None = None
 
-    async def load(self, credentials: Dict[str, Any]) -> None:
+    async def load(self, **kwargs: Any) -> None:
         """Load and establish an asynchronous database connection.
 
         Args:
@@ -173,7 +176,7 @@ class AsyncSQLClient(SQLClient):
         Raises:
             ValueError: If connection fails due to authentication or connection issues
         """
-        self.credentials = credentials
+        self.credentials = kwargs.get("credentials", {})
         try:
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
