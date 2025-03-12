@@ -6,6 +6,7 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.config import get_settings
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -59,7 +60,7 @@ class JsonOutput(Output):
         state: Optional[ActivitiesState] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 1024 * 1024 * 10,
-        chunk_size: int = 100000,
+        chunk_size: Optional[int] = None,
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
@@ -75,8 +76,8 @@ class JsonOutput(Output):
                 Defaults to None.
             buffer_size (int, optional): Size of the buffer in bytes.
                 Defaults to 10MB (1024 * 1024 * 10).
-            chunk_size (int, optional): Maximum number of records per chunk.
-                Defaults to 100000.
+            chunk_size (Optional[int], optional): Maximum number of records per chunk. If None, uses config value.
+                Defaults to None.
             total_record_count (int, optional): Initial total record count.
                 Defaults to 0.
             chunk_count (int, optional): Initial chunk count.
@@ -92,7 +93,8 @@ class JsonOutput(Output):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
-        self.chunk_size = chunk_size
+        settings = get_settings()
+        self.chunk_size = chunk_size or settings.chunk_size
         self.buffer: List[Union[pd.DataFrame, "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
