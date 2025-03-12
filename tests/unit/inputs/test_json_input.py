@@ -5,7 +5,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.inputs.json import JsonInput
-from application_sdk.test_utils.hypothesis.strategies.json_input import (
+from application_sdk.test_utils.hypothesis.strategies.inputs.json_input import (
     download_prefix_strategy,
     file_names_strategy,
     json_input_config_strategy,

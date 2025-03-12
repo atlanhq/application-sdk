@@ -8,7 +8,7 @@ from hypothesis import strategies as st
 from loguru import logger
 
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logger
-from application_sdk.test_utils.hypothesis.strategies.logger import (
+from application_sdk.test_utils.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
 )

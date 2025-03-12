@@ -8,7 +8,7 @@ from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import SQLClient
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.test_utils.hypothesis.strategies.sql import (
+from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     metadata_args_strategy,
     sql_credentials_strategy,
     sql_data_strategy,
