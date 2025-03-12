@@ -94,7 +94,7 @@ class FastApiServerClient:
         assert response.status_code == 200
         return response.json()
 
-    def update_configuration(self, workflow_id: str, payload: Dict) -> Dict[str, Any]:
+    def update_configuration(self, workflow_id: str, payload: Dict):
         """
         Method to update workflow configuration using /workflows/v1/config API
 
@@ -103,11 +103,10 @@ class FastApiServerClient:
         Returns:
             Dict: Response from the update configuration API
         """
-        response = self._post(f"/workflows/v1/config/{workflow_id}", json=payload)
-        assert response.status_code == 200
-        return response.json()
+        response = self._post(f"/workflows/v1/config/{workflow_id}", data=payload)
+        return response
 
-    def get_configuration(self, workflow_id: str) -> Dict[str, Any]:
+    def get_configuration(self, workflow_id: str):
         """
         Method to get workflow configuration using /workflows/v1/config API
 
@@ -117,8 +116,7 @@ class FastApiServerClient:
             Dict: Response from the get configuration API
         """
         response = self._get(f"/workflows/v1/config/{workflow_id}")
-        assert response.status_code == 200
-        return response.json()
+        return response
 
     def _get(self, url: str = ""):
         """
