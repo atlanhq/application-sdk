@@ -6,6 +6,33 @@ import pytest
 
 from application_sdk.transformers.atlas import AtlasTransformer
 
+column_attributes = [
+    "qualifiedName",
+    "name",
+    "tenantId",
+    "connectorName",
+    "connectionName",
+    "connectionQualifiedName",
+    "lastSyncWorkflowName",
+    "lastSyncRun",
+    "databaseName",
+    "databaseQualifiedName",
+    "schemaName",
+    "schemaQualifiedName",
+    "tableName",
+    "tableQualifiedName",
+    "viewName",
+    "viewQualifiedName",
+    "dataType",
+    "order",
+    "isPartition",
+    "isPrimary",
+    "isForeign",
+    "isNullable",
+    "numericScale",
+    "maxLength",
+]
+
 
 @pytest.fixture
 def resources_dir():
@@ -37,6 +64,11 @@ def assert_attributes(
 ):
     attr_type = "customAttributes" if is_custom else "attributes"
     for attr in attributes:
+        if (
+            attr not in transformed_data[attr_type]
+            and attr not in expected_data[attr_type]
+        ):
+            continue
         assert (
             transformed_data[attr_type][attr] == expected_data[attr_type][attr]
         ), f"Mismatch in {'custom ' if is_custom else ''}{attr}"
@@ -144,6 +176,7 @@ def test_materialized_view_column_transformation(
         ]
     )
 
+
 def test_column_with_view_parent(
     transformer: AtlasTransformer,
     raw_data: Dict[str, Any],
@@ -171,9 +204,13 @@ def test_column_with_view_parent(
         "is_generated",
         "column_size",
     ]
+
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
+    assert_attributes(transformed_data, expected_column, column_attributes)
+    assert "lastSyncRunAt" in transformed_data["attributes"]
+    assert transformed_data["attributes"]["lastSyncRunAt"] != None
 
     # Test view relationship
     assert "view" in transformed_data["attributes"]
@@ -181,6 +218,7 @@ def test_column_with_view_parent(
         transformed_data["attributes"]["view"]["uniqueAttributes"]["qualifiedName"]
         == expected_column["attributes"]["view"]["uniqueAttributes"]["qualifiedName"]
     )
+
 
 def test_column_with_materialized_view_parent(
     transformer: AtlasTransformer,
@@ -212,6 +250,9 @@ def test_column_with_materialized_view_parent(
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
+    assert_attributes(transformed_data, expected_column, column_attributes)
+    assert "lastSyncRunAt" in transformed_data["attributes"]
+    assert transformed_data["attributes"]["lastSyncRunAt"] != None
 
     # Test materialized view relationship
     assert "materialisedView" in transformed_data["attributes"]
@@ -223,6 +264,7 @@ def test_column_with_materialized_view_parent(
             "qualifiedName"
         ]
     )
+
 
 def test_column_with_foreign_table_parent(
     transformer: AtlasTransformer,
@@ -254,17 +296,17 @@ def test_column_with_foreign_table_parent(
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
+    assert_attributes(transformed_data, expected_column, column_attributes)
+    assert "lastSyncRunAt" in transformed_data["attributes"]
+    assert transformed_data["attributes"]["lastSyncRunAt"] != None
 
     # Test materialized view relationship
     assert "table" in transformed_data["attributes"]
     assert (
-        transformed_data["attributes"]["table"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
-        == expected_column["attributes"]["table"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
+        transformed_data["attributes"]["table"]["uniqueAttributes"]["qualifiedName"]
+        == expected_column["attributes"]["table"]["uniqueAttributes"]["qualifiedName"]
     )
+
 
 def test_column_with_partitioned_table_parent(
     transformer: AtlasTransformer,
@@ -296,6 +338,9 @@ def test_column_with_partitioned_table_parent(
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
+    assert_attributes(transformed_data, expected_column, column_attributes)
+    assert "lastSyncRunAt" in transformed_data["attributes"]
+    assert transformed_data["attributes"]["lastSyncRunAt"] != None
 
     # Test materialized view relationship
     assert "tablePartition" in transformed_data["attributes"]
@@ -307,6 +352,7 @@ def test_column_with_partitioned_table_parent(
             "qualifiedName"
         ]
     )
+
 
 def test_column_variation_1(
     transformer: AtlasTransformer,
@@ -338,17 +384,17 @@ def test_column_variation_1(
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
+    assert_attributes(transformed_data, expected_column, column_attributes)
+    assert "lastSyncRunAt" in transformed_data["attributes"]
+    assert transformed_data["attributes"]["lastSyncRunAt"] != None
 
     # Test materialized view relationship
     assert "table" in transformed_data["attributes"]
     assert (
-        transformed_data["attributes"]["table"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
-        == expected_column["attributes"]["table"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
+        transformed_data["attributes"]["table"]["uniqueAttributes"]["qualifiedName"]
+        == expected_column["attributes"]["table"]["uniqueAttributes"]["qualifiedName"]
     )
+
 
 def test_column_variation_2(
     transformer: AtlasTransformer,
@@ -380,16 +426,15 @@ def test_column_variation_2(
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
+    assert_attributes(transformed_data, expected_column, column_attributes)
+    assert "lastSyncRunAt" in transformed_data["attributes"]
+    assert transformed_data["attributes"]["lastSyncRunAt"] != None
 
     # Test materialized view relationship
     assert "table" in transformed_data["attributes"]
     assert (
-        transformed_data["attributes"]["table"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
-        == expected_column["attributes"]["table"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
+        transformed_data["attributes"]["table"]["uniqueAttributes"]["qualifiedName"]
+        == expected_column["attributes"]["table"]["uniqueAttributes"]["qualifiedName"]
     )
 
 
@@ -422,7 +467,6 @@ def test_column_with_custom_attributes(
     assert_attributes(
         transformed_data, expected_column, custom_attributes, is_custom=True
     )
-
     # Test table relationship
     assert "table" in transformed_data["attributes"]
     assert (
