@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 
 
 class DiffAtlanActivities:
-    IGNORE_COLUMNS = ["lastSyncWorkflowName", "lastSyncRunAt", "lastSyncRun"]
+    IGNORE_COLUMNS = ["lastSyncWorkflowName", "lastSyncRunAt", "lastSyncRun", "typeName", "qualifiedName"]
 
     @classmethod
     def create_current_state_hash(cls, df: daft.DataFrame) -> daft.DataFrame:
@@ -30,17 +30,17 @@ class DiffAtlanActivities:
 
         custom_attributes_df = df.select("typeName", "attributes.qualifiedName", "customAttributes.*")
         custom_attributes_hash_df = cls._compute_row_hash(
-            custom_attributes_df).select("typeName", "qualifiedName", "row_hash")
+            custom_attributes_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         custom_attributes_hash_df = custom_attributes_hash_df.with_column_renamed("row_hash", "custom_attributes_hash")
 
         classifications_df = df.select("typeName", "attributes.qualifiedName", "classifications.*")
         classifications_hash_df = cls._compute_row_hash(
-            classifications_df).select("typeName", "qualifiedName", "row_hash")
+            classifications_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         classifications_hash_df = classifications_hash_df.with_column_renamed("row_hash", "classifications_hash")
 
         terms_df = df.select("typeName", "attributes.qualifiedName", "terms.*")
         terms_hash_df = cls._compute_row_hash(
-            terms_df).select("typeName", "qualifiedName", "row_hash")
+            terms_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         terms_hash_df = terms_hash_df.with_column_renamed("row_hash", "terms_hash")
 
         hash_df = attributes_hash_df.join(custom_attributes_hash_df, on=["typeName", "qualifiedName"]) \
