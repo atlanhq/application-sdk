@@ -73,7 +73,7 @@ jobs:
       - name: Perform Version Update
         id: version_bump
         run: |
-          python scripts/release.py ${{ github.ref_name }}
+          python .github/scripts/release.py ${{ github.ref_name }}
           poetry lock
 
       - name: Commit version bump and changelog

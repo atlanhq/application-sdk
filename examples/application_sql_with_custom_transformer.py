@@ -108,12 +108,14 @@ class SampleSQLActivities(SQLMetadataExtractionActivities):
 
 class PostgresDatabase(Database):
     @classmethod
-    def parse_obj(cls, obj: Dict[str, Any]) -> Database:
-        database = Database.creator(
-            name=obj["datname"],
-            connection_qualified_name=obj["connection_qualified_name"],
-        )
-        return database
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+        attributes = {
+            "name": obj.get("datname", ""),
+            "connection_qualified_name": obj.get("connection_qualified_name", ""),
+        }
+        return {
+            "attributes": attributes,
+        }
 
 
 class CustomTransformer(AtlasTransformer):

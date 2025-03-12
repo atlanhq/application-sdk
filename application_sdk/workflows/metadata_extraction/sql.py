@@ -169,8 +169,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         4. Writing metadata to storage
 
         Args:
-            workflow_config (Dict[str, Any]): Configuration for the workflow execution,
-                including workflow_id and other parameters.
+            workflow_config (Dict[str, Any]): Includes workflow_id and other parameters
+                workflow_id is used to extract the workflow configuration from the
+                state store.
 
         Note:
             The workflow uses a retry policy with maximum 6 attempts and backoff
