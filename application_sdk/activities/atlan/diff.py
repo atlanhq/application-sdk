@@ -1,5 +1,6 @@
 import daft
 import duckdb
+from daft import col
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -23,22 +24,24 @@ class DiffAtlanActivities:
         logger.debug(f"Creating current state hash")
 
         # Create hashes for attributes, customAttributes, terms and classifications
-        attributes_df = df.select("typeName", "attributes.*")
+        attributes_df = df.select("typeName", col("attributes").struct.get("*"))
         attributes_hash_df = cls._compute_row_hash(
             attributes_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         attributes_hash_df = attributes_hash_df.with_column_renamed("row_hash", "attributes_hash")
 
-        custom_attributes_df = df.select("typeName", "attributes.qualifiedName", "customAttributes.*")
+        custom_attributes_df = df.select("typeName", col("attributes").struct.get("qualifiedName"),
+                                         col("customAttributes").struct.get("*"))
         custom_attributes_hash_df = cls._compute_row_hash(
             custom_attributes_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         custom_attributes_hash_df = custom_attributes_hash_df.with_column_renamed("row_hash", "custom_attributes_hash")
 
-        classifications_df = df.select("typeName", "attributes.qualifiedName", "classifications.*")
+        classifications_df = df.select("typeName", col("attributes").struct.get("qualifiedName"),
+                                       col("classifications").struct.get("*"))
         classifications_hash_df = cls._compute_row_hash(
             classifications_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         classifications_hash_df = classifications_hash_df.with_column_renamed("row_hash", "classifications_hash")
 
-        terms_df = df.select("typeName", "attributes.qualifiedName", "terms.*")
+        terms_df = df.select("typeName", col("attributes").struct.get("qualifiedName"), col("terms").struct.get("*"))
         terms_hash_df = cls._compute_row_hash(
             terms_df, ignore_columns=cls.IGNORE_COLUMNS).select("typeName", "qualifiedName", "row_hash")
         terms_hash_df = terms_hash_df.with_column_renamed("row_hash", "terms_hash")
@@ -50,7 +53,9 @@ class DiffAtlanActivities:
         return hash_df
 
     @staticmethod
-    def _compute_row_hash(df: daft.DataFrame, columns_order: list[str] = None, ignore_columns: list[str] = None) -> daft.DataFrame:
+    def _compute_row_hash(df: daft.DataFrame,
+                          columns_order: list[str] = None,
+                          ignore_columns: list[str] = None) -> daft.DataFrame:
         """
         Create a hashed column for the dataframe
         Args:
