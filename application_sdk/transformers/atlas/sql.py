@@ -5,7 +5,7 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple, TypeVar, Union, overload
+from typing import Any, Dict, List, Optional, TypeVar, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -83,7 +83,7 @@ class Procedure(assets.Procedure):
             return {
                 "attributes": procedure_attributes,
                 "custom_attributes": procedure_custom_attributes,
-                "entity_class": Procedure
+                "entity_class": Procedure,
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Procedure Entity: {str(e)}")
@@ -135,7 +135,7 @@ class Database(assets.Database):
             return {
                 "attributes": database_attributes,
                 "custom_attributes": database_custom_attributes,
-                "entity_class": Database
+                "entity_class": Database,
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Database Entity: {str(e)}")
@@ -204,7 +204,7 @@ class Schema(assets.Schema):
             return {
                 "attributes": schema_attributes,
                 "custom_attributes": schema_custom_attributes,
-                "entity_class": Schema
+                "entity_class": Schema,
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Schema Entity: {str(e)}")
@@ -436,7 +436,7 @@ class Table(assets.Table):
             return {
                 "attributes": sql_table_attributes,
                 "custom_attributes": custom_attributes,
-                "entity_class": table_type
+                "entity_class": table_type,
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Table Entity: {str(e)}")
@@ -603,7 +603,7 @@ class Column(assets.Column):
             return {
                 "attributes": attributes,
                 "custom_attributes": custom_attributes,
-                "entity_class": Column
+                "entity_class": Column,
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Column Entity: {str(e)}")
@@ -842,7 +842,7 @@ class Function(assets.Function):
             return {
                 "attributes": function_attributes,
                 "custom_attributes": function_custom_attributes,
-                "entity_class": Function
+                "entity_class": Function,
             }
         except AssertionError as e:
             raise ValueError(f"Error creating Function Entity: {str(e)}")
