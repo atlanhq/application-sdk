@@ -16,7 +16,6 @@ from application_sdk.test_utils.hypothesis.strategies.sql import (
 )
 from application_sdk.test_utils.hypothesis.strategies.sql_client import (
     mock_sql_query_result_strategy,
-    sql_engine_config_strategy,
     sql_connection_string_strategy,
     sql_error_strategy,
 )
@@ -351,7 +350,9 @@ async def test_run_query_with_error(
 
 @given(connection_string=sql_connection_string_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
-def test_connection_string_property_based(sql_client: SQLClient, connection_string: str):
+def test_connection_string_property_based(
+    sql_client: SQLClient, connection_string: str
+):
     """Property-based test for various connection string formats"""
     with patch("application_sdk.clients.sql.create_engine") as mock_create_engine:
         # Mock the engine and connection

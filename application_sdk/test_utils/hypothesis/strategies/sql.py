@@ -67,9 +67,7 @@ sql_data_strategy = st.lists(
 sql_query_strategy = st.one_of(
     st.just("SELECT * FROM test_table"),
     st.just("SELECT col1, col2 FROM test_table"),
-    st.builds(
-        lambda table: f"SELECT * FROM {table}", table=st.text()
-    ),
+    st.builds(lambda table: f"SELECT * FROM {table}", table=st.text()),
     st.builds(
         lambda table, limit: f"SELECT * FROM {table} LIMIT {limit}",
         table=st.text(),

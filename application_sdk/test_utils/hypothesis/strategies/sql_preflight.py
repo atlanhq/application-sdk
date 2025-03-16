@@ -7,9 +7,7 @@ database_name_strategy = st.text()
 schema_name_strategy = st.text()
 
 # Strategy for generating lists of schema names
-schema_list_strategy = st.lists(
-    schema_name_strategy,unique=False
-)
+schema_list_strategy = st.lists(schema_name_strategy, unique=False)
 
 # Strategy for generating wildcard schema selections
 wildcard_schema_strategy = st.just("*")
@@ -21,9 +19,7 @@ schema_selection_strategy = st.one_of(schema_list_strategy, wildcard_schema_stra
 metadata_entry_tuple_strategy = st.tuples(database_name_strategy, schema_name_strategy)
 
 # Strategy for generating lists of metadata entries
-metadata_list_strategy = st.lists(
-    metadata_entry_tuple_strategy,unique=False
-).map(
+metadata_list_strategy = st.lists(metadata_entry_tuple_strategy, unique=False).map(
     lambda entries: [
         {"TABLE_CATALOG": db, "TABLE_SCHEMA": schema} for db, schema in entries
     ]

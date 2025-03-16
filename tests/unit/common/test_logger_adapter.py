@@ -128,7 +128,7 @@ def test_process_with_generated_workflow_context(workflow_info: mock.Mock):
             assert kwargs["namespace"] == workflow_info.namespace
             assert kwargs["task_queue"] == workflow_info.task_queue
             assert kwargs["attempt"] == workflow_info.attempt
-            expected_msg = "Test message Workflow Context: Workflow ID: {workflow_id} Run ID: {run_id} Type: {workflow_type}"
+            expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
             assert msg == expected_msg
 
 
@@ -214,7 +214,6 @@ def test_get_logger():
     assert isinstance(logger1, AtlanLoggerAdapter)
 
 
-
 @given(st.text(min_size=1))
 def test_get_logger_with_various_names(logger_name: str):
     """Test get_logger function with various logger names."""
@@ -223,6 +222,7 @@ def test_get_logger_with_various_names(logger_name: str):
     assert logger1 is logger2
     assert isinstance(logger1, AtlanLoggerAdapter)
     assert logger1.logger_name == logger_name
+
 
 def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter, mock_logger):
     """Test that the logger can handle dictionaries and lists without formatting errors."""
@@ -252,4 +252,3 @@ def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter, mock_log
     finally:
         # Restore the original logger
         logger_adapter.logger = original_logger
-

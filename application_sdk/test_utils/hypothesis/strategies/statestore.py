@@ -45,7 +45,7 @@ uuid_strategy = st.uuids().map(str)
 def credentials_strategy(draw) -> Dict[str, Any]:
     """Generate a dictionary of credentials with common keys."""
     # Always include username and password as they're most common
-    num_fields = draw(st.integers())
+    num_fields = draw(st.integers(min_value=2))
     required_keys = ["username", "password"]
     optional_keys = draw(
         st.lists(

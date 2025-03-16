@@ -1,5 +1,4 @@
 from hypothesis import strategies as st
-from typing import Any, Dict
 
 # Strategy for generating mock SQL query results
 mock_sql_row_strategy = st.fixed_dictionaries(
@@ -50,12 +49,14 @@ sql_connection_string_strategy = st.builds(
 )
 
 # Strategy for generating SQL error scenarios
-sql_error_strategy = st.sampled_from([
-    "OperationalError",
-    "IntegrityError",
-    "ProgrammingError",
-    "DataError",
-    "InternalError",
-    "NotSupportedError",
-    "TimeoutError",
-]) 
+sql_error_strategy = st.sampled_from(
+    [
+        "OperationalError",
+        "IntegrityError",
+        "ProgrammingError",
+        "DataError",
+        "InternalError",
+        "NotSupportedError",
+        "TimeoutError",
+    ]
+)

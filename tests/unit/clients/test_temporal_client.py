@@ -1,5 +1,5 @@
-from unittest.mock import ANY, AsyncMock, MagicMock, patch, call
 from typing import Any, Dict, Generator, Protocol
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
 from hypothesis import given, settings
@@ -13,8 +13,7 @@ from application_sdk.test_utils.hypothesis.strategies.temporal import (
 
 class WorkflowInterface(Protocol):
     @staticmethod
-    async def run(*args: Any, **kwargs: Any) -> Dict[str, Any]:
-        ...
+    async def run(*args: Any, **kwargs: Any) -> Dict[str, Any]: ...
 
 
 @pytest.fixture(scope="module")
@@ -43,7 +42,11 @@ async def test_load(mock_connect: AsyncMock, params: Dict[str, str]):
 
     # Verify that Client.connect was called with the correct parameters
     assert any(
-        call(temporal_client.get_connection_string(), namespace=temporal_client.get_namespace()) == c
+        call(
+            temporal_client.get_connection_string(),
+            namespace=temporal_client.get_namespace(),
+        )
+        == c
         for c in mock_connect.call_args_list
     )
 
@@ -67,7 +70,7 @@ async def test_start_workflow(
     temporal_client = TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
     )
-    
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -115,17 +118,13 @@ async def test_start_workflow_with_workflow_id(
     temporal_client = TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
     )
-    
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
 
     def start_workflow_side_effect(
-        workflow_type: Any,
-        args: Any,
-        id: str,
-        *extra_args: Any,
-        **kwargs: Any
+        workflow_type: Any, args: Any, id: str, *extra_args: Any, **kwargs: Any
     ) -> MagicMock:
         mock_handle = MagicMock()
         mock_handle.id = id
@@ -171,7 +170,7 @@ async def test_start_workflow_failure(
     temporal_client = TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
     )
-    
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -208,7 +207,7 @@ async def test_create_worker_without_client(
     temporal_client = TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
     )
-    
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -236,7 +235,7 @@ async def test_create_worker(
     temporal_client = TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
     )
-    
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client

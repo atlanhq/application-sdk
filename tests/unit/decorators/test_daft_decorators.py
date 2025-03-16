@@ -52,9 +52,7 @@ class TestDaftDecorators:
         """
         os.remove("/tmp/test_connectorx.db")
 
-    @given(
-        value=st.integers()
-    )
+    @given(value=st.integers())
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
