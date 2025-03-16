@@ -220,23 +220,23 @@ class AtlanLoggerAdapter:
 
     def debug(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
-        self.logger.debug(msg, *args, **kwargs)
+        self.logger.bind(**kwargs).debug(msg, *args)
 
     def info(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
-        self.logger.info(msg, *args, **kwargs)
+        self.logger.bind(**kwargs).info(msg, *args)
 
     def warning(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
-        self.logger.warning(msg, *args, **kwargs)
+        self.logger.bind(**kwargs).warning(msg, *args)
 
     def error(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
-        self.logger.error(msg, *args, **kwargs)
+        self.logger.bind(**kwargs).error(msg, *args)
 
     def critical(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
-        self.logger.critical(msg, *args, **kwargs)
+        self.logger.bind(**kwargs).critical(msg, *args)
 
 
 # Create a singleton instance of the logger
