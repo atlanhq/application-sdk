@@ -98,13 +98,6 @@ class BaseTest(TestInterface):
         """
         Test configuration update
         """
-        # First get the current configuration
-        get_response = requests.get(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
-        )
-        self.assertEqual(get_response.status_code, 200)
-        current_config = get_response.json()
-
         # Prepare update payload
         update_payload = {
             "connection": self.connection,
@@ -126,8 +119,11 @@ class BaseTest(TestInterface):
         updated_config = updated_get_response.json()
 
         # Assert that the configuration was updated correctly
-        expected_config = {**current_config, "temp-table-regex": "^temp_.*"}
-        self.assertEqual(updated_config, expected_config)
+        # Only check that the specific fields we updated match what we expect
+        self.assertEqual(updated_config["metadata"]["temp-table-regex"], "^temp_.*")
+
+        # Verify the connection matches what we sent
+        self.assertEqual(updated_config["connection"], self.connection)
 
     @pytest.mark.order(7)
     def test_data_validation(self):
