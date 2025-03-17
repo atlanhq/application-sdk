@@ -35,7 +35,12 @@ db_schema_mapping_strategy = st.dictionaries(
 
 # Strategy for generating regex-style database to schema mappings
 regex_db_schema_mapping_strategy = st.dictionaries(
-    keys=st.builds(lambda x: f"^{x}$", database_name_strategy),
+    keys=st.one_of(
+        st.builds(lambda x: f"^{x}$", database_name_strategy),
+        st.builds(lambda x: f"{x}.*", database_name_strategy),
+        st.builds(lambda x: f".*{x}", database_name_strategy),
+        st.builds(lambda x: f".*{x}.*", database_name_strategy),
+    ),
     values=schema_selection_strategy,
     min_size=1,
     max_size=3,
@@ -49,7 +54,5 @@ mixed_mapping_strategy = st.one_of(
 # Strategy for generating complete preflight check payloads
 preflight_check_payload_strategy = st.builds(
     lambda mapping: {"metadata": {"include-filter": mapping}},
-    mapping=st.one_of(
-        st.builds(str, mixed_mapping_strategy)  # Convert dict to JSON string
-    ),
+    mapping=st.one_of(st.builds(str, mixed_mapping_strategy)),
 )
