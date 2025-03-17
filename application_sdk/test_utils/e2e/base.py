@@ -84,21 +84,6 @@ class BaseTest(TestInterface):
         logger.info("Workflow completed successfully")
 
     @pytest.mark.order(5)
-    def test_configuration_update(self):
-        """
-        Test configuration update
-        """
-        update_payload = {
-            "connection": self.connection,
-            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
-        }
-        response = requests.post(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}",
-            json=update_payload,
-        )
-        self.assertEqual(response.status_code, 200)
-
-    @pytest.mark.order(6)
     def test_configuration_get(self):
         """
         Test configuration retrieval
@@ -117,6 +102,30 @@ class BaseTest(TestInterface):
         # Verify that response data contains the expected metadata and connection
         self.assertEqual(response_data["data"]["connection"], self.connection)
         self.assertEqual(response_data["data"]["metadata"], self.metadata)
+
+    @pytest.mark.order(6)
+    def test_configuration_update(self):
+        """
+        Test configuration update
+        """
+        update_payload = {
+            "connection": self.connection,
+            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+        }
+        response = requests.post(
+            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}",
+            json=update_payload,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response_data = response.json()
+        self.assertEqual(response_data["success"], True)
+        self.assertEqual(
+            response_data["message"], "Workflow configuration updated successfully"
+        )
+        self.assertEqual(
+            response_data["data"]["metadata"]["temp-table-regex"], "^temp_.*"
+        )
 
     @pytest.mark.order(7)
     def test_data_validation(self):
