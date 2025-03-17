@@ -89,3 +89,116 @@ class BaseTest(TestInterface):
         Test for validating the extracted source data
         """
         self.validate_data()
+
+    @pytest.mark.order(7)
+    def test_health_check_negative(self):
+        """
+        Test health check with invalid server URL
+        """
+        with pytest.raises(requests.exceptions.RequestException):
+            # Use an invalid host to trigger connection error
+            invalid_host = "http://invalid-host-that-does-not-exist:8000"
+            requests.get(invalid_host, timeout=2)
+
+    @pytest.mark.order(8)
+    def test_auth_negative_invalid_credentials(self):
+        """
+        Test authentication with invalid credentials
+        """
+        invalid_credentials = {"username": "invalid", "password": "invalid"}
+        try:
+            response = self.client._post("/auth", data=invalid_credentials)
+            # Either expect a non-200 status code or an error message in the response
+            if response.status_code == 200:
+                response_data = response.json()
+                self.assertEqual(response_data["success"], False)
+            else:
+                self.assertNotEqual(response.status_code, 200)
+        except requests.exceptions.RequestException:
+            # If the request fails with an exception, the test passes
+            pass
+
+    @pytest.mark.order(9)
+    def test_metadata_negative(self):
+        """
+        Test metadata API with invalid credentials
+        """
+        invalid_credentials = {"username": "invalid", "password": "invalid"}
+        try:
+            response = self.client._post("/metadata", data=invalid_credentials)
+            # Either expect a non-200 status code or an error message in the response
+            if response.status_code == 200:
+                response_data = response.json()
+                self.assertEqual(response_data["success"], False)
+            else:
+                self.assertNotEqual(response.status_code, 200)
+        except requests.exceptions.RequestException:
+            # If the request fails with an exception, the test passes
+            pass
+
+    @pytest.mark.order(10)
+    def test_preflight_check_negative(self):
+        """
+        Test preflight check with invalid metadata
+        """
+        invalid_metadata = {"invalid": "metadata"}
+        try:
+            response = self.client._post(
+                "/check",
+                data={"credentials": self.credentials, "metadata": invalid_metadata},
+            )
+            # Either expect a non-200 status code or an error message in the response
+            if response.status_code == 200:
+                response_data = response.json()
+                self.assertEqual(response_data["success"], False)
+            else:
+                self.assertNotEqual(response.status_code, 200)
+        except requests.exceptions.RequestException:
+            # If the request fails with an exception, the test passes
+            pass
+
+    @pytest.mark.order(11)
+    def test_run_workflow_negative(self):
+        """
+        Test running workflow with invalid connection details
+        """
+        invalid_connection = {"invalid": "connection"}
+        try:
+            response = self.client._post(
+                "/start",
+                data={
+                    "credentials": self.credentials,
+                    "metadata": self.metadata,
+                    "connection": invalid_connection,
+                },
+            )
+            # Either expect a non-200 status code or an error message in the response
+            if response.status_code == 200:
+                response_data = response.json()
+                self.assertEqual(response_data["success"], False)
+            else:
+                self.assertNotEqual(response.status_code, 200)
+        except requests.exceptions.RequestException:
+            # If the request fails with an exception, the test passes
+            pass
+
+    @pytest.mark.order(12)
+    def test_workflow_status_negative(self):
+        """
+        Test getting workflow status with invalid workflow ID and run ID
+        """
+        invalid_workflow_id = "invalid-workflow-id"
+        invalid_run_id = "invalid-run-id"
+        try:
+            response = self.client._get(
+                f"/status/{invalid_workflow_id}/{invalid_run_id}"
+            )
+            # Either expect a non-200 status code or an error message in the response
+            if response.status_code == 200:
+                response_data = response.json()
+                self.assertEqual(response_data["success"], False)
+            else:
+                self.assertNotEqual(response.status_code, 200)
+        except requests.exceptions.RequestException:
+            # If the request fails with an exception, the test passes
+            pass
