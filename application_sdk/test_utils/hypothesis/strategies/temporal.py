@@ -31,7 +31,10 @@ def workflow_credentials(draw: DrawFn) -> Dict[str, str]:
 @st.composite
 def workflow_args(draw: DrawFn, include_workflow_id: bool = False) -> Dict[str, Any]:
     """Generate workflow arguments."""
-    args: Dict[str, Any] = {"param1": draw(st.text()), "credentials": draw(workflow_credentials())}
+    args: Dict[str, Any] = {
+        "param1": draw(st.text()),
+        "credentials": draw(workflow_credentials()),
+    }
 
     if include_workflow_id:
         args["workflow_id"] = draw(workflow_id())

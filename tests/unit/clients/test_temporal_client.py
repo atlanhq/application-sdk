@@ -24,11 +24,13 @@ def mock_dapr_output_client() -> Generator[MagicMock, None, None]:
         mock_instance.__exit__.return_value = None
         yield mock_instance
 
+
 @pytest.fixture
 def temporal_client() -> TemporalClient:
     return TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
     )
+
 
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -85,7 +87,7 @@ async def test_start_workflow(
 
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
-    
+
     # Create a mock workflow class that implements WorkflowInterface
     class MockWorkflow:
         @staticmethod
@@ -132,7 +134,7 @@ async def test_start_workflow_with_workflow_id(
 
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
-    
+
     # Create a mock workflow class that implements WorkflowInterface
     class MockWorkflow:
         @staticmethod
@@ -174,7 +176,7 @@ async def test_start_workflow_failure(
 
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
-    
+
     # Create a mock workflow class that implements WorkflowInterface
     class MockWorkflow:
         @staticmethod
