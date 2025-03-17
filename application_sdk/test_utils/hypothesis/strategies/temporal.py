@@ -1,10 +1,11 @@
 from typing import Any, Dict
 
 from hypothesis import strategies as st
+from hypothesis.strategies import DrawFn
 
 
 @st.composite
-def temporal_connection_params(draw) -> Dict[str, str]:
+def temporal_connection_params(draw: DrawFn) -> Dict[str, str]:
     """Generate valid temporal connection parameters."""
     return {
         "host": draw(
@@ -22,15 +23,15 @@ def temporal_connection_params(draw) -> Dict[str, str]:
 
 
 @st.composite
-def workflow_credentials(draw) -> Dict[str, str]:
+def workflow_credentials(draw: DrawFn) -> Dict[str, str]:
     """Generate workflow credentials."""
     return {"username": draw(st.text()), "password": draw(st.text())}
 
 
 @st.composite
-def workflow_args(draw, include_workflow_id: bool = False) -> Dict[str, Any]:
+def workflow_args(draw: DrawFn, include_workflow_id: bool = False) -> Dict[str, Any]:
     """Generate workflow arguments."""
-    args = {"param1": draw(st.text()), "credentials": draw(workflow_credentials())}
+    args: Dict[str, Any] = {"param1": draw(st.text()), "credentials": draw(workflow_credentials())}
 
     if include_workflow_id:
         args["workflow_id"] = draw(workflow_id())
@@ -39,12 +40,12 @@ def workflow_args(draw, include_workflow_id: bool = False) -> Dict[str, Any]:
 
 
 @st.composite
-def workflow_id(draw) -> str:
+def workflow_id(draw: DrawFn) -> str:
     """Generate valid workflow IDs."""
     return draw(st.text())
 
 
 @st.composite
-def run_id(draw) -> str:
+def run_id(draw: DrawFn) -> str:
     """Generate valid run IDs."""
     return draw(st.text())

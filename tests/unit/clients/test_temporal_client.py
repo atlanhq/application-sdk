@@ -2,7 +2,7 @@ from typing import Any, Dict, Generator, Protocol
 from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.temporal import TemporalClient
 from application_sdk.test_utils.hypothesis.strategies.temporal import (
@@ -24,14 +24,19 @@ def mock_dapr_output_client() -> Generator[MagicMock, None, None]:
         mock_instance.__exit__.return_value = None
         yield mock_instance
 
+@pytest.fixture
+def temporal_client() -> TemporalClient:
+    return TemporalClient(
+        host="localhost", port="7233", application_name="test_app", namespace="default"
+    )
 
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
 @given(params=temporal_connection_params())
-@settings(deadline=None)
-async def test_load(mock_connect: AsyncMock, params: Dict[str, str]):
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
+async def test_load(mock_connect: AsyncMock, params: Dict[str, str]) -> None:
     temporal_client = TemporalClient(**params)
     # Mock the client connection
     mock_client = AsyncMock()
@@ -54,23 +59,18 @@ async def test_load(mock_connect: AsyncMock, params: Dict[str, str]):
     assert temporal_client.client == mock_client
 
 
+@pytest.mark.asyncio
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
+@patch("application_sdk.clients.temporal.Client.connect", new_callable=AsyncMock)
 @given(args=workflow_args())
-@settings(deadline=None)
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_start_workflow(
     mock_connect: AsyncMock,
     mock_secret_store: MagicMock,
     args: Dict[str, Any],
-):
-    # Create temporal client
-    temporal_client = TemporalClient(
-        host="localhost", port="7233", application_name="test_app", namespace="default"
-    )
-
+    temporal_client: TemporalClient,
+    mock_dapr_output_client: MagicMock,
+) -> None:
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -85,7 +85,7 @@ async def test_start_workflow(
 
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
-
+    
     # Create a mock workflow class that implements WorkflowInterface
     class MockWorkflow:
         @staticmethod
@@ -96,35 +96,30 @@ async def test_start_workflow(
     result = await temporal_client.start_workflow(args, MockWorkflow)  # type: ignore
 
     # Assertions
-    assert mock_client.start_workflow.called
+    mock_client.start_workflow.assert_called_once()
     assert "workflow_id" in result
     assert result["workflow_id"] == "test_workflow_id"
     assert result["run_id"] == "test_run_id"
 
 
+@pytest.mark.asyncio
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
+@patch("application_sdk.clients.temporal.Client.connect", new_callable=AsyncMock)
 @given(args=workflow_args(include_workflow_id=True))
-@settings(deadline=None)
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_start_workflow_with_workflow_id(
     mock_connect: AsyncMock,
     mock_secret_store: MagicMock,
     args: Dict[str, Any],
-):
-    # Create temporal client
-    temporal_client = TemporalClient(
-        host="localhost", port="7233", application_name="test_app", namespace="default"
-    )
-
+    temporal_client: TemporalClient,
+    mock_dapr_output_client: MagicMock,
+) -> None:
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
 
     def start_workflow_side_effect(
-        workflow_type: Any, args: Any, id: str, *extra_args: Any, **kwargs: Any
+        workflow_type: Any, workflow_args: Any, id: str, *extra_args: Any, **kwargs: Any
     ) -> MagicMock:
         mock_handle = MagicMock()
         mock_handle.id = id
@@ -137,7 +132,7 @@ async def test_start_workflow_with_workflow_id(
 
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
-
+    
     # Create a mock workflow class that implements WorkflowInterface
     class MockWorkflow:
         @staticmethod
@@ -145,32 +140,30 @@ async def test_start_workflow_with_workflow_id(
             return {"status": "success"}
 
     # Run start_workflow and capture the result
-    result = await temporal_client.start_workflow(args, MockWorkflow)  # type: ignore
+    result = await temporal_client.start_workflow(
+        args,
+        MockWorkflow,  # type: ignore
+    )
 
     # Assertions
-    assert mock_client.start_workflow.called
+    mock_client.start_workflow.assert_called_once()
     assert "workflow_id" in result
     assert result["workflow_id"] == args["workflow_id"]
     assert result["run_id"] == "test_run_id"
 
 
+@pytest.mark.asyncio
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
+@patch("application_sdk.clients.temporal.Client.connect", new_callable=AsyncMock)
 @given(args=workflow_args())
-@settings(deadline=None)
+@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_start_workflow_failure(
     mock_connect: AsyncMock,
     mock_secret_store: MagicMock,
     args: Dict[str, Any],
-):
-    # Create temporal client
-    temporal_client = TemporalClient(
-        host="localhost", port="7233", application_name="test_app", namespace="default"
-    )
-
+    temporal_client: TemporalClient,
+    mock_dapr_output_client: MagicMock,
+) -> None:
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -181,7 +174,7 @@ async def test_start_workflow_failure(
 
     # Mock the state store
     mock_secret_store.store_credentials.return_value = "test_credentials"
-
+    
     # Create a mock workflow class that implements WorkflowInterface
     class MockWorkflow:
         @staticmethod
@@ -191,7 +184,7 @@ async def test_start_workflow_failure(
     # Assertions
     with pytest.raises(Exception, match="Simulated failure"):
         await temporal_client.start_workflow(args, MockWorkflow)  # type: ignore
-    assert mock_client.start_workflow.called
+    mock_client.start_workflow.assert_called_once()
 
 
 @patch("application_sdk.clients.temporal.Worker")
@@ -202,7 +195,7 @@ async def test_start_workflow_failure(
 async def test_create_worker_without_client(
     mock_connect: AsyncMock,
     mock_worker_class: MagicMock,
-):
+) -> None:
     # Create temporal client
     temporal_client = TemporalClient(
         host="localhost", port="7233", application_name="test_app", namespace="default"
