@@ -108,6 +108,16 @@ class BaseTest(TestInterface):
         )
         self.assertEqual(response.status_code, 200)
 
+        response_data = response.json()
+        self.assertEqual(response_data["success"], True)
+        self.assertEqual(
+            response_data["message"], "Workflow configuration fetched successfully"
+        )
+
+        # Verify that response data contains the expected metadata and connection
+        self.assertEqual(response_data["data"]["connection"], self.connection)
+        self.assertEqual(response_data["data"]["metadata"], self.metadata)
+
     @pytest.mark.order(7)
     def test_data_validation(self):
         """
