@@ -164,18 +164,18 @@ class TestNormalizeFilters:
 
 
 class TestWorkflowConfig:
-    @patch("application_sdk.common.utils.StateStoreInput.extract_configuration")
-    def test_get_workflow_config(self, mock_extract: Mock) -> None:
+    @patch("application_sdk.common.utils.StateStoreInput.get_state")
+    def test_get_workflow_config(self, mock_get_state: Mock) -> None:
         """Test getting workflow configuration"""
         expected_config = {"key": "value"}
-        mock_extract.return_value = expected_config
+        mock_get_state.return_value = expected_config
 
         # Call the function
         result = get_workflow_config("test_config_id")
 
         # Assertions
         assert result == expected_config
-        mock_extract.assert_called_once_with("test_config_id")
+        mock_get_state.assert_called_once_with("config_test_config_id")
 
     @patch("application_sdk.common.utils.StateStoreInput.extract_configuration")
     @patch("application_sdk.common.utils.StateStoreOutput.store_configuration")
