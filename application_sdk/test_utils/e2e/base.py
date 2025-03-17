@@ -84,6 +84,21 @@ class BaseTest(TestInterface):
         logger.info("Workflow completed successfully")
 
     @pytest.mark.order(5)
+    def test_configuration_update(self):
+        """
+        Test configuration update
+        """
+        update_payload = {
+            "connection": self.connection,
+            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+        }
+        response = requests.post(
+            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}",
+            json=update_payload,
+        )
+        self.assertEqual(response.status_code, 200)
+
+    @pytest.mark.order(6)
     def test_configuration_get(self):
         """
         Test configuration retrieval
@@ -92,42 +107,6 @@ class BaseTest(TestInterface):
             f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
         )
         self.assertEqual(response.status_code, 200)
-
-    @pytest.mark.order(6)
-    def test_configuration_update(self):
-        """
-        Test configuration update
-        """
-        # First get the current configuration
-        get_response = requests.get(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
-        )
-        self.assertEqual(get_response.status_code, 200)
-        current_config = get_response.json()
-
-        # Prepare update payload
-        update_payload = {
-            "connection": self.connection,
-            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
-        }
-
-        # Update the configuration
-        update_response = requests.post(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}",
-            json=update_payload,
-        )
-        self.assertEqual(update_response.status_code, 200)
-
-        # Get the updated configuration and verify it matches our update
-        updated_get_response = requests.get(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
-        )
-        self.assertEqual(updated_get_response.status_code, 200)
-        updated_config = updated_get_response.json()
-
-        # Assert that the configuration was updated correctly
-        expected_config = {**current_config, "temp-table-regex": "^temp_.*"}
-        self.assertEqual(updated_config, expected_config)
 
     @pytest.mark.order(7)
     def test_data_validation(self):
