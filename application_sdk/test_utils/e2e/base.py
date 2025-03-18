@@ -6,7 +6,7 @@ from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e import TestInterface
-from application_sdk.test_utils.e2e.conftest import WorkflowDetails
+from application_sdk.test_utils.e2e.conftest import workflow_details
 
 logger = get_logger(__name__)
 
@@ -69,8 +69,10 @@ class BaseTest(TestInterface):
         )
         self.assertEqual(response["success"], True)
         self.assertEqual(response["message"], "Workflow started successfully")
-        WorkflowDetails.workflow_id = response["data"]["workflow_id"]
-        WorkflowDetails.run_id = response["data"]["run_id"]
+        workflow_details[self.test_name] = {
+            "workflow_id": response["data"]["workflow_id"],
+            "run_id": response["data"]["run_id"],
+        }
 
         # Wait for the workflow to complete
         workflow_status = self.monitor_and_wait_workflow_execution()
