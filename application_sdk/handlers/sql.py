@@ -1,9 +1,12 @@
 import asyncio
 import json
+import os
+import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
+from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
@@ -329,46 +332,46 @@ class SQLHandler(HandlerInterface):
         Returns:
             Dict[str, Any]: Result of the version check with success status and messages
         """
-        import os
-        import re
-
-        from packaging import version
 
         logger.info("Checking client version")
         try:
-            # If the get_client_version_sql is not defined, skip the check
-            if not self.get_client_version_sql:
-                logger.info("Client version check skipped - no version query defined")
-                return {
-                    "success": True,
-                    "successMessage": "Client version check skipped - no version query defined",
-                    "failureMessage": "",
-                }
-
-            # Only execute the query if get_client_version_sql is defined
-            sql_input = await SQLQueryInput(
-                query=self.get_client_version_sql,
-                engine=self.sql_client.engine,
-                chunk_size=None,
-            ).get_dataframe()
-
+            # Try to get the version from the sql_client
+            version_info = self.sql_client.engine.dialect.server_version_info
             min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
-
-            # Get the full version string from the result
-            version_string = sql_input.to_dict(orient="records")[0]["version"]
-
-            # Extract the version number using regex
-            # This will extract patterns like "15.4" from the version string
-            version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
-            if version_match:
-                client_version = version_match.group(1)
+            
+            if version_info:
+                # Handle tuple version info (like (15, 4))
+                if isinstance(version_info, tuple):
+                    client_version = '.'.join(str(x) for x in version_info)
+                else:
+                    client_version = str(version_info)
             else:
-                # Fallback if no version number is found
-                client_version = "0.0.0"
-                logger.warning(
-                    f"Could not extract version number from: {version_string}"
-                )
+                # If server_version_info is None, try using get_client_version_sql
+                if not self.get_client_version_sql:
+                    logger.info("Client version check skipped - no version query defined")
+                    return {
+                        "success": True,
+                        "successMessage": "Client version check skipped - no version query defined",
+                        "failureMessage": "",
+                    }
 
+                # Only execute the query if get_client_version_sql is defined
+                sql_input = await SQLQueryInput(
+                    query=self.get_client_version_sql,
+                    engine=self.sql_client.engine,
+                    chunk_size=None,
+                ).get_dataframe()
+                
+                version_string = next(iter(sql_input.to_dict(orient="records")[0].values()))
+                version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
+                if version_match:
+                    client_version = version_match.group(1)
+                else:
+                    client_version = "0.0.0"
+                    logger.warning(
+                        f"Could not extract version number from: {version_string}"
+                    )
+            
             is_valid = version.parse(client_version) >= version.parse(min_version)
 
             return {
