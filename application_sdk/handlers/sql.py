@@ -346,7 +346,7 @@ class SQLHandler(HandlerInterface):
 
             # Try to get the version from the sql_client
             version_info = self.sql_client.engine.dialect.server_version_info
-            min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
+            min_version = os.getenv("ATLAN_SQL_CLIENT_MIN_VERSION", "0.0.0")
 
             if version_info:
                 # Handle tuple version info (like (15, 4))
