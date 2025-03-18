@@ -335,34 +335,33 @@ class SQLHandler(HandlerInterface):
 
         logger.info("Checking client version")
         try:
+            # If server_version_info is None, try using get_client_version_sql
+            if not self.get_client_version_sql:
+                logger.info("Client version check skipped - no version query defined")
+                return {
+                    "success": True,
+                    "successMessage": "Client version check skipped - no version query defined",
+                    "failureMessage": "",
+                }
+
             # Try to get the version from the sql_client
             version_info = self.sql_client.engine.dialect.server_version_info
             min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
-            
+
             if version_info:
                 # Handle tuple version info (like (15, 4))
-                if isinstance(version_info, tuple):
-                    client_version = '.'.join(str(x) for x in version_info)
-                else:
-                    client_version = str(version_info)
+                client_version = ".".join(str(x) for x in version_info)
             else:
-                # If server_version_info is None, try using get_client_version_sql
-                if not self.get_client_version_sql:
-                    logger.info("Client version check skipped - no version query defined")
-                    return {
-                        "success": True,
-                        "successMessage": "Client version check skipped - no version query defined",
-                        "failureMessage": "",
-                    }
-
                 # Only execute the query if get_client_version_sql is defined
                 sql_input = await SQLQueryInput(
                     query=self.get_client_version_sql,
                     engine=self.sql_client.engine,
                     chunk_size=None,
                 ).get_dataframe()
-                
-                version_string = next(iter(sql_input.to_dict(orient="records")[0].values()))
+
+                version_string = next(
+                    iter(sql_input.to_dict(orient="records")[0].values())
+                )
                 version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
                 if version_match:
                     client_version = version_match.group(1)
@@ -371,7 +370,7 @@ class SQLHandler(HandlerInterface):
                     logger.warning(
                         f"Could not extract version number from: {version_string}"
                     )
-            
+
             is_valid = version.parse(client_version) >= version.parse(min_version)
 
             return {

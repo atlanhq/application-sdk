@@ -239,4 +239,3 @@ class AsyncSQLClient(SQLClient):
             raise
 
         activity.logger.info("Query execution completed")
-
