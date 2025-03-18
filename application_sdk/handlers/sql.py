@@ -34,7 +34,7 @@ class SQLHandler(HandlerInterface):
     sql_client: SQLClient
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
-    version_check_sql: str = "SELECT version();"
+    get_client_version_sql: str | None = None
     # Variables for fetching metadata
     metadata_sql: str | None = None
     tables_check_sql: str | None = None
@@ -319,16 +319,14 @@ class SQLHandler(HandlerInterface):
                 "error": str(exc),
             }
 
-    @transform(sql_input=SQLQueryInput(query="version_check_sql", chunk_size=None))
-    async def _check_client_version(self, sql_input: pd.DataFrame) -> Dict[str, Any]:
+    async def _check_client_version(self) -> bool:
         """
         Check if the client version meets the minimum required version.
 
         Returns:
-            Dict[str, Any]: Result of the version check
+            bool: True if the client version meets the minimum required version, False otherwise
         """
         
-        logger.info(f"sql_input: {sql_input}")
         import os
         import re
         from packaging import version
@@ -336,6 +334,14 @@ class SQLHandler(HandlerInterface):
         logger.info("Checking client version")
         try:
             min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
+            
+            # if the get_client_version_sql is not defined skip the check
+            if not self.get_client_version_sql:
+                return True
+            
+            sql_input = await self.sql_client.run_query(self.get_client_version_sql)
+            
+            logger.info(f"sql_input: {sql_input}")
             
             # Get the full version string from the result
             version_string = sql_input.to_dict(orient="records")[0]["version"]
@@ -352,22 +358,7 @@ class SQLHandler(HandlerInterface):
 
             is_valid = version.parse(client_version) >= version.parse(min_version)
 
-            return {
-                "success": is_valid,
-                "successMessage": f"Client version {client_version} meets minimum required version {min_version}"
-                if is_valid
-                else "",
-                "failureMessage": f"Client version {client_version} does not meet minimum required version {min_version}"
-                if not is_valid
-                else "",
-                "clientVersion": client_version,
-                "minRequiredVersion": min_version,
-            }
+            return is_valid
         except Exception as exc:
-            logger.error("Error during client version check", exc_info=True)
-            return {
-                "success": False,
-                "successMessage": "",
-                "failureMessage": "Client version check failed",
-                "error": str(exc),
-            }
+            logger.error(f"Error during client version check, {exc}")
+            return False
