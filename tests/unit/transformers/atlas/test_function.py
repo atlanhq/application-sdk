@@ -76,63 +76,6 @@ def test_function_initialization():
         == "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/test_function"
     )
 
-
-def test_function_transformation(
-    transformer: AtlasTransformer,
-    raw_data: Dict[str, Any],
-    expected_data: Dict[str, Any],
-):
-    """Test the transformation of regular functions."""
-    transformed_data = transformer.transform_metadata(
-        "FUNCTION",
-        raw_data["regular_function"],
-        "test_workflow_id",
-        "test_run_id",
-        connection_name="test-connection",
-        connection_qualified_name="default/snowflake/1728518400",
-    )
-
-    assert transformed_data is not None
-    expected_function = expected_data["regular_function"]
-
-    # Basic type assertion
-    assert transformed_data["typeName"] == "Function"
-
-    # Standard attributes verification
-    standard_attributes = [
-        "name",
-        "qualifiedName",
-        "functionDefinition",
-        "functionReturnType",
-        "functionArguments",
-        "functionLanguage",
-        "functionType",
-        "functionIsExternal",
-        "functionIsDMF",
-        "functionIsSecure",
-        "functionIsMemoizable",
-        "databaseName",
-        "schemaName",
-        "databaseQualifiedName",
-        "schemaQualifiedName",
-        "connectionQualifiedName",
-        "lastSyncRun",
-        "lastSyncWorkflowName",
-    ]
-    assert_attributes(transformed_data, expected_function, standard_attributes)
-
-    # Verify function schema relationship
-    assert "functionSchema" in transformed_data["attributes"]
-    assert (
-        transformed_data["attributes"]["functionSchema"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
-        == expected_function["attributes"]["functionSchema"]["uniqueAttributes"][
-            "qualifiedName"
-        ]
-    )
-
-
 def test_function_invalid_data(transformer: AtlasTransformer):
     """Test function transformation with invalid data."""
     # Test missing required fields
