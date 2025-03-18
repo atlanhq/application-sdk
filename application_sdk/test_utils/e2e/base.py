@@ -1,3 +1,4 @@
+import asyncio
 from typing import Any, Dict
 
 import pytest
@@ -89,3 +90,25 @@ class BaseTest(TestInterface):
         Test for validating the extracted source data
         """
         self.validate_data()
+
+    @pytest.mark.order(7)
+    def test_scale(self):
+        """
+        Test for running the scale test
+        """
+        if not self.run_scale_test:
+            pytest.skip("Scale test is disabled")
+        
+        # Run the async scale_test method
+        status, time_taken = asyncio.run(self.scale_test())
+        
+        # Validate the results
+        self.assertEqual(status, "COMPLETED 🟢")
+        assert time_taken > 0
+        
+        logger.info(f"Scale test completed successfully. Time taken: {time_taken} seconds")
+
+    @pytest.fixture(scope="class", autouse=True)
+    def setup_scale_test_fixture(self):
+        if self.run_scale_test:
+            self.setup_scale_test_resources()

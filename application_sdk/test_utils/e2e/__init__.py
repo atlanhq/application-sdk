@@ -3,25 +3,27 @@ import os
 import time
 from abc import abstractmethod
 from glob import glob
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import orjson
 import pandas as pd
 import pandera.extensions as extensions
-from pandera.io import from_yaml
+import sqlglot
+from pandera.io.pandas_io import from_yaml
 from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e.client import FastApiServerClient
 from application_sdk.test_utils.e2e.conftest import WorkflowDetails
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml
+from application_sdk.test_utils.scale_data_generator.driver import DriverArgs, driver
 
 logger = get_logger(__name__)
 
 
 # Custom Tests
 @extensions.register_check_method(statistics=["expected_record_count"])
-def check_record_count_ge(df: pd.DataFrame, *, expected_record_count) -> bool:
+def check_record_count_ge(df: pd.DataFrame, *, expected_record_count: int) -> bool:
     if df.shape[0] >= expected_record_count:
         return True
     else:
@@ -55,6 +57,11 @@ class TestInterface:
     connection: Dict[str, Any]
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
+    run_scale_test: bool = False
+    scale_test_config_path: str = ""
+    scale_test_output_dir: str = ""
+    scale_test_output_format: str = ""
+    scale_test_app_type: str = ""
 
     @classmethod
     def setup_class(cls):
@@ -71,37 +78,42 @@ class TestInterface:
             host=config["server_config"]["server_host"],
             version=config["server_config"]["server_version"],
         )
+        cls.run_scale_test = config["scale_tests"]["enabled"]
+        cls.scale_test_config_path = config["scale_tests"]["scale_test_config_path"]
+        cls.scale_test_output_dir = config["scale_tests"]["output_dir"]
+        cls.scale_test_output_format = config["scale_tests"]["output_format"]
+        cls.app_type = config["scale_tests"]["app_type"]
 
     @abstractmethod
-    def test_health_check(self):
+    def test_health_check(self) -> None:
         """
         Method to test the health check of the server.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def test_auth(self):
+    def test_auth(self) -> None:
         """
         Method to test the test authentication.
         """
         raise NotImplementedError
 
     @abstractmethod
-    def test_metadata(self):
+    def test_metadata(self) -> None:
         """
         Method to test the metadata
         """
         raise NotImplementedError
 
     @abstractmethod
-    def test_preflight_check(self):
+    def test_preflight_check(self) -> None:
         """
         Method to test the preflight check
         """
         raise NotImplementedError
 
     @abstractmethod
-    def test_run_workflow(self):
+    def test_run_workflow(self) -> None:
         """
         Method to run the workflow
         """
@@ -142,8 +154,15 @@ class TestInterface:
         start_time = time.time()
         while True:
             # Get the workflow status using the API
+            workflow_id = WorkflowDetails.workflow_id
+            run_id = WorkflowDetails.run_id
+
+            # Check if workflow_id and run_id are not None before proceeding
+            if workflow_id is None or run_id is None:
+                raise ValueError("Workflow ID or Run ID is missing")
+
             workflow_status_response = self.client.get_workflow_status(
-                WorkflowDetails.workflow_id, WorkflowDetails.run_id
+                workflow_id, run_id
             )
 
             # Get the actual status from the response
@@ -227,3 +246,73 @@ class TestInterface:
             dataframe = self._get_normalised_dataframe(expected_file_postfix)
             schema.validate(dataframe, lazy=True)
             logger.info(f"Data Validation for {expected_file_postfix} successful")
+
+    def _get_transpiled_sql(self, sql: str) -> str:
+        """
+        Transpiles the given SQL to DuckDB SQL.
+        """
+        transpiled_sql = sqlglot.transpile(
+            sql,
+            write="duckdb",
+            read=self.scale_test_app_type,
+        )[0]
+
+        return transpiled_sql
+
+    def setup_scale_test_resources(self):
+        """
+        Setup resources for scale testing by generating test data.
+        This loads the test data configuration and creates the required datasets.
+        """
+        driver(
+            DriverArgs(
+                config_path=self.scale_test_config_path,
+                output_dir=self.scale_test_output_dir,
+                output_format=self.scale_test_output_format,
+            )
+        )
+
+    async def scale_test(self) -> Tuple[str, float]:
+        """
+        Method to run scale tests using the application workflow.
+
+        This async method should be implemented by subclasses to set up and run the workflow with
+        scale test data. The implementation should:
+
+        1. Define an application_sql function that creates and starts the workflow components
+        2. Set up mocks/patches to use the test data instead of real database connections
+        3. Run the workflow using run_and_monitor_workflow
+        4. Validate the results
+
+        Example implementation:
+
+        ```python
+        async def scale_test(self):
+            # Mock implementation for SQL
+            mock_sql_input = self.create_mock_sql_input()
+
+            # Set up all necessary patches
+            with patch(...), patch(...), ...:
+                # Initialize the temporal client
+                temporal_client = TemporalClient()
+                await temporal_client.load()
+
+                # Run and monitor the workflow
+                status, time_taken = await run_and_monitor_workflow(
+                    application_sql,  # The workflow function to test
+                    temporal_client,
+                    polling_interval=5,
+                    timeout=600,
+                )
+
+                # Assert workflow completed successfully
+                assert status == "COMPLETED 🟢"
+                assert time_taken > 0
+
+                return status, time_taken
+        ```
+
+        Returns:
+            Tuple[str, float]: A tuple containing the workflow status and time taken
+        """
+        raise NotImplementedError("Subclasses must implement scale_test method")
