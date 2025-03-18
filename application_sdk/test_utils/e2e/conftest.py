@@ -1,3 +1,3 @@
-from typing import Dict, Any
+from typing import Any, Dict
 
 workflow_details: Dict[str, Any] = {}

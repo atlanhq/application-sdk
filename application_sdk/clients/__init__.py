@@ -35,15 +35,3 @@ class ClientInterface(ABC):
         Subclasses should override this method if cleanup is needed.
         """
         return
-
-    @abstractmethod
-    async def get_version(self) -> str:
-        """Get the version of the client.
-
-        Returns:
-            str: The version of the client.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-        """
-        raise NotImplementedError("get_version method is not implemented")

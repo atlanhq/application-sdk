@@ -319,46 +319,72 @@ class SQLHandler(HandlerInterface):
                 "error": str(exc),
             }
 
-    async def _check_client_version(self) -> bool:
+    async def _check_client_version(self) -> Dict[str, Any]:
         """
         Check if the client version meets the minimum required version.
 
+        If get_client_version_sql is not defined by the implementing app,
+        this check will be skipped and return success.
+
         Returns:
-            bool: True if the client version meets the minimum required version, False otherwise
+            Dict[str, Any]: Result of the version check with success status and messages
         """
-        
         import os
         import re
+
         from packaging import version
 
         logger.info("Checking client version")
         try:
-            min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
-            
-            # if the get_client_version_sql is not defined skip the check
+            # If the get_client_version_sql is not defined, skip the check
             if not self.get_client_version_sql:
-                return True
-            
-            sql_input = await self.sql_client.run_query(self.get_client_version_sql)
-            
-            logger.info(f"sql_input: {sql_input}")
-            
+                logger.info("Client version check skipped - no version query defined")
+                return {
+                    "success": True,
+                    "successMessage": "Client version check skipped - no version query defined",
+                    "failureMessage": "",
+                }
+
+            # Only execute the query if get_client_version_sql is defined
+            sql_input = await SQLQueryInput(
+                query=self.get_client_version_sql,
+                engine=self.sql_client.engine,
+                chunk_size=None,
+            ).get_dataframe()
+
+            min_version = os.getenv("ATLAN_CLIENT_MIN_VERSION", "0.0.0")
+
             # Get the full version string from the result
             version_string = sql_input.to_dict(orient="records")[0]["version"]
-            
+
             # Extract the version number using regex
-            # This will extract patterns like "15.4" from the full PostgreSQL version string
+            # This will extract patterns like "15.4" from the version string
             version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
             if version_match:
                 client_version = version_match.group(1)
             else:
                 # Fallback if no version number is found
                 client_version = "0.0.0"
-                logger.warning(f"Could not extract version number from: {version_string}")
+                logger.warning(
+                    f"Could not extract version number from: {version_string}"
+                )
 
             is_valid = version.parse(client_version) >= version.parse(min_version)
 
-            return is_valid
+            return {
+                "success": is_valid,
+                "successMessage": f"Client version {client_version} meets minimum required version {min_version}"
+                if is_valid
+                else "",
+                "failureMessage": f"Client version {client_version} does not meet minimum required version {min_version}"
+                if not is_valid
+                else "",
+            }
         except Exception as exc:
-            logger.error(f"Error during client version check, {exc}")
-            return False
+            logger.error(f"Error during client version check: {exc}", exc_info=True)
+            return {
+                "success": False,
+                "successMessage": "",
+                "failureMessage": "Client version check failed",
+                "error": str(exc),
+            }
