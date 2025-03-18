@@ -91,7 +91,7 @@ class BaseTest(TestInterface):
         Test configuration retrieval
         """
         response = requests.get(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
+            f"{self.client.host}/workflows/v1/config/{workflow_details[self.test_name]['workflow_id']}"
         )
         self.assertEqual(response.status_code, 200)
 
@@ -115,7 +115,7 @@ class BaseTest(TestInterface):
             "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
         }
         response = requests.post(
-            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}",
+            f"{self.client.host}/workflows/v1/config/{workflow_details[self.test_name]['workflow_id']}",
             json=update_payload,
         )
         self.assertEqual(response.status_code, 200)
