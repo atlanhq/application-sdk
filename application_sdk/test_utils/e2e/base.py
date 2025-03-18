@@ -6,7 +6,7 @@ from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e import TestInterface
-from application_sdk.test_utils.e2e.conftest import WorkflowDetails
+from application_sdk.test_utils.e2e.conftest import workflow_details
 
 logger = get_logger(__name__)
 
@@ -57,7 +57,7 @@ class BaseTest(TestInterface):
         )
         self.assertEqual(response, self.expected_api_responses["preflight_check"])
 
-    @pytest.mark.order(5)
+    @pytest.mark.order(4)
     def test_run_workflow(self):
         """
         Test running the metadata extraction workflow
@@ -69,8 +69,10 @@ class BaseTest(TestInterface):
         )
         self.assertEqual(response["success"], True)
         self.assertEqual(response["message"], "Workflow started successfully")
-        WorkflowDetails.workflow_id = response["data"]["workflow_id"]
-        WorkflowDetails.run_id = response["data"]["run_id"]
+        workflow_details[self.test_name] = {
+            "workflow_id": response["data"]["workflow_id"],
+            "run_id": response["data"]["run_id"],
+        }
 
         # Wait for the workflow to complete
         workflow_status = self.monitor_and_wait_workflow_execution()
@@ -83,7 +85,51 @@ class BaseTest(TestInterface):
 
         logger.info("Workflow completed successfully")
 
+    @pytest.mark.order(5)
+    def test_configuration_get(self):
+        """
+        Test configuration retrieval
+        """
+        response = requests.get(
+            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}"
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response_data = response.json()
+        self.assertEqual(response_data["success"], True)
+        self.assertEqual(
+            response_data["message"], "Workflow configuration fetched successfully"
+        )
+
+        # Verify that response data contains the expected metadata and connection
+        self.assertEqual(response_data["data"]["connection"], self.connection)
+        self.assertEqual(response_data["data"]["metadata"], self.metadata)
+
     @pytest.mark.order(6)
+    def test_configuration_update(self):
+        """
+        Test configuration update
+        """
+        update_payload = {
+            "connection": self.connection,
+            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+        }
+        response = requests.post(
+            f"{self.client.host}/workflows/v1/config/{WorkflowDetails.workflow_id}",
+            json=update_payload,
+        )
+        self.assertEqual(response.status_code, 200)
+
+        response_data = response.json()
+        self.assertEqual(response_data["success"], True)
+        self.assertEqual(
+            response_data["message"], "Workflow configuration updated successfully"
+        )
+        self.assertEqual(
+            response_data["data"]["metadata"]["temp-table-regex"], "^temp_.*"
+        )
+
+    @pytest.mark.order(7)
     def test_data_validation(self):
         """
         Test for validating the extracted source data

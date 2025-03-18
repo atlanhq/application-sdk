@@ -1,6 +1,3 @@
-from typing import Optional
+from typing import Dict, Any
 
-
-class WorkflowDetails:
-    workflow_id: Optional[str] = None
-    run_id: Optional[str] = None
+workflow_details: Dict[str, Any] = {}
