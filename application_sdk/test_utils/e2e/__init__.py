@@ -82,7 +82,7 @@ class TestInterface:
         cls.scale_test_config_path = config["scale_tests"]["scale_test_config_path"]
         cls.scale_test_output_dir = config["scale_tests"]["output_dir"]
         cls.scale_test_output_format = config["scale_tests"]["output_format"]
-        cls.app_type = config["scale_tests"]["app_type"]
+        cls.scale_test_app_type = config["scale_tests"]["app_type"]
 
     @abstractmethod
     def test_health_check(self) -> None:
