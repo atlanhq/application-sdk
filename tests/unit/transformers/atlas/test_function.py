@@ -76,6 +76,7 @@ def test_function_initialization():
         == "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/test_function"
     )
 
+
 def test_function_invalid_data(transformer: AtlasTransformer):
     """Test function transformation with invalid data."""
     # Test missing required fields
