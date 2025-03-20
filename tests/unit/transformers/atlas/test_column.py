@@ -210,7 +210,7 @@ def test_column_with_view_parent(
     )
     assert_attributes(transformed_data, expected_column, column_attributes)
     assert "lastSyncRunAt" in transformed_data["attributes"]
-    assert transformed_data["attributes"]["lastSyncRunAt"] != None
+    assert transformed_data["attributes"]["lastSyncRunAt"] is not None
 
     # Test view relationship
     assert "view" in transformed_data["attributes"]
@@ -252,7 +252,7 @@ def test_column_with_materialized_view_parent(
     )
     assert_attributes(transformed_data, expected_column, column_attributes)
     assert "lastSyncRunAt" in transformed_data["attributes"]
-    assert transformed_data["attributes"]["lastSyncRunAt"] != None
+    assert transformed_data["attributes"]["lastSyncRunAt"] is not None
 
     # Test materialized view relationship
     assert "materialisedView" in transformed_data["attributes"]
@@ -298,7 +298,7 @@ def test_column_with_foreign_table_parent(
     )
     assert_attributes(transformed_data, expected_column, column_attributes)
     assert "lastSyncRunAt" in transformed_data["attributes"]
-    assert transformed_data["attributes"]["lastSyncRunAt"] != None
+    assert transformed_data["attributes"]["lastSyncRunAt"] is not None
 
     # Test materialized view relationship
     assert "table" in transformed_data["attributes"]
@@ -340,7 +340,7 @@ def test_column_with_partitioned_table_parent(
     )
     assert_attributes(transformed_data, expected_column, column_attributes)
     assert "lastSyncRunAt" in transformed_data["attributes"]
-    assert transformed_data["attributes"]["lastSyncRunAt"] != None
+    assert transformed_data["attributes"]["lastSyncRunAt"] is not None
 
     # Test materialized view relationship
     assert "tablePartition" in transformed_data["attributes"]
@@ -386,7 +386,7 @@ def test_column_variation_1(
     )
     assert_attributes(transformed_data, expected_column, column_attributes)
     assert "lastSyncRunAt" in transformed_data["attributes"]
-    assert transformed_data["attributes"]["lastSyncRunAt"] != None
+    assert transformed_data["attributes"]["lastSyncRunAt"] is not None
 
     # Test materialized view relationship
     assert "table" in transformed_data["attributes"]
@@ -428,7 +428,7 @@ def test_column_variation_2(
     )
     assert_attributes(transformed_data, expected_column, column_attributes)
     assert "lastSyncRunAt" in transformed_data["attributes"]
-    assert transformed_data["attributes"]["lastSyncRunAt"] != None
+    assert transformed_data["attributes"]["lastSyncRunAt"] is not None
 
     # Test materialized view relationship
     assert "table" in transformed_data["attributes"]

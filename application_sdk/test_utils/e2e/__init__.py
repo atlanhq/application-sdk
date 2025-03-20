@@ -156,16 +156,16 @@ class TestInterface:
         start_time = time.time()
         while True:
             # Get the workflow status using the API
-            workflow_id = WorkflowDetails.workflow_id
-            run_id = WorkflowDetails.run_id
+            workflow_id = workflow_details[self.test_name]["workflow_id"]
+            run_id = workflow_details[self.test_name]["run_id"]
 
             # Check if workflow_id and run_id are not None before proceeding
             if workflow_id is None or run_id is None:
                 raise ValueError("Workflow ID or Run ID is missing")
 
             workflow_status_response = self.client.get_workflow_status(
-                workflow_details[self.test_name]["workflow_id"],
-                workflow_details[self.test_name]["run_id"],
+                workflow_id,
+                run_id,
             )
 
             self.run_id = workflow_status_response["data"]["last_executed_run_id"]
