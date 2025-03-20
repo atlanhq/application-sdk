@@ -1,0 +1,9 @@
+{
+    "simple_procedure": {
+        "procedure_catalog": "wwi",
+        "procedure_schema": "public",
+        "procedure_name": "pg_stat_statements_reset",
+        "source_owner": "rdsadmin",
+        "procedure_definition": "pg_stat_statements_reset_1_7"
+    }
+}
