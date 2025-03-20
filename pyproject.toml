@@ -97,6 +97,7 @@ pytest = "^8.3.3"
 coverage = "^7.6.1"
 pytest-asyncio = "^0.24.0"
 hypothesis = "^6.114.0"
+sqlglot = {extras = ["rs"], version = "^26.0.1"}
 
 [tool.poetry.group.examples.dependencies]
 snowflake-sqlalchemy = "^1.7.0"
