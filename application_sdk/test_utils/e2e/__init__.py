@@ -291,31 +291,31 @@ class TestInterface:
 
         Example implementation:
 
-        ```python
-        async def scale_test(self):
-            # Mock implementation for SQL
-            mock_sql_input = self.create_mock_sql_input()
+        .. code-block:: python
 
-            # Set up all necessary patches
-            with patch(...), patch(...), ...:
-                # Initialize the temporal client
-                temporal_client = TemporalClient()
-                await temporal_client.load()
+            async def scale_test(self):
+                # Mock implementation for SQL
+                mock_sql_input = self.create_mock_sql_input()
 
-                # Run and monitor the workflow
-                status, time_taken = await run_and_monitor_workflow(
-                    application_sql,  # The workflow function to test
-                    temporal_client,
-                    polling_interval=5,
-                    timeout=600,
-                )
+                # Set up all necessary patches
+                with patch(...), patch(...), ...:
+                    # Initialize the temporal client
+                    temporal_client = TemporalClient()
+                    await temporal_client.load()
 
-                # Assert workflow completed successfully
-                assert status == "COMPLETED 🟢"
-                assert time_taken > 0
+                    # Run and monitor the workflow
+                    status, time_taken = await run_and_monitor_workflow(
+                        application_sql,  # The workflow function to test
+                        temporal_client,
+                        polling_interval=5,
+                        timeout=600,
+                    )
 
-                return status, time_taken
-        ```
+                    # Assert workflow completed successfully
+                    assert status == "COMPLETED 🟢"
+                    assert time_taken > 0
+
+                    return status, time_taken
 
         Returns:
             Tuple[str, float]: A tuple containing the workflow status and time taken
