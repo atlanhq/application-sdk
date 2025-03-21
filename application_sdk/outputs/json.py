@@ -1,6 +1,7 @@
 import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
+import orjson
 import pandas as pd
 from temporalio import activity
 
@@ -200,8 +201,22 @@ class JsonOutput(Output):
             Daft does not have built-in JSON writing support, so we convert to pandas.
         """
         # Daft does not have a built in method to write the daft dataframe to json
-        # So we convert it to pandas dataframe and write it to json
-        await self.write_dataframe(dataframe.to_pandas())
+        # So we are using orjson to write the data to json in a more memory efficient way
+        self.chunk_count += 1
+        self.total_record_count += dataframe.count_rows()
+        output_file_name = (
+            f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+        )
+        with open(output_file_name, "w") as f:
+            for row in dataframe.iter_rows():
+                f.write(
+                    orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+                )
+
+        # Push the file to the object store
+        await ObjectStoreOutput.push_file_to_object_store(
+            self.output_prefix, output_file_name
+        )
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.

@@ -3,12 +3,12 @@ import json
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import pandas as pd
+import daft
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
+from application_sdk.decorators import transform_daft
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
@@ -55,10 +55,10 @@ class SQLHandler(HandlerInterface):
         """
         await self.sql_client.load(credentials)
 
-    @transform(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
+    @transform_daft(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
     async def prepare_metadata(
         self,
-        sql_input: pd.DataFrame,
+        sql_input: daft.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> List[Dict[Any, Any]]:
         """
@@ -66,7 +66,7 @@ class SQLHandler(HandlerInterface):
         """
         result: List[Dict[Any, Any]] = []
         try:
-            for row in sql_input.to_dict(orient="records"):
+            for row in sql_input.to_pylist():
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -78,12 +78,12 @@ class SQLHandler(HandlerInterface):
             raise exc
         return result
 
-    @transform(
+    @transform_daft(
         sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
     )
     async def test_auth(
         self,
-        sql_input: pd.DataFrame,
+        sql_input: daft.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> bool:
         """
@@ -93,7 +93,7 @@ class SQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            sql_input.to_dict(orient="records")
+            sql_input.to_pylist()
             return True
         except Exception as exc:
             logger.error(
@@ -278,7 +278,7 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @transform(
+    @transform_daft(
         sql_input=SQLQueryInput(
             query="tables_check_sql",
             chunk_size=None,
@@ -287,7 +287,7 @@ class SQLHandler(HandlerInterface):
     )
     async def tables_check(
         self,
-        sql_input: pd.DataFrame,
+        sql_input: daft.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
@@ -296,7 +296,7 @@ class SQLHandler(HandlerInterface):
         logger.info("Starting tables check")
         try:
             result = 0
-            for row in sql_input.to_dict(orient="records"):
+            for row in sql_input.to_pylist():
                 result += row["count"]
 
             return {

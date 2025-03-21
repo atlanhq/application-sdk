@@ -2,6 +2,7 @@ import asyncio
 import concurrent
 from typing import Any, Dict, Iterator, Optional, Union
 
+import daft
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -136,6 +137,20 @@ class SQLQueryInput(Input):
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
+    def _execute_query_daft(self) -> Union[daft.DataFrame, Iterator[daft.DataFrame]]:
+        """Execute SQL query using the provided engine and daft.
+
+        Returns:
+            Union[daft.DataFrame, Iterator[daft.DataFrame]]: Query results as DataFrame
+                or iterator of DataFrames if chunked.
+        """
+        # Daft uses ConnectorX to read data from SQL by default for supported connectors
+        # If a connection string is passed, it will use ConnectorX to read data
+        # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
+        if isinstance(self.engine, str):
+            return daft.read_sql(self.query, self.engine)
+        return daft.read_sql(self.query, self.engine.connect)
+
     def _execute_query(self) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
         """Execute SQL query using the provided engine and pandas.
 
@@ -216,14 +231,11 @@ class SQLQueryInput(Input):
             https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
-            # Daft uses ConnectorX to read data from SQL by default for supported connectors
-            # If a connection string is passed, it will use ConnectorX to read data
-            # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-            import daft
-
-            if isinstance(self.engine, str):
-                return daft.read_sql(self.query, self.engine)
-            return daft.read_sql(self.query, lambda: self.engine.connect())
+            # Run the blocking operation in a thread pool
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return await asyncio.get_event_loop().run_in_executor(
+                    executor, self._execute_query_daft
+                )
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 

@@ -1,6 +1,7 @@
-from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type
+from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
 
-import pandas as pd
+import daft
+import daft.udf
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -8,7 +9,8 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import run_sync, transform
+from application_sdk.common.udfs import process_rows
+from application_sdk.decorators import transform_daft
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -147,60 +149,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._clean_state()
 
-    @run_sync
-    def _process_rows(
-        self,
-        results: pd.DataFrame,
-        typename: str,
-        workflow_id: str,
-        workflow_run_id: str,
-        state: SQLMetadataExtractionActivitiesState,
-        connection_name: Optional[str],
-        connection_qualified_name: Optional[str],
-    ) -> List[Optional[Dict[str, Any]]]:
-        """Process DataFrame rows and transform them into metadata.
-
-        Args:
-            results: DataFrame containing the rows to process
-            typename: Type of data being transformed
-            workflow_id: Current workflow ID
-            workflow_run_id: Current workflow run ID
-            state: Current activity state
-            connection_name: Name of the connection
-            connection_qualified_name: Qualified name of the connection
-
-        Returns:
-            list: List of transformed metadata dictionaries
-        """
-        transformed_metadata_list = []
-        for row in results.to_dict(orient="records"):
-            try:
-                if not state.transformer:
-                    raise ValueError("Transformer is not set")
-
-                transformed_metadata: Optional[Dict[str, Any]] = (
-                    state.transformer.transform_metadata(
-                        typename,
-                        row,
-                        workflow_id=workflow_id,
-                        workflow_run_id=workflow_run_id,
-                        connection_name=connection_name,
-                        connection_qualified_name=connection_qualified_name,
-                    )
-                )
-                if transformed_metadata is not None:
-                    transformed_metadata_list.append(transformed_metadata)
-                else:
-                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                activity.logger.error(
-                    f"Error processing row for {typename}: {row_error}"
-                )
-        return transformed_metadata_list
-
     async def _transform_batch(
         self,
-        results,
+        results: daft.DataFrame,
         typename: str,
         workflow_id: str,
         workflow_run_id: str,
@@ -217,30 +168,29 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             "connection_qualified_name", None
         )
 
-        # Replace NaN with None to avoid issues with JSON serialization
-        results = results.replace({float("nan"): None})
-
-        transformed_metadata_list = await self._process_rows(
-            results,
-            typename,
-            workflow_id,
-            workflow_run_id,
-            state,
-            connection_name,
-            connection_qualified_name,
+        results = results.select(
+            process_rows(
+                *results.columns,
+                typename=typename,
+                workflow_id=workflow_id,
+                workflow_run_id=workflow_run_id,
+                connection_name=connection_name,
+                connection_qualified_name=connection_qualified_name,
+                transformer=state.transformer,
+            ).alias("transformed_data")
         )
 
-        return pd.DataFrame(transformed_metadata_list)
+        return results
 
     @activity.defn
     @auto_heartbeater
-    @transform(
-        batch_input=SQLQueryInput(query="fetch_database_sql"),
+    @transform_daft(
+        batch_input=SQLQueryInput(query="fetch_database_sql", chunk_size=None),
         raw_output=JsonOutput(output_suffix="/raw/database"),
     )
     async def fetch_databases(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
+        batch_input: Generator[daft.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -254,18 +204,18 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="database")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
-        batch_input=SQLQueryInput(query="fetch_schema_sql"),
+    @transform_daft(
+        batch_input=SQLQueryInput(query="fetch_schema_sql", chunk_size=None),
         raw_output=JsonOutput(output_suffix="/raw/schema"),
     )
     async def fetch_schemas(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
+        batch_input: Generator[daft.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -279,21 +229,22 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="schema")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
+    @transform_daft(
         batch_input=SQLQueryInput(
             query="fetch_table_sql",
             temp_table_sql_query="tables_extraction_temp_table_regex_sql",
+            chunk_size=None,
         ),
         raw_output=JsonOutput(output_suffix="/raw/table"),
     )
     async def fetch_tables(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
+        batch_input: Generator[daft.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -307,21 +258,22 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="table")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
+    @transform_daft(
         batch_input=SQLQueryInput(
             query="fetch_column_sql",
             temp_table_sql_query="column_extraction_temp_table_regex_sql",
+            chunk_size=None,
         ),
         raw_output=JsonOutput(output_suffix="/raw/column"),
     )
     async def fetch_columns(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
+        batch_input: Generator[daft.DataFrame, None, None],
         raw_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -335,18 +287,18 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="column")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
+    @transform_daft(
         raw_input=JsonInput(path="/raw/"),
         transformed_output=JsonOutput(output_suffix="/transformed/"),
     )
     async def transform_data(
         self,
-        raw_input: AsyncGenerator[pd.DataFrame, None],
+        raw_input: AsyncGenerator[daft.DataFrame, None],
         transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -370,5 +322,5 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 kwargs.get("workflow_run_id"),
                 kwargs,
             )
-            await transformed_output.write_dataframe(transformed_chunk)
+            await transformed_output.write_daft_dataframe(transformed_chunk)
         return await transformed_output.get_statistics()
