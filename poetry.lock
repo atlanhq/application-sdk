@@ -5125,7 +5125,7 @@ sqlcipher = ["sqlcipher3_binary"]
 name = "sqlglot"
 version = "26.11.1"
 description = "An easily customizable SQL parser and transpiler"
-optional = false
+optional = true
 python-versions = ">=3.8"
 files = [
     {file = "sqlglot-26.11.1-py3-none-any.whl", hash = "sha256:5659fb46937ed89da6854e30eb318f57110f5526ef555407a2bf8f714e70496d"},
@@ -5143,7 +5143,7 @@ rs = ["sqlglotrs (==0.4.0)"]
 name = "sqlglotrs"
 version = "0.4.0"
 description = "An easily customizable SQL parser and transpiler"
-optional = false
+optional = true
 python-versions = ">=3.7"
 files = [
     {file = "sqlglotrs-0.4.0-cp310-cp310-macosx_10_12_x86_64.whl", hash = "sha256:065bea5861d613ee27967cdd76d5176303595d9794e0a2dd4a1027f2ebe6ad91"},
@@ -6265,7 +6265,7 @@ daft = ["getdaft"]
 iam-auth = ["boto3"]
 iceberg = ["pyiceberg"]
 langgraph-agent = ["langchain-core", "langchain-openai", "langgraph"]
-scale-data-generator = ["duckdb", "duckdb-engine", "faker", "numpy", "pandas", "pyarrow", "pyyaml"]
+scale-data-generator = ["duckdb", "duckdb-engine", "faker", "numpy", "pandas", "pyarrow", "pyyaml", "sqlglot"]
 sqlalchemy = ["sqlalchemy"]
 tests = ["orjson", "pandera", "pytest-order"]
 workflows = ["dapr", "pandas", "temporalio"]
@@ -6273,4 +6273,4 @@ workflows = ["dapr", "pandas", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "7122f5022bf80277de439fe784167dd444dafba546c16efa65dfae7b9d837d68"
+content-hash = "1e5b4252d257ce657cb767f84346c10bc7282462a7a3ba255256844fccaef5a0"
