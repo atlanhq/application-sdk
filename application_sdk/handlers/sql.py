@@ -335,24 +335,21 @@ class SQLHandler(HandlerInterface):
 
         logger.info("Checking client version")
         try:
-            # If server_version_info is None, try using get_client_version_sql
-            if not self.get_client_version_sql:
-                logger.info("Client version check skipped - no version query defined")
-                return {
-                    "success": True,
-                    "successMessage": "Client version check skipped - no version query defined",
-                    "failureMessage": "",
-                }
+            min_version = os.getenv("ATLAN_SQL_CLIENT_MIN_VERSION")
+            client_version = None
 
-            # Try to get the version from the sql_client
-            version_info = self.sql_client.engine.dialect.server_version_info
-            min_version = os.getenv("ATLAN_SQL_CLIENT_MIN_VERSION", "0.0.0")
+            # Try to get the version from the sql_client dialect
+            if hasattr(self.sql_client.engine.dialect, "server_version_info"):
+                version_info = self.sql_client.engine.dialect.server_version_info
+                if version_info:
+                    # Handle tuple version info (like (15, 4))
+                    client_version = ".".join(str(x) for x in version_info)
+                    logger.info(
+                        f"Detected client version from dialect: {client_version}"
+                    )
 
-            if version_info:
-                # Handle tuple version info (like (15, 4))
-                client_version = ".".join(str(x) for x in version_info)
-            else:
-                # Only execute the query if get_client_version_sql is defined
+            # If dialect version not available and get_client_version_sql is defined, use SQL query
+            if not client_version and self.get_client_version_sql:
                 sql_input = await SQLQueryInput(
                     query=self.get_client_version_sql,
                     engine=self.sql_client.engine,
@@ -365,12 +362,35 @@ class SQLHandler(HandlerInterface):
                 version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
                 if version_match:
                     client_version = version_match.group(1)
+                    logger.info(
+                        f"Detected client version from SQL query: {client_version}"
+                    )
                 else:
-                    client_version = "0.0.0"
                     logger.warning(
                         f"Could not extract version number from: {version_string}"
                     )
 
+            # If no client version could be determined
+            if not client_version:
+                logger.info("Client version could not be determined")
+                return {
+                    "success": True,
+                    "successMessage": "Client version check skipped - version could not be determined",
+                    "failureMessage": "",
+                }
+
+            # If no minimum version requirement is set, just report the client version
+            if not min_version:
+                logger.info(
+                    f"No minimum version requirement set. Client version: {client_version}"
+                )
+                return {
+                    "success": True,
+                    "successMessage": f"Client version: {client_version} (no minimum version requirement)",
+                    "failureMessage": "",
+                }
+
+            # Compare versions when both client version and minimum version are available
             is_valid = version.parse(client_version) >= version.parse(min_version)
 
             return {
