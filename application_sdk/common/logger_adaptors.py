@@ -24,7 +24,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-LOG_LEVEL: str = os.getenv("LOG_LEVEL", "DEBUG").upper()
+LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # Configure temporal logging
 log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
