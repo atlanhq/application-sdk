@@ -40,8 +40,6 @@ logger = get_logger(__name__)
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
-WORKFLOW_MAX_TIMEOUT = timedelta(hours=6)
-
 
 class TemporalConstants(Enum):
     HOST = os.getenv("ATLAN_TEMPORAL_HOST", "localhost")
@@ -49,6 +47,7 @@ class TemporalConstants(Enum):
     NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE", "default")
     APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 
+    WORKFLOW_MAX_TIMEOUT = timedelta(hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT", "1")))
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -289,7 +288,7 @@ class TemporalClient(ClientInterface):
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
-                execution_timeout=WORKFLOW_MAX_TIMEOUT,
+                execution_timeout=TemporalConstants.WORKFLOW_MAX_TIMEOUT.value,
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
