@@ -187,7 +187,7 @@ class SQLHandler(HandlerInterface):
             ) = await asyncio.gather(
                 self.check_schemas_and_databases(payload),
                 self.tables_check(payload),
-                self._check_client_version(),
+                self.check_client_version(),
             )
 
             if (
@@ -322,7 +322,7 @@ class SQLHandler(HandlerInterface):
                 "error": str(exc),
             }
 
-    async def _check_client_version(self) -> Dict[str, Any]:
+    async def check_client_version(self) -> Dict[str, Any]:
         """
         Check if the client version meets the minimum required version.
 
