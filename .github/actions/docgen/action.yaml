@@ -1,0 +1,60 @@
+name: Automated Docs Generation for Atlan Apps
+description: |
+  Automatically generates comprehensive documentation from atlan docs manigest using the Atlan Apps SDK.
+  This action scans the specified source directory for markdown files, docstrings, type hints, and other documentation markers,
+  then compiles them into structured documentation.
+
+inputs:
+  github-token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v1
+      with:
+        python-version: "3.11"
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: 1.8.5
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        virtualenvs-path: .venv
+        installer-parallel: true
+
+    - name: Install dependencies
+      shell: bash
+      run: |
+        git config --global url."https://${{ inputs.github-token }}@github.com/".insteadOf "git@github.com:"
+        poetry install -vv
+        poetry add mkdocs mkdocs-material
+
+    - name: Verify and Generate Docs
+      shell: bash
+      run: |
+        # Create Python script inline
+        cat << 'EOF' > docs.py
+        from application_sdk.docgen import AtlanDocsGenerator
+
+        def main():
+          docs_generator = AtlanDocsGenerator(
+              docs_directory_path="docs",
+              export_path="dist",
+          )
+          docs_generator.verify()
+          docs_generator.export()
+
+        if __name__ == "__main__":
+          main()
+
+        EOF
+
+        poetry run python docs.py
