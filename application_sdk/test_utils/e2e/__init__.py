@@ -13,7 +13,7 @@ from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e.client import FastApiServerClient
-from application_sdk.test_utils.e2e.conftest import WorkflowDetails
+from application_sdk.test_utils.e2e.conftest import workflow_details
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml
 
 logger = get_logger(__name__)
@@ -71,6 +71,7 @@ class TestInterface:
             host=config["server_config"]["server_host"],
             version=config["server_config"]["server_version"],
         )
+        cls.test_name = config["test_name"]
 
     @abstractmethod
     def test_health_check(self):
@@ -143,8 +144,11 @@ class TestInterface:
         while True:
             # Get the workflow status using the API
             workflow_status_response = self.client.get_workflow_status(
-                WorkflowDetails.workflow_id, WorkflowDetails.run_id
+                workflow_details[self.test_name]["workflow_id"],
+                workflow_details[self.test_name]["run_id"],
             )
+
+            self.run_id = workflow_status_response["data"]["last_executed_run_id"]
 
             # Get the actual status from the response
             self.assertEqual(workflow_status_response["success"], True)
@@ -175,7 +179,7 @@ class TestInterface:
         Returns:
             pd.DataFrame: Normalised dataframe of the extracted data
         """
-        extracted_dir_path = f"{self.extracted_output_base_path}/{WorkflowDetails.workflow_id}/{WorkflowDetails.run_id}{expected_file_postfix}"
+        extracted_dir_path = f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
         data = []
         for f_name in glob(f"{extracted_dir_path}/*.json"):
             with open(f_name, "rb") as f:
