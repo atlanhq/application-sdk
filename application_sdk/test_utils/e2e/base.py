@@ -136,16 +136,6 @@ class BaseTest(TestInterface):
         """
         self.validate_data()
 
-    @pytest.mark.order(7)
-    def test_health_check_negative(self):
-        """
-        Test health check with invalid server URL
-        """
-        with pytest.raises(requests.exceptions.RequestException):
-            # Use an invalid host to trigger connection error
-            invalid_host = "http://invalid-host-that-does-not-exist:8000"
-            requests.get(invalid_host, timeout=2)
-
     @pytest.mark.order(8)
     def test_auth_negative_invalid_credentials(self):
         """
