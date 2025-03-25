@@ -7,7 +7,7 @@ from typing import Any, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
@@ -85,6 +85,9 @@ class AtlanLoggerAdapter:
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                    headers={
+                        "Content-Type": "application/json",
+                    }
                 )
 
                 batch_processor = BatchLogRecordProcessor(
