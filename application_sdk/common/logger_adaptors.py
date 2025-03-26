@@ -94,44 +94,64 @@ class AtlanLoggerAdapter:
                     resource=Resource.create(resource_attributes)
                 )
 
-                # Choose the right exporter based on protocol
+                # List to store processors
+                processors = []
+
+                # Add gRPC exporter if enabled
                 if ENABLE_GRPC_EXPORTER:
-                    exporter = GRPCLogExporter(
+                    grpc_exporter = GRPCLogExporter(
                         endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                         timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
                     )
-                else:
-                    # Test the HTTP endpoint is reachable
-                    if ENABLE_HTTP_EXPORTER:
-                        try:
-                            import requests
+                    grpc_processor = BatchLogRecordProcessor(
+                        grpc_exporter,
+                        schedule_delay_millis=int(
+                            os.getenv("OTEL_BATCH_DELAY_MS", "5000")
+                        ),
+                        max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
+                        max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                    )
+                    processors.append(grpc_processor)
+                    self.logger_provider.add_log_record_processor(grpc_processor)
 
-                            # Just make a HEAD request to see if the endpoint is responsive
-                            # Strip the path portion as we're just testing connectivity to the host
-                            base_url = OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT.split(
-                                "/telemetry"
-                            )[0]
-                            requests.head(f"{base_url}/health", timeout=2)
-                        except Exception:
-                            pass
+                # Add HTTP exporter if enabled
+                if ENABLE_HTTP_EXPORTER:
+                    try:
+                        import requests
 
-                    exporter = HTTPLogExporter(
+                        # Just make a HEAD request to see if the endpoint is responsive
+                        # Strip the path portion as we're just testing connectivity to the host
+                        base_url = OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT.split(
+                            "/telemetry"
+                        )[0]
+                        requests.head(f"{base_url}/health", timeout=2)
+                    except Exception:
+                        pass
+
+                    http_exporter = HTTPLogExporter(
                         endpoint=OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT,
                         timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
                         headers={"Content-Type": "application/x-protobuf"},
                     )
+                    http_processor = BatchLogRecordProcessor(
+                        http_exporter,
+                        schedule_delay_millis=int(
+                            os.getenv("OTEL_BATCH_DELAY_MS", "5000")
+                        ),
+                        max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
+                        max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                    )
+                    processors.append(http_processor)
+                    self.logger_provider.add_log_record_processor(http_processor)
 
-                batch_processor = BatchLogRecordProcessor(
-                    exporter,
-                    schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
-                    max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-                    max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
-                )
-
-                self.logger_provider.add_log_record_processor(batch_processor)
-
-                # Add OTLP sink
-                self.logger.add(self.otlp_sink, level=LOG_LEVEL)
+                # Make sure we have at least one processor
+                if not processors:
+                    self.logger.warning(
+                        "No OTLP exporters were enabled. Logs will not be exported."
+                    )
+                else:
+                    # Add OTLP sink
+                    self.logger.add(self.otlp_sink, level=LOG_LEVEL)
 
             except Exception as e:
                 self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
