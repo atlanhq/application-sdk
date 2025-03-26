@@ -335,7 +335,7 @@ class SQLHandler(HandlerInterface):
 
         logger.info("Checking client version")
         try:
-            min_version = os.getenv("ATLAN_SQL_CLIENT_MIN_VERSION")
+            min_version = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
             client_version = None
 
             # Try to get the version from the sql_client dialect
