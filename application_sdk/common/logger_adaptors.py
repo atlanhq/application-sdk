@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 from contextvars import ContextVar
@@ -24,6 +25,11 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 )
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Configure temporal logging
+log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
+logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.getLogger("temporalio").setLevel(log_level)
 
 # Add these constants
 SEVERITY_MAPPING = {

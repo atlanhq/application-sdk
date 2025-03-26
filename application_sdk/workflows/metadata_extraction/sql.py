@@ -91,7 +91,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
-            schedule_to_start_timeout=self.default_schedule_to_start_timeout,
         )
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
@@ -120,7 +119,6 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     retry_policy=retry_policy,
                     start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,
-                    schedule_to_start_timeout=self.default_schedule_to_start_timeout,
                 )
             )
 
