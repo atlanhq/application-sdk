@@ -339,7 +339,7 @@ class SQLHandler(HandlerInterface):
             client_version = None
 
             # Try to get the version from the sql_client dialect
-            if hasattr(self.sql_client.engine.dialect, "server_version_info"):
+            if hasattr(self.sql_client, "engine"):
                 version_info = self.sql_client.engine.dialect.server_version_info
                 if version_info:
                     # Handle tuple version info (like (15, 4))
