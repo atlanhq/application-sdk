@@ -7,7 +7,12 @@ from typing import Any, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+    OTLPLogExporter as GRPCLogExporter,
+)
+from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+    OTLPLogExporter as HTTPLogExporter,
+)
 from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
@@ -23,8 +28,15 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
-ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
+OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT: str = os.getenv(
+    "OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT", "http://0.0.0.0:8050/telemetry/v1/logs"
+)
+ENABLE_OTLP_LOGS: bool = os.getenv("ATLAN_ENABLE_OTLP_LOGS", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+ENABLE_GRPC_EXPORTER: bool = os.getenv("ENABLE_GRPC_EXPORTER", "true").lower() == "true"
+ENABLE_HTTP_EXPORTER: bool = (
+    os.getenv("ENABLE_HTTP_EXPORTER", "false").lower() == "true"
+)
 
 # Configure temporal logging
 log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
@@ -82,10 +94,32 @@ class AtlanLoggerAdapter:
                     resource=Resource.create(resource_attributes)
                 )
 
-                exporter = OTLPLogExporter(
-                    endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                    timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
-                )
+                # Choose the right exporter based on protocol
+                if ENABLE_GRPC_EXPORTER:
+                    exporter = GRPCLogExporter(
+                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                        timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                    )
+                else:
+                    # Test the HTTP endpoint is reachable
+                    if ENABLE_HTTP_EXPORTER:
+                        try:
+                            import requests
+
+                            # Just make a HEAD request to see if the endpoint is responsive
+                            # Strip the path portion as we're just testing connectivity to the host
+                            base_url = OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT.split(
+                                "/telemetry"
+                            )[0]
+                            requests.head(f"{base_url}/health", timeout=2)
+                        except Exception:
+                            pass
+
+                    exporter = HTTPLogExporter(
+                        endpoint=OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT,
+                        timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                        headers={"Content-Type": "application/x-protobuf"},
+                    )
 
                 batch_processor = BatchLogRecordProcessor(
                     exporter,
