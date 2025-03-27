@@ -387,7 +387,7 @@ class TemporalClient(ClientInterface):
             raise ValueError("Client is not loaded")
 
         try:
-            workflow_handle = await self.client.get_workflow_handle(
+            workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
             )
             workflow_execution = await workflow_handle.describe()
