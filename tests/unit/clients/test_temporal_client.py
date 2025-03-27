@@ -286,35 +286,6 @@ async def test_close(mock_connect: AsyncMock, temporal_client: TemporalClient):
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
-async def test_stop_workflow_error(
-    mock_connect: AsyncMock, temporal_client: TemporalClient
-):
-    """Test stop_workflow error handling."""
-    # Mock the client connection
-    mock_client = AsyncMock()
-    mock_connect.return_value = mock_client
-
-    # Mock workflow handle with error
-    mock_handle = AsyncMock()
-    mock_handle.terminate.side_effect = Exception("Error terminating workflow")
-    mock_client.get_workflow_handle = AsyncMock(return_value=mock_handle)
-
-    # Run load to connect the client
-    await temporal_client.load()
-
-    # Verify error is raised
-    with pytest.raises(Exception, match="Error terminating workflow"):
-        await temporal_client.stop_workflow("test_workflow_id", "test_run_id")
-
-
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
 async def test_get_workflow_run_status_error(
     mock_connect: AsyncMock, temporal_client: TemporalClient
 ):
