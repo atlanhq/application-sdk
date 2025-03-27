@@ -36,7 +36,6 @@ class WorkflowInterface(ABC):
 
     default_heartbeat_timeout: timedelta | None = timedelta(seconds=10)
     default_start_to_close_timeout: timedelta | None = timedelta(hours=2)
-    default_schedule_to_start_timeout: timedelta | None = timedelta(hours=6)
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
@@ -83,10 +82,7 @@ class WorkflowInterface(ABC):
             workflow_run_id = workflow.info().run_id
             workflow_args["workflow_run_id"] = workflow_run_id
 
-            retry_policy = RetryPolicy(
-                maximum_attempts=6,
-                backoff_coefficient=2,
-            )
+            retry_policy = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
             result = await workflow.execute_activity_method(
                 self.activities_cls.preflight_check,
@@ -94,7 +90,6 @@ class WorkflowInterface(ABC):
                 retry_policy=retry_policy,
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
-                schedule_to_start_timeout=self.default_schedule_to_start_timeout,
             )
 
             logger.info("Workflow completed successfully")

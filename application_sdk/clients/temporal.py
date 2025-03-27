@@ -1,5 +1,6 @@
 import os
 import uuid
+from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
 
@@ -46,6 +47,10 @@ class TemporalConstants(Enum):
     PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
     NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE", "default")
     APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+
+    WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
+        hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
+    )
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
@@ -287,6 +292,7 @@ class TemporalClient(ClientInterface):
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
+                execution_timeout=TemporalConstants.WORKFLOW_MAX_TIMEOUT_HOURS.value,
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
