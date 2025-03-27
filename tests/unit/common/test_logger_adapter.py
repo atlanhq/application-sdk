@@ -213,6 +213,7 @@ def test_get_logger():
     assert logger1 is logger2
     assert isinstance(logger1, AtlanLoggerAdapter)
 
+
 @given(st.text(min_size=1))
 def test_get_logger_with_various_names(logger_name: str):
     """Test get_logger function with various logger names."""
