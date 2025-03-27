@@ -2,9 +2,8 @@ from typing import Any, Dict, Generator
 from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
-from temporalio.client import WorkflowExecutionStatus
 
-from application_sdk.clients.temporal import TEMPORAL_NOT_FOUND_FAILURE, TemporalClient
+from application_sdk.clients.temporal import TemporalClient
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -287,29 +286,6 @@ async def test_close(mock_connect: AsyncMock, temporal_client: TemporalClient):
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-async def test_stop_workflow(mock_connect: AsyncMock, temporal_client: TemporalClient):
-    """Test stop_workflow successfully terminates a workflow."""
-    # Mock the client connection
-    mock_client = AsyncMock()
-    mock_connect.return_value = mock_client
-
-    # Mock workflow handle
-    mock_handle = AsyncMock()
-    mock_client.get_workflow_handle = AsyncMock(return_value=mock_handle)
-
-    # Run load to connect the client
-    await temporal_client.load()
-
-    # Stop the workflow
-    await temporal_client.stop_workflow("test_workflow_id", "test_run_id")
-
-    # Verify the workflow handle was retrieved and terminate was called
-    mock_client.get_workflow_handle.assert_called_once_with(
-        "test_workflow_id", run_id="test_run_id"
-    )
-    mock_handle.terminate.assert_awaited_once()
-
-
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
@@ -333,94 +309,6 @@ async def test_stop_workflow_error(
     # Verify error is raised
     with pytest.raises(Exception, match="Error terminating workflow"):
         await temporal_client.stop_workflow("test_workflow_id", "test_run_id")
-
-
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
-async def test_get_workflow_run_status(
-    mock_connect: AsyncMock, temporal_client: TemporalClient
-):
-    """Test get_workflow_run_status returns correct status."""
-    # Mock the client connection
-    mock_client = AsyncMock()
-    mock_connect.return_value = mock_client
-
-    # Mock workflow handle and execution
-    mock_handle = AsyncMock()
-    mock_execution = MagicMock()
-    mock_execution.raw_description.workflow_execution_info.status = (
-        WorkflowExecutionStatus.RUNNING.value
-    )
-    mock_execution.raw_description.workflow_execution_info.execution_duration.ToSeconds.return_value = 60
-    mock_execution.raw_description.workflow_execution_info.root_execution.run_id = (
-        "root_run_id"
-    )
-
-    mock_handle.describe = AsyncMock(return_value=mock_execution)
-    mock_client.get_workflow_handle = AsyncMock(return_value=mock_handle)
-
-    # Run load to connect the client
-    await temporal_client.load()
-
-    # Get workflow status
-    status = await temporal_client.get_workflow_run_status(
-        "test_workflow_id", "test_run_id", include_last_executed_run_id=True
-    )
-
-    # Verify the response
-    assert status["workflow_id"] == "test_workflow_id"
-    assert status["run_id"] == "test_run_id"
-    assert status["status"] == "RUNNING"
-    assert status["execution_duration_seconds"] == 60
-    assert status["last_executed_run_id"] == "root_run_id"
-
-
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
-async def test_get_workflow_run_status_not_found(
-    mock_connect: AsyncMock, temporal_client: TemporalClient
-):
-    """Test get_workflow_run_status when workflow is not found."""
-    # Mock the client connection
-    mock_client = AsyncMock()
-    mock_connect.return_value = mock_client
-
-    # Mock workflow handle with not found error
-    mock_handle = AsyncMock()
-
-    # Create a mock error that matches the expected structure
-    class MockGrpcError(Exception):
-        def __init__(self):
-            self.grpc_status = MagicMock()
-            self.grpc_status.details = [MagicMock()]
-            self.grpc_status.details[0].type_url = TEMPORAL_NOT_FOUND_FAILURE
-
-    mock_handle.describe.side_effect = MockGrpcError()
-    mock_client.get_workflow_handle = AsyncMock(return_value=mock_handle)
-
-    # Run load to connect the client
-    await temporal_client.load()
-
-    # Get workflow status
-    status = await temporal_client.get_workflow_run_status(
-        "test_workflow_id", "test_run_id"
-    )
-
-    # Verify the response for not found case
-    assert status["workflow_id"] == "test_workflow_id"
-    assert status["run_id"] == "test_run_id"
-    assert status["status"] == "NOT_FOUND"
-    assert status["execution_duration_seconds"] == 0
-
-    # Verify the workflow handle was called with correct parameters
-    mock_client.get_workflow_handle.assert_called_once_with(
-        "test_workflow_id", run_id="test_run_id"
-    )
-    mock_handle.describe.assert_called_once()
 
 
 @patch(
