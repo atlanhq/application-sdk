@@ -4,7 +4,7 @@ from typing import Any, Callable, Dict, Optional
 import duckdb
 import faker
 
-from application_sdk.test_utils.scale_data_generator.config_loader import (
+from application_sdk.test_utils.scale_data_generator.duckdb.config_loader import (
     ConfigLoader,
     OutputFormat,
 )

@@ -3,7 +3,7 @@ import os
 import time
 from abc import abstractmethod
 from glob import glob
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import orjson
 import pandas as pd
@@ -16,7 +16,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e.client import FastApiServerClient
 from application_sdk.test_utils.e2e.conftest import workflow_details
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml
-from application_sdk.test_utils.scale_data_generator.driver import DriverArgs, driver
+from application_sdk.test_utils.scale_data_generator.duckdb.driver import DriverArgs, driver
 
 logger = get_logger(__name__)
 
@@ -58,6 +58,7 @@ class TestInterface:
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
     run_scale_test: bool = False
+    run_scale_test_type: str = ""
     scale_test_config_path: str = ""
     scale_test_output_dir: str = ""
     scale_test_output_format: str = ""
@@ -80,10 +81,10 @@ class TestInterface:
         )
 
         cls.run_scale_test = config["scale_tests"]["enabled"]
-        cls.scale_test_config_path = config["scale_tests"]["scale_test_config_path"]
-        cls.scale_test_output_dir = config["scale_tests"]["output_dir"]
-        cls.scale_test_output_format = config["scale_tests"]["output_format"]
-        cls.scale_test_app_type = config["scale_tests"]["app_type"]
+        cls.scale_test_config_path = config["scale_tests"]["duckdb"]["scale_test_config_path"]
+        cls.scale_test_output_dir = config["scale_tests"]["duckdb"]["output_dir"]
+        cls.scale_test_output_format = config["scale_tests"]["duckdb"]["output_format"]
+        cls.scale_test_app_type = config["scale_tests"]["duckdb"]["app_type"]
         cls.test_name = config["test_name"]
 
     @abstractmethod
