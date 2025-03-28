@@ -7,7 +7,7 @@ from typing import Any, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
-from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+# Import both HTTP and gRPC exporters conditionally
 from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
@@ -23,8 +23,11 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
+# Add environment variable to control which protocol to use (http or grpc)
+OTEL_EXPORTER_PROTOCOL: str = os.getenv("OTEL_EXPORTER_PROTOCOL", "grpc").lower()
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
+
 
 # Configure temporal logging
 log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
@@ -82,6 +85,11 @@ class AtlanLoggerAdapter:
                     resource=Resource.create(resource_attributes)
                 )
 
+                # Choose the appropriate exporter based on protocol env var
+                if OTEL_EXPORTER_PROTOCOL == "http":
+                    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+                else:
+                    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
