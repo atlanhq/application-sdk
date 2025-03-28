@@ -16,7 +16,10 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e.client import FastApiServerClient
 from application_sdk.test_utils.e2e.conftest import workflow_details
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml
-from application_sdk.test_utils.scale_data_generator.duckdb.driver import DriverArgs, driver
+from application_sdk.test_utils.scale_data_generator.duckdb.driver import (
+    DriverArgs,
+    driver,
+)
 
 logger = get_logger(__name__)
 
@@ -81,7 +84,9 @@ class TestInterface:
         )
 
         cls.run_scale_test = config["scale_tests"]["enabled"]
-        cls.scale_test_config_path = config["scale_tests"]["duckdb"]["scale_test_config_path"]
+        cls.scale_test_config_path = config["scale_tests"]["duckdb"][
+            "scale_test_config_path"
+        ]
         cls.scale_test_output_dir = config["scale_tests"]["duckdb"]["output_dir"]
         cls.scale_test_output_format = config["scale_tests"]["duckdb"]["output_format"]
         cls.scale_test_app_type = config["scale_tests"]["duckdb"]["app_type"]

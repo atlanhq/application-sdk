@@ -3,7 +3,6 @@ from typing import Any, Dict, Optional
 
 import yaml
 
-
 class ConfigLoader:
     def __init__(self, config_path: str):
         self.config_path = Path(config_path)
@@ -25,7 +24,7 @@ class ConfigLoader:
         """Validate the configuration structure."""
         if not self.config:
             raise ValueError("Config is empty")
-
+            
         if "hierarchy" not in self.config:
             raise ValueError("Missing required section: hierarchy")
 
@@ -42,10 +41,7 @@ class ConfigLoader:
 
     def get_table_records(self, table_name: str) -> int:
         """Get the number of records for a specific table in the hierarchy."""
-
-        def find_table_records(
-            hierarchy: Dict[str, Any], target_name: str
-        ) -> Optional[int]:
+        def find_table_records(hierarchy: Dict[str, Any], target_name: str) -> Optional[int]:
             if hierarchy["name"] == target_name:
                 return hierarchy.get("records", 0)
             if "children" in hierarchy:
@@ -63,10 +59,7 @@ class ConfigLoader:
 
     def get_table_children(self, table_name: str) -> list[Dict[str, Any]]:
         """Get the children of a specific table in the hierarchy."""
-
-        def find_table_children(
-            hierarchy: Dict[str, Any], target_name: str
-        ) -> Optional[list[Dict[str, Any]]]:
+        def find_table_children(hierarchy: Dict[str, Any], target_name: str) -> Optional[list[Dict[str, Any]]]:
             if hierarchy["name"] == target_name:
                 return hierarchy.get("children", [])
             if "children" in hierarchy:
