@@ -7,6 +7,7 @@ from typing import Any, Dict, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
+
 # Import both HTTP and gRPC exporters conditionally
 from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
@@ -87,9 +88,13 @@ class AtlanLoggerAdapter:
 
                 # Choose the appropriate exporter based on protocol env var
                 if OTEL_EXPORTER_PROTOCOL == "http":
-                    from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+                    from opentelemetry.exporter.otlp.proto.http._log_exporter import (
+                        OTLPLogExporter,
+                    )
                 else:
-                    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+                    from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                        OTLPLogExporter,
+                    )
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                     timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
