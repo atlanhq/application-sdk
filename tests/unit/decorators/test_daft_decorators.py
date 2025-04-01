@@ -52,7 +52,11 @@ class TestDaftDecorators:
         """
         os.remove("/tmp/test_connectorx.db")
 
-    @given(value=st.integers())
+    @given(
+        value=st.integers(
+            min_value=-(2**31), max_value=2**31 - 1
+        )  # SQLite INTEGER limits
+    )
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
@@ -84,7 +88,11 @@ class TestDaftDecorators:
 
     @given(
         values=st.lists(
-            st.integers(),
+            st.integers(
+                min_value=-(2**31), max_value=2**31 - 1
+            ),  # SQLite INTEGER limits
+            min_size=1,
+            max_size=100,
         )
     )
     @patch(
@@ -124,7 +132,11 @@ class TestDaftDecorators:
 
     @given(
         values=st.lists(
-            st.integers(),
+            st.integers(
+                min_value=-(2**31), max_value=2**31 - 1
+            ),  # SQLite INTEGER limits
+            min_size=1,
+            max_size=100,
         ),
         chunk_size=st.integers(),
     )

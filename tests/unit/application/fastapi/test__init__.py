@@ -12,7 +12,7 @@ from application_sdk.application.fastapi import (
 )
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
-from application_sdk.test_utils.hypothesis.strategies.fastapi import (
+from application_sdk.test_utils.hypothesis.strategies.application.fastapi.fastapi import (
     event_data_strategy,
     payload_strategy,
 )
