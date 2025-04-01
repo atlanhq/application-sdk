@@ -6,14 +6,14 @@ The action ensures that the examples provided in the SDK are working correctly a
 
 ## Inputs
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| `github-token` | Yes | The GitHub token to use for the action |
-| `postgres-host` | Yes | The host of the Postgres database |
-| `postgres-password` | Yes | The password of the Postgres database |
-| `snowflake-account-id` | Yes | The account ID of the Snowflake database |
-| `snowflake-user` | Yes | The user of the Snowflake database |
-| `snowflake-password` | Yes | The password of the Snowflake database |
+| Input                  | Required | Description                              |
+| ---------------------- | -------- | ---------------------------------------- |
+| `github-token`         | Yes      | The GitHub token to use for the action   |
+| `postgres-host`        | Yes      | The host of the Postgres database        |
+| `postgres-password`    | Yes      | The password of the Postgres database    |
+| `snowflake-account-id` | Yes      | The account ID of the Snowflake database |
+| `snowflake-user`       | Yes      | The user of the Snowflake database       |
+| `snowflake-password`   | Yes      | The password of the Snowflake database   |
 
 ## What it does
 

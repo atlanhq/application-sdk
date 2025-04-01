@@ -4,9 +4,9 @@ This GitHub Action runs Trivy security scanner on the codebase to detect and rep
 
 ## Inputs
 
-| Input | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `add-report-comment-to-pr` | No | `true` | Whether to add a comment to the PR with the Trivy scan results |
+| Input                      | Required | Default | Description                                                    |
+| -------------------------- | -------- | ------- | -------------------------------------------------------------- |
+| `add-report-comment-to-pr` | No       | `true`  | Whether to add a comment to the PR with the Trivy scan results |
 
 ## What it does
 

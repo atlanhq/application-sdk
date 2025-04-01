@@ -4,10 +4,10 @@ This GitHub Action runs unit tests for the Atlan Application SDK. It executes a 
 
 ## Inputs
 
-| Input | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `github-token` | Yes | - | The GitHub token to use for the action |
-| `fail-under` | No | `60` | The minimum coverage threshold to enforce (percentage) |
+| Input          | Required | Default | Description                                            |
+| -------------- | -------- | ------- | ------------------------------------------------------ |
+| `github-token` | Yes      | -       | The GitHub token to use for the action                 |
+| `fail-under`   | No       | `60`    | The minimum coverage threshold to enforce (percentage) |
 
 ## What it does
 

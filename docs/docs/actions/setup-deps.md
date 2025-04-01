@@ -4,9 +4,9 @@ This GitHub Action sets up Python project dependencies and manages dependency ca
 
 ## Inputs
 
-| Input | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `cache` | No | `true` | Enable dependency caching |
+| Input   | Required | Default | Description               |
+| ------- | -------- | ------- | ------------------------- |
+| `cache` | No       | `true`  | Enable dependency caching |
 
 ## What it does
 

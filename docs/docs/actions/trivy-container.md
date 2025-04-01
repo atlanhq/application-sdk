@@ -4,10 +4,10 @@ This GitHub Action runs Trivy security scanner on container images to detect and
 
 ## Inputs
 
-| Input | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `skip-files` | No | - | Comma-separated list of files or directories to be skipped |
-| `github-token` | Yes | - | The GitHub token to use for the action |
+| Input          | Required | Default | Description                                                |
+| -------------- | -------- | ------- | ---------------------------------------------------------- |
+| `skip-files`   | No       | -       | Comma-separated list of files or directories to be skipped |
+| `github-token` | Yes      | -       | The GitHub token to use for the action                     |
 
 ## What it does
 

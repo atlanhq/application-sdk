@@ -4,11 +4,11 @@ This GitHub Action automatically synchronizes and merges branches in the reposit
 
 ## Inputs
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| `source-branch` | Yes | Source branch to sync from |
-| `target-branch` | Yes | Target branch to sync to |
-| `github-token` | Yes | GitHub token for authentication |
+| Input           | Required | Description                     |
+| --------------- | -------- | ------------------------------- |
+| `source-branch` | Yes      | Source branch to sync from      |
+| `target-branch` | Yes      | Target branch to sync to        |
+| `github-token`  | Yes      | GitHub token for authentication |
 
 ## What it does
 

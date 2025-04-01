@@ -6,10 +6,10 @@ The action ensures that Atlan apps remain compatible with SDK updates and contin
 
 ## Inputs
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| `github-token` | Yes | The GitHub token to use for the action |
-| `repo-name` | Yes | The name of the app repository to test |
+| Input          | Required | Description                            |
+| -------------- | -------- | -------------------------------------- |
+| `github-token` | Yes      | The GitHub token to use for the action |
+| `repo-name`    | Yes      | The name of the app repository to test |
 
 ## What it does
 

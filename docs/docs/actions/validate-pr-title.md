@@ -4,9 +4,9 @@ This GitHub Action validates pull request titles against defined patterns. It en
 
 ## Inputs
 
-| Input | Required | Description |
-|-------|----------|-------------|
-| `github-token` | Yes | The GitHub token to use for the action |
+| Input          | Required | Description                            |
+| -------------- | -------- | -------------------------------------- |
+| `github-token` | Yes      | The GitHub token to use for the action |
 
 ## What it does
 

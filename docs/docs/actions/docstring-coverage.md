@@ -4,10 +4,10 @@ This GitHub Action reports Python docstring coverage in a specified Python modul
 
 ## Inputs
 
-| Input | Required | Default | Description |
-|-------|----------|---------|-------------|
-| `fail-under` | No | `80` | Minimum required docstring coverage percentage |
-| `module-name` | No | `app` | Target Python module for coverage check |
+| Input         | Required | Default | Description                                    |
+| ------------- | -------- | ------- | ---------------------------------------------- |
+| `fail-under`  | No       | `80`    | Minimum required docstring coverage percentage |
+| `module-name` | No       | `app`   | Target Python module for coverage check        |
 
 ## What it does
 
