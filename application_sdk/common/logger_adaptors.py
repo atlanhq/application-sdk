@@ -156,7 +156,9 @@ class AtlanLoggerAdapter:
 
             except Exception as e:
                 # Bind logger_name before logging the error
-                self.logger.bind(logger_name=self.logger_name).error(f"Failed to setup OTLP logging: {str(e)}")
+                self.logger.bind(logger_name=self.logger_name).error(
+                    f"Failed to setup OTLP logging: {str(e)}"
+                )
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         try:
@@ -173,7 +175,9 @@ class AtlanLoggerAdapter:
                     if "=" in item  # Ensure there's an "=" to split
                 }
         except Exception as e:
-            self.logger.bind(logger_name=self.logger_name).error(f"Failed to parse OTLP resource attributes: {str(e)}")
+            self.logger.bind(logger_name=self.logger_name).error(
+                f"Failed to parse OTLP resource attributes: {str(e)}"
+            )
         return {}
 
     def _create_log_record(self, record: dict) -> LogRecord:
@@ -216,7 +220,9 @@ class AtlanLoggerAdapter:
             log_record = self._create_log_record(message.record)
             self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
         except Exception as e:
-            self.logger.bind(logger_name=self.logger_name).error(f"Error processing log record: {e}")
+            self.logger.bind(logger_name=self.logger_name).error(
+                f"Error processing log record: {e}"
+            )
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
