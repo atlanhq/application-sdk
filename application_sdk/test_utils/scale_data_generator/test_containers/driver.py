@@ -16,6 +16,7 @@ from application_sdk.test_utils.scale_data_generator.test_on_source.config_loade
 class DriverArgs:
     config_path: str
     source_type: str
+    container_class: Optional[Type] = None
 
 
 def driver(args: DriverArgs):
@@ -28,6 +29,7 @@ def driver(args: DriverArgs):
         generator = DataGenerator(
             config_loader=config_loader,
             source_type=args.source_type,
+            container_class=args.container_class,
         )
 
         try:

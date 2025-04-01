@@ -53,7 +53,9 @@ class DataCleaner:
         """
         connection.execute(text(drop_query))
 
-    def _drop_table(self, table_name: str, schema_name: str, connection: Engine) -> None:
+    def _drop_table(
+        self, table_name: str, schema_name: str, connection: Engine
+    ) -> None:
         """Drop a table from the database."""
         drop_query = f"""
         DROP TABLE IF EXISTS {schema_name}.{table_name} CASCADE
@@ -95,7 +97,7 @@ class DataCleaner:
             # Drop databases in reverse order
             for db_num in range(num_databases, 0, -1):
                 db_name = f"database_{db_num}"
-                
+
                 # Connect to the database
                 db_engine = create_engine(
                     self._get_connection_url().replace(self.db_name, db_name)

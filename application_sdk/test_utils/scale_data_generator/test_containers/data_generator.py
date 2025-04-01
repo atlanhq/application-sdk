@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Type
 
 import faker
 from sqlalchemy import (
@@ -55,15 +55,18 @@ class DataGenerator:
         self,
         config_loader: ConfigLoader,
         source_type: str,
+        container_class: Optional[Type] = None,
     ):
         """Initialize the data generator.
 
         Args:
             config_loader: ConfigLoader instance with hierarchy configuration
             source_type: Type of database (e.g., 'postgresql', 'mysql')
+            container_class: The testcontainer class to use (e.g., PostgresContainer)
         """
         self.config_loader = config_loader
         self.source_type = source_type
+        self.container_class = container_class
         self.fake = faker.Faker()
         self.engine: Optional[Engine] = None
         self.metadata = MetaData()
@@ -71,8 +74,11 @@ class DataGenerator:
 
     def _start_container(self) -> Dict[str, Any]:
         """Start a test container and return connection parameters."""
+        if not self.container_class:
+            raise ValueError(f"No container class provided for {self.source_type}")
+
         if self.source_type == "postgresql":
-            self.container = PostgresContainer("postgres:latest")
+            self.container = self.container_class("postgres:latest")
             self.container.start()
             return {
                 "username": self.container.POSTGRES_USER,

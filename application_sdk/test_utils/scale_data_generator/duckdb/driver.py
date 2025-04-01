@@ -8,6 +8,7 @@ from loguru import logger
 
 from application_sdk.test_utils.scale_data_generator.duckdb.config_loader import (
     ConfigLoader,
+    OutputFormat,
 )
 from application_sdk.test_utils.scale_data_generator.duckdb.data_generator import (
     DataGenerator,
@@ -30,7 +31,7 @@ def driver(args: DriverArgs):
         start_time = time.time()
         config_loader = ConfigLoader(args.config_path)
         generator = DataGenerator(config_loader)
-        generator.generate_data(args.output_format, args.output_dir)
+        generator.generate_data(OutputFormat(args.output_format), args.output_dir)
         generator.generate_duckdb_tables(args.output_dir)
         end_time = time.time()
         logger.info(
@@ -61,7 +62,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir",
         help="Directory to save generated files",
-        default="application_sdk/test_utils/scale_data_generator/output",
+        default="./tests/scale/output",
     )
 
     args = parser.parse_args()

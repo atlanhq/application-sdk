@@ -1,7 +1,6 @@
 import inspect
 import os
 import time
-from abc import abstractmethod
 from glob import glob
 from typing import Any, Dict, List, Optional
 
@@ -17,8 +16,22 @@ from application_sdk.test_utils.e2e.client import FastApiServerClient
 from application_sdk.test_utils.e2e.conftest import workflow_details
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml
 from application_sdk.test_utils.scale_data_generator.duckdb.driver import (
-    DriverArgs,
-    driver,
+    DriverArgs as DuckdbDriverArgs,
+)
+from application_sdk.test_utils.scale_data_generator.duckdb.driver import (
+    driver as duckdb_driver,
+)
+from application_sdk.test_utils.scale_data_generator.test_containers.driver import (
+    DriverArgs as TestcontainersDriverArgs,
+)
+from application_sdk.test_utils.scale_data_generator.test_containers.driver import (
+    driver as testcontainers_driver,
+)
+from application_sdk.test_utils.scale_data_generator.test_on_source.driver import (
+    DriverArgs as SourceDriverArgs,
+)
+from application_sdk.test_utils.scale_data_generator.test_on_source.driver import (
+    driver as source_driver,
 )
 
 logger = get_logger(__name__)
@@ -83,44 +96,45 @@ class TestInterface:
             version=config["server_config"]["server_version"],
         )
 
-        cls.run_scale_test = config["scale_tests"]["enabled"]
-        cls.scale_test_config_path = config["scale_tests"]["duckdb"][
-            "scale_test_config_path"
-        ]
-        cls.scale_test_output_dir = config["scale_tests"]["duckdb"]["output_dir"]
-        cls.scale_test_output_format = config["scale_tests"]["duckdb"]["output_format"]
-        cls.scale_test_app_type = config["scale_tests"]["duckdb"]["app_type"]
+        # Scale test configuration
+        if config.get("test_type") == "duckdb"
+            cls.scale_test_duckdb_config_path = "./tests/scale/config.yaml"
+            cls.scale_test_duckdb_output_dir = "./tests/scale/output"
+            cls.scale_test_duckdb_output_format = config.get("duckdb", {}).get("output_format", "json")
+            cls.scale_test_app_type = config.get("app_type", "postgres")
+        elif config.get("test_type") == "testcontainers":
+            cls.scale_test_config_path = "./tests/scale/config.yaml"
+            cls.scale_test_app_type = config.get("app_type", "postgres")
+            cls.scale_test_container_class = config.get("container_class", None)
+        elif config.get("test_type") == "source_data_generator":
+            cls.scale_test_config_path = "./tests/scale/config.yaml"
+
         cls.test_name = config["test_name"]
 
-    @abstractmethod
     def test_health_check(self) -> None:
         """
         Method to test the health check of the server.
         """
         raise NotImplementedError
 
-    @abstractmethod
     def test_auth(self) -> None:
         """
         Method to test the test authentication.
         """
         raise NotImplementedError
 
-    @abstractmethod
     def test_metadata(self) -> None:
         """
         Method to test the metadata
         """
         raise NotImplementedError
 
-    @abstractmethod
     def test_preflight_check(self) -> None:
         """
         Method to test the preflight check
         """
         raise NotImplementedError
 
-    @abstractmethod
     def test_run_workflow(self) -> None:
         """
         Method to run the workflow
@@ -270,15 +284,39 @@ class TestInterface:
 
         return transpiled_sql
 
-    def setup_scale_test_resources(self):
+    def setup_scale_test_resources_duckdb(self):
         """
-        Setup resources for scale testing by generating test data.
+        Setup resources for scale testing by generating test data in duckdb.
         This loads the test data configuration and creates the required datasets.
         """
-        driver(
-            DriverArgs(
+        duckdb_driver(
+            DuckdbDriverArgs(
+                config_path=self.scale_test_duckdb_config_path,
+                output_dir=self.scale_test_duckdb_output_dir,
+                output_format=self.scale_test_duckdb_output_format,
+            )
+        )
+
+    def setup_scale_test_resources_testcontainers(self):
+        """
+        Setup resources for scale testing by generating test data in testcontainers.
+        This loads the test data configuration and creates the required datasets.
+        """
+        testcontainers_driver(
+            TestcontainersDriverArgs(
                 config_path=self.scale_test_config_path,
-                output_dir=self.scale_test_output_dir,
-                output_format=self.scale_test_output_format,
+                source_type=self.scale_test_app_type,
+                container_class=self.scale_test_container_class,
+            )
+        )
+
+    def setup_scale_test_resources_sourcedata_generator(self):
+        """
+        Setup resources for scale testing by generating test data at source.
+        This loads the test data configuration and creates the required datasets.
+        """
+        source_driver(
+            SourceDriverArgs(
+                config_path=self.scale_test_config_path,
             )
         )
