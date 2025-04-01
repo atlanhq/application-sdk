@@ -102,7 +102,6 @@ runs:
         cat workflow_status.md
 
     - name: Comment test results on Pull Request
-      shell: bash
       if: ${{ !cancelled() && github.event_name == 'pull_request' }}
       uses: mshick/add-pr-comment@v2
       with:
