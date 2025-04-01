@@ -1,0 +1,82 @@
+name: Trivy Code Scanner for Atlan Apps
+
+description: |
+  Runs Trivy security scanner on the codebase to detect and report vulnerabilities.
+  This action uses Trivy to scan the codebase for vulnerabilities and report them as a SARIF file.
+  The SARIF file can be uploaded to the GitHub Security tab for further analysis.
+
+inputs:
+  add-report-comment-to-pr:
+    description: Whether to add a comment to the PR with the Trivy scan results
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Trivy Scan (SARIF)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0' # Don't fail here because we need to upload the scan results to GitHub Security tab
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Trivy Scan (JSON)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'json'
+        output: 'trivy-results.json'
+        exit-code: '0'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Upload Trivy Scan Results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Set up Python
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      if: inputs.add-report-comment-to-pr == 'true'
+      shell: bash
+      run: |
+        pip install mdutils
+
+    - name: Convert Trivy Scan Results to Markdown
+      if: inputs.add-report-comment-to-pr == 'true'
+      shell: bash
+      run: |
+        python .github/scripts/trivy-to-markdown.py trivy-results.json trivy-results.md
+
+    - name: Comment on PR with Trivy Scan Results
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: trivy
+        message-path: trivy-results.md
+
+    - name: Fail on High/Critical Vulnerabilities
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
