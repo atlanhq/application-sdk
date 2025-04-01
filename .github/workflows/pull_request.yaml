@@ -86,32 +86,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: "./.github/actions/setup-deps"
-      - name: Get branch name
-        run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
-        id: get_branch
-      - name: Run Unit and Integration Tests with Coverage
-        run: |
-          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
-          poetry run coverage xml
-          poetry run coverage html
-          poetry run coverage report --fail-under=60
-      - name: Comment Coverage Report on PR
-        uses: orgoro/coverage@v3.2
+      - uses: "./.github/actions/unit-tests"
         with:
-          coverageFile: coverage.xml
-          token: ${{ secrets.ORG_PAT_GITHUB }}
-      - name: Upload Coverage Report to S3
-        uses: atlanhq/kryptonite/upload@v1
-        with:
-          source: ./htmlcov
-          target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
-      - name: Comment Coverage Report URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "coverage"
-          message: |
-            Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-under: "60"
 
   matrix-builder:
     name: Build Test Matrix
@@ -196,6 +174,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+<<<<<<< HEAD
 
       - name: Install Dapr CLI
         run: |
@@ -268,6 +247,16 @@ jobs:
         run: |
           make stop-all
           sleep 10  # Give services time to stop
+=======
+      - uses: "./.github/actions/e2e-examples"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          postgres-host: ${{ secrets.POSTGRES_HOST }}
+          postgres-password: ${{ secrets.POSTGRES_PASSWORD }}
+          snowflake-account-id: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+          snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
+          snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
+>>>>>>> f5e06b30 (ci: reuse actions for unit and e2e tests)
 
   # E2E Tests: This step is run for each app in the matrix
   e2e-apps:
@@ -279,7 +268,9 @@ jobs:
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
+      - uses: "./.github/actions/e2e-apps"
         with:
+<<<<<<< HEAD
           ref: ${{ github.ref }}
       - name: Get the application-sdk commit SHA
         run: |
@@ -343,6 +334,10 @@ jobs:
           else
             echo "Workflow run $run_id in $repo_name succeeded"
           fi
+=======
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: ${{ matrix.repo_name }}
+>>>>>>> f5e06b30 (ci: reuse actions for unit and e2e tests)
 
   # Documentation
   docs:

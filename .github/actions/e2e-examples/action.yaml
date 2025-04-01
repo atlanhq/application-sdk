@@ -1,0 +1,118 @@
+name: End to End Tests for application-sdk examples
+
+description: |
+  Runs End-to-End (E2E) tests for application-sdk examples.
+
+  This action executes a comprehensive suite of end-to-end tests for the application-sdk examples.
+  It validates the functionality of example applications by:
+  - Setting up required infrastructure (Dapr, Temporal)
+  - Installing all necessary dependencies
+  - Running the examples in an environment that mirrors production
+  - Verifying the examples work as expected from start to finish
+
+  The tests ensure that the examples provided in the SDK are working correctly
+  and can serve as reliable reference implementations for SDK users.
+
+inputs:
+  github-token:
+    required: true
+    description: The GitHub token to use for the action.
+  postgres-host:
+    required: true
+    description: The host of the Postgres database.
+  postgres-password:
+    required: true
+    description: The password of the Postgres database.
+  snowflake-account-id:
+    required: true
+    description: The account ID of the Snowflake database.
+  snowflake-user:
+    required: true
+    description: The user of the Snowflake database.
+  snowflake-password:
+    required: true
+    description: The password of the Snowflake database.
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Dapr CLI
+      shell: bash
+      run: |
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
+        dapr init --runtime-version 1.13.6 --slim
+
+    - name: Install Temporal CLI and Start Server
+      shell: bash
+      run: |
+        curl -sSf https://temporal.download/cli.sh | sh
+        export PATH="$HOME/.temporalio/bin:$PATH"
+        temporal server start-dev --db-filename /tmp/temporal.db &
+        sleep 10  # Give some time for Temporal to start
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v1
+      with:
+        python-version: "3.11"
+
+    - name: Install Poetry
+      uses: snok/install-poetry@v1
+      with:
+        version: 1.8.5
+        virtualenvs-create: true
+        virtualenvs-in-project: true
+        virtualenvs-path: .venv
+        installer-parallel: true
+
+    - name: Install Dependencies
+      shell: bash
+      run: |
+        git config --global url."https://${{ inputs.github-token }}@github.com/".insteadOf "git@github.com:"
+        # Configure poetry to use project-specific virtualenv
+        poetry config virtualenvs.in-project true
+
+        # Install the dependencies with extras
+        poetry install --all-extras
+        poetry update application-sdk --dry-run
+
+    # Start all services
+    - name: Start Platform Services
+      shell: bash
+      run: |
+        make start-all
+        sleep 10  # Give services time to start up
+
+    # Make API call and capture workflow/run IDs for each example
+    - name: Start the workflows
+      shell: bash
+      id: workflow_info
+      env:
+        POSTGRES_HOST: ${{ inputs.postgres-host }}
+        POSTGRES_PASSWORD: ${{ inputs.postgres-password }}
+        SNOWFLAKE_ACCOUNT_ID: ${{ inputs.snowflake-account-id }}
+        SNOWFLAKE_USER: ${{ inputs.snowflake-user }}
+        SNOWFLAKE_PASSWORD: ${{ inputs.snowflake-password }}
+      run: |
+        cd examples
+        poetry run python run_examples.py
+
+        echo "Workflow status:"
+        cat workflow_status.md
+
+    - name: Comment test results on Pull Request
+      shell: bash
+      if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: "workflow_status"
+        message-path: "examples/workflow_status.md"
+
+    # Stop all services
+    - name: Stop all services
+      shell: bash
+      continue-on-error: true
+      run: |
+        make stop-all
+        sleep 10  # Give services time to stop
