@@ -97,3 +97,15 @@ nav:
 
   - Configuration Reference: configuration.md
   - API Reference: /application-sdk/main/api
+  - GitHub Actions:
+      - Overview: actions/index.md
+      - Docgen: actions/docgen.md
+      - Docstring Coverage: actions/docstring-coverage.md
+      - E2E Apps: actions/e2e-apps.md
+      - E2E Examples: actions/e2e-examples.md
+      - Setup Dependencies: actions/setup-deps.md
+      - Sync Branches: actions/sync-branches.md
+      - Trivy: actions/trivy.md
+      - Trivy Container: actions/trivy-container.md
+      - Unit Tests: actions/unit-tests.md
+      - Validate PR Title: actions/validate-pr-title.md
