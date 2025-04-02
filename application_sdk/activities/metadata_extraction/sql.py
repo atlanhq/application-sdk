@@ -372,7 +372,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             )
             await transformed_output.write_dataframe(transformed_chunk)
         return await transformed_output.get_statistics()
-    
+
     @activity.defn
     @auto_heartbeater
     @transform(
