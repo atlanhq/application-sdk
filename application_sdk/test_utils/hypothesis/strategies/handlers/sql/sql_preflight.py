@@ -1,4 +1,5 @@
 from hypothesis import strategies as st
+from packaging import version
 
 # Strategy for generating database names
 database_name_strategy = st.text(
@@ -71,3 +72,20 @@ preflight_check_payload_strategy = st.builds(
         st.builds(str, mixed_mapping_strategy)  # Convert dict to JSON string
     ),
 )
+
+# Strategy for generating version tuples
+version_tuple_strategy = st.tuples(
+    st.integers(min_value=1, max_value=20),  # Major version
+    st.integers(min_value=0, max_value=99),  # Minor version
+).map(lambda v: f"{v[0]}.{v[1]}")  # Convert to string format
+
+# Strategy for version comparison test cases
+version_comparison_strategy = st.builds(
+    lambda client, min_ver: (
+        client,
+        min_ver,
+        version.parse(client) >= version.parse(min_ver),
+    ),
+    client=version_tuple_strategy,
+    min_ver=version_tuple_strategy,
+)  # Creates a tuple[str, str, bool]

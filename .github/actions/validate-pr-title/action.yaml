@@ -1,0 +1,30 @@
+name: Validate PR Title for Atlan Apps
+
+description: |
+  Validates pull request titles against defined patterns.
+
+  This action validates pull request titles in two ways:
+  - Ensures a Jira issue key (e.g., ABC-123) is present anywhere in the PR title
+  - Validates that the PR title matches the Conventional Commits spec
+
+  Examples:
+    - "feat: APP-3214 Add user authentication"
+    - "fix: APP-1234 Resolve memory leak issue"
+
+inputs:
+  github-token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Enforce Pull Request Title includes Jira Issue Key
+      uses: ryanvade/enforce-pr-title-style-action@v2.1.2
+      with:
+        keyAnywhereInTitle: 'true'
+
+    - name: Enforce Pull Request Title follows semantic commits
+      uses: amannn/action-semantic-pull-request@v5
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
