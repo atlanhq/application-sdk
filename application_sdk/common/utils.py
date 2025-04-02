@@ -190,17 +190,20 @@ def read_sql_files(queries_prefix: str) -> Dict[str, str]:
     """
     Reads all SQL files in the queries directory and returns a dictionary of the file name and the SQL content.
 
+    Reads SQL files recursively from the given directory and builds a mapping of filenames
+    to their SQL contents. The filenames are converted to uppercase and have the .sql
+    extension removed.
+
     Args:
-        queries_prefix: Absolute path of the directory with queries stored in .sql files.
+        queries_prefix: Absolute path of the directory containing SQL query files.
 
     Returns:
-        Dict[str, str]: A dictionary mapping SQL file names (uppercase, without extension) to their contents.
-
-    Example:
-        {
-            'TABLE_EXTRACTION': 'SELECT * FROM ...',
-            'SCHEMA_EXTRACTION': 'SELECT * FROM ...'
-        }
+        A dictionary mapping SQL file names (uppercase, without extension) to their contents.
+        For example:
+            {
+                'TABLE_EXTRACTION': 'SELECT * FROM ...',
+                'SCHEMA_EXTRACTION': 'SELECT * FROM ...'
+            }
     """
     sql_files: List[str] = glob.glob(
         os.path.join(
