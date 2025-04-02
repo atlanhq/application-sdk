@@ -153,7 +153,7 @@ class FastAPIApplication(AtlanApplicationInterface):
 
             self.app.mount(
                 "/atlandocs",
-                StaticFiles(directory=f"{self.docs_export_path}/site", html=True),
+                StaticFiles(directory=f"{self.docs_export_path}", html=True),
                 name="atlandocs",
             )
         except Exception as e:
