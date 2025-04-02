@@ -57,7 +57,6 @@ class TestInterface:
     Attributes:
         config_file_path: Path to the configuration file.
         extracted_output_base_path: Base path for extracted output.
-        expected_output_base_path: Base path for expected output.
         credentials: Credentials dictionary for the test.
         metadata: Metadata dictionary for the test.
         connection: Connection details dictionary for the test.
@@ -67,18 +66,17 @@ class TestInterface:
 
     config_file_path: str
     extracted_output_base_path: str
-    expected_output_base_path: str
     credentials: Dict[str, Any]
     metadata: Dict[str, Any]
     connection: Dict[str, Any]
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
-    run_scale_test: bool = False
-    run_scale_test_type: str = ""
+    test_type: str = ""
     scale_test_config_path: str = ""
-    scale_test_output_dir: str = ""
-    scale_test_output_format: str = ""
-    scale_test_app_type: str = ""
+    scale_test_container_class: str = ""
+    scale_test_duckdb_output_dir = ""
+    scale_test_duckdb_output_format = ""
+    app_type: str = ""
 
     @classmethod
     def setup_class(cls):
@@ -95,21 +93,29 @@ class TestInterface:
             host=config["server_config"]["server_host"],
             version=config["server_config"]["server_version"],
         )
+        cls.scale_test_config_path = "./tests/scale/config.yaml"
+        cls.app_type = config["app_type"]
 
         # Scale test configuration
-        if config.get("test_type") == "duckdb"
-            cls.scale_test_duckdb_config_path = "./tests/scale/config.yaml"
-            cls.scale_test_duckdb_output_dir = "./tests/scale/output"
-            cls.scale_test_duckdb_output_format = config.get("duckdb", {}).get("output_format", "json")
-            cls.scale_test_app_type = config.get("app_type", "postgres")
-        elif config.get("test_type") == "testcontainers":
-            cls.scale_test_config_path = "./tests/scale/config.yaml"
-            cls.scale_test_app_type = config.get("app_type", "postgres")
-            cls.scale_test_container_class = config.get("container_class", None)
-        elif config.get("test_type") == "source_data_generator":
-            cls.scale_test_config_path = "./tests/scale/config.yaml"
+        if config.get("test_type") == "duckdb":
+            cls.scale_test_duckdb_output_dir = "./tests/scale/duckdb/output"
+            cls.scale_test_duckdb_output_format = config.get("duckdb", {}).get(
+                "output_format", "json"
+            )
 
         cls.test_name = config["test_name"]
+
+    def set_container_class(self, container_class: str):
+        """
+        Set the container class for the scale test
+        """
+        self.scale_test_container_class = container_class
+
+    def get_container_class(self) -> str:
+        """
+        Get the container class for the scale test
+        """
+        return self.scale_test_container_class
 
     def test_health_check(self) -> None:
         """
@@ -135,9 +141,12 @@ class TestInterface:
         """
         raise NotImplementedError
 
-    def test_run_workflow(self) -> None:
+    def test_run_workflow(self) -> str:
         """
         Method to run the workflow
+
+        Returns:
+            str: Status of the workflow
         """
         raise NotImplementedError
 
@@ -279,7 +288,7 @@ class TestInterface:
         transpiled_sql = sqlglot.transpile(
             sql,
             write="duckdb",
-            read=self.scale_test_app_type,
+            read=self.app_type,
         )[0]
 
         return transpiled_sql
@@ -291,7 +300,7 @@ class TestInterface:
         """
         duckdb_driver(
             DuckdbDriverArgs(
-                config_path=self.scale_test_duckdb_config_path,
+                config_path=self.scale_test_config_path,
                 output_dir=self.scale_test_duckdb_output_dir,
                 output_format=self.scale_test_duckdb_output_format,
             )
@@ -305,8 +314,8 @@ class TestInterface:
         testcontainers_driver(
             TestcontainersDriverArgs(
                 config_path=self.scale_test_config_path,
-                source_type=self.scale_test_app_type,
-                container_class=self.scale_test_container_class,
+                source_type=self.app_type,
+                container_class=self.get_container_class(),
             )
         )
 

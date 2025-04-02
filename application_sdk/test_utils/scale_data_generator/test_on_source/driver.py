@@ -19,6 +19,13 @@ from application_sdk.test_utils.scale_data_generator.test_on_source.data_generat
 @dataclass
 class DriverArgs:
     config_path: str
+    db_name: str
+    source_type: str
+    username: str
+    password: str
+    host: str
+    port: str
+    clean: bool = False
 
 
 def get_connection_params(args: DriverArgs) -> Dict[str, Any]:
