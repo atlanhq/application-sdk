@@ -21,6 +21,7 @@ class DocsManifestMetadata(BaseModel):
 
     version: str
     name: str
+    display_name: str
     description: str
     author: str
     keywords: List[str] = []

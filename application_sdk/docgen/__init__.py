@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import List
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
+from application_sdk.docgen.exporters.docusaurus import DocusaurusExporter
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.parsers.directory import DirectoryParser
 from application_sdk.docgen.parsers.manifest import ManifestParser
@@ -59,16 +59,6 @@ class AtlanDocsGenerator:
         Raises:
             Exception: Any exception that occurs during manifest parsing or export process.
         """
-
-        try:
-            from mkdocs import config
-            from mkdocs.commands import build
-        except ImportError:
-            logger.warning(
-                "mkdocs is not installed. Please install it using 'pip install mkdocs'"
-            )
-            return
-
         try:
             manifest = self.manifest_parser.parse_manifest()
         except Exception as e:
@@ -178,21 +168,9 @@ class AtlanDocsGenerator:
                     )
                     pages.append(page)
 
-        mkdocs_exporter = MkDocsExporter(
+        docusaurus_exporter = DocusaurusExporter(
             manifest=manifest, export_path=self.export_path
         )
-        mkdocs_exporter.export(pages=pages)
-
-        # Build the MkDocs site
-        cfg = config.load_config(  # type: ignore
-            config_file=os.path.join(self.export_path, "mkdocs.yml")
-        )
-
-        cfg.plugins.on_startup(command="build", dirty=False)
-
-        try:
-            build.build(cfg, dirty=False)
-        finally:
-            cfg.plugins.on_shutdown()
+        docusaurus_exporter.export(pages=pages)
 
         logger.info(f"Documentation exported to {self.export_path}")
