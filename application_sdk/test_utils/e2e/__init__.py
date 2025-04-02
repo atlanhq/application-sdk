@@ -327,6 +327,13 @@ class TestInterface:
         source_driver(
             SourceDriverArgs(
                 config_path=self.scale_test_config_path,
+                db_name=self.credentials.get("database", "postgres"),
+                source_type=self.app_type,
+                username=str(self.credentials["username"]),
+                password=str(self.credentials["password"]),
+                host=str(self.credentials["host"]),
+                port=str(self.credentials["port"]),
+                clean=False,
             )
         )
 
