@@ -237,14 +237,14 @@ def test_read_sql_files_with_multiple_files(tmp_path: Path):
         mock_file = mock_file_open.return_value
         mock_file.read.side_effect = list(mock_files.values())
 
-        result = read_sql_files()
+        result = read_sql_files("/mock/path")
 
         # Verify the results
         assert result == expected_result
 
         # Verify glob was called correctly
         mock_glob.assert_called_once_with(
-            os.path.join("/mock/path", "queries", "**/*.sql"), recursive=True
+            os.path.join("/mock/path", "**/*.sql"), recursive=True
         )
 
         # Verify files were opened
@@ -256,7 +256,7 @@ def test_read_sql_files_with_empty_directory():
     with patch("glob.glob", return_value=[]), patch(
         "os.path.dirname", return_value="/mock/path"
     ):
-        result = read_sql_files()
+        result = read_sql_files("/mock/path")
         assert result == {}
 
 
@@ -275,7 +275,7 @@ def test_read_sql_files_with_whitespace():
     ), patch("os.path.dirname", return_value="/mock/path"):
         mock_glob.return_value = ["/mock/path/queries/test.sql"]
 
-        result = read_sql_files()
+        result = read_sql_files("/mock/path")
         assert result == {"TEST": expected_content.strip()}
 
 
@@ -303,5 +303,5 @@ def test_read_sql_files_case_sensitivity():
         mock_file = mock_file_open.return_value
         mock_file.read.side_effect = list(mock_files.values())
 
-        result = read_sql_files()
+        result = read_sql_files("/mock/path")
         assert result == expected_result
