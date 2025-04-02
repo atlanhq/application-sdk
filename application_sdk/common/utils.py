@@ -186,12 +186,12 @@ def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, 
     return extracted_config
 
 
-def read_sql_files() -> Dict[str, str]:
+def read_sql_files(queries_prefix: str) -> Dict[str, str]:
     """
     Reads all SQL files in the queries directory and returns a dictionary of the file name and the SQL content.
 
     Args:
-        None
+        queries_prefix: Absolute path of the directory with queries stored in .sql files.
 
     Returns:
         Dict[str, str]: A dictionary mapping SQL file names (uppercase, without extension) to their contents.
@@ -204,8 +204,7 @@ def read_sql_files() -> Dict[str, str]:
     """
     sql_files: List[str] = glob.glob(
         os.path.join(
-            os.path.dirname(os.path.abspath(__file__)),
-            "queries",
+            queries_prefix,
             "**/*.sql",
         ),
         recursive=True,
