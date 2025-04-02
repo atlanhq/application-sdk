@@ -43,7 +43,7 @@ class ScaleTest(TestInterface):
         self.assertEqual(response.status_code, 200)
 
     @pytest.mark.order(2)
-    def test_scale(self) -> Tuple[str, float]:
+    def test_scale(self):
         """
         Method to run scale tests using the application workflow.
 
@@ -51,11 +51,8 @@ class ScaleTest(TestInterface):
         - source_data_generator: Generates data in source database, runs workflow, and cleans up
         - testcontainers: Spawns test container, generates data, runs workflow, and cleans up
         - Other test types should be implemented by subclasses
-
-        Returns:
-            Tuple[str, float]: A tuple containing the workflow status and time taken
         """
-        if not self.test_type in ["source_data_generator", "testcontainers","duckdb"]:
+        if self.test_type not in ["source_data_generator", "testcontainers", "duckdb"]:
             pytest.skip("Scale test is disabled")
 
         if self.test_type == "source_data_generator":
@@ -71,7 +68,9 @@ class ScaleTest(TestInterface):
                 source_driver(
                     SourceDriverArgs(
                         config_path=self.scale_test_config_path,
-                        db_name=self.credentials.get("extra", None).get("database", None),
+                        db_name=self.credentials.get("extra", None).get(
+                            "database", None
+                        ),
                         schema=self.credentials.get("extra", None).get("schema", None),
                         source_type=self.app_type,
                         username=str(self.credentials["username"]),
@@ -83,12 +82,25 @@ class ScaleTest(TestInterface):
 
                 # Run the workflow
                 logger.info("Running workflow...")
-                workflow_status = self.test_run_workflow()
+                workflow_status = self.client.run_workflow(
+                    credentials=self.credentials,
+                    metadata=self.metadata,
+                    connection=self.connection,
+                )
 
-                # Assert workflow completed successfully
-                assert (
-                    workflow_status == "COMPLETED"
-                ), f"Workflow failed with status: {workflow_status}"
+                # Store workflow details
+                self.workflow_details = {
+                    "workflow_id": workflow_status["data"]["workflow_id"],
+                    "run_id": workflow_status["data"]["run_id"],
+                }
+
+                # Assert workflow started successfully
+                self.assertEqual(workflow_status["success"], True)
+                self.assertEqual(
+                    workflow_status["message"], "Workflow started successfully"
+                )
+                self.assertIn("workflow_id", workflow_status["data"])
+                self.assertIn("run_id", workflow_status["data"])
 
                 # Clean up generated data
                 logger.info("Cleaning up generated data...")
@@ -104,11 +116,6 @@ class ScaleTest(TestInterface):
                         clean=True,
                     )
                 )
-
-                return (
-                    workflow_status,
-                    0.0,
-                )  # Time taken is not relevant for this test type
 
             except Exception as e:
                 logger.error(f"Error during source data generator test: {e}")
@@ -131,17 +138,12 @@ class ScaleTest(TestInterface):
                 workflow_status = self.test_run_workflow()
 
                 # Assert workflow completed successfully
-                assert (
-                    workflow_status == "COMPLETED"
-                ), f"Workflow failed with status: {workflow_status}"
+                self.assertEqual(
+                    workflow_status, "COMPLETED", f"Workflow failed with status: {workflow_status}"
+                )
 
                 # Note: The test container is automatically cleaned up by the driver
                 # in its finally block, so no explicit cleanup is needed here
-
-                return (
-                    workflow_status,
-                    0.0,
-                )  # Time taken is not relevant for this test type
 
             except Exception as e:
                 logger.error(f"Error during testcontainers test: {e}")

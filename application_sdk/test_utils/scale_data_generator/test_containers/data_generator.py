@@ -15,7 +15,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 from testcontainers.mysql import MySqlContainer
-from testcontainers.postgres import PostgresContainer
 
 from application_sdk.test_utils.scale_data_generator.test_on_source.config_loader import (
     ConfigLoader,

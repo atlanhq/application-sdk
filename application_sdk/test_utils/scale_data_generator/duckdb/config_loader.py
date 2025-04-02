@@ -12,7 +12,7 @@ class OutputFormat(Enum):
 
 
 class ConfigLoader:
-    def __init__(self, config_path: str = "./tests/scale/config.yaml"):
+    def __init__(self, config_path: str = "./tests/scale/scale_config.yaml"):
         self.config_path = Path(config_path)
         self.config: Optional[Dict[str, Any]] = None
         self._load_config()

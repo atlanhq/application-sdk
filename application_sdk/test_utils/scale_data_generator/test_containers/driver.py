@@ -1,6 +1,7 @@
 import argparse
 import time
 from dataclasses import dataclass
+from typing import Optional, Type
 
 from loguru import logger
 
