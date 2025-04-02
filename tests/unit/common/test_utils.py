@@ -1,11 +1,14 @@
+import os
+from pathlib import Path
 from typing import Dict, List, Union
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, mock_open, patch
 
 from application_sdk.common.utils import (
     get_workflow_config,
     normalize_filters,
     prepare_filters,
     prepare_query,
+    read_sql_files,
     update_workflow_config,
 )
 
@@ -206,3 +209,99 @@ class TestWorkflowConfig:
         expected_config = {"key1": "value1", "key2": "new_value"}
         assert result == expected_config
         mock_store.assert_called_once_with("test_config_id", expected_config)
+
+
+def test_read_sql_files_with_multiple_files(tmp_path: Path):
+    """Test read_sql_files with multiple SQL files in different directories."""
+    mock_files = {
+        os.path.join("queries", "extraction", "table.sql"): "SELECT * FROM tables;",
+        os.path.join("queries", "schema.sql"): "SELECT * FROM schemas;",
+        os.path.join("queries", "views.sql"): "SELECT * FROM views;",
+    }
+
+    expected_result = {
+        "TABLE": "SELECT * FROM tables;",
+        "SCHEMA": "SELECT * FROM schemas;",
+        "VIEWS": "SELECT * FROM views;",
+    }
+
+    with patch("glob.glob") as mock_glob, patch(
+        "builtins.open", new_callable=mock_open
+    ) as mock_file_open, patch("os.path.dirname", return_value="/mock/path"):
+        # Configure glob to return our mock files
+        mock_glob.return_value = [
+            os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
+        ]
+
+        # Configure file open to return different content for different files
+        mock_file = mock_file_open.return_value
+        mock_file.read.side_effect = list(mock_files.values())
+
+        result = read_sql_files()
+
+        # Verify the results
+        assert result == expected_result
+
+        # Verify glob was called correctly
+        mock_glob.assert_called_once_with(
+            os.path.join("/mock/path", "queries", "**/*.sql"), recursive=True
+        )
+
+        # Verify files were opened
+        assert mock_file_open.call_count == len(mock_files)
+
+
+def test_read_sql_files_with_empty_directory():
+    """Test read_sql_files when no SQL files are found."""
+    with patch("glob.glob", return_value=[]), patch(
+        "os.path.dirname", return_value="/mock/path"
+    ):
+        result = read_sql_files()
+        assert result == {}
+
+
+def test_read_sql_files_with_whitespace():
+    """Test read_sql_files handles whitespace in SQL content correctly."""
+    sql_content = """
+    SELECT *
+    FROM tables
+    WHERE id > 0;
+    """
+
+    expected_content = "SELECT *\n    FROM tables\n    WHERE id > 0;"
+
+    with patch("glob.glob") as mock_glob, patch(
+        "builtins.open", mock_open(read_data=sql_content)
+    ), patch("os.path.dirname", return_value="/mock/path"):
+        mock_glob.return_value = ["/mock/path/queries/test.sql"]
+
+        result = read_sql_files()
+        assert result == {"TEST": expected_content.strip()}
+
+
+def test_read_sql_files_case_sensitivity():
+    """Test read_sql_files handles file names with different cases correctly."""
+    mock_files = {
+        os.path.join("queries", "UPPER.SQL"): "upper case",
+        os.path.join("queries", "lower.sql"): "lower case",
+        os.path.join("queries", "Mixed.Sql"): "mixed case",
+    }
+
+    expected_result = {
+        "UPPER": "upper case",
+        "LOWER": "lower case",
+        "MIXED": "mixed case",
+    }
+
+    with patch("glob.glob") as mock_glob, patch(
+        "builtins.open", new_callable=mock_open
+    ) as mock_file_open, patch("os.path.dirname", return_value="/mock/path"):
+        mock_glob.return_value = [
+            os.path.join("/mock/path", file_path) for file_path in mock_files.keys()
+        ]
+
+        mock_file = mock_file_open.return_value
+        mock_file.read.side_effect = list(mock_files.values())
+
+        result = read_sql_files()
+        assert result == expected_result
