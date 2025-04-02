@@ -372,3 +372,17 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             )
             await transformed_output.write_dataframe(transformed_chunk)
         return await transformed_output.get_statistics()
+    
+    @activity.defn
+    @auto_heartbeater
+    @transform(
+        batch_input=SQLQueryInput(query="fetch_procedure_sql"),
+        raw_output=JsonOutput(output_suffix="/raw/extras-procedure"),
+    )
+    async def fetch_procedures(
+        self,
+        batch_input: Generator[pd.DataFrame, None, None],
+        raw_output: JsonOutput,
+        **kwargs: Dict[str, Any],
+    ):
+        raise NotImplementedError("Fetch procedures not implemented")
