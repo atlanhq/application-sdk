@@ -1,4 +1,6 @@
+import glob
 import json
+import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -182,3 +184,38 @@ def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, 
 
     StateStoreOutput.store_configuration(config_id, extracted_config)
     return extracted_config
+
+
+def read_sql_files() -> Dict[str, str]:
+    """
+    Reads all SQL files in the queries directory and returns a dictionary of the file name and the SQL content.
+
+    Args:
+        None
+
+    Returns:
+        Dict[str, str]: A dictionary mapping SQL file names (uppercase, without extension) to their contents.
+
+    Example:
+        {
+            'TABLE_EXTRACTION': 'SELECT * FROM ...',
+            'SCHEMA_EXTRACTION': 'SELECT * FROM ...'
+        }
+    """
+    sql_files: List[str] = glob.glob(
+        os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "queries",
+            "**/*.sql",
+        ),
+        recursive=True,
+    )
+
+    result: Dict[str, str] = {}
+    for file in sql_files:
+        with open(file, "r") as f:
+            result[os.path.basename(file).upper().replace(".SQL", "")] = (
+                f.read().strip()
+            )
+
+    return result
