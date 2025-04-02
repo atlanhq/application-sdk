@@ -319,7 +319,7 @@ class TestInterface:
             )
         )
 
-    def setup_scale_test_resources_sourcedata_generator(self):
+    def setup_scale_test_resources_source_data_generator(self):
         """
         Setup resources for scale testing by generating test data at source.
         This loads the test data configuration and creates the required datasets.
@@ -327,5 +327,22 @@ class TestInterface:
         source_driver(
             SourceDriverArgs(
                 config_path=self.scale_test_config_path,
+            )
+        )
+
+    def teardown_scale_test_resources_source_data_generator(self):
+        """
+        Teardown resources for scale testing by deleting the test data at source.
+        """
+        source_driver(
+            SourceDriverArgs(
+                config_path=self.scale_test_config_path,
+                db_name=self.credentials.get("database", "postgres"),
+                source_type=self.app_type,
+                username=str(self.credentials["username"]),
+                password=str(self.credentials["password"]),
+                host=str(self.credentials["host"]),
+                port=str(self.credentials["port"]),
+                clean=True,
             )
         )

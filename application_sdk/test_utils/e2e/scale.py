@@ -1,22 +1,11 @@
-from typing import Any, Dict, Tuple
+from typing import Any, Dict
 
 import pytest
 import requests
+from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.test_utils.e2e import TestInterface
-from application_sdk.test_utils.scale_data_generator.test_containers.driver import (
-    DriverArgs as TestcontainersDriverArgs,
-)
-from application_sdk.test_utils.scale_data_generator.test_containers.driver import (
-    driver as testcontainers_driver,
-)
-from application_sdk.test_utils.scale_data_generator.test_on_source.driver import (
-    DriverArgs as SourceDriverArgs,
-)
-from application_sdk.test_utils.scale_data_generator.test_on_source.driver import (
-    driver as source_driver,
-)
 
 logger = get_logger(__name__)
 
@@ -32,7 +21,6 @@ class ScaleTest(TestInterface):
     credentials: Dict[str, Any]
     metadata: Dict[str, Any]
     connection: Dict[str, Any]
-    run_scale_test: bool = True
 
     @pytest.mark.order(1)
     def test_health_check(self):
@@ -65,20 +53,7 @@ class ScaleTest(TestInterface):
 
                 # Generate test data in source database
                 logger.info("Generating test data in source database...")
-                source_driver(
-                    SourceDriverArgs(
-                        config_path=self.scale_test_config_path,
-                        db_name=self.credentials.get("extra", None).get(
-                            "database", None
-                        ),
-                        schema=self.credentials.get("extra", None).get("schema", None),
-                        source_type=self.app_type,
-                        username=str(self.credentials["username"]),
-                        password=str(self.credentials["password"]),
-                        host=str(self.credentials["host"]),
-                        port=str(self.credentials["port"]),
-                    )
-                )
+                self.setup_scale_test_resources_source_data_generator()
 
                 # Run the workflow
                 logger.info("Running workflow...")
@@ -102,20 +77,19 @@ class ScaleTest(TestInterface):
                 self.assertIn("workflow_id", workflow_status["data"])
                 self.assertIn("run_id", workflow_status["data"])
 
+                # Wait for the workflow to complete
+                workflow_status = self.monitor_and_wait_workflow_execution()
+
+                if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
+                    raise WorkflowExecutionError(
+                        f"Workflow failed with status: {workflow_status}"
+                    )
+
+                logger.info("Workflow completed successfully")
+
                 # Clean up generated data
                 logger.info("Cleaning up generated data...")
-                source_driver(
-                    SourceDriverArgs(
-                        config_path=self.scale_test_config_path,
-                        db_name=self.credentials.get("database", "postgres"),
-                        source_type=self.app_type,
-                        username=str(self.credentials["username"]),
-                        password=str(self.credentials["password"]),
-                        host=str(self.credentials["host"]),
-                        port=str(self.credentials["port"]),
-                        clean=True,
-                    )
-                )
+                self.teardown_scale_test_resources_source_data_generator()
 
             except Exception as e:
                 logger.error(f"Error during source data generator test: {e}")
@@ -125,36 +99,45 @@ class ScaleTest(TestInterface):
             try:
                 # Set up test container and generate data
                 logger.info("Setting up test container and generating data...")
-                testcontainers_driver(
-                    TestcontainersDriverArgs(
-                        config_path=self.scale_test_config_path,
-                        source_type=self.app_type,
-                        container_class=self.get_container_class(),
-                    )
-                )
+                self.setup_scale_test_resources_testcontainers()
 
                 # Run the workflow
                 logger.info("Running workflow...")
-                workflow_status = self.test_run_workflow()
-
-                # Assert workflow completed successfully
-                self.assertEqual(
-                    workflow_status, "COMPLETED", f"Workflow failed with status: {workflow_status}"
+                workflow_status = self.client.run_workflow(
+                    credentials=self.credentials,
+                    metadata=self.metadata,
+                    connection=self.connection,
                 )
 
-                # Note: The test container is automatically cleaned up by the driver
-                # in its finally block, so no explicit cleanup is needed here
+                # Store workflow details
+                self.workflow_details = {
+                    "workflow_id": workflow_status["data"]["workflow_id"],
+                    "run_id": workflow_status["data"]["run_id"],
+                }
+
+                # Assert workflow started successfully
+                self.assertEqual(workflow_status["success"], True)
+                self.assertEqual(
+                    workflow_status["message"], "Workflow started successfully"
+                )
+                self.assertIn("workflow_id", workflow_status["data"])
+                self.assertIn("run_id", workflow_status["data"])
+
+                # Wait for the workflow to complete
+                workflow_status = self.monitor_and_wait_workflow_execution()
+
+                if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
+                    raise WorkflowExecutionError(
+                        f"Workflow failed with status: {workflow_status}"
+                    )
+
+                logger.info("Workflow completed successfully")
 
             except Exception as e:
                 logger.error(f"Error during testcontainers test: {e}")
                 raise WorkflowExecutionError(f"Testcontainers test failed: {e}")
 
-        # For other test types, let subclasses implement their own logic
-        raise NotImplementedError(
-            "Subclasses must implement scale_test method for other test types"
-        )
-
     @pytest.fixture(scope="class", autouse=True)
-    def setup_scale_test_fixture(self):
-        if self.run_scale_test:
-            self.setup_scale_test_resources()
+    def setup_scale_test_duckdb_fixture(self):
+        if self.test_type == "duckdb":
+            self.setup_scale_test_resources_duckdb()
