@@ -199,11 +199,6 @@ def read_sql_files(queries_prefix: str) -> Dict[str, str]:
 
     Returns:
         A dictionary mapping SQL file names (uppercase, without extension) to their contents.
-        For example:
-            {
-                'TABLE_EXTRACTION': 'SELECT * FROM ...',
-                'SCHEMA_EXTRACTION': 'SELECT * FROM ...'
-            }
     """
     sql_files: List[str] = glob.glob(
         os.path.join(
