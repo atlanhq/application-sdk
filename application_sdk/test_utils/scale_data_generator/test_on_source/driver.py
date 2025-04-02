@@ -20,6 +20,7 @@ from application_sdk.test_utils.scale_data_generator.test_on_source.data_generat
 class DriverArgs:
     config_path: str
     db_name: str
+    schema: str
     source_type: str
     username: str
     password: str

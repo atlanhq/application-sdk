@@ -55,7 +55,7 @@ class ScaleTest(TestInterface):
         Returns:
             Tuple[str, float]: A tuple containing the workflow status and time taken
         """
-        if not self.run_scale_test:
+        if not self.test_type in ["source_data_generator", "testcontainers","duckdb"]:
             pytest.skip("Scale test is disabled")
 
         if self.test_type == "source_data_generator":
@@ -71,7 +71,8 @@ class ScaleTest(TestInterface):
                 source_driver(
                     SourceDriverArgs(
                         config_path=self.scale_test_config_path,
-                        db_name=self.credentials.get("database", "postgres"),
+                        db_name=self.credentials.get("extra", None).get("database", None),
+                        schema=self.credentials.get("extra", None).get("schema", None),
                         source_type=self.app_type,
                         username=str(self.credentials["username"]),
                         password=str(self.credentials["password"]),
