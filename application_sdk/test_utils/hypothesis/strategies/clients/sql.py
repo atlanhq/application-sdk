@@ -3,11 +3,11 @@ from hypothesis import strategies as st
 # Strategy for generating SQL credentials
 sql_credentials_strategy = st.fixed_dictionaries(
     {
-        "username": st.text(min_size=1, max_size=50),
-        "password": st.text(min_size=1, max_size=100),
-        "database": st.text(min_size=1, max_size=50),
-        "schema": st.text(min_size=1, max_size=50),
-        "warehouse": st.text(min_size=1, max_size=50).map(lambda x: x.upper() + "_WH"),
+        "username": st.text(),
+        "password": st.text(),
+        "database": st.text(),
+        "schema": st.text(),
+        "warehouse": st.text().map(lambda x: x.upper() + "_WH"),
         "role": st.sampled_from(["ACCOUNTADMIN", "SYSADMIN", "USERADMIN", "PUBLIC"]),
     }
 )
@@ -19,7 +19,7 @@ metadata_sql_strategy = st.one_of(
     st.just("SELECT * FROM information_schema.views"),
     st.builds(
         lambda schema: f"SELECT * FROM information_schema.tables WHERE table_schema = '{schema}'",
-        schema=st.text(min_size=1, max_size=30),
+        schema=st.text(),
     ),
 )
 
@@ -41,7 +41,7 @@ metadata_args_strategy = st.fixed_dictionaries(
 # Strategy for generating SQL query results
 sql_column_strategy = st.fixed_dictionaries(
     {
-        "name": st.text(min_size=1, max_size=30).map(str.upper),
+        "name": st.text().map(str.upper),
         "type": st.sampled_from(
             ["VARCHAR", "INTEGER", "FLOAT", "TIMESTAMP", "BOOLEAN"]
         ),
@@ -52,7 +52,7 @@ sql_column_strategy = st.fixed_dictionaries(
 # Strategy for generating SQL query data
 sql_data_strategy = st.lists(
     st.dictionaries(
-        keys=st.text(min_size=1, max_size=30).map(str.upper),
+        keys=st.text().map(str.upper),
         values=st.one_of(
             st.text(),
             st.integers(),
@@ -60,32 +60,26 @@ sql_data_strategy = st.lists(
             st.booleans(),
             st.none(),
         ),
-        min_size=1,
-        max_size=5,
     ),
-    min_size=0,
-    max_size=10,
 )
 
 # Strategy for generating SQL queries
 sql_query_strategy = st.one_of(
     st.just("SELECT * FROM test_table"),
     st.just("SELECT col1, col2 FROM test_table"),
-    st.builds(
-        lambda table: f"SELECT * FROM {table}", table=st.text(min_size=1, max_size=30)
-    ),
+    st.builds(lambda table: f"SELECT * FROM {table}", table=st.text()),
     st.builds(
         lambda table, limit: f"SELECT * FROM {table} LIMIT {limit}",
-        table=st.text(min_size=1, max_size=30),
-        limit=st.integers(min_value=1, max_value=1000),
+        table=st.text(),
+        limit=st.integers(),
     ),
 )
 
 # Strategy for generating SQLAlchemy connection arguments
 sqlalchemy_connect_args_strategy = st.fixed_dictionaries(
     {
-        "connect_timeout": st.integers(min_value=1, max_value=300),
+        "connect_timeout": st.integers(),
         "retry_on_timeout": st.booleans(),
-        "max_retries": st.integers(min_value=0, max_value=10),
+        "max_retries": st.integers(),
     }
 )

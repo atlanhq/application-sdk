@@ -4,19 +4,12 @@ from hypothesis import strategies as st
 from hypothesis.strategies import composite
 
 # Strategy for generating safe string values
-safe_string_strategy = st.text(
-    min_size=1,
-    max_size=100,
-    alphabet=st.characters(
-        blacklist_categories=("Cs",),  # Exclude surrogate characters
-        blacklist_characters=["\x00"],  # Exclude null bytes
-    ),
-)
+safe_string_strategy = st.text()
 
 # Strategy for generating credential values
 credential_value_strategy = st.one_of(
     safe_string_strategy,
-    st.integers(min_value=-1000000, max_value=1000000),
+    st.integers(),
     st.booleans(),
     st.none(),
 )
@@ -52,7 +45,7 @@ uuid_strategy = st.uuids().map(str)
 def credentials_strategy(draw) -> Dict[str, Any]:
     """Generate a dictionary of credentials with common keys."""
     # Always include username and password as they're most common
-    num_fields = draw(st.integers(min_value=2, max_value=10))
+    num_fields = draw(st.integers(min_value=2))
     required_keys = ["username", "password"]
     optional_keys = draw(
         st.lists(
@@ -77,9 +70,9 @@ def configuration_strategy(draw) -> Dict[str, Any]:
 
     # Add some common configuration fields
     extra_fields = {
-        "connection_timeout": draw(st.integers(min_value=1, max_value=3600)),
-        "max_retries": draw(st.integers(min_value=0, max_value=10)),
-        "batch_size": draw(st.integers(min_value=1, max_value=10000)),
+        "connection_timeout": draw(st.integers()),
+        "max_retries": draw(st.integers()),
+        "batch_size": draw(st.integers()),
         "is_secure": draw(st.booleans()),
         "debug_mode": draw(st.booleans()),
         "environment": draw(st.sampled_from(["dev", "staging", "prod"])),
@@ -88,8 +81,8 @@ def configuration_strategy(draw) -> Dict[str, Any]:
     # Optionally add nested configuration
     if draw(st.booleans()):
         extra_fields["advanced_settings"] = {
-            "pool_size": draw(st.integers(min_value=1, max_value=100)),
-            "retry_interval": draw(st.integers(min_value=1, max_value=60)),
+            "pool_size": draw(st.integers()),
+            "retry_interval": draw(st.integers()),
             "timeout_policy": draw(st.sampled_from(["strict", "lenient", "adaptive"])),
         }
 
