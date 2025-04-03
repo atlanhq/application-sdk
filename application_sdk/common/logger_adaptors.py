@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import logging
 from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Tuple
@@ -38,10 +39,34 @@ ENABLE_HTTP_EXPORTER: bool = (
     os.getenv("ENABLE_HTTP_EXPORTER", "false").lower() == "true"
 )
 
-# Configure temporal logging
-log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
-logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s")
-logging.getLogger("temporalio").setLevel(log_level)
+# Add a Loguru handler for the Python logging system
+class InterceptHandler(logging.Handler):
+    def emit(self, record):
+        # Get corresponding Loguru level if it exists
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Find caller from where originated the logged message
+        frame, depth = logging.currentframe(), 2
+        while frame.f_code.co_filename == logging.__file__:
+            filename = frame.f_code.co_filename
+            is_logging = filename == logging.__file__
+            is_frozen = "importlib" in filename and "_bootstrap" in filename
+            if depth > 0 and not (is_logging or is_frozen):
+                break
+            frame = frame.f_back
+            depth += 1
+
+        # Add logger_name to extra to prevent KeyError
+        logger_extras = {"logger_name": record.name}
+        
+        logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
+            level, record.getMessage()
+        )
+
+logging.basicConfig(level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()])
 
 # Add these constants
 SEVERITY_MAPPING = {
