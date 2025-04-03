@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from sqlalchemy import DDL, MetaData, Table, create_engine, inspect
 from sqlalchemy.engine import Connection, Engine
@@ -13,18 +13,15 @@ class DataCleaner:
     def __init__(
         self,
         config_loader: ConfigLoader,
-        connection_params: Dict[str, Any],
         connection_url: str,
     ):
         """Initialize the data cleaner.
 
         Args:
             config_loader: ConfigLoader instance with hierarchy configuration
-            connection_params: Additional connection parameters
             connection_url: Connection URL
         """
         self.config_loader = config_loader
-        self.connection_params = connection_params
         self.connection_url = connection_url
         self.engine: Optional[Engine] = None
 

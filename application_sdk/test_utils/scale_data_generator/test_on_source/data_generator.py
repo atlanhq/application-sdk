@@ -1,7 +1,8 @@
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 import faker
 from sqlalchemy import (
+    DDL,
     Boolean,
     Column,
     DateTime,
@@ -11,9 +12,10 @@ from sqlalchemy import (
     String,
     Table,
     create_engine,
-    text,
+    event,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.schema import CreateSchema
 
 from application_sdk.test_utils.scale_data_generator.test_on_source.config_loader import (
     ConfigLoader,
@@ -52,41 +54,22 @@ class DataGenerator:
     def __init__(
         self,
         config_loader: ConfigLoader,
-        db_name: str,
-        source_type: str,
-        connection_params: Dict[str, Any],
+        connection_url: str,
     ):
         """Initialize the data generator.
 
         Args:
             config_loader: ConfigLoader instance with hierarchy configuration
-            db_name: Name of the database to connect to
-            source_type: Type of database (e.g., 'postgresql', 'mysql')
-            connection_params: Additional connection parameters
+            connection_url: Database connection URL
         """
         self.config_loader = config_loader
-        self.db_name = db_name
-        self.source_type = source_type
-        self.connection_params = connection_params
         self.fake = faker.Faker()
         self.engine: Optional[Engine] = None
         self.metadata = MetaData()
+        self.connection_url = connection_url
 
     def _get_connection_url(self) -> str:
-        """Generate SQLAlchemy connection URL based on source type."""
-        base_params = {
-            "username": self.connection_params.get("username", "postgres"),
-            "password": self.connection_params.get("password", "postgres"),
-            "host": self.connection_params.get("host", "localhost"),
-            "port": self.connection_params.get("port", "5432"),
-        }
-
-        if self.source_type == "postgresql":
-            return f"postgresql://{base_params['username']}:{base_params['password']}@{base_params['host']}:{base_params['port']}/{self.db_name}"
-        elif self.source_type == "mysql":
-            return f"mysql+pymysql://{base_params['username']}:{base_params['password']}@{base_params['host']}:{base_params['port']}/{self.db_name}"
-        else:
-            raise ValueError(f"Unsupported database type: {self.source_type}")
+        return self.connection_url
 
     def _generate_column_type(self) -> str:
         """Generate a random column type from supported types."""
@@ -149,12 +132,21 @@ class DataGenerator:
         temp_table_name = f"temp_{view_name}"
         self._create_table(temp_table_name, schema_name, num_columns, connection)
 
-        # Create view
-        view_query = f"""
-        CREATE OR REPLACE VIEW {schema_name}.{view_name} AS
-        SELECT * FROM {schema_name}.{temp_table_name}
-        """
-        connection.execute(text(view_query))
+        # Create view using SQLAlchemy DDL
+        view = Table(
+            view_name,
+            self.metadata,
+            schema=schema_name,
+            extend_existing=True,
+        )
+
+        view_query = f"SELECT * FROM {schema_name}.{temp_table_name}"
+        view.create(connection, checkfirst=True)
+        event.listen(
+            view,
+            "after_create",
+            DDL(f"CREATE OR REPLACE VIEW {schema_name}.{view_name} AS {view_query}"),
+        )
 
     def generate_data(self) -> None:
         """Generate data according to the hierarchy configuration."""
@@ -170,13 +162,8 @@ class DataGenerator:
             # Create databases
             for db_num in range(1, num_databases + 1):
                 db_name = f"database_{db_num}"
-
-                # Create database if it doesn't exist
-                if self.source_type == "postgresql":
-                    connection.execute(text("COMMIT"))
-                    connection.execute(text(f"CREATE DATABASE {db_name}"))
-                elif self.source_type == "mysql":
-                    connection.execute(text(f"CREATE DATABASE IF NOT EXISTS {db_name}"))
+                # Create database using SQLAlchemy DDL
+                connection.execute(DDL(f"CREATE DATABASE IF NOT EXISTS {db_name}"))
 
                 # Connect to the new database
                 db_engine = create_engine(
@@ -190,16 +177,9 @@ class DataGenerator:
 
                 for schema_num in range(1, num_schemas + 1):
                     schema_name = f"schema_{schema_num}"
-
-                    # Create schema
-                    if self.source_type == "postgresql":
-                        db_connection.execute(
-                            text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
-                        )
-                    elif self.source_type == "mysql":
-                        db_connection.execute(
-                            text(f"CREATE SCHEMA IF NOT EXISTS {schema_name}")
-                        )
+                    # Create schema using SQLAlchemy CreateSchema
+                    schema = CreateSchema(schema_name)
+                    db_connection.execute(schema)
 
                     # Create tables
                     tables = self.config_loader.get_table_children("schema")
