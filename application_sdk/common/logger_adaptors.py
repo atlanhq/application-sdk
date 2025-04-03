@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-import logging
 from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Tuple
@@ -29,15 +28,12 @@ OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
 OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
     "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
 )
-OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT: str = os.getenv(
-    "OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT", "http://0.0.0.0:8050/telemetry/v1/logs"
-)
 ENABLE_OTLP_LOGS: bool = os.getenv("ATLAN_ENABLE_OTLP_LOGS", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
-ENABLE_GRPC_EXPORTER: bool = os.getenv("ENABLE_GRPC_EXPORTER", "true").lower() == "true"
-ENABLE_HTTP_EXPORTER: bool = (
-    os.getenv("ENABLE_HTTP_EXPORTER", "false").lower() == "true"
+ENABLE_MARKETPLACE_EXPORTER: bool = (
+    os.getenv("ENABLE_MARKETPLACE_EXPORTER", "false").lower() == "true"
 )
+
 
 # Add a Loguru handler for the Python logging system
 class InterceptHandler(logging.Handler):
@@ -61,12 +57,15 @@ class InterceptHandler(logging.Handler):
 
         # Add logger_name to extra to prevent KeyError
         logger_extras = {"logger_name": record.name}
-        
+
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
         )
 
-logging.basicConfig(level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()])
+
+logging.basicConfig(
+    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
+)
 
 # Add these constants
 SEVERITY_MAPPING = {
@@ -122,8 +121,35 @@ class AtlanLoggerAdapter:
                 # List to store processors
                 processors = []
 
-                # Add gRPC exporter if enabled
-                if ENABLE_GRPC_EXPORTER:
+                # Configure exporter based on ENABLE_MARKETPLACE_EXPORTER flag
+                if ENABLE_MARKETPLACE_EXPORTER:
+                    # Use HTTP exporter for marketplace
+                    try:
+                        import requests
+
+                        # Just make a HEAD request to see if the endpoint is responsive
+                        base_url = OTEL_EXPORTER_OTLP_ENDPOINT.split("/telemetry")[0]
+                        requests.head(f"{base_url}/health", timeout=2)
+                    except Exception:
+                        pass
+
+                    http_exporter = HTTPLogExporter(
+                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                        timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                        headers={"Content-Type": "application/x-protobuf"},
+                    )
+                    http_processor = BatchLogRecordProcessor(
+                        http_exporter,
+                        schedule_delay_millis=int(
+                            os.getenv("OTEL_BATCH_DELAY_MS", "5000")
+                        ),
+                        max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
+                        max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                    )
+                    processors.append(http_processor)
+                    self.logger_provider.add_log_record_processor(http_processor)
+                else:
+                    # Use gRPC exporter by default
                     grpc_exporter = GRPCLogExporter(
                         endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
                         timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
@@ -138,36 +164,6 @@ class AtlanLoggerAdapter:
                     )
                     processors.append(grpc_processor)
                     self.logger_provider.add_log_record_processor(grpc_processor)
-
-                # Add HTTP exporter if enabled
-                if ENABLE_HTTP_EXPORTER:
-                    try:
-                        import requests
-
-                        # Just make a HEAD request to see if the endpoint is responsive
-                        # Strip the path portion as we're just testing connectivity to the host
-                        base_url = OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT.split(
-                            "/telemetry"
-                        )[0]
-                        requests.head(f"{base_url}/health", timeout=2)
-                    except Exception:
-                        pass
-
-                    http_exporter = HTTPLogExporter(
-                        endpoint=OTEL_EXPORTER_OTLP_HTTP_LOGS_ENDPOINT,
-                        timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
-                        headers={"Content-Type": "application/x-protobuf"},
-                    )
-                    http_processor = BatchLogRecordProcessor(
-                        http_exporter,
-                        schedule_delay_millis=int(
-                            os.getenv("OTEL_BATCH_DELAY_MS", "5000")
-                        ),
-                        max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-                        max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
-                    )
-                    processors.append(http_processor)
-                    self.logger_provider.add_log_record_processor(http_processor)
 
                 # Make sure we have at least one processor
                 if not processors:
