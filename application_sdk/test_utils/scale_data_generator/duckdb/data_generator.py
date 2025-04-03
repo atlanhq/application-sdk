@@ -8,9 +8,13 @@ from application_sdk.test_utils.scale_data_generator.duckdb.config_loader import
     ConfigLoader,
     OutputFormat,
 )
-from application_sdk.test_utils.scale_data_generator.duckdb.output_handler import (
+from application_sdk.test_utils.scale_data_generator.duckdb.output_handler.csv_handler import (
     CsvFormatHandler,
+)
+from application_sdk.test_utils.scale_data_generator.duckdb.output_handler.json_handler import (
     JsonFormatHandler,
+)
+from application_sdk.test_utils.scale_data_generator.duckdb.output_handler.parquet_handler import (
     ParquetFormatHandler,
 )
 

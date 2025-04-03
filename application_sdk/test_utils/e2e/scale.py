@@ -17,10 +17,10 @@ class WorkflowExecutionError(Exception):
 class ScaleTest(TestInterface):
     config_file_path: str
     extracted_output_base_path: str
-    schema_base_path: str
     credentials: Dict[str, Any]
     metadata: Dict[str, Any]
     connection: Dict[str, Any]
+    connection_url: str
 
     @pytest.mark.order(1)
     def test_health_check(self):
@@ -53,7 +53,9 @@ class ScaleTest(TestInterface):
 
                 # Generate test data in source database
                 logger.info("Generating test data in source database...")
-                self.setup_scale_test_resources_source_data_generator()
+                self.setup_scale_test_resources_source_data_generator(
+                    self.connection_url
+                )
 
                 # Run the workflow
                 logger.info("Running workflow...")
@@ -89,7 +91,9 @@ class ScaleTest(TestInterface):
 
                 # Clean up generated data
                 logger.info("Cleaning up generated data...")
-                self.teardown_scale_test_resources_source_data_generator()
+                self.teardown_scale_test_resources_source_data_generator(
+                    self.connection_url
+                )
 
             except Exception as e:
                 logger.error(f"Error during source data generator test: {e}")

@@ -319,7 +319,7 @@ class TestInterface:
             )
         )
 
-    def setup_scale_test_resources_source_data_generator(self):
+    def setup_scale_test_resources_source_data_generator(self, connection_url: str):
         """
         Setup resources for scale testing by generating test data at source.
         This loads the test data configuration and creates the required datasets.
@@ -327,19 +327,19 @@ class TestInterface:
         source_driver(
             SourceDriverArgs(
                 config_path=self.scale_test_config_path,
-                connection_url=self.connection["connection_url"],
+                connection_url=connection_url,
                 clean=False,
             )
         )
 
-    def teardown_scale_test_resources_source_data_generator(self):
+    def teardown_scale_test_resources_source_data_generator(self, connection_url: str):
         """
         Teardown resources for scale testing by deleting the test data at source.
         """
         source_driver(
             SourceDriverArgs(
                 config_path=self.scale_test_config_path,
-                connection_url=self.connection["connection_url"],
+                connection_url=connection_url,
                 clean=True,
             )
         )
