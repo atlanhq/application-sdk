@@ -20,6 +20,9 @@ class DiffActivitiesTest(unittest.TestCase):
                         "qualifiedName": "default.table1",
                         "name": "table1",
                         "owner": "Alice",
+                        "integers": 1,
+                        "structs": {"a": 1},
+                        "maps": {"a": 1},
                     },
                     "customAttributes": {
                         "description": "table1 description",
@@ -37,14 +40,16 @@ class DiffActivitiesTest(unittest.TestCase):
         results = hash_df.to_pylist()
 
         self.assertEqual(len(results), 1)
+        from xxhash import xxh3_64
+
         result = results[0]
         expected_result = {
             "typeName": "Table",
             "qualifiedName": "default.table1",
-            "attributes_hash": md5(b"table1Alice").hexdigest(),
-            "custom_attributes_hash": md5(b"table1 description").hexdigest(),
-            "classifications_hash": md5(b"PII").hexdigest(),
-            "terms_hash": md5(b"term1").hexdigest(),
+            "attributes_hash": xxh3_64("1table1Alice").intdigest(),
+            "custom_attributes_hash": xxh3_64("table1 description").intdigest(),
+            "classifications_hash": xxh3_64("PII").intdigest(),
+            "terms_hash": xxh3_64("term1").intdigest(),
         }
         self.assertEqual(result, expected_result)
 

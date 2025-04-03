@@ -65,23 +65,21 @@ class DiffAtlanActivities:
         Returns:
             DataFrame with hashed column
         """
-        if columns_order is None:
-            columns_order = [col.name() for col in df.columns]
-            columns_order.sort()
-
         if ignore_columns is None:
             ignore_columns = []
 
-        df_cols = [col.name() for col in df.columns]
-        cols_to_hash = [col for col in columns_order if col not in ignore_columns or col not in df_cols]
+        if columns_order is None:
+            columns_order = [column.name() for column in df.columns]
+            columns_order.sort()
 
-        arrow_df = df.to_arrow()
-        # Create a concatenated string of values for hashing
-        concat_expr = ",".join(cols_to_hash)
+        cols_to_hash = [column for column in columns_order if column not in ignore_columns]
+        concat_expr = ",".join([f"""CAST({column} AS STRING)""" for column in cols_to_hash])
 
-        # Query in duckdb
-        results = duckdb.sql(f"SELECT *, md5(concat({concat_expr})) as row_hash FROM arrow_df").arrow()
-        return daft.from_arrow(results)
+        # Add a new column with the hash value
+        df = daft.sql(f"""
+            SELECT *, HASH(CONCAT({concat_expr})) AS row_hash FROM df
+        """)
+        return df
 
     @activity.defn
     def calculate_diff_test(self):
