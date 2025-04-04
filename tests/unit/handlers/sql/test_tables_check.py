@@ -48,9 +48,10 @@ async def test_tables_check_success(sql_handler: SQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
     mock_df = pd.DataFrame([{"count": 5}])
-    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
-        MagicMock()
-    )  # type: ignore
+    if sql_handler.sql_client.engine is not None:
+        sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+            MagicMock()
+        )
     with patch("pandas.read_sql_query", return_value=mock_df):
         result = await sql_handler.tables_check()
         assert result["success"] is True
@@ -61,9 +62,10 @@ async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
     """Test tables check with empty response."""
     # Create a mock DataFrame with zero count
     mock_df = pd.DataFrame([{"count": 0}])
-    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
-        MagicMock()
-    )  # type: ignore
+    if sql_handler.sql_client.engine is not None:
+        sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+            MagicMock()
+        )  # type: ignore
     with patch("pandas.read_sql_query", return_value=mock_df):
         result = await sql_handler.tables_check()
         assert result["success"] is True
@@ -74,9 +76,10 @@ async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
     """Test tables check with failure response."""
     # Create a DataFrame with invalid data that will cause an error
     mock_df = pd.DataFrame([{"wrong_column": "invalid"}])  # Missing 'count' column
-    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
-        MagicMock()
-    )  # type: ignore
+    if sql_handler.sql_client.engine is not None:
+        sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+            MagicMock()
+        )
     with patch("pandas.read_sql_query", return_value=mock_df):
         result = await sql_handler.tables_check()
         assert result["success"] is False

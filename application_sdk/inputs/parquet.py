@@ -1,5 +1,5 @@
 import logging
-from typing import Any, AsyncIterator, Dict, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Optional
 
 import daft
 import pandas as pd
@@ -8,6 +8,9 @@ from application_sdk.inputs import Input
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    import daft
 
 
 class ParquetInput(Input):

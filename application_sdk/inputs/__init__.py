@@ -1,9 +1,12 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator
+from typing import TYPE_CHECKING, Any, Dict, Iterator
 
 import pandas as pd
 
 from application_sdk.common.logger_adaptors import get_logger
+
+if TYPE_CHECKING:
+    import daft
 
 logger = get_logger(__name__)
 

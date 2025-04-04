@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 import pandas as pd
 from temporalio import activity
@@ -10,6 +10,9 @@ from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
 
 
 class ParquetOutput(Output):

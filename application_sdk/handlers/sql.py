@@ -85,11 +85,24 @@ class SQLHandler(HandlerInterface):
     @transform(
         sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
     )
-    async def test_auth(
+    async def _run_test_auth(
         self,
         sql_input: pd.DataFrame,
         **kwargs: Dict[str, Any],
     ) -> bool:
+        """
+        Internal implementation of authentication test with transform decorator.
+        """
+        try:
+            sql_input.to_dict(orient="records")
+            return True
+        except Exception as exc:
+            logger.error(
+                f"Failed to authenticate with the given credentials: {str(exc)}"
+            )
+            raise exc
+
+    async def test_auth(self, *args: Any, **kwargs: Any) -> bool:
         """
         Test the authentication credentials.
 
@@ -97,8 +110,7 @@ class SQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            sql_input.to_dict(orient="records")
-            return True
+            return await self._run_test_auth(**kwargs)
         except Exception as exc:
             logger.error(
                 f"Failed to authenticate with the given credentials: {str(exc)}"

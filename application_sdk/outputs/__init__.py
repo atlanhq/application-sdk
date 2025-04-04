@@ -6,7 +6,7 @@ in the application, including file outputs and object store interactions.
 
 import inspect
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Generator, Optional, Union
 
 import pandas as pd
 from temporalio import activity
@@ -18,8 +18,11 @@ from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
 
+if TYPE_CHECKING:
+    import daft
 
-def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821
+
+def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:
     """
     Helper method to check if the dataframe has any rows
     """
@@ -49,10 +52,10 @@ class Output(ABC):
         chunk_count (int): Number of chunks the output was split into.
     """
 
-    output_path: str
-    output_prefix: str
-    total_record_count: int
-    chunk_count: int
+    output_path: str | None = None
+    output_prefix: str | None = None
+    total_record_count: int | None = None
+    chunk_count: int | None = None
     state: Optional[ActivitiesState] = None
 
     @classmethod

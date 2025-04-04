@@ -10,14 +10,14 @@ class SampleSQLHandler(SQLHandler):
     async def prepare(self, credentials: Dict[str, Any], **kwargs) -> None:
         pass
 
-    async def test_auth(self, **kwargs) -> bool:
+    async def test_auth(self, **kwargs: Any) -> bool:
         return True
 
-    async def fetch_metadata(self, **kwargs) -> List[Dict[str, str]]:
+    async def fetch_metadata(self, **kwargs: Any) -> List[Dict[str, str]]:
         return [{"database": "test", "schema": "test"}]
 
     async def preflight_check(
-        self, payload: Dict[str, Any], **kwargs
+        self, payload: Dict[str, Any], **kwargs: Any
     ) -> Dict[str, Any]:
         return {
             "success": True,

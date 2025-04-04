@@ -1,6 +1,6 @@
 import asyncio
 import concurrent
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
 
 import pandas as pd
 from sqlalchemy import text
@@ -15,6 +15,9 @@ from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
 
 
 def _get_sql_query(

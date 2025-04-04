@@ -2,7 +2,7 @@ import asyncio
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import Any, Callable, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional, Union
 
 import pandas as pd
 
@@ -14,6 +14,9 @@ logger = get_logger(__name__)
 
 
 executor = ThreadPoolExecutor()
+
+if TYPE_CHECKING:
+    import daft
 
 
 async def to_async(
@@ -181,7 +184,7 @@ async def run_process(
         return await fn(**fn_kwargs)
 
 
-def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
+def transform(*args: Any, **kwargs: Any):
     """Decorator that reads data from an Input source and returns data as a pandas DataFrame.
 
     This decorator handles reading data from an Input source and writing it to an Output.
@@ -277,7 +280,7 @@ def transform(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
     return wrapper
 
 
-def transform_daft(*args: Dict[str, Any], **kwargs: Dict[str, Any]):
+def transform_daft(*args: Any, **kwargs: Any):
     """Decorator that reads data from an Input source and returns data as a daft DataFrame.
 
     This decorator handles reading data from an Input source and writing it to an Output.

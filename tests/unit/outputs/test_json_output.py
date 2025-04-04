@@ -38,10 +38,14 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
         chunk_size=config["chunk_size"],
     )
 
-    assert json_output.output_path.endswith(config["output_suffix"])
+    assert (
+        json_output.output_path.endswith(config["output_suffix"])
+        if json_output.output_path
+        else False
+    )
     assert json_output.output_prefix == config["output_prefix"]
     assert json_output.chunk_size == config["chunk_size"]
-    assert os.path.exists(json_output.output_path)
+    assert os.path.exists(str(json_output.output_path))
 
 
 @pytest.mark.asyncio
@@ -135,7 +139,7 @@ async def test_write_dataframe_multiple_chunks(
 
 @pytest.mark.asyncio
 async def test_write_dataframe_error(base_output_path: str) -> None:
-    json_output = JsonOutput.re_init(  # type: ignore
+    json_output = JsonOutput.re_init(
         output_suffix="/tests/raw",
         output_path=base_output_path,
         output_prefix="test_prefix",

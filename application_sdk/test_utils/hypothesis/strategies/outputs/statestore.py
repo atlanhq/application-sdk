@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from hypothesis import strategies as st
 from hypothesis.strategies import composite
@@ -41,8 +41,9 @@ common_credential_keys = st.sampled_from(
 uuid_strategy = st.uuids().map(str)
 
 
+# draw is optional, but we need to pass it to the composite strategy
 @composite
-def credentials_strategy(draw) -> Dict[str, Any]:
+def credentials_strategy(draw: Optional[Any] = None) -> Dict[str, Any]:
     """Generate a dictionary of credentials with common keys."""
     # Always include username and password as they're most common
     num_fields = draw(st.integers(min_value=2))
@@ -63,10 +64,11 @@ def credentials_strategy(draw) -> Dict[str, Any]:
 
 
 @composite
-def configuration_strategy(draw) -> Dict[str, Any]:
+def configuration_strategy(draw: Optional[Any] = None) -> Dict[str, Any]:
     """Generate a configuration dictionary that might include nested structures."""
-    # Generate base configuration with credentials
-    config = draw(credentials_strategy())
+    if draw is not None:
+        # Generate base configuration with credentials
+        config = draw(credentials_strategy())
 
     # Add some common configuration fields
     extra_fields = {
@@ -79,12 +81,15 @@ def configuration_strategy(draw) -> Dict[str, Any]:
     }
 
     # Optionally add nested configuration
-    if draw(st.booleans()):
-        extra_fields["advanced_settings"] = {
-            "pool_size": draw(st.integers()),
-            "retry_interval": draw(st.integers()),
-            "timeout_policy": draw(st.sampled_from(["strict", "lenient", "adaptive"])),
-        }
+    if draw is not None:
+        if draw(st.booleans()):
+            extra_fields["advanced_settings"] = {
+                "pool_size": draw(st.integers()),
+                "retry_interval": draw(st.integers()),
+                "timeout_policy": draw(
+                    st.sampled_from(["strict", "lenient", "adaptive"])
+                ),
+            }
 
     config.update(extra_fields)
     return config

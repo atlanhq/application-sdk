@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
 
 import pandas as pd
 
@@ -9,6 +9,9 @@ from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
 
 
 class JsonInput(Input):

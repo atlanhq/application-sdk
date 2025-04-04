@@ -3,7 +3,7 @@ from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type
 import pandas as pd
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesInterface, ActivitiesState
+from application_sdk.activities import ActivitiesInterface, ActivitiesState, H
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
@@ -20,7 +20,7 @@ from application_sdk.transformers.atlas import AtlasTransformer
 activity.logger = get_logger(__name__)
 
 
-class SQLMetadataExtractionActivitiesState(ActivitiesState):
+class SQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
     """State class for SQL metadata extraction activities.
 
     This class holds the state required for SQL metadata extraction activities,
@@ -33,11 +33,10 @@ class SQLMetadataExtractionActivitiesState(ActivitiesState):
     """
 
     sql_client: Optional[SQLClient] = None
-    handler: Optional[SQLHandler] = None
     transformer: Optional[TransformerInterface] = None
 
 
-class SQLMetadataExtractionActivities(ActivitiesInterface):
+class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
     """Activities for extracting metadata from SQL databases.
 
     This class provides activities for extracting metadata from SQL databases,
@@ -57,8 +56,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         column_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during column extraction.
             Defaults to an empty string.
     """
-
-    _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
 
     fetch_database_sql = None
     fetch_schema_sql = None

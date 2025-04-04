@@ -1,4 +1,4 @@
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Any, Dict, Union
 
 import pandas as pd
 from pyiceberg.catalog import Catalog
@@ -9,6 +9,9 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 
 activity.logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
 
 
 class IcebergOutput(Output):

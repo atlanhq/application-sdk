@@ -1,5 +1,5 @@
 import os
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
 
 import pandas as pd
 from temporalio import activity
@@ -11,6 +11,9 @@ from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 activity.logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
@@ -64,7 +67,7 @@ class JsonOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
-        **kwargs: Dict[str, Any],
+        **kwargs: Any,
     ):
         """Initialize the JSON output handler.
 
@@ -95,21 +98,21 @@ class JsonOutput(Output):
         self.buffer_size = buffer_size
         settings = get_settings()
         self.chunk_size = chunk_size or settings.chunk_size
-        self.buffer: List[Union[pd.DataFrame, "daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: List[Union[pd.DataFrame, "daft.DataFrame"]] = []
         self.current_buffer_size = 0
         self.path_gen = path_gen
         self.state = state
 
     @classmethod
-    def re_init(
+    def re_init(  # type: ignore
         cls,
         output_path: str,
         typename: Optional[str] = None,
         chunk_count: int = 0,
         total_record_count: int = 0,
         chunk_start: Optional[int] = None,
-        output_suffix: str = None,
-        **kwargs: Dict[str, Any],
+        output_suffix: Optional[str] = None,
+        **kwargs: Any,
     ):
         """Re-initialize the output class with given keyword arguments.
 

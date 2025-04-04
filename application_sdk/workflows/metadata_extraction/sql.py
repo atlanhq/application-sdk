@@ -5,7 +5,7 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
+from typing import Any, Callable, Dict, List, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -68,7 +68,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
     async def fetch_and_transform(
         self,
-        fetch_fn: Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]],
+        fetch_fn: Callable[..., Any],
         workflow_args: Dict[str, Any],
         retry_policy: RetryPolicy,
     ) -> None:
@@ -85,6 +85,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
         """
+
         raw_stat = await workflow.execute_activity_method(
             fetch_fn,
             workflow_args,
@@ -95,7 +96,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         raw_stat = ActivityStatistics.model_validate(raw_stat)
         transform_activities: List[Any] = []
 
-        if raw_stat is None or raw_stat.chunk_count == 0:
+        if raw_stat.chunk_count == 0:
             # to handle the case where the fetch_fn returns None or no chunks
             return
 

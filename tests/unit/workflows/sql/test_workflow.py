@@ -163,11 +163,13 @@ async def test_fetch_and_transform_error_handling():
             )
 
 
-def normalize_sql(query: str) -> str:
+def normalize_sql(query: str | None) -> str:
     """
     Normalize SQL queries by removing extra whitespace, line breaks, and indentation.
     Also normalizes spacing around semicolons and parentheses.
     """
+    if query is None:
+        return ""
     # First remove all whitespace around semicolons and parentheses
     query = re.sub(r"\s*([;()])\s*", r"\1", query)
     # Then normalize all other whitespace

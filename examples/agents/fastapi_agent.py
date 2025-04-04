@@ -22,7 +22,8 @@ async def run_agent_server():
         state_graph_builder=get_state_graph, graph_builder_name="my_agent"
     )
     await app.setup_worker(temporal_client)
-    await app.worker.start(daemon=True)
+    if app.worker is not None:
+        await app.worker.start(daemon=True)
 
     # Start the server
     await app.start()
