@@ -281,6 +281,7 @@ jobs:
     needs: matrix-builder
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
@@ -308,8 +309,8 @@ jobs:
           repo: "${{ matrix.repo_name }}"
           owner: "atlanhq"
           workflow: "e2e-integration-test.yaml"
-          workflow_timeout_seconds: 120
-          workflow_job_steps_retry_seconds: 10
+          workflow_timeout_seconds: 300
+          workflow_job_steps_retry_seconds: 20
           distinct_id: "${{ env.distinct_id }}"
       - name: Check the test logs using the below run URL
         run: |
