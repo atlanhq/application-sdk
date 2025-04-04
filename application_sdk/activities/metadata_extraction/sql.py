@@ -3,7 +3,7 @@ from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type
 import pandas as pd
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesInterface, ActivitiesState, H
+from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
