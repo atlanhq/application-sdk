@@ -6,12 +6,7 @@ from hypothesis.strategies import composite
 
 # Strategy for generating safe file path components
 safe_path_strategy = st.text(
-    min_size=1,
-    max_size=30,
-    alphabet=st.characters(
-        whitelist_categories=("Lu", "Ll", "Nd"),  # Only letters and numbers
-        blacklist_characters=["/", "\\", ".", " ", "\t", "\n", "\r"],
-    ),
+    alphabet=st.characters(),
 )
 
 # Strategy for generating output paths
@@ -25,46 +20,33 @@ output_path_strategy = st.builds(
 output_prefix_strategy = safe_path_strategy
 
 # Strategy for generating chunk sizes
-chunk_size_strategy = st.integers(min_value=1, max_value=1000000)
+chunk_size_strategy = st.integers()
 
 # Strategy for generating column names
 column_name_strategy = st.text(
-    min_size=1,
-    max_size=30,
-    alphabet=st.characters(
-        whitelist_categories=("Lu", "Ll", "Nd"),
-        blacklist_characters=["/", "\\", ".", " ", "\t", "\n", "\r"],
-    ),
+    alphabet=st.characters(),
 ).map(lambda x: x.strip())
 
 # Strategy for generating cell values
 cell_value_strategy = st.one_of(
-    st.integers(min_value=-1000000, max_value=1000000),  # Reasonable integer range
-    st.floats(
-        allow_infinity=False, allow_nan=False, min_value=-1000000, max_value=1000000
-    ),
+    st.integers(),
+    st.floats(allow_infinity=True, allow_nan=True),
     st.text(
-        min_size=0,
-        max_size=100,
-        alphabet=st.characters(
-            blacklist_categories=("Cs",)
-        ),  # Exclude surrogate characters
+        alphabet=st.characters(),
     ),
     st.booleans(),
     st.none(),
 )
 
 # Strategy for generating DataFrame columns
-dataframe_columns_strategy = st.lists(
-    column_name_strategy, min_size=1, max_size=10, unique=True
-)
+dataframe_columns_strategy = st.lists(column_name_strategy)
 
 
 @composite
 def dataframe_strategy(draw) -> pd.DataFrame:
     """Generate a pandas DataFrame with random data."""
     columns = draw(dataframe_columns_strategy)
-    num_rows = draw(st.integers(min_value=0, max_value=1000))
+    num_rows = draw(st.integers())
 
     if num_rows == 0 or not columns:
         return pd.DataFrame(columns=columns)

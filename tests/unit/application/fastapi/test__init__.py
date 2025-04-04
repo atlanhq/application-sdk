@@ -33,9 +33,7 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(payload=payload_strategy)
-    @settings(
-        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     async def test_preflight_check_success(
         self,
         payload: Dict[str, Any],
@@ -71,9 +69,7 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(payload=payload_strategy)
-    @settings(
-        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     async def test_preflight_check_failure(
         self,
         payload: Dict[str, Any],
@@ -99,9 +95,7 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(event_data=event_data_strategy)
-    @settings(
-        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     async def test_event_trigger_success(self, event_data: Dict[str, Any]):
         """Test event trigger with hypothesis generated event data"""
 
@@ -137,9 +131,7 @@ class TestFastAPIApplication:
 
     @pytest.mark.asyncio
     @given(event_data=event_data_strategy)
-    @settings(
-        max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture]
-    )
+    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
     async def test_event_trigger_conditions(self, event_data: Dict[str, Any]):
         """Test event trigger conditions with hypothesis generated event data"""
         temporal_client = AsyncMock()
