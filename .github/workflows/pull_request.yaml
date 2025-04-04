@@ -191,8 +191,8 @@ jobs:
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}
         uses: mshick/add-pr-comment@v2
         with:
-          message-id: 'workflow_status'
-          message-path: 'examples/workflow_status.md'
+          message-id: "workflow_status"
+          message-path: "examples/workflow_status.md"
 
       # Stop all services
       - name: Stop all services
@@ -201,12 +201,86 @@ jobs:
           make stop-all
           sleep 10  # Give services time to stop
 
+  matrix-builder:
+    name: Build Test Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get PR Labels
+        id: get-labels
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const labelNames = labels.map(label => label.name).join(',');
+            console.log(`PR Labels: ${labelNames}`);
+            core.setOutput('labels', labelNames);
+
+      - name: Build matrix from PR labels
+        id: set-matrix
+        run: |
+          # Get the target branch of PR
+          TARGET_BRANCH="${{ github.base_ref }}"
+          # Default repo:branch if no label provided
+          DEFAULT_MATRIX="{\"repo_name\":[\"atlan-postgres-app\"],\"target_branch\":[\"${TARGET_BRANCH}\"]}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Parse labels from GitHub Script output
+            LABELS="${{ steps.get-labels.outputs.labels }}"
+            
+            # Parse repo:branch labels
+            REPOS=()
+            BRANCHES=()
+            FOUND_LABEL=false
+            
+            echo "Found labels: ${LABELS}"
+            
+            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+            for LABEL in "${LABEL_ARRAY[@]}"; do
+              if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
+                REPO="${BASH_REMATCH[1]}"
+                BRANCH="${BASH_REMATCH[2]}"
+                REPOS+=("$REPO")
+                BRANCHES+=("$BRANCH")
+                FOUND_LABEL=true
+                echo "Parsed label: $REPO:$BRANCH"
+              fi
+            done
+            
+            # Generate matrix JSON
+            if [[ "$FOUND_LABEL" == "true" ]]; then
+              # Convert arrays to JSON arrays
+              REPO_JSON=$(printf '"%s",' "${REPOS[@]}" | sed 's/,$//')
+              BRANCH_JSON=$(printf '"%s",' "${BRANCHES[@]}" | sed 's/,$//')
+              MATRIX="{\"repo_name\":[${REPO_JSON}],\"target_branch\":[${BRANCH_JSON}]}"
+              echo "Generated matrix from labels: $MATRIX"
+            else
+              MATRIX="$DEFAULT_MATRIX"
+              echo "No repo:branch labels found, using default matrix"
+            fi
+          else
+            MATRIX="$DEFAULT_MATRIX"
+            echo "Not a PR event, using default matrix"
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix output: $MATRIX"
+
   e2e-apps:
     name: E2E (Apps)
+    needs: matrix-builder
     runs-on: ubuntu-latest
     strategy:
-      matrix:
-        repo_name: ["atlan-postgres-app"]
+      matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -229,8 +303,8 @@ jobs:
         id: return_dispatch
         with:
           token: "${{ secrets.ORG_PAT_GITHUB }}"
-          ref: ${{ env.base_branch }}
-          repo: ${{ matrix.repo_name }}
+          ref: "refs/heads/${{ matrix.target_branch }}"
+          repo: "${{ matrix.repo_name }}"
           owner: "atlanhq"
           workflow: "e2e-integration-test.yaml"
           workflow_timeout_seconds: 120
