@@ -46,8 +46,11 @@ class TemporalConstants(Enum):
     PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
     NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE", "default")
     APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+    UI_HOST = os.getenv("ATLAN_TEMPORAL_UI_HOST", "localhost")
+    UI_PORT = os.getenv("ATLAN_TEMPORAL_UI_PORT", "8233")
 
     WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1")))
+    MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -322,7 +325,7 @@ class TemporalClient(ClientInterface):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[int] = None,
+        max_concurrent_activities: Optional[int] = TemporalConstants.MAX_CONCURRENT_ACTIVITIES.value,
     ) -> Worker:
         """Create a Temporal worker.
 
