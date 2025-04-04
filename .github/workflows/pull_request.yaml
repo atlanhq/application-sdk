@@ -230,17 +230,15 @@ jobs:
         run: |
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
-          # Default repo:branch if no label provided
-          DEFAULT_MATRIX="{\"repo_name\":[\"atlan-postgres-app\"],\"target_branch\":[\"${TARGET_BRANCH}\"]}"
+          # Default matrix if no label provided
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
             LABELS="${{ steps.get-labels.outputs.labels }}"
             
-            # Parse repo:branch labels
-            REPOS=()
-            BRANCHES=()
             FOUND_LABEL=false
+            INCLUDES=""
             
             echo "Found labels: ${LABELS}"
             
@@ -249,19 +247,22 @@ jobs:
               if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
                 REPO="${BASH_REMATCH[1]}"
                 BRANCH="${BASH_REMATCH[2]}"
-                REPOS+=("$REPO")
-                BRANCHES+=("$BRANCH")
+                
+                # Add comma if not the first entry
+                if [[ "$FOUND_LABEL" == "true" ]]; then
+                  INCLUDES="${INCLUDES},"
+                fi
+                
+                # Add this pair as a direct include entry
+                INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
                 FOUND_LABEL=true
-                echo "Parsed label: $REPO:$BRANCH"
+                echo "Added pair: $REPO:$BRANCH"
               fi
             done
             
-            # Generate matrix JSON
+            # Generate matrix JSON with includes
             if [[ "$FOUND_LABEL" == "true" ]]; then
-              # Convert arrays to JSON arrays
-              REPO_JSON=$(printf '"%s",' "${REPOS[@]}" | sed 's/,$//')
-              BRANCH_JSON=$(printf '"%s",' "${BRANCHES[@]}" | sed 's/,$//')
-              MATRIX="{\"repo_name\":[${REPO_JSON}],\"target_branch\":[${BRANCH_JSON}]}"
+              MATRIX="{\"include\":[${INCLUDES}]}"
               echo "Generated matrix from labels: $MATRIX"
             else
               MATRIX="$DEFAULT_MATRIX"
