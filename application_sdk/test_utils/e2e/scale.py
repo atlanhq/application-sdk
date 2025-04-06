@@ -145,3 +145,19 @@ class ScaleTest(TestInterface):
     def setup_scale_test_duckdb_fixture(self):
         if self.test_type == "duckdb":
             self.setup_scale_test_resources_duckdb()
+
+    @pytest.mark.skip(reason="Not implemented")
+    def test_auth(self):
+        pass
+
+    @pytest.mark.skip(reason="Not implemented")
+    def test_metadata(self):
+        pass
+
+    @pytest.mark.skip(reason="Not implemented")
+    def test_preflight_check(self):
+        pass
+
+    @pytest.mark.skip(reason="Not implemented")
+    def test_run_workflow(self):
+        pass

@@ -1,6 +1,7 @@
 import inspect
 import os
 import time
+from abc import ABC, abstractmethod
 from glob import glob
 from typing import Any, Dict, List, Optional
 
@@ -48,7 +49,7 @@ def check_record_count_ge(df: pd.DataFrame, *, expected_record_count: int) -> bo
         )
 
 
-class TestInterface:
+class TestInterface(ABC):
     """Interface for end-to-end tests.
 
     This class provides an interface for running end-to-end tests, including methods for
@@ -95,6 +96,7 @@ class TestInterface:
         )
         cls.scale_test_config_path = "./tests/scale/config.yaml"
         cls.app_type = config["app_type"]
+        cls.test_type = config["test_type"]
 
         # Scale test configuration
         if config.get("test_type") == "duckdb":
@@ -117,30 +119,35 @@ class TestInterface:
         """
         return self.scale_test_container_class
 
+    @abstractmethod
     def test_health_check(self) -> None:
         """
         Method to test the health check of the server.
         """
         raise NotImplementedError
 
+    @abstractmethod
     def test_auth(self) -> None:
         """
         Method to test the test authentication.
         """
         raise NotImplementedError
 
+    @abstractmethod
     def test_metadata(self) -> None:
         """
         Method to test the metadata
         """
         raise NotImplementedError
 
+    @abstractmethod
     def test_preflight_check(self) -> None:
         """
         Method to test the preflight check
         """
         raise NotImplementedError
 
+    @abstractmethod
     def test_run_workflow(self) -> str:
         """
         Method to run the workflow
@@ -163,15 +170,21 @@ class TestInterface:
         if not os.path.exists(cls.config_file_path):
             raise FileNotFoundError(f"Config file not found: {cls.config_file_path}")
 
-        # Prepare the schema files base path
-        cls.schema_base_path = f"{tests_dir}/schema"
-        if not os.path.exists(cls.schema_base_path):
-            raise FileNotFoundError(
-                f"Schema base path not found: {cls.schema_base_path}"
-            )
+        if cls.config_file_path:
+            config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
+            cls.test_type = config["test_type"]
 
-        # Prepare the extracted output base path
-        cls.extracted_output_base_path = "/tmp/output"
+        if cls.test_type not in ["source_data_generator", "testcontainers", "duckdb"]:
+            # Prepare the schema files base path
+            cls.schema_base_path = f"{tests_dir}/schema"
+            if not os.path.exists(cls.schema_base_path):
+                raise FileNotFoundError(
+                    f"Schema base path not found: {cls.schema_base_path}"
+                )
+
+        if cls.test_type in ["source_data_generator", "testcontainers", "duckdb"]:
+            # Prepare the extracted output base path
+            cls.extracted_output_base_path = "/tmp/output"
 
     def monitor_and_wait_workflow_execution(self) -> str:
         """
