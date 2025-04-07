@@ -32,13 +32,14 @@ import time
 from typing import Any, Dict
 from urllib.parse import quote_plus
 
+from application_sdk.clients.utils import get_workflow_client
 from pyatlan.model.assets import Database
 
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.clients.sql import AsyncSQLClient
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.transformers.atlas import AtlasTransformer
@@ -149,10 +150,8 @@ async def application_sql_with_custom_transformer(
 ) -> Dict[str, Any]:
     print("Starting application_sql_with_custom_transformer")
 
-    temporal_client = TemporalClient(
-        application_name=APPLICATION_NAME,
-    )
-    await temporal_client.load()
+    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
+    await workflow_client.load()
 
     activities = SampleSQLActivities(
         sql_client_class=PostgreSQLClient,
@@ -161,9 +160,9 @@ async def application_sql_with_custom_transformer(
     )
 
     worker: Worker = Worker(
-        temporal_client=temporal_client,
+        workflow_client=workflow_client,
         workflow_classes=[SQLMetadataExtractionWorkflow],
-        temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
     )
 
     # wait for the worker to start
@@ -195,7 +194,7 @@ async def application_sql_with_custom_transformer(
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    workflow_response = await temporal_client.start_workflow(
+    workflow_response = await workflow_client.start_workflow(
         workflow_args, SQLMetadataExtractionWorkflow
     )
 
