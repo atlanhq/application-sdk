@@ -14,6 +14,7 @@ import socket
 import threading
 import time
 import uuid
+from typing import Any
 
 import psutil
 from fastapi import APIRouter, status
@@ -140,5 +141,5 @@ async def ready():
     return {"status": "ok"}
 
 
-def get_server_router() -> APIRouter:
+def get_server_router() -> Any:
     return router

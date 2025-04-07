@@ -101,12 +101,12 @@ class FastAPIApplication(AtlanApplicationInterface):
         temporal_client (Optional[TemporalClient]): Client for Temporal workflow operations.
     """
 
-    app: FastAPI
+    app: Any
     temporal_client: Optional[TemporalClient]
 
-    workflow_router: APIRouter = APIRouter()
-    pubsub_router: APIRouter = APIRouter()
-    events_router: APIRouter = APIRouter()
+    workflow_router: Any = APIRouter()
+    pubsub_router: Any = APIRouter()
+    events_router: Any = APIRouter()
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"

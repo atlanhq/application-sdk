@@ -123,10 +123,15 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             await sql_client.load(credentials)
 
         self._state[workflow_id].sql_client = sql_client
+
+        # Create transformer with required parameters from ApplicationConstants
+        transformer_params = {
+            "connector_name": ApplicationConstants.APPLICATION_NAME.value,
+            "connector_type": "sql",
+            "tenant_id": ApplicationConstants.TENANT_ID.value,
+        }
         self._state[workflow_id].transformer = self.transformer_class(
-            connector_name=ApplicationConstants.APPLICATION_NAME.value,
-            connector_type="sql",
-            tenant_id=ApplicationConstants.TENANT_ID.value,
+            **transformer_params
         )
 
     async def _clean_state(self):
@@ -144,7 +149,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
 
         await super()._clean_state()
 
-    @run_sync
     def _process_rows(
         self,
         results: pd.DataFrame,
@@ -360,11 +364,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 - chunk_count: Number of chunks processed
         """
         async for input in raw_input:
+            # Extract type information for proper typing
+            typename_value = str(kwargs.get("typename", ""))
+            workflow_id_value = str(kwargs.get("workflow_id", ""))
+            workflow_run_id_value = str(kwargs.get("workflow_run_id", ""))
+
             transformed_chunk = await self._transform_batch(
                 input,
-                kwargs.get("typename"),
-                kwargs.get("workflow_id"),
-                kwargs.get("workflow_run_id"),
+                typename_value,
+                workflow_id_value,
+                workflow_run_id_value,
                 kwargs,
             )
             await transformed_output.write_dataframe(transformed_chunk)

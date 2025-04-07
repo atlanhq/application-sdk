@@ -1,13 +1,16 @@
 """Object store interface for the application."""
 
 import os
+from typing import Optional
 
 from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+
+activity.logger = logger
 
 
 class ObjectStoreOutput:
@@ -16,9 +19,9 @@ class ObjectStoreOutput:
 
     @classmethod
     async def push_file_to_object_store(
-        cls, output_prefix: str, file_path: str
-    ) -> None:
-        """Pushes a single file to the object store.
+        cls, output_prefix: Optional[str], file_path: str
+    ):
+        """Push a file to the object store.
 
         Args:
             output_prefix (str): The base path to calculate relative paths from.
@@ -86,11 +89,11 @@ class ObjectStoreOutput:
                     file_path = os.path.join(root, file)
                     await cls.push_file_to_object_store(output_prefix, file_path)
 
-            activity.logger.info(
+            logger.info(
                 f"Completed pushing data from {input_files_path} to object store"
             )
         except Exception as e:
-            activity.logger.error(
+            logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e

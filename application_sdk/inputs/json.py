@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Iterator, List, Optional
 
 import pandas as pd
 
@@ -51,10 +51,15 @@ class JsonInput(Input):
 
         for file_name in self.file_names or []:
             try:
-                if not os.path.exists(os.path.join(self.path, file_name)):
+                # Ensure path is not None before joining
+                local_path = os.path.join(self.path or "", file_name)
+                if not os.path.exists(local_path):
+                    # Ensure download_file_prefix is not None before joining
+                    prefix = self.download_file_prefix or ""
+                    remote_path = os.path.join(prefix, file_name)
                     ObjectStoreInput.download_file_from_object_store(
-                        os.path.join(self.download_file_prefix, file_name),
-                        os.path.join(self.path, file_name),
+                        remote_path,
+                        local_path,
                     )
             except Exception as e:
                 logger.error(f"Error downloading file {file_name}: {str(e)}")
@@ -65,19 +70,22 @@ class JsonInput(Input):
         cls,
         path: str,
         **kwargs: Dict[str, Any],
-    ):
+    ) -> "JsonInput":
         """Re-initialize the input class with given keyword arguments.
 
         Args:
             path (str): The additional path to the input directory.
             **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
+
+        Returns:
+            JsonInput: A new instance of the JsonInput class
         """
         output_path = kwargs.get("output_path", "")
         kwargs["path"] = f"{output_path}{path}"
         kwargs["download_file_prefix"] = kwargs.get("output_prefix", "")
         return cls(**kwargs)
 
-    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    async def get_batched_dataframe(self) -> AsyncGenerator[pd.DataFrame, None]:
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
@@ -86,8 +94,9 @@ class JsonInput(Input):
             await self.download_files()
 
             for file_name in self.file_names or []:
+                local_path = os.path.join(self.path or "", file_name)
                 json_reader_obj = pd.read_json(
-                    os.path.join(self.path, file_name),
+                    local_path,
                     chunksize=self.chunk_size,
                     lines=True,
                 )
@@ -115,7 +124,9 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading data from JSON: {str(e)}")
 
-    async def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
+    async def get_batched_daft_dataframe(
+        self,
+    ) -> AsyncGenerator["daft.DataFrame", None]:  # noqa: F821
         """
         Method to read the data from the json files in the path
         and return as a batched daft dataframe
@@ -125,8 +136,9 @@ class JsonInput(Input):
 
             await self.download_files()
             for file_name in self.file_names or []:
+                local_path = os.path.join(self.path or "", file_name)
                 json_reader_obj = daft.read_json(
-                    path=os.path.join(self.path, file_name),
+                    path=local_path,
                     _chunk_size=self.chunk_size,
                 )
                 yield json_reader_obj
