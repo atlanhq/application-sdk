@@ -1,5 +1,5 @@
 import json
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
@@ -182,11 +182,6 @@ def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, 
 
     StateStoreOutput.store_configuration(config_id, extracted_config)
     return extracted_config
-
-
-
-import json
-from typing import Any, Dict, Union
 
 
 def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:

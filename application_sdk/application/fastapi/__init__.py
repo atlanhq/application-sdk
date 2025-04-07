@@ -25,7 +25,7 @@ from application_sdk.application.fastapi.models import (
 )
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
-from application_sdk.clients.temporal import TemporalClient, TemporalConstants
+from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.docgen import AtlanDocsGenerator
@@ -62,8 +62,8 @@ class WorkflowTrigger(BaseModel):
 
 
 class HttpWorkflowTrigger(WorkflowTrigger):
-    endpoint: str
-    methods: List[str]
+    endpoint: str = "/start"
+    methods: List[str] = ["POST"]
 
 
 class EventWorkflowTrigger(WorkflowTrigger):
@@ -88,7 +88,7 @@ class Application(AtlanApplicationInterface):
 
     Attributes:
         app (FastAPI): The main FastAPI application instance.
-        workflow_client (Optional[TemporalClient]): Client for interacting with Temporal workflows.
+        workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
         workflow_router (APIRouter): Router for workflow-related endpoints.
         pubsub_router (APIRouter): Router for pub/sub operations.
         events_router (APIRouter): Router for event handling.
@@ -100,11 +100,11 @@ class Application(AtlanApplicationInterface):
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
         handler (Optional[HandlerInterface]): Handler for processing application operations.
-        workflow_client (Optional[TemporalClient]): Client for Temporal workflow operations.
+        workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
     """
 
     app: FastAPI
-    workflow_client: Optional[TemporalClient]
+    workflow_client: Optional[WorkflowClient]
 
     workflow_router: APIRouter = APIRouter()
     pubsub_router: APIRouter = APIRouter()
@@ -120,14 +120,14 @@ class Application(AtlanApplicationInterface):
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
-        workflow_client: Optional[TemporalClient] = None,
+        workflow_client: Optional[WorkflowClient] = None,
     ):
         """Initialize the FastAPI application.
 
         Args:
             lifespan: Optional lifespan manager for the FastAPI application.
             handler (Optional[HandlerInterface]): Handler for processing application operations.
-            workflow_client (Optional[TemporalClient]): Client for Temporal workflow operations.
+            workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
         """
         self.app = FastAPI(lifespan=lifespan)
         self.app.add_exception_handler(
@@ -182,7 +182,6 @@ class Application(AtlanApplicationInterface):
 
 
     async def home(self, request: Request) -> HTMLResponse:
-        # TODO: move this to the application-sdk
         return self.templates.TemplateResponse(
             "index.html",
             {
@@ -193,8 +192,8 @@ class Application(AtlanApplicationInterface):
                 "app_http_host": ApplicationConstants.APP_HOST.value,
                 "tenant_id": ApplicationConstants.TENANT_ID.value,
                 "app_name": ApplicationConstants.APPLICATION_NAME.value,
-                "temporal_ui_host": TemporalConstants.UI_HOST.value,
-                "temporal_ui_port": TemporalConstants.UI_PORT.value,
+                "workflow_ui_host": WorkflowConstants.UI_HOST.value,
+                "workflow_ui_port": WorkflowConstants.UI_PORT.value,
             },
         )
 
@@ -510,7 +509,7 @@ class AgentApplication(Application):
     """FastAPI Application implementation with agent capabilities."""
 
     agent_router: APIRouter = APIRouter()
-    workflow_client: Optional[TemporalClient] = None
+    workflow_client: Optional[WorkflowClient] = None
     worker: Optional[Worker] = None
     workflow_handles: Dict[str, Any] = {}
     graph_builder_name: str
@@ -622,7 +621,7 @@ class AgentApplication(Application):
                 "data": None,
             }
 
-    async def setup_worker(self, workflow_client: TemporalClient) -> Worker:
+    async def setup_worker(self, workflow_client: WorkflowClient) -> Worker:
         """Set up and start the Temporal worker.
 
         Args:

@@ -1,7 +1,4 @@
-import os
 import uuid
-from datetime import timedelta
-from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -21,7 +18,6 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients import ClientInterface
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
@@ -34,23 +30,13 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
+from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
 
 logger = get_logger(__name__)
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
-
-class TemporalConstants(Enum):
-    HOST = os.getenv("ATLAN_TEMPORAL_HOST", "localhost")
-    PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
-    NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE", "default")
-    APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
-    UI_HOST = os.getenv("ATLAN_TEMPORAL_UI_HOST", "localhost")
-    UI_PORT = os.getenv("ATLAN_TEMPORAL_UI_PORT", "8233")
-
-    WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1")))
-    MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -159,21 +145,8 @@ class EventInterceptor(Interceptor):
         return EventWorkflowInboundInterceptor
 
 
-class TemporalClient(ClientInterface):
-    """Client for interacting with Temporal workflow service.
-
-    This class provides functionality for managing workflow executions,
-    including starting workflows, creating workers, and checking workflow status.
-
-    Attributes:
-        client: Temporal client instance.
-        worker: Temporal worker instance.
-        application_name (str): Name of the application.
-        worker_task_queue (str): Task queue for the worker.
-        host (str): Temporal server host.
-        port (str): Temporal server port.
-        namespace (str): Temporal namespace.
-    """
+class TemporalWorkflowClient(WorkflowClient):
+    """Temporal-specific implementation of WorkflowClient."""
 
     def __init__(
         self,
@@ -182,14 +155,6 @@ class TemporalClient(ClientInterface):
         application_name: str | None = None,
         namespace: str | None = "default",
     ):
-        """Initialize the Temporal client.
-
-        Args:
-            host (str | None, optional): Temporal server host. Defaults to None.
-            port (str | None, optional): Temporal server port. Defaults to None.
-            application_name (str | None, optional): Application name. Defaults to None.
-            namespace (str | None, optional): Temporal namespace. Defaults to "default".
-        """
         self.client = None
         self.worker = None
         self.application_name = (
@@ -198,9 +163,9 @@ class TemporalClient(ClientInterface):
             else ApplicationConstants.APPLICATION_NAME.value
         )
         self.worker_task_queue = self.get_worker_task_queue()
-        self.host = host if host else TemporalConstants.HOST.value
-        self.port = port if port else TemporalConstants.PORT.value
-        self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
+        self.host = host if host else WorkflowConstants.HOST.value
+        self.port = port if port else WorkflowConstants.PORT.value
+        self.namespace = namespace if namespace else WorkflowConstants.NAMESPACE.value
 
         workflow.logger = get_logger(__name__)
         activity.logger = get_logger(__name__)
@@ -291,7 +256,7 @@ class TemporalClient(ClientInterface):
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
-                execution_timeout=TemporalConstants.WORKFLOW_MAX_TIMEOUT_HOURS.value,
+                execution_timeout=WorkflowConstants.WORKFLOW_MAX_TIMEOUT_HOURS.value,
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
@@ -325,7 +290,7 @@ class TemporalClient(ClientInterface):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[int] = TemporalConstants.MAX_CONCURRENT_ACTIVITIES.value,
+        max_concurrent_activities: Optional[int] = WorkflowConstants.MAX_CONCURRENT_ACTIVITIES.value,
     ) -> Worker:
         """Create a Temporal worker.
 

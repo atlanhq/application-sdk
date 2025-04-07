@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Sequence
 import uvloop
 from temporalio.types import CallableType
 
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +25,7 @@ class Worker:
     including their activities, workflows, and module configurations.
 
     Attributes:
-        workflow_client (TemporalClient | None): Client for interacting with Temporal.
+        workflow_client (WorkflowClient | None): Client for interacting with Temporal.
         workflow_worker: The Temporal worker instance.
         workflow_activities (Sequence[CallableType]): List of activity functions.
         workflow_classes (List[Any]): List of workflow classes.
@@ -35,7 +35,7 @@ class Worker:
 
     def __init__(
         self,
-        workflow_client: TemporalClient | None = None,
+        workflow_client: WorkflowClient | None = None,
         workflow_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = ["application_sdk", "pandas","os", "app"],
         workflow_classes: List[Any] = [],
@@ -60,7 +60,7 @@ class Worker:
         self.passthrough_modules = passthrough_modules
         self.max_concurrent_activities = max_concurrent_activities
 
-    async def start(self, daemon: bool = False, *args: Any, **kwargs: Any) -> None:
+    async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
 
         This method starts the worker either in the current thread or as a daemon
@@ -88,6 +88,11 @@ class Worker:
 
         if not self.workflow_client:
             raise ValueError("Workflow client is not set")
+
+        # # activities across workflows
+        # workflow_activities: Sequence[CallableType] = []
+        # for workflow_defn in self.workflow_classes:
+        #     workflow_activities.extend(workflow_defn.get_activities())
 
         try:
             worker = self.workflow_client.create_worker(
