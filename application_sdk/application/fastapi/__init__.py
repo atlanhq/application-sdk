@@ -1,4 +1,4 @@
-from typing import Any, Callable, Dict, List, Optional, Type, cast
+from typing import Any, Callable, List, Optional, Type
 
 from fastapi import APIRouter, FastAPI, status
 from fastapi.responses import JSONResponse
@@ -29,27 +29,7 @@ from application_sdk.common.utils import get_workflow_config, update_workflow_co
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
-from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
-
-try:
-    from langgraph.graph import StateGraph
-
-    from application_sdk.activities.agents.langgraph import register_graph_builder
-    from application_sdk.agents import AgentState, LangGraphWorkflow
-
-    langgraph_available = True
-except ImportError:
-    # Create placeholders for type checking when langgraph is not available
-    StateGraph = Any  # type: ignore
-    AgentState = Any  # type: ignore
-    LangGraphWorkflow = Any  # type: ignore
-
-    def register_graph_builder(name: str, builder_func: Any) -> None:
-        """Placeholder for register_graph_builder when langgraph is not available."""
-        pass
-
-    langgraph_available = False
 
 logger = get_logger(__name__)
 
@@ -66,15 +46,6 @@ class HttpWorkflowTrigger(WorkflowTrigger):
 
 class EventWorkflowTrigger(WorkflowTrigger):
     should_trigger_workflow: Callable[[Any], bool]
-
-
-class AgentRequest(BaseModel):
-    """Request model for agent endpoints."""
-
-    user_query: str
-    workflow_state: Optional[Dict[str, Any]] = None
-    schedule_to_close_timeout: Optional[int] = None  # timeout in seconds
-    heartbeat_timeout: Optional[int] = None  # timeout in seconds
 
 
 class FastAPIApplication(AtlanApplicationInterface):
@@ -471,153 +442,3 @@ class FastAPIApplication(AtlanApplicationInterface):
             )
         )
         await server.serve()
-
-
-class FastAPIAgentApplication(FastAPIApplication):
-    """FastAPI Application implementation with agent capabilities."""
-
-    agent_router: APIRouter = APIRouter()
-    temporal_client: Optional[TemporalClient] = None
-    worker: Optional[Worker] = None
-    workflow_handles: Dict[str, Any] = {}
-    graph_builder_name: str
-
-    def __init__(self, *args: Any, **kwargs: Any) -> None:
-        if not langgraph_available:
-            raise ImportError(
-                "LangGraph is required for FastAPIAgentApplication. "
-                "Please install it with 'pip install application-sdk[langgraph_agent]' or use the langgraph_agent extra."
-            )
-        super().__init__(*args, **kwargs)
-
-    def register_routers(self) -> None:
-        """Register all routers including the agent router."""
-        self.register_routes()
-        self.app.include_router(self.agent_router, prefix="/api/v1/agent")
-        super().register_routers()
-
-    def register_routes(self) -> None:
-        """Register agent-specific routes."""
-        self.agent_router.add_api_route(
-            "/query",
-            self.process_query,
-            methods=["POST"],
-        )
-        self.agent_router.add_api_route(
-            "/result/{workflow_id}",
-            self.get_workflow_result,
-            methods=["GET"],
-        )
-        super().register_routes()
-
-    async def process_query(self, request: AgentRequest) -> Dict[str, Any]:
-        """Process an agent query.
-
-        Args:
-            request: The agent request containing the user query and optional workflow state.
-                In the request:
-                - user_query: The user's query
-                - workflow_state: The state of the workflow
-                - schedule_to_close_timeout: Optional timeout in seconds for activity completion
-                - heartbeat_timeout: Optional timeout in seconds for activity heartbeat
-
-        Returns:
-            Dict containing the workflow ID and run ID.
-        """
-        if not self.temporal_client:
-            raise Exception("Temporal client not initialized")
-
-        # Use provided state or create default state
-        state = request.workflow_state or AgentState(messages=[])
-
-        workflow_input = {
-            "user_query": request.user_query,
-            "state": state,
-            "graph_builder_name": self.graph_builder_name,
-            "schedule_to_close_timeout": request.schedule_to_close_timeout,
-            "heartbeat_timeout": request.heartbeat_timeout,
-        }
-
-        # Use cast to assure the type checker that LangGraphWorkflow is a valid workflow class
-        response = await self.temporal_client.start_workflow(
-            workflow_class=cast(Type[WorkflowInterface], LangGraphWorkflow),
-            workflow_args=workflow_input,
-        )
-
-        if "handle" in response:
-            self.workflow_handles[response["workflow_id"]] = response["handle"]
-
-        return {
-            "success": True,
-            "message": "Workflow started successfully",
-            "data": {
-                "workflow_id": response.get("workflow_id", ""),
-                "run_id": response.get("run_id", ""),
-            },
-        }
-
-    async def get_workflow_result(self, workflow_id: str) -> Dict[str, Any]:
-        """Get the result of a completed workflow.
-
-        Args:
-            workflow_id: The ID of the workflow to get results for.
-
-        Returns:
-            Dict containing the workflow result.
-        """
-        if workflow_id not in self.workflow_handles:
-            return {
-                "success": False,
-                "message": "Workflow not found or already completed",
-                "data": None,
-            }
-
-        try:
-            handle = self.workflow_handles[workflow_id]
-            result = await handle.result()
-            del self.workflow_handles[workflow_id]
-
-            return {
-                "success": True,
-                "message": "Workflow completed successfully",
-                "data": result,
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "message": f"Error getting workflow result: {str(e)}",
-                "data": None,
-            }
-
-    async def setup_worker(self, temporal_client: TemporalClient) -> Worker:
-        """Set up and start the Temporal worker.
-
-        Args:
-            temporal_client: The Temporal client instance.
-
-        Returns:
-            The initialized Worker instance.
-        """
-        self.worker = Worker(
-            temporal_client=temporal_client,
-            workflow_classes=[cast(Type[WorkflowInterface], LangGraphWorkflow)],
-            temporal_activities=LangGraphWorkflow.get_activities(
-                LangGraphWorkflow.activities_cls()
-            ),
-            max_concurrent_activities=5,
-        )
-        return self.worker
-
-    def register_graph(
-        self,
-        state_graph_builder: Callable[..., StateGraph],
-        graph_builder_name: str = "workflow",
-    ) -> None:
-        """Register a graph with a given name.
-
-        Args:
-            state_graph_builder: Function that returns a LangGraph StateGraph
-            graph_builder_name: Name to register the graph builder under
-        """
-        register_graph_builder(graph_builder_name, state_graph_builder)
-        self.graph_builder_name = graph_builder_name
