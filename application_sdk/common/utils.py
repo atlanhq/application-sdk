@@ -1,4 +1,6 @@
+import glob
 import json
+import os
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -182,3 +184,81 @@ def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, 
 
     StateStoreOutput.store_configuration(config_id, extracted_config)
     return extracted_config
+
+
+def read_sql_files(
+    queries_prefix: str = f"{os.path.dirname(os.path.abspath(__file__))}/queries",
+) -> Dict[str, str]:
+    """
+    Reads all SQL files in the queries directory and returns a dictionary of the file name and the SQL content.
+
+    Reads SQL files recursively from the given directory and builds a mapping of filenames
+    to their SQL contents. The filenames are converted to uppercase and have the .sql
+    extension removed.
+
+    Args:
+        queries_prefix: Absolute path of the directory containing SQL query files.
+
+    Returns:
+        A dictionary mapping SQL file names (uppercase, without extension) to their contents.
+    """
+    sql_files: List[str] = glob.glob(
+        os.path.join(
+            queries_prefix,
+            "**/*.sql",
+        ),
+        recursive=True,
+    )
+
+    result: Dict[str, str] = {}
+    for file in sql_files:
+        with open(file, "r") as f:
+            result[os.path.basename(file).upper().replace(".SQL", "")] = (
+                f.read().strip()
+            )
+
+    return result
+
+
+def get_actual_cpu_count():
+    """Gets the actual number of CPUs available on the system.
+
+    This function attempts to get the true number of CPUs available to the current process
+    by checking CPU affinity. Falls back to os.cpu_count() if affinity is not available.
+
+    Returns:
+        int: The number of CPUs available to the current process.
+
+    Examples:
+        >>> get_actual_cpu_count()
+        8  # On a system with 8 CPU cores
+
+        >>> # On a containerized system with CPU limits
+        >>> get_actual_cpu_count()
+        2  # Returns actual available CPUs rather than host system count
+
+    Note:
+        Based on https://stackoverflow.com/a/55423170/1710342
+    """
+    try:
+        return len(os.sched_getaffinity(0)) or 1  # type: ignore
+    except AttributeError:
+        return os.cpu_count() or 1
+
+
+def get_safe_num_threads():
+    """Gets the recommended number of threads for parallel processing.
+
+    Returns:
+        int: The recommended number of threads, calculated as 2x the number of available
+            CPU cores, with a minimum of 2 threads.
+
+    Examples:
+        >>> get_safe_num_threads()
+        16  # On a system with 8 CPU cores
+
+        >>> # On a single core system
+        >>> get_safe_num_threads()
+        2  # Minimum of 2 threads returned
+    """
+    return get_actual_cpu_count() * 2 or 2
