@@ -218,3 +218,47 @@ def read_sql_files(
             )
 
     return result
+
+
+def get_actual_cpu_count():
+    """Gets the actual number of CPUs available on the system.
+
+    This function attempts to get the true number of CPUs available to the current process
+    by checking CPU affinity. Falls back to os.cpu_count() if affinity is not available.
+
+    Returns:
+        int: The number of CPUs available to the current process.
+
+    Examples:
+        >>> get_actual_cpu_count()
+        8  # On a system with 8 CPU cores
+
+        >>> # On a containerized system with CPU limits
+        >>> get_actual_cpu_count()
+        2  # Returns actual available CPUs rather than host system count
+
+    Note:
+        Based on https://stackoverflow.com/a/55423170/1710342
+    """
+    try:
+        return len(os.sched_getaffinity(0)) or 1  # type: ignore
+    except AttributeError:
+        return os.cpu_count() or 1
+
+
+def get_safe_num_threads():
+    """Gets the recommended number of threads for parallel processing.
+
+    Returns:
+        int: The recommended number of threads, calculated as 2x the number of available
+            CPU cores, with a minimum of 2 threads.
+
+    Examples:
+        >>> get_safe_num_threads()
+        16  # On a system with 8 CPU cores
+
+        >>> # On a single core system
+        >>> get_safe_num_threads()
+        2  # Minimum of 2 threads returned
+    """
+    return get_actual_cpu_count() * 2 or 2
