@@ -10,7 +10,10 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Dict, List
+from urllib.parse import quote_plus
 
+from application_sdk.common.aws_utils import generate_aws_rds_token_with_iam_role, generate_aws_rds_token_with_iam_user
+from application_sdk.common.utils import parse_credentials_extra
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -93,6 +96,101 @@ class SQLClient(ClientInterface):
         """Close the database connection."""
         if self.connection:
             self.connection.close()
+
+    def get_iam_user_token(self):
+        """
+            Get the IAM user token for the database.
+            This is a temporary token that is used to authenticate the IAM user to the database.
+        """
+        extra = parse_credentials_extra(self.credentials)
+        aws_access_key_id = self.credentials["username"]
+        aws_secret_access_key = self.credentials["password"]
+        host = self.credentials["host"]
+        user = extra.get("username")
+        database = extra.get("database")
+        if not user:
+            raise ValueError("username is required for IAM user authentication")
+        if not database:
+            raise ValueError("database is required for IAM user authentication")
+
+        port = self.credentials["port"]
+        region = self.credentials.get("region", None)
+        token = generate_aws_rds_token_with_iam_user(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            host=host,
+            user=user,
+            port=port,
+            region=region,
+        )
+
+        return token
+
+    def get_iam_role_token(self):
+        """
+            Get the IAM role token for the database.
+            This is a temporary token that is used to authenticate the IAM role to the database.
+        """
+        extra = parse_credentials_extra(self.credentials)
+        aws_role_arn = extra.get("aws_role_arn")
+        database = extra.get("database")
+        external_id = extra.get("aws_external_id")
+
+        if not aws_role_arn:
+            raise ValueError("aws_role_arn is required for IAM role authentication")
+        if not database:
+            raise ValueError("database is required for IAM role authentication")
+        if not external_id:
+            raise ValueError("aws_external_id is required for IAM role authentication")
+
+        session_name = os.getenv("AWS_SESSION_NAME", "temp-session")
+        username = self.credentials["username"]
+        host = self.credentials["host"]
+        port = self.credentials.get("port", 5432)
+        region = self.credentials.get("region", None)
+        token = generate_aws_rds_token_with_iam_role(
+            role_arn=aws_role_arn,
+            host=host,
+            user=username,
+            external_id=external_id,
+            session_name=session_name,
+            port=port,
+            region=region,
+        )
+        return token
+
+    def get_auth_token(self) -> str:
+        """
+            Get the auth token for the SQL source.
+        """
+        authType = self.credentials.get("authType", "basic")  # Default to basic auth
+        token = None
+
+        match authType:
+            case "iam_user":
+                token = self.get_iam_user_token()
+            case "iam_role":
+                token = self.get_iam_role_token()
+            case "basic":
+                token = self.credentials["password"]
+            case _:
+                raise ValueError(f"Invalid auth type: {authType}")
+
+        encoded_token = quote_plus(token)
+        return encoded_token
+
+    def add_source_connection_params(self, connection_string: str, source_connection_params: Dict[str, Any]) -> str:
+        """
+            Add the source connection params to the connection string.
+        """
+        for key, value in source_connection_params.items():
+            if "?" not in connection_string:
+                connection_string += "?"
+            else:
+                connection_string += "&"
+            connection_string += f"{key}={value}"
+
+        return connection_string
 
     def get_sqlalchemy_connection_string(self) -> str:
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")

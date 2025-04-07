@@ -1,8 +1,10 @@
 from typing import Any, Callable, List, Optional, Type
 
-from fastapi import APIRouter, FastAPI, status
-from fastapi.responses import JSONResponse
+from application_sdk.common.constants import ApplicationConstants
+from fastapi import APIRouter, FastAPI, Request, status
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
@@ -23,7 +25,7 @@ from application_sdk.application.fastapi.models import (
 )
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.docgen import AtlanDocsGenerator
@@ -40,16 +42,16 @@ class WorkflowTrigger(BaseModel):
 
 
 class HttpWorkflowTrigger(WorkflowTrigger):
-    endpoint: str
-    methods: List[str]
+    endpoint: str = "/start"
+    methods: List[str] = ["POST"]
 
 
 class EventWorkflowTrigger(WorkflowTrigger):
     should_trigger_workflow: Callable[[Any], bool]
 
 
-class FastAPIApplication(AtlanApplicationInterface):
-    """FastAPI Application implementation of the Atlan Application Interface.
+class Application(AtlanApplicationInterface):
+    """A FastAPI Application implementation of the Atlan Application Interface.
 
     This class provides a FastAPI-based web application that handles workflow management,
     authentication, metadata operations, and event processing. It supports both HTTP and
@@ -57,7 +59,7 @@ class FastAPIApplication(AtlanApplicationInterface):
 
     Attributes:
         app (FastAPI): The main FastAPI application instance.
-        temporal_client (Optional[TemporalClient]): Client for interacting with Temporal workflows.
+        workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
         workflow_router (APIRouter): Router for workflow-related endpoints.
         pubsub_router (APIRouter): Router for pub/sub operations.
         events_router (APIRouter): Router for event handling.
@@ -69,11 +71,11 @@ class FastAPIApplication(AtlanApplicationInterface):
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
         handler (Optional[HandlerInterface]): Handler for processing application operations.
-        temporal_client (Optional[TemporalClient]): Client for Temporal workflow operations.
+        workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
     """
 
     app: FastAPI
-    temporal_client: Optional[TemporalClient]
+    workflow_client: Optional[WorkflowClient]
 
     workflow_router: APIRouter = APIRouter()
     pubsub_router: APIRouter = APIRouter()
@@ -89,21 +91,23 @@ class FastAPIApplication(AtlanApplicationInterface):
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
-        temporal_client: Optional[TemporalClient] = None,
+        workflow_client: Optional[WorkflowClient] = None,
+        frontend_templates_path: str = "frontend/templates",
     ):
         """Initialize the FastAPI application.
 
         Args:
             lifespan: Optional lifespan manager for the FastAPI application.
             handler (Optional[HandlerInterface]): Handler for processing application operations.
-            temporal_client (Optional[TemporalClient]): Client for Temporal workflow operations.
+            workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
         """
         self.app = FastAPI(lifespan=lifespan)
+        self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
         self.handler = handler
-        self.temporal_client = temporal_client
+        self.workflow_client = workflow_client
         self.app.add_middleware(LogMiddleware)
         self.register_routers()
         self.setup_atlan_docs()
@@ -148,6 +152,23 @@ class FastAPIApplication(AtlanApplicationInterface):
         self.app.include_router(self.pubsub_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
+
+    async def home(self, request: Request) -> HTMLResponse:
+        return self.templates.TemplateResponse(
+            "index.html",
+            {
+                "request": request,
+                "app_dashboard_http_port": ApplicationConstants.APP_DASHBOARD_PORT.value,
+                "app_dashboard_http_host": ApplicationConstants.APP_DASHBOARD_HOST.value,
+                "app_http_port": ApplicationConstants.APP_PORT.value,
+                "app_http_host": ApplicationConstants.APP_HOST.value,
+                "tenant_id": ApplicationConstants.TENANT_ID.value,
+                "app_name": ApplicationConstants.APPLICATION_NAME.value,
+                "workflow_ui_host": WorkflowConstants.UI_HOST.value,
+                "workflow_ui_port": WorkflowConstants.UI_PORT.value,
+            },
+        )
+
     def register_workflow(
         self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
     ):
@@ -166,10 +187,10 @@ class FastAPIApplication(AtlanApplicationInterface):
             if isinstance(trigger, HttpWorkflowTrigger):
 
                 async def start_workflow(body: WorkflowRequest):
-                    if not self.temporal_client:
+                    if not self.workflow_client:
                         raise Exception("Temporal client not initialized")
 
-                    workflow_data = await self.temporal_client.start_workflow(
+                    workflow_data = await self.workflow_client.start_workflow(
                         body.model_dump(), workflow_class=workflow_class
                     )
                     return WorkflowResponse(
@@ -254,6 +275,13 @@ class FastAPIApplication(AtlanApplicationInterface):
             methods=["POST"],
         )
 
+
+    def register_ui_routes(self):
+        """Register the UI routes for the FastAPI application."""
+        self.app.get("/")(self.home)
+        # Mount static files
+        self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
+
     async def get_dapr_subscriptions(
         self,
     ) -> List[dict[str, Any]]:
@@ -280,7 +308,7 @@ class FastAPIApplication(AtlanApplicationInterface):
         Raises:
             Exception: If temporal client is not initialized.
         """
-        if not self.temporal_client:
+        if not self.workflow_client:
             raise Exception("Temporal client not initialized")
 
         logger.info("Received event {}", event)
@@ -292,7 +320,7 @@ class FastAPIApplication(AtlanApplicationInterface):
                     event,
                 )
 
-                await self.temporal_client.start_workflow(
+                await self.workflow_client.start_workflow(
                     workflow_args=event, workflow_class=trigger.workflow_class
                 )
 
@@ -370,10 +398,10 @@ class FastAPIApplication(AtlanApplicationInterface):
         Raises:
             Exception: If temporal client is not initialized.
         """
-        if not self.temporal_client:
+        if not self.workflow_client:
             raise Exception("Temporal client not initialized")
 
-        workflow_status = await self.temporal_client.get_workflow_run_status(
+        workflow_status = await self.workflow_client.get_workflow_run_status(
             workflow_id,
             run_id,
             include_last_executed_run_id=True,
@@ -421,19 +449,25 @@ class FastAPIApplication(AtlanApplicationInterface):
         Raises:
             Exception: If temporal client is not initialized.
         """
-        if not self.temporal_client:
+        if not self.workflow_client:
             raise Exception("Temporal client not initialized")
 
-        await self.temporal_client.stop_workflow(workflow_id, run_id)
+        await self.workflow_client.stop_workflow(workflow_id, run_id)
         return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
-    async def start(self, host: str = "0.0.0.0", port: int = 8000):
+    async def start(
+        self, host: str = ApplicationConstants.APP_HOST.value,
+        port: int = ApplicationConstants.APP_PORT.value,
+    ) -> None:
         """Start the FastAPI application server.
 
         Args:
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
         """
+        self.register_ui_routes()
+
+        logger.info(f"Starting application on {host}:{port}")
         server = Server(
             Config(
                 app=self.app,

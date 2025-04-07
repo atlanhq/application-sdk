@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 from temporalio.client import WorkflowExecutionStatus, WorkflowHandle
 
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.workflow import WorkflowClient
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ async def monitor_workflow_execution_and_write_status(
 
 async def run_and_monitor_workflow(
     example_workflow_function,
-    temporal_client: TemporalClient,
+    workflow_client: WorkflowClient,
     polling_interval: int = 5,
     timeout: Optional[int] = 240,
 ) -> tuple[str, float]:
@@ -86,7 +86,7 @@ async def run_and_monitor_workflow(
 
     Args:
         example: The workflow example function to run
-        temporal_client: The temporal client instance
+        workflow_client: The temporal client instance
 
     Returns:
         tuple[str, float]: A tuple containing (workflow_status, time_taken)
@@ -94,7 +94,7 @@ async def run_and_monitor_workflow(
     start_time = time.time()
     workflow_response = await example_workflow_function()
 
-    workflow_handle = temporal_client.client.get_workflow_handle(
+    workflow_handle = workflow_client.client.get_workflow_handle(
         workflow_id=workflow_response["workflow_id"],
         run_id=workflow_response["run_id"],
     )
