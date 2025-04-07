@@ -89,11 +89,6 @@ class Worker:
         if not self.workflow_client:
             raise ValueError("Workflow client is not set")
 
-        # # activities across workflows
-        # workflow_activities: Sequence[CallableType] = []
-        # for workflow_defn in self.workflow_classes:
-        #     workflow_activities.extend(workflow_defn.get_activities())
-
         try:
             worker = self.workflow_client.create_worker(
                 activities=self.workflow_activities,

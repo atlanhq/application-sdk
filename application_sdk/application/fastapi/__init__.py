@@ -92,6 +92,7 @@ class Application(AtlanApplicationInterface):
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
         workflow_client: Optional[WorkflowClient] = None,
+        frontend_templates_path: str = "frontend/templates",
     ):
         """Initialize the FastAPI application.
 
@@ -101,10 +102,10 @@ class Application(AtlanApplicationInterface):
             workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
         """
         self.app = FastAPI(lifespan=lifespan)
+        self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.app.add_exception_handler(
             status.HTTP_500_INTERNAL_SERVER_ERROR, internal_server_error_handler
         )
-        self.templates = Jinja2Templates(directory="frontend/templates")
         self.handler = handler
         self.workflow_client = workflow_client
         self.app.add_middleware(LogMiddleware)

@@ -2,12 +2,6 @@
 
 The application uses the following environment variables for configuration:
 
-## Database Configuration
-
-| Environment Variable | Description | Default Value |
-|---------------------|-------------|---------------|
-| `ATLAN_SQLALCHEMY_DATABASE_URL` | Specifies the database connection URL | `sqlite:////tmp/app.db` |
-| `ATLAN_SQLALCHEMY_CONNECT_ARGS` | Specifies additional connection arguments for SQLAlchemy as a JSON string | `{"check_same_thread": false}` |
 
 ## Temporal Configuration
 
