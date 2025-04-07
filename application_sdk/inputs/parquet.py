@@ -1,8 +1,10 @@
+import glob
 import logging
+import os
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from application_sdk.inputs import Input
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.inputs.objectstore import ObjectStoreInput
 
 logger = logging.getLogger(__name__)
 
@@ -50,10 +52,10 @@ class ParquetInput(Input):
         """
         output_path = kwargs.get("output_path", "")
         kwargs["path"] = f"{output_path}{path}"
-        kwargs["download_file_prefix"] = kwargs.get("output_prefix", "")
+        kwargs["input_prefix"] = kwargs.get("output_prefix", "")
         return cls(**kwargs)
 
-    async def read_file(self, remote_file_path: str) -> str:
+    async def download_files(self, remote_file_path: str) -> str:
         """Read a file from the object store.
 
         Args:
@@ -62,13 +64,15 @@ class ParquetInput(Input):
         Returns:
             str: Path to the downloaded local file.
         """
-        logger.info(
-            f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
-        )
-        local_file_path = await ObjectStoreOutput.pull_file_from_object_store(
-            self.input_prefix, remote_file_path
-        )
-        return local_file_path
+        if os.path.isdir(remote_file_path):
+            parquet_files = glob.glob(os.path.join(remote_file_path, "*.parquet"))
+            if not parquet_files:
+                logger.info(
+                    f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
+                )
+                ObjectStoreInput.download_files_from_object_store(
+                    self.input_prefix, remote_file_path
+                )
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """
@@ -83,7 +87,7 @@ class ParquetInput(Input):
 
             path = self.path
             if self.input_prefix:
-                path = await self.read_file(self.path)
+                path = await self.download_files(self.path)
             # Use pandas native read_parquet which can handle both single files and directories
             return pd.read_parquet(path)
         except Exception as e:
@@ -104,7 +108,7 @@ class ParquetInput(Input):
 
             path = self.path
             if self.input_prefix:
-                path = await self.read_file(self.path)
+                path = await self.download_files(self.path)
             df = pd.read_parquet(path)
             if self.chunk_size:
                 for i in range(0, len(df), self.chunk_size):
@@ -128,10 +132,9 @@ class ParquetInput(Input):
         try:
             import daft
 
-            path = f"{self.path}{self.file_names[0].split('/')[0]}/*.parquet"
-            if self.input_prefix:
-                path = await self.read_file(self.path)
-            return daft.read_parquet(path)
+            path = f"{self.path}{self.file_names[0].split('/')[0]}"
+            await self.download_files(path)
+            return daft.read_parquet(f"{path}/*.parquet")
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) using daft: {str(e)}"
@@ -152,7 +155,7 @@ class ParquetInput(Input):
 
             path = self.path
             if self.input_prefix:
-                path = await self.read_file(self.path)
+                path = await self.download_files(self.path)
             # Use daft's native chunking through _chunk_size parameter
             df_iterator = daft.read_parquet(path, _chunk_size=self.chunk_size)
             for batch_df in df_iterator:

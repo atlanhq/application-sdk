@@ -236,30 +236,30 @@ jobs:
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
             LABELS="${{ steps.get-labels.outputs.labels }}"
-            
+
             FOUND_LABEL=false
             INCLUDES=""
-            
+
             echo "Found labels: ${LABELS}"
-            
+
             IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
             for LABEL in "${LABEL_ARRAY[@]}"; do
               if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
                 REPO="${BASH_REMATCH[1]}"
                 BRANCH="${BASH_REMATCH[2]}"
-                
+
                 # Add comma if not the first entry
                 if [[ "$FOUND_LABEL" == "true" ]]; then
                   INCLUDES="${INCLUDES},"
                 fi
-                
+
                 # Add this pair as a direct include entry
                 INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
                 FOUND_LABEL=true
                 echo "Added pair: $REPO:$BRANCH"
               fi
             done
-            
+
             # Generate matrix JSON with includes
             if [[ "$FOUND_LABEL" == "true" ]]; then
               MATRIX="{\"include\":[${INCLUDES}]}"

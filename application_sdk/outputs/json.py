@@ -197,37 +197,38 @@ class JsonOutput(Output):
             dataframe (daft.DataFrame): The DataFrame to write.
 
         Note:
-            Daft does not have built-in JSON writing support, so we convert to pandas.
+            Daft does not have built-in JSON writing support, so we are using orjson.
         """
         # Daft does not have a built in method to write the daft dataframe to json
         # So we are using orjson to write the data to json in a more memory efficient way
-        self.chunk_count += 1
-        output_file_name = (
-            f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-        )
         buffer = []
 
-        with open(output_file_name, "w") as f:
-            for row in dataframe:
-                self.total_record_count += 1
-                # Serialize the row and add it to the buffer
-                buffer.append(
-                    orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
-                )
+        for row in dataframe:
+            self.total_record_count += 1
+            # Serialize the row and add it to the buffer
+            buffer.append(
+                orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+            )
 
-                # If the buffer reaches the specified size, write it to the file
-                if len(buffer) >= self.buffer_size:
-                    f.writelines(buffer)  # Write all buffered rows at once
-                    buffer.clear()  # Clear the buffer
+            # If the buffer reaches the specified size, write it to the file
+            if self.chunk_size and len(buffer) >= self.chunk_size:
+                self.chunk_count += 1
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                with open(output_file_name, "w") as f:
+                    f.writelines(buffer)
+                buffer.clear()  # Clear the buffer
 
-            # Write any remaining rows in the buffer
-            if buffer:
+        # Write any remaining rows in the buffer
+        if buffer:
+            self.chunk_count += 1
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+            with open(output_file_name, "w") as f:
                 f.writelines(buffer)
-                buffer.clear()
+            buffer.clear()
 
         # Push the file to the object store
-        await ObjectStoreOutput.push_file_to_object_store(
-            self.output_prefix, output_file_name
+        await ObjectStoreOutput.push_files_to_object_store(
+            self.output_prefix, self.output_path
         )
 
     async def _flush_buffer(self):

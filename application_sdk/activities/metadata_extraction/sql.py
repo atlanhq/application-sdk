@@ -148,7 +148,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._clean_state()
 
-    @run_sync
     def _process_rows(
         self,
         results: "daft.DataFrame",

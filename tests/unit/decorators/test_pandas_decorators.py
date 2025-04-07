@@ -46,6 +46,7 @@ class TestPandasDecorators:
         Basic test to read the SQL data with hypothesis generated values
         """
         import pandas as pd
+
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS test_values (value INTEGER)"))

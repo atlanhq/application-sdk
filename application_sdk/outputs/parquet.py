@@ -1,6 +1,7 @@
 import os
 from typing import Any, Dict, Optional
 
+import daft
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -65,10 +66,10 @@ class ParquetOutput(Output):
         self.state = state
 
         # Create output directory
-        full_path = f"{output_path}{output_suffix}"
+        self.output_path = f"{output_path}{output_suffix}"
         if typename:
-            full_path = f"{full_path}/{typename}"
-        os.makedirs(full_path, exist_ok=True)
+            self.output_path = f"{self.output_path}/{typename}"
+        os.makedirs(self.output_path, exist_ok=True)
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -105,7 +106,7 @@ class ParquetOutput(Output):
             )
             raise
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(self, dataframe: daft.DataFrame):  # noqa: F821
         """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
@@ -120,19 +121,14 @@ class ParquetOutput(Output):
             self.chunk_count += 1
             self.total_record_count += row_count
 
-            # Generate output file path
-            file_path = f"{self.output_path}{self.output_suffix}"
-            if self.typename:
-                file_path = f"{file_path}{self.typename}"
-
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
-                file_path,
+                self.output_path,
                 write_mode="overwrite" if self.mode == "overwrite" else "append",
             )
 
             # Upload the file to object store
-            await self.upload_file(file_path)
+            await self.upload_file(self.output_path)
         except Exception as e:
             activity.logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
             raise

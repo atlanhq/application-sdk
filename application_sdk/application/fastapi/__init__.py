@@ -1,6 +1,5 @@
 from typing import Any, Callable, List, Optional, Type
 
-from application_sdk.common.constants import ApplicationConstants
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,6 +25,7 @@ from application_sdk.application.fastapi.models import (
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
+from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.docgen import AtlanDocsGenerator
@@ -152,7 +152,6 @@ class Application(AtlanApplicationInterface):
         self.app.include_router(self.pubsub_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-
     async def home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
             "index.html",
@@ -274,7 +273,6 @@ class Application(AtlanApplicationInterface):
             self.on_event,
             methods=["POST"],
         )
-
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
@@ -456,7 +454,8 @@ class Application(AtlanApplicationInterface):
         return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(
-        self, host: str = ApplicationConstants.APP_HOST.value,
+        self,
+        host: str = ApplicationConstants.APP_HOST.value,
         port: int = ApplicationConstants.APP_PORT.value,
     ) -> None:
         """Start the FastAPI application server.

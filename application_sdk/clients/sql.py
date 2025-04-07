@@ -12,12 +12,15 @@ from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from application_sdk.common.aws_utils import generate_aws_rds_token_with_iam_role, generate_aws_rds_token_with_iam_user
-from application_sdk.common.utils import parse_credentials_extra
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
+from application_sdk.common.aws_utils import (
+    generate_aws_rds_token_with_iam_role,
+    generate_aws_rds_token_with_iam_user,
+)
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import parse_credentials_extra
 
 activity.logger = get_logger(__name__)
 
@@ -99,8 +102,8 @@ class SQLClient(ClientInterface):
 
     def get_iam_user_token(self):
         """
-            Get the IAM user token for the database.
-            This is a temporary token that is used to authenticate the IAM user to the database.
+        Get the IAM user token for the database.
+        This is a temporary token that is used to authenticate the IAM user to the database.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials["username"]
@@ -128,8 +131,8 @@ class SQLClient(ClientInterface):
 
     def get_iam_role_token(self):
         """
-            Get the IAM role token for the database.
-            This is a temporary token that is used to authenticate the IAM role to the database.
+        Get the IAM role token for the database.
+        This is a temporary token that is used to authenticate the IAM role to the database.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -161,7 +164,7 @@ class SQLClient(ClientInterface):
 
     def get_auth_token(self) -> str:
         """
-            Get the auth token for the SQL source.
+        Get the auth token for the SQL source.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -179,9 +182,11 @@ class SQLClient(ClientInterface):
         encoded_token = quote_plus(token)
         return encoded_token
 
-    def add_source_connection_params(self, connection_string: str, source_connection_params: Dict[str, Any]) -> str:
+    def add_source_connection_params(
+        self, connection_string: str, source_connection_params: Dict[str, Any]
+    ) -> str:
         """
-            Add the source connection params to the connection string.
+        Add the source connection params to the connection string.
         """
         for key, value in source_connection_params.items():
             if "?" not in connection_string:
