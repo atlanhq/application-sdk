@@ -333,12 +333,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @auto_heartbeater
     @transform_daft(
         raw_input=ParquetInput(path="/raw/", chunk_size=None),
-        transformed_output=JsonOutput(output_suffix="/transformed", chunk_size=None),
+        transformed_output=JsonOutput(output_suffix="/transformed", chunk_size=100000),
     )
     async def transform_data(
         self,
         raw_input: "daft.DataFrame",
-        transformed_output: ParquetOutput,
+        transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
         """Transforms raw data into the required format.
