@@ -172,7 +172,7 @@ class SQLClient(ClientInterface):
             case "iam_role":
                 token = self.get_iam_role_token()
             case "basic":
-                token = self.credentials.get("password")
+                token = self.credentials["password"]
             case _:
                 raise ValueError(f"Invalid auth type: {authType}")
 
