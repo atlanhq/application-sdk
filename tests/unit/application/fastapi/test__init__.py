@@ -6,7 +6,7 @@ from hypothesis import HealthCheck, given, settings
 
 from application_sdk.application.fastapi import (
     EventWorkflowTrigger,
-    FastAPIApplication,
+    Application,
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
@@ -23,13 +23,13 @@ class SampleWorkflow(WorkflowInterface):
     pass
 
 
-class TestFastAPIApplication:
+class TestApplication:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """Setup method that runs before each test method"""
         self.mock_handler = Mock(spec=HandlerInterface)
         self.mock_handler.preflight_check = AsyncMock()
-        self.app = FastAPIApplication(handler=self.mock_handler)
+        self.app = Application(handler=self.mock_handler)
 
     @pytest.mark.asyncio
     @given(payload=payload_strategy)
@@ -107,7 +107,7 @@ class TestFastAPIApplication:
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()
 
-        self.app.temporal_client = temporal_client
+        self.app.workflow_client = temporal_client
         self.app.event_triggers = []
 
         self.app.register_workflow(
@@ -138,7 +138,7 @@ class TestFastAPIApplication:
         temporal_client.start_workflow = AsyncMock()
 
         self.app.event_triggers = []
-        self.app.temporal_client = temporal_client
+        self.app.workflow_client = temporal_client
 
         def trigger_workflow_on_start(event: AtlanEvent):
             if event.data.event_type == "workflow_start":
