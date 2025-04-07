@@ -90,7 +90,7 @@ class SQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise
+            raise ValueError(str(e))
 
     async def close(self) -> None:
         """Close the database connection."""

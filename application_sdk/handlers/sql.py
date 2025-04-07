@@ -1,9 +1,12 @@
 import asyncio
 import json
+import os
+import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
+from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
@@ -34,6 +37,7 @@ class SQLHandler(HandlerInterface):
     sql_client: SQLClient
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
+    get_client_version_sql: str | None = None
     # Variables for fetching metadata
     metadata_sql: str | None = None
     tables_check_sql: str | None = None
@@ -179,17 +183,22 @@ class SQLHandler(HandlerInterface):
             (
                 results["databaseSchemaCheck"],
                 results["tablesCheck"],
+                results["versionCheck"],
             ) = await asyncio.gather(
                 self.check_schemas_and_databases(payload),
                 self.tables_check(payload),
+                self.check_client_version(),
             )
 
             if (
                 not results["databaseSchemaCheck"]["success"]
                 or not results["tablesCheck"]["success"]
+                or not results["versionCheck"]["success"]
             ):
                 raise ValueError(
-                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, tablesCheck: {results['tablesCheck']}"
+                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, "
+                    f"tablesCheck: {results['tablesCheck']}, "
+                    f"versionCheck: {results['versionCheck']}"
                 )
 
             logger.info("Preflight check completed successfully")
@@ -310,5 +319,94 @@ class SQLHandler(HandlerInterface):
                 "success": False,
                 "successMessage": "",
                 "failureMessage": "Tables check failed",
+                "error": str(exc),
+            }
+
+    async def check_client_version(self) -> Dict[str, Any]:
+        """
+        Check if the client version meets the minimum required version.
+
+        If get_client_version_sql is not defined by the implementing app,
+        this check will be skipped and return success.
+
+        Returns:
+            Dict[str, Any]: Result of the version check with success status and messages
+        """
+
+        logger.info("Checking client version")
+        try:
+            min_version = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
+            client_version = None
+
+            # Try to get the version from the sql_client dialect
+            if hasattr(self.sql_client, "engine"):
+                version_info = self.sql_client.engine.dialect.server_version_info
+                if version_info:
+                    # Handle tuple version info (like (15, 4))
+                    client_version = ".".join(str(x) for x in version_info)
+                    logger.info(
+                        f"Detected client version from dialect: {client_version}"
+                    )
+
+            # If dialect version not available and get_client_version_sql is defined, use SQL query
+            if not client_version and self.get_client_version_sql:
+                sql_input = await SQLQueryInput(
+                    query=self.get_client_version_sql,
+                    engine=self.sql_client.engine,
+                    chunk_size=None,
+                ).get_dataframe()
+
+                version_string = next(
+                    iter(sql_input.to_dict(orient="records")[0].values())
+                )
+                version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
+                if version_match:
+                    client_version = version_match.group(1)
+                    logger.info(
+                        f"Detected client version from SQL query: {client_version}"
+                    )
+                else:
+                    logger.warning(
+                        f"Could not extract version number from: {version_string}"
+                    )
+
+            # If no client version could be determined
+            if not client_version:
+                logger.info("Client version could not be determined")
+                return {
+                    "success": True,
+                    "successMessage": "Client version check skipped - version could not be determined",
+                    "failureMessage": "",
+                }
+
+            # If no minimum version requirement is set, just report the client version
+            if not min_version:
+                logger.info(
+                    f"No minimum version requirement set. Client version: {client_version}"
+                )
+                return {
+                    "success": True,
+                    "successMessage": f"Client version: {client_version} (no minimum version requirement)",
+                    "failureMessage": "",
+                }
+
+            # Compare versions when both client version and minimum version are available
+            is_valid = version.parse(client_version) >= version.parse(min_version)
+
+            return {
+                "success": is_valid,
+                "successMessage": f"Client version {client_version} meets minimum required version {min_version}"
+                if is_valid
+                else "",
+                "failureMessage": f"Client version {client_version} does not meet minimum required version {min_version}"
+                if not is_valid
+                else "",
+            }
+        except Exception as exc:
+            logger.error(f"Error during client version check: {exc}", exc_info=True)
+            return {
+                "success": False,
+                "successMessage": "",
+                "failureMessage": "Client version check failed",
                 "error": str(exc),
             }

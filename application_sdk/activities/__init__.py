@@ -75,10 +75,15 @@ class ActivitiesInterface(ABC):
         Returns:
             The state data for the current workflow.
         """
-        workflow_id = get_workflow_id()
-        if workflow_id not in self._state:
-            await self._set_state(workflow_args)
-        return self._state[workflow_id]
+        try:
+            workflow_id = get_workflow_id()
+            if workflow_id not in self._state:
+                await self._set_state(workflow_args)
+            return self._state[workflow_id]
+        except Exception as e:
+            activity.logger.error(f"Error getting state: {str(e)}", exc_info=e)
+            await self._clean_state()
+            raise
 
     async def _clean_state(self):
         """Remove the state data for the current workflow."""
