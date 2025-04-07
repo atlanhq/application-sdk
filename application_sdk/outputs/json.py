@@ -2,7 +2,6 @@ import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import orjson
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -60,7 +59,7 @@ class JsonOutput(Output):
         typename: Optional[str] = None,
         state: Optional[ActivitiesState] = None,
         chunk_start: Optional[int] = None,
-        buffer_size: int = 1024 * 1024 * 10,
+        buffer_size: int = 100000,
         chunk_size: Optional[int] = None,
         total_record_count: int = 0,
         chunk_count: int = 0,
@@ -96,7 +95,7 @@ class JsonOutput(Output):
         self.buffer_size = buffer_size
         settings = get_settings()
         self.chunk_size = chunk_size or settings.chunk_size
-        self.buffer: List[Union[pd.DataFrame, "daft.DataFrame"]] = []  # noqa: F821
+        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
         self.state = state
@@ -150,7 +149,7 @@ class JsonOutput(Output):
             **kwargs,
         )
 
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to JSON files.
 
         This method writes the DataFrame to JSON files, potentially splitting it
@@ -203,15 +202,28 @@ class JsonOutput(Output):
         # Daft does not have a built in method to write the daft dataframe to json
         # So we are using orjson to write the data to json in a more memory efficient way
         self.chunk_count += 1
-        self.total_record_count += dataframe.count_rows()
         output_file_name = (
             f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
         )
+        buffer = []
+
         with open(output_file_name, "w") as f:
-            for row in dataframe.iter_rows():
-                f.write(
+            for row in dataframe:
+                self.total_record_count += 1
+                # Serialize the row and add it to the buffer
+                buffer.append(
                     orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
                 )
+
+                # If the buffer reaches the specified size, write it to the file
+                if len(buffer) >= self.buffer_size:
+                    f.writelines(buffer)  # Write all buffered rows at once
+                    buffer.clear()  # Clear the buffer
+
+            # Write any remaining rows in the buffer
+            if buffer:
+                f.writelines(buffer)
+                buffer.clear()
 
         # Push the file to the object store
         await ObjectStoreOutput.push_file_to_object_store(

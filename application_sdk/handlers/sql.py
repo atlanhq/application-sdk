@@ -3,8 +3,6 @@ import json
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import daft
-
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
@@ -58,7 +56,7 @@ class SQLHandler(HandlerInterface):
     @transform_daft(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
     async def prepare_metadata(
         self,
-        sql_input: daft.DataFrame,
+        sql_input: "daft.DataFrame",
         **kwargs: Dict[str, Any],
     ) -> List[Dict[Any, Any]]:
         """
@@ -83,7 +81,7 @@ class SQLHandler(HandlerInterface):
     )
     async def test_auth(
         self,
-        sql_input: daft.DataFrame,
+        sql_input: "daft.DataFrame",
         **kwargs: Dict[str, Any],
     ) -> bool:
         """
@@ -287,7 +285,7 @@ class SQLHandler(HandlerInterface):
     )
     async def tables_check(
         self,
-        sql_input: daft.DataFrame,
+        sql_input: "daft.DataFrame",
         **kwargs: Dict[str, Any],
     ) -> Dict[str, Any]:
         """

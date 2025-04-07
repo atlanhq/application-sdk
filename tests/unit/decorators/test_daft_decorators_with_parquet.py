@@ -5,7 +5,6 @@ from typing import Any
 from unittest.mock import patch
 
 import daft
-import pandas as pd
 
 from application_sdk.decorators import transform_daft
 from application_sdk.inputs.parquet import ParquetInput
@@ -60,6 +59,8 @@ class TestDaftDecoratorsParquet:
         cls.test_dir = tempfile.mkdtemp(prefix="parquet_daft_test_")
 
         # Create test parquet file
+        import pandas as pd
+
         df = pd.DataFrame(TEST_DATA)
         cls.input_file = os.path.join(cls.test_dir, "input.parquet")
         df.to_parquet(cls.input_file)

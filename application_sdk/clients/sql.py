@@ -11,8 +11,6 @@ from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Dict, List
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -76,6 +74,8 @@ class SQLClient(ClientInterface):
         """
         self.credentials = credentials
         try:
+            from sqlalchemy import create_engine
+
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.sql_alchemy_connect_args,
@@ -124,6 +124,8 @@ class SQLClient(ClientInterface):
 
         with ThreadPoolExecutor() as pool:
             try:
+                from sqlalchemy import text
+
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
@@ -161,8 +163,8 @@ class AsyncSQLClient(SQLClient):
         engine (AsyncEngine | None): Async SQLAlchemy engine instance.
     """
 
-    connection: AsyncConnection | None = None
-    engine: AsyncEngine | None = None
+    connection: "AsyncConnection"
+    engine: "AsyncEngine"
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish an asynchronous database connection.
@@ -175,6 +177,8 @@ class AsyncSQLClient(SQLClient):
         """
         self.credentials = credentials
         try:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.sql_alchemy_connect_args,
@@ -213,6 +217,8 @@ class AsyncSQLClient(SQLClient):
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
+            from sqlalchemy import text
+
             if use_server_side_cursor:
                 await self.connection.execution_options(yield_per=batch_size)
 

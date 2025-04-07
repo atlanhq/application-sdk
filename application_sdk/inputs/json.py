@@ -1,8 +1,6 @@
 import os
 from typing import Any, Dict, Iterator, List, Optional
 
-import pandas as pd
-
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
 from application_sdk.inputs import Input
@@ -80,6 +78,8 @@ class JsonInput(Input):
         and return as a batched pandas dataframe
         """
         try:
+            import pandas as pd
+
             await self.download_files()
 
             for file_name in self.file_names or []:
@@ -93,12 +93,14 @@ class JsonInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data from JSON: {str(e)}")
 
-    async def get_dataframe(self) -> pd.DataFrame:
+    async def get_dataframe(self) -> "pd.DataFrame":
         """
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
         """
         try:
+            import pandas as pd
+
             dataframes = []
             await self.download_files()
             for file_name in self.file_names or []:
@@ -138,15 +140,8 @@ class JsonInput(Input):
         try:
             import daft
 
-            dataframe_concat = None
             await self.download_files()
-            for file_name in self.file_names or []:
-                json_dataframe = daft.read_json(path=os.path.join(self.path, file_name))
-                dataframe_concat = (
-                    json_dataframe
-                    if dataframe_concat is None
-                    else dataframe_concat.concat(json_dataframe)
-                )
-            return dataframe_concat
+            directory = os.path.join(self.path, self.file_names[0].split("/")[0])
+            return daft.read_json(path=f"{directory}/*.json")
         except Exception as e:
             logger.error(f"Error reading data from JSON using daft: {str(e)}")

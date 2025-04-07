@@ -1,7 +1,6 @@
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Type
+from typing import Any, Dict, Iterator, Optional, Type
 
 import daft
-import daft.udf
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -9,13 +8,13 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.udfs import process_rows
-from application_sdk.decorators import transform_daft
+from application_sdk.decorators import run_sync, transform_daft
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.inputs.json import JsonInput
+from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
+from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
@@ -149,18 +148,63 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._clean_state()
 
-    async def _transform_batch(
+    @run_sync
+    def _process_rows(
         self,
-        results: daft.DataFrame,
+        results: "daft.DataFrame",
         typename: str,
+        workflow_id: str,
+        workflow_run_id: str,
+        state: SQLMetadataExtractionActivitiesState,
+        connection_name: Optional[str],
+        connection_qualified_name: Optional[str],
+    ) -> Iterator[Dict[str, Any]]:
+        """Process DataFrame rows and transform them into metadata.
+
+        Args:
+            results: DataFrame containing the rows to process
+            typename: Type of data being transformed
+            workflow_id: Current workflow ID
+            workflow_run_id: Current workflow run ID
+            state: Current activity state
+            connection_name: Name of the connection
+            connection_qualified_name: Qualified name of the connection
+
+        Returns:
+            list: List of transformed metadata dictionaries
+        """
+        if not state.transformer:
+            raise ValueError("Transformer is not set")
+        for row in results.iter_rows():
+            try:
+                transformed_metadata: Optional[Dict[str, Any]] = (
+                    state.transformer.transform_metadata(
+                        typename,
+                        row,
+                        workflow_id=workflow_id,
+                        workflow_run_id=workflow_run_id,
+                        connection_name=connection_name,
+                        connection_qualified_name=connection_qualified_name,
+                    )
+                )
+                if transformed_metadata:
+                    yield transformed_metadata
+                else:
+                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
+            except Exception as row_error:
+                activity.logger.error(
+                    f"Error processing row for {typename}: {row_error}"
+                )
+
+    def _transform_batch(
+        self,
+        results: "daft.DataFrame",
+        typename: str,
+        state: SQLMetadataExtractionActivitiesState,
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
     ):
-        state: SQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
-        )
-
         connection_name = workflow_args.get("connection", {}).get(
             "connection_name", None
         )
@@ -168,30 +212,26 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             "connection_qualified_name", None
         )
 
-        results = results.select(
-            process_rows(
-                *results.columns,
-                typename=typename,
-                workflow_id=workflow_id,
-                workflow_run_id=workflow_run_id,
-                connection_name=connection_name,
-                connection_qualified_name=connection_qualified_name,
-                transformer=state.transformer,
-            ).alias("transformed_data")
+        yield from self._process_rows(
+            results,
+            typename,
+            workflow_id,
+            workflow_run_id,
+            state,
+            connection_name,
+            connection_qualified_name,
         )
-
-        return results
 
     @activity.defn
     @auto_heartbeater
     @transform_daft(
         batch_input=SQLQueryInput(query="fetch_database_sql", chunk_size=None),
-        raw_output=JsonOutput(output_suffix="/raw/database"),
+        raw_output=ParquetOutput(output_suffix="/raw/database"),
     )
     async def fetch_databases(
         self,
-        batch_input: Generator[daft.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch databases from the source database.
@@ -211,12 +251,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @auto_heartbeater
     @transform_daft(
         batch_input=SQLQueryInput(query="fetch_schema_sql", chunk_size=None),
-        raw_output=JsonOutput(output_suffix="/raw/schema"),
+        raw_output=ParquetOutput(output_suffix="/raw/schema"),
     )
     async def fetch_schemas(
         self,
-        batch_input: Generator[daft.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch schemas from the source database.
@@ -240,12 +280,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             temp_table_sql_query="tables_extraction_temp_table_regex_sql",
             chunk_size=None,
         ),
-        raw_output=JsonOutput(output_suffix="/raw/table"),
+        raw_output=ParquetOutput(output_suffix="/raw/table"),
     )
     async def fetch_tables(
         self,
-        batch_input: Generator[daft.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch tables from the source database.
@@ -269,12 +309,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             temp_table_sql_query="column_extraction_temp_table_regex_sql",
             chunk_size=None,
         ),
-        raw_output=JsonOutput(output_suffix="/raw/column"),
+        raw_output=ParquetOutput(output_suffix="/raw/column"),
     )
     async def fetch_columns(
         self,
-        batch_input: Generator[daft.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch columns from the source database.
@@ -293,13 +333,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     @activity.defn
     @auto_heartbeater
     @transform_daft(
-        raw_input=JsonInput(path="/raw/"),
-        transformed_output=JsonOutput(output_suffix="/transformed/"),
+        raw_input=ParquetInput(path="/raw/", chunk_size=None),
+        transformed_output=JsonOutput(output_suffix="/transformed", chunk_size=None),
     )
     async def transform_data(
         self,
-        raw_input: AsyncGenerator[daft.DataFrame, None],
-        transformed_output: JsonOutput,
+        raw_input: "daft.DataFrame",
+        transformed_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Transforms raw data into the required format.
@@ -314,13 +354,14 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        async for input in raw_input:
-            transformed_chunk = await self._transform_batch(
-                input,
-                kwargs.get("typename"),
-                kwargs.get("workflow_id"),
-                kwargs.get("workflow_run_id"),
-                kwargs,
-            )
-            await transformed_output.write_daft_dataframe(transformed_chunk)
+        state: SQLMetadataExtractionActivitiesState = await self._get_state(kwargs)
+        transformed_chunk = self._transform_batch(
+            raw_input,
+            kwargs.get("typename"),
+            state,
+            kwargs.get("workflow_id"),
+            kwargs.get("workflow_run_id"),
+            kwargs,
+        )
+        await transformed_output.write_daft_dataframe(transformed_chunk)
         return await transformed_output.get_statistics()

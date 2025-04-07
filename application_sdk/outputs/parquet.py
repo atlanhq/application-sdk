@@ -1,7 +1,6 @@
 import os
 from typing import Any, Dict, Optional
 
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -31,12 +30,12 @@ class ParquetOutput(Output):
 
     def __init__(
         self,
-        output_path: str,
-        output_suffix: str,
-        output_prefix: str,
+        output_path: Optional[str] = None,
+        output_suffix: Optional[str] = None,
+        output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
         mode: str = "append",
-        chunk_size: int = 100000,
+        chunk_size: Optional[int] = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
         state: Optional[ActivitiesState] = None,
@@ -71,7 +70,7 @@ class ParquetOutput(Output):
             full_path = f"{full_path}/{typename}"
         os.makedirs(full_path, exist_ok=True)
 
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
@@ -113,18 +112,18 @@ class ParquetOutput(Output):
             dataframe (daft.DataFrame): The DataFrame to write.
         """
         try:
-            if dataframe.count_rows() == 0:
+            row_count = dataframe.count_rows()
+            if row_count == 0:
                 return
 
             # Update counters
             self.chunk_count += 1
-            self.total_record_count += dataframe.count_rows()
+            self.total_record_count += row_count
 
             # Generate output file path
             file_path = f"{self.output_path}{self.output_suffix}"
             if self.typename:
-                file_path = f"{file_path}/{self.typename}"
-            file_path = f"{file_path}_{self.chunk_count}.parquet"
+                file_path = f"{file_path}{self.typename}"
 
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
@@ -147,6 +146,6 @@ class ParquetOutput(Output):
         activity.logger.info(
             f"Uploading file: {local_file_path} to {self.output_prefix}"
         )
-        await ObjectStoreOutput.push_file_to_object_store(
+        await ObjectStoreOutput.push_files_to_object_store(
             self.output_prefix, local_file_path
         )

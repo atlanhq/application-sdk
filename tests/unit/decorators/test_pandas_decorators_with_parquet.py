@@ -5,8 +5,6 @@ from concurrent.futures import Future
 from typing import Any, AsyncIterator, Callable, List, Optional, TypeVar
 from unittest.mock import patch
 
-import pandas as pd
-
 from application_sdk.decorators import transform
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.outputs.parquet import ParquetOutput
@@ -27,7 +25,7 @@ TEST_DATA = [
 ]
 
 
-def add_1(dataframe: pd.DataFrame) -> pd.DataFrame:
+def add_1(dataframe: "pd.DataFrame") -> "pd.DataFrame":
     """
     Similar to a transformation function that adds 1 to the value column
     """
@@ -72,6 +70,8 @@ class TestPandasDecoratorsParquet:
         cls.test_dir = tempfile.mkdtemp(prefix="parquet_pandas_test_")
 
         # Create test parquet file
+        import pandas as pd
+
         df = pd.DataFrame(TEST_DATA)
         cls.input_file = os.path.join(cls.test_dir, "input.parquet")
         df.to_parquet(cls.input_file)
@@ -123,8 +123,8 @@ class TestPandasDecoratorsParquet:
             ),
         )
         async def func(
-            batch_input: pd.DataFrame, output: ParquetOutput, **kwargs: Any
-        ) -> pd.DataFrame:
+            batch_input: "pd.DataFrame", output: ParquetOutput, **kwargs: Any
+        ) -> "pd.DataFrame":
             await output.write_dataframe(add_1(batch_input))
             return batch_input
 
@@ -169,7 +169,7 @@ class TestPandasDecoratorsParquet:
             ),
         )
         async def func(
-            batch_input: AsyncIterator[pd.DataFrame],
+            batch_input: AsyncIterator["pd.DataFrame"],
             output: ParquetOutput,
             **kwargs: Any,
         ) -> None:
@@ -190,6 +190,8 @@ class TestPandasDecoratorsParquet:
         # Read and verify all transformed data
         all_data: List[int] = []
         for file in sorted(output_files):
+            import pandas as pd
+
             df = pd.read_parquet(f"{self.test_dir}/{file}")
             all_data.extend(df["value"].tolist())
 

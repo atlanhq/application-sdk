@@ -1,7 +1,6 @@
 import os
 from unittest.mock import patch
 
-import pandas as pd
 import pytest
 
 from application_sdk.outputs.json import JsonOutput
@@ -26,6 +25,8 @@ async def test_init(json_output):
 
 @pytest.mark.asyncio
 async def test_write_dataframe_empty(json_output):
+    import pandas as pd
+
     dataframe = pd.DataFrame()
     await json_output.write_dataframe(dataframe)
     assert json_output.chunk_count == 0
@@ -37,6 +38,8 @@ async def test_write_dataframe_empty(json_output):
     "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
 )
 async def test_write_dataframe_single_chunk(mock_push, json_output):
+    import pandas as pd
+
     dataframe = pd.DataFrame({"col1": range(10), "col2": range(10)})
     await json_output.write_dataframe(dataframe)
 
@@ -52,6 +55,8 @@ async def test_write_dataframe_single_chunk(mock_push, json_output):
 )
 async def test_write_dataframe_multiple_chunks(mock_push, json_output):
     json_output.chunk_size = 3
+    import pandas as pd
+
     dataframe = pd.DataFrame({"col1": range(10), "col2": range(10)})
     await json_output.write_dataframe(dataframe)
 

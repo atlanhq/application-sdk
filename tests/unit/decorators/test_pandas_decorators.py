@@ -2,7 +2,6 @@ import os
 from concurrent.futures import Future
 from unittest.mock import patch
 
-import pandas as pd
 import sqlalchemy
 from sqlalchemy.sql import text
 
@@ -42,7 +41,7 @@ class TestPandasDecorators:
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
 
         @transform(batch_input=SQLQueryInput(engine=engine, query="SELECT 1 as value"))
-        async def func(batch_input: pd.DataFrame, **kwargs):
+        async def func(batch_input: "pd.DataFrame", **kwargs):
             assert len(list(batch_input)) == 1
 
         await func()
@@ -71,7 +70,7 @@ class TestPandasDecorators:
                 engine=engine, query="SELECT * FROM numbers", chunk_size=None
             )
         )
-        async def func(batch_input: pd.DataFrame, **kwargs):
+        async def func(batch_input: "pd.DataFrame", **kwargs):
             assert len(batch_input) == 10
 
         await func()
@@ -102,7 +101,7 @@ class TestPandasDecorators:
                 engine=engine, query="SELECT * FROM numbers", chunk_size=3
             )
         )
-        async def func(batch_input: pd.DataFrame, **kwargs):
+        async def func(batch_input: "pd.DataFrame", **kwargs):
             for chunk in batch_input:
                 assert len(chunk) == expected_row_count.pop(0)
 

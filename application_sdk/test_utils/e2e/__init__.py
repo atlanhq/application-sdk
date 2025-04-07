@@ -170,7 +170,7 @@ class TestInterface:
             # Wait for the polling interval before checking the status again
             time.sleep(self.polling_interval)
 
-    def _get_normalised_dataframe(self, expected_file_postfix: str) -> pd.DataFrame:
+    def _get_normalised_dataframe(self, expected_file_postfix: str) -> "pd.DataFrame":
         """
         Method to get the normalised dataframe of the extracted data
 

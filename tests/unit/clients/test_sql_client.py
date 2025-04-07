@@ -2,7 +2,6 @@ import asyncio
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pandas as pd
 import pytest
 
 from application_sdk.clients.sql import SQLClient
@@ -49,6 +48,7 @@ def test_load(mock_create_engine: Any, sql_client: SQLClient):
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    import pandas as pd
 
     mock_run_query.return_value = pd.DataFrame(data)
 
@@ -71,6 +71,7 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    import pandas as pd
 
     mock_run_query.return_value = pd.DataFrame(data)
 
@@ -95,6 +96,8 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
+    import pandas as pd
+
     mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
