@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from hypothesis import strategies as st
 from hypothesis.strategies import composite
@@ -43,7 +43,7 @@ uuid_strategy = st.uuids().map(str)
 
 # draw is optional, but we need to pass it to the composite strategy
 @composite
-def credentials_strategy(draw: Optional[Any] = None) -> Dict[str, Any]:
+def credentials_strategy(draw) -> Dict[str, Any]:
     """Generate a dictionary of credentials with common keys."""
     # Always include username and password as they're most common
     num_fields = draw(st.integers(min_value=2))
@@ -64,7 +64,7 @@ def credentials_strategy(draw: Optional[Any] = None) -> Dict[str, Any]:
 
 
 @composite
-def configuration_strategy(draw: Optional[Any] = None) -> Dict[str, Any]:
+def configuration_strategy(draw) -> Dict[str, Any]:
     """Generate a configuration dictionary that might include nested structures."""
     if draw is not None:
         # Generate base configuration with credentials
