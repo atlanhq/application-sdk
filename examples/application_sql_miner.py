@@ -24,7 +24,7 @@ from urllib.parse import quote_plus
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
@@ -109,7 +109,6 @@ class SnowflakeSQLClient(SQLClient):
         encoded_password = quote_plus(self.credentials["password"])
         base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"
 
-        # FIXME: add more params
         if self.credentials.get("warehouse"):
             base_url = f"{base_url}?warehouse={self.credentials['warehouse']}"
         if self.credentials.get("role"):
@@ -138,19 +137,17 @@ class SampleSnowflakeHandler(SQLHandler):
 async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
     print("Starting application_sql_miner")
 
-    temporal_client = TemporalClient(
-        application_name=APPLICATION_NAME,
-    )
-    await temporal_client.load()
+    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
+    await workflow_client.load()
 
     activities = SampleSQLMinerActivities(
         sql_client_class=SnowflakeSQLClient, handler_class=SampleSnowflakeHandler
     )
 
     worker: Worker = Worker(
-        temporal_client=temporal_client,
+        workflow_client=workflow_client,
         workflow_classes=[SQLQueryExtractionWorkflow],
-        temporal_activities=SQLQueryExtractionWorkflow.get_activities(activities),
+        workflow_activities=SQLQueryExtractionWorkflow.get_activities(activities),
     )
 
     # wait for the worker to start
@@ -190,7 +187,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
         },
     }
 
-    workflow_response = await temporal_client.start_workflow(
+    workflow_response = await workflow_client.start_workflow(
         workflow_class=SQLQueryExtractionWorkflow,
         workflow_args=workflow_args,
     )
