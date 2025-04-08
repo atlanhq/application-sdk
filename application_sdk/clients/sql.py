@@ -140,8 +140,6 @@ class SQLClient(ClientInterface):
             raise ValueError("aws_role_arn is required for IAM role authentication")
         if not database:
             raise ValueError("database is required for IAM role authentication")
-        if not external_id:
-            raise ValueError("aws_external_id is required for IAM role authentication")
 
         session_name = os.getenv("AWS_SESSION_NAME", "temp-session")
         username = self.credentials["username"]
