@@ -4,7 +4,7 @@ Utility functions for monitoring Temporal workflow execution status.
 
 import asyncio
 
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.test_utils.workflow_monitoring import run_and_monitor_workflow
 from examples.application_hello_world import application_hello_world
 from examples.application_sql import application_sql
@@ -15,8 +15,8 @@ from examples.application_sql_with_custom_transformer import (
 
 
 async def main():
-    temporal_client = TemporalClient()
-    await temporal_client.load()
+    workflow_client = get_workflow_client()
+    await workflow_client.load()
     # run all the examples
 
     with open("workflow_status.md", "w") as f:
@@ -36,7 +36,7 @@ async def main():
     failed_examples: list[str] = []
 
     for example in examples:
-        status, time_taken = await run_and_monitor_workflow(example, temporal_client)
+        status, time_taken = await run_and_monitor_workflow(example, workflow_client)
         time_taken_formatted = f"{time_taken:.2f} seconds"
 
         with open("workflow_status.md", "a") as f:

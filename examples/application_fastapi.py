@@ -1,7 +1,7 @@
 import asyncio
 from typing import Any, Dict, List
 
-from application_sdk.application.fastapi import FastAPIApplication, HttpWorkflowTrigger
+from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.workflows import WorkflowInterface
 
@@ -42,7 +42,7 @@ class SampleWorkflow(WorkflowInterface):
 
 
 async def application_fastapi():
-    fast_api_app = FastAPIApplication(
+    fast_api_app = Application(
         handler=SampleSQLHandler(),
     )
     fast_api_app.register_workflow(
