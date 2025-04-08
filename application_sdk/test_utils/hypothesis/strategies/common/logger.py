@@ -16,24 +16,14 @@ def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
     Returns:
         A mock object with workflow information fields populated with random data.
     """
-    if draw is None:
-        return mock.Mock(
-            workflow_id=st.text(),
-            run_id=st.text(),
-            workflow_type=st.text(),
-            namespace=st.text(),
-            task_queue=st.text(),
-            attempt=st.integers(),
-        )
-    else:
-        return mock.Mock(
-            workflow_id=draw(st.text()),
-            run_id=draw(st.text()),
-            workflow_type=draw(st.text()),
-            namespace=draw(st.text()),
-            task_queue=draw(st.text()),
-            attempt=draw(st.integers()),
-        )
+    return mock.Mock(
+        workflow_id=draw(st.text()),
+        run_id=draw(st.text()),
+        workflow_type=draw(st.text()),
+        namespace=draw(st.text()),
+        task_queue=draw(st.text()),
+        attempt=draw(st.integers()),
+    )
 
 
 @st.composite
@@ -46,14 +36,13 @@ def activity_info_strategy(draw: DrawFn) -> mock.Mock:
     Returns:
         A mock object with activity information fields populated with random data.
     """
-    if draw is not None:
-        return mock.Mock(
-            workflow_id=draw(st.text()),
-            workflow_run_id=draw(st.text()),
-            activity_id=draw(st.text()),
-            activity_type=draw(st.text()),
-            task_queue=draw(st.text()),
-            attempt=draw(st.integers()),
-            schedule_to_close_timeout=f"{draw(st.integers())}s",
-            start_to_close_timeout=f"{draw(st.integers())}s",
-        )
+    return mock.Mock(
+        workflow_id=draw(st.text()),
+        workflow_run_id=draw(st.text()),
+        activity_id=draw(st.text()),
+        activity_type=draw(st.text()),
+        task_queue=draw(st.text()),
+        attempt=draw(st.integers()),
+        schedule_to_close_timeout=f"{draw(st.integers())}s",
+        start_to_close_timeout=f"{draw(st.integers())}s",
+    )

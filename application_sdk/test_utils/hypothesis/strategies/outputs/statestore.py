@@ -46,13 +46,19 @@ uuid_strategy = st.uuids().map(str)
 def credentials_strategy(draw) -> Dict[str, Any]:
     """Generate a dictionary of credentials with common keys."""
     # Always include username and password as they're most common
-    num_fields = draw(st.integers(min_value=2))
+    num_fields = draw(st.integers(min_value=2, max_value=10))
     required_keys = ["username", "password"]
+
+    # Ensure we don't request more unique keys than available
+    # common_credential_keys has 17 elements, but we already used 2 for required_keys
+    # So the max available is 15
+    optional_keys_count = min(num_fields - 2, 15)
+
     optional_keys = draw(
         st.lists(
             common_credential_keys,
-            min_size=num_fields - 2,
-            max_size=num_fields - 2,
+            min_size=optional_keys_count,
+            max_size=optional_keys_count,
             unique=True,
         )
     )
@@ -66,9 +72,8 @@ def credentials_strategy(draw) -> Dict[str, Any]:
 @composite
 def configuration_strategy(draw) -> Dict[str, Any]:
     """Generate a configuration dictionary that might include nested structures."""
-    if draw is not None:
-        # Generate base configuration with credentials
-        config = draw(credentials_strategy())
+    # Generate base configuration with credentials
+    config = draw(credentials_strategy())
 
     # Add some common configuration fields
     extra_fields = {
@@ -81,15 +86,12 @@ def configuration_strategy(draw) -> Dict[str, Any]:
     }
 
     # Optionally add nested configuration
-    if draw is not None:
-        if draw(st.booleans()):
-            extra_fields["advanced_settings"] = {
-                "pool_size": draw(st.integers()),
-                "retry_interval": draw(st.integers()),
-                "timeout_policy": draw(
-                    st.sampled_from(["strict", "lenient", "adaptive"])
-                ),
-            }
+    if draw(st.booleans()):
+        extra_fields["advanced_settings"] = {
+            "pool_size": draw(st.integers()),
+            "retry_interval": draw(st.integers()),
+            "timeout_policy": draw(st.sampled_from(["strict", "lenient", "adaptive"])),
+        }
 
     config.update(extra_fields)
     return config
