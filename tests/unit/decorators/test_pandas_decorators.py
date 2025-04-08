@@ -119,7 +119,7 @@ class TestPandasDecorators:
             )
         )
         async def func(batch_input: pd.DataFrame, **kwargs):
-            for chunk in batch_input:
+            async for chunk in batch_input:
                 assert len(chunk) == expected_row_count.pop(0)
 
         await func()

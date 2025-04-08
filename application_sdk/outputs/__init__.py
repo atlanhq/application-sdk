@@ -113,7 +113,6 @@ class Output(ABC):
                 )
         except Exception as e:
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
-            raise e
 
     @abstractmethod
     async def write_dataframe(self, dataframe: pd.DataFrame):
@@ -181,7 +180,6 @@ class Output(ABC):
             activity.logger.error(
                 f"Error writing batched daft dataframe to json: {str(e)}"
             )
-            raise e
 
     @abstractmethod
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
