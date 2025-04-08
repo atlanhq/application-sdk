@@ -14,17 +14,21 @@ import socket
 import threading
 import time
 import uuid
-from typing import Any
+from typing import Any, Dict, List
 
 import psutil
-from fastapi import APIRouter, status
+
+# Import with alias to avoid naming conflicts
+from fastapi import APIRouter as FastAPIRouter
+from fastapi import status
 from fastapi.responses import JSONResponse
 
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
 
-router = APIRouter(
+# Create a router instance using the alias
+router = FastAPIRouter(
     prefix="/server",
     tags=["server"],
     responses={404: {"description": "Not found"}},

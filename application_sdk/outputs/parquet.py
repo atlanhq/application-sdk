@@ -85,8 +85,12 @@ class ParquetOutput(Output):
                 return
 
             # Update counters
-            self.chunk_count += 1
-            self.total_record_count += len(dataframe)
+            self.chunk_count = 1 if self.chunk_count is None else self.chunk_count + 1
+            self.total_record_count = (
+                len(dataframe)
+                if self.total_record_count is None
+                else self.total_record_count + len(dataframe)
+            )
 
             # Generate output file path
             file_path = f"{self.output_path}{self.output_suffix}"
@@ -120,8 +124,12 @@ class ParquetOutput(Output):
                 return
 
             # Update counters
-            self.chunk_count += 1
-            self.total_record_count += dataframe.count_rows()
+            self.chunk_count = 1 if self.chunk_count is None else self.chunk_count + 1
+            self.total_record_count = (
+                dataframe.count_rows()
+                if self.total_record_count is None
+                else self.total_record_count + dataframe.count_rows()
+            )
 
             # Generate output file path
             file_path = f"{self.output_path}{self.output_suffix}"

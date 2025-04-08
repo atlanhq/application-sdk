@@ -143,7 +143,7 @@ class JsonOutput(Output):
                 lambda chunk_start, chunk_count: f"{start_marker}_{end_marker}.json"
             )
         return cls(
-            output_suffix=output_suffix,
+            output_suffix=output_suffix or "",
             output_path=output_path,
             typename=typename,
             chunk_count=chunk_count,
@@ -221,8 +221,12 @@ class JsonOutput(Output):
 
         # Write DataFrame to JSON file
         if not combined_dataframe.empty:
-            self.chunk_count += 1
-            self.total_record_count += len(combined_dataframe)
+            self.chunk_count = 1 if self.chunk_count is None else self.chunk_count + 1
+            self.total_record_count = (
+                len(combined_dataframe)
+                if self.total_record_count is None
+                else self.total_record_count + len(combined_dataframe)
+            )
             output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
             combined_dataframe.to_json(output_file_name, orient="records", lines=True)
 

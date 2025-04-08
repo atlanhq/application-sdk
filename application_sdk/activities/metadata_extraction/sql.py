@@ -221,7 +221,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         # Replace NaN with None to avoid issues with JSON serialization
         results = results.replace({float("nan"): None})
 
-        transformed_metadata_list = await self._process_rows(
+        transformed_metadata_list = self._process_rows(
             results,
             typename,
             workflow_id,

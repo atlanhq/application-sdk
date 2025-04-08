@@ -68,7 +68,6 @@ class SQLQueryExtractionActivitiesState(ActivitiesState):
 
     sql_client: SQLClient
     handler: SQLHandler
-    workflow_args: Dict[str, Any]
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
