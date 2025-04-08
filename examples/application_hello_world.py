@@ -1,10 +1,10 @@
 import asyncio
 from typing import Any, Callable, Dict, Sequence
 
-from application_sdk.clients.utils import get_workflow_client
 from temporalio import workflow
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 @workflow.defn
 class HelloWorldWorkflow(WorkflowInterface):
     @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> None:
         print("HELLO WORLD")
 
     @staticmethod

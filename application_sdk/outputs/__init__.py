@@ -79,22 +79,41 @@ class Output(ABC):
         into chunks based on chunk_size and buffer_size settings.
 
         Args:
-            dataframe (pd.DataFrame): The DataFrame to write.
+            batched_dataframe: A generator or async generator of DataFrames to write.
 
         Note:
             If the DataFrame is empty, the method returns without writing.
         """
         try:
+            # Handle based on type - first check AsyncGenerator specifically
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
-            else:
+            # Handle sync generators with regular for
+            elif inspect.isgenerator(batched_dataframe):
                 for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
+            # Handle single dataframe case
+            elif isinstance(batched_dataframe, pd.DataFrame):
+                if not is_empty_dataframe(batched_dataframe):
+                    await self.write_dataframe(batched_dataframe)
+            # Handle regular iterables only (not AsyncGenerator)
+            elif hasattr(batched_dataframe, "__iter__") and not isinstance(
+                batched_dataframe, AsyncGenerator
+            ):
+                for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self.write_dataframe(dataframe)
+            # Unknown type
+            else:
+                activity.logger.warning(
+                    f"Unsupported dataframe type: {type(batched_dataframe)}"
+                )
         except Exception as e:
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
+            raise e
 
     @abstractmethod
     async def write_dataframe(self, dataframe: pd.DataFrame):
@@ -118,24 +137,51 @@ class Output(ABC):
         into chunks based on chunk_size and buffer_size settings.
 
         Args:
-            dataframe (daft.DataFrame): The DataFrame to write.
+            batched_dataframe: A generator or async generator of daft DataFrames to write.
 
         Note:
             If the DataFrame is empty, the method returns without writing.
         """
         try:
+            # Try to import daft to check instance type
+            try:
+                import daft
+
+                has_daft = True
+            except ImportError:
+                has_daft = False
+
+            # Handle based on type - first check AsyncGenerator specifically
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
-            else:
+            # Handle sync generators with regular for
+            elif inspect.isgenerator(batched_dataframe):
                 for dataframe in batched_dataframe:
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
+            # Handle single dataframe case
+            elif has_daft and isinstance(batched_dataframe, daft.DataFrame):
+                if not is_empty_dataframe(batched_dataframe):
+                    await self.write_daft_dataframe(batched_dataframe)
+            # Handle regular iterables only (not AsyncGenerator)
+            elif hasattr(batched_dataframe, "__iter__") and not isinstance(
+                batched_dataframe, AsyncGenerator
+            ):
+                for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self.write_daft_dataframe(dataframe)
+            # Unknown type
+            else:
+                activity.logger.warning(
+                    f"Unsupported dataframe type: {type(batched_dataframe)}"
+                )
         except Exception as e:
             activity.logger.error(
                 f"Error writing batched daft dataframe to json: {str(e)}"
             )
+            raise e
 
     @abstractmethod
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821

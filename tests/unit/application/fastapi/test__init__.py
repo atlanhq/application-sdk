@@ -5,8 +5,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.application.fastapi import (
-    EventWorkflowTrigger,
     Application,
+    EventWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
 )

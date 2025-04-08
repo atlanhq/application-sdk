@@ -77,13 +77,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     from databases, with support for chunking and parallel processing.
 
     Attributes:
-        _state (Dict[str, StateModel]): Internal state storage.
         sql_client_class (Type[SQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
-
-    _state: Dict[str, SQLQueryExtractionActivitiesState] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -118,6 +115,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Args:
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
         """
+        workflow_id = get_workflow_id()
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
             credentials = SecretStoreInput.extract_credentials(
@@ -127,7 +125,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = SQLQueryExtractionActivitiesState(
+        self._state[workflow_id] = SQLQueryExtractionActivitiesState(
             sql_client=sql_client,
             handler=handler,
             workflow_args=workflow_args,

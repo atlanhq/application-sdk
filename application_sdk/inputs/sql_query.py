@@ -1,6 +1,6 @@
 import asyncio
 import concurrent
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Optional, Union
 
 import pandas as pd
 from sqlalchemy import text
@@ -24,7 +24,7 @@ def _get_sql_query(
     query_attribute: str,
     workflow_args: Dict[str, Any],
     parent_class: Optional[Any],
-    temp_table_sql_query: str | None = None,
+    temp_table_sql_query: Optional[str] = None,
 ) -> str:
     """Get the SQL query to execute.
 
@@ -33,21 +33,32 @@ def _get_sql_query(
     """
     # Check if the parent class has the query defined and process the same
     if parent_class and hasattr(parent_class, query_attribute):
+        query_value = getattr(parent_class, query_attribute)
         if temp_table_sql_query and hasattr(parent_class, temp_table_sql_query):
-            return prepare_query(
-                getattr(parent_class, query_attribute),
-                workflow_args,
-                getattr(parent_class, temp_table_sql_query),
-            )
+            temp_value = getattr(parent_class, temp_table_sql_query)
+            result = prepare_query(query_value, workflow_args, temp_value)
+            return result if isinstance(result, str) else ""
         else:
-            return prepare_query(getattr(parent_class, query_attribute), workflow_args)
+            result = prepare_query(query_value, workflow_args)
+            return result if isinstance(result, str) else ""
 
     # Check if the workflow_args have the query defined and process the same
     # This is applicable in case of query miner workflow
-    if workflow_args.get(query_attribute):
-        return workflow_args.get(query_attribute)
+    if (
+        workflow_args
+        and isinstance(workflow_args, dict)
+        and workflow_args.get(query_attribute)
+    ):
+        query = workflow_args.get(query_attribute)
+        if isinstance(query, str):
+            return query
 
-    return query_attribute
+    # Return the query attribute itself if it's a string
+    if isinstance(query_attribute, str):
+        return query_attribute
+
+    # Last resort to avoid returning None
+    return ""
 
 
 class SQLQueryInput(Input):
@@ -97,32 +108,63 @@ class SQLQueryInput(Input):
             )
 
     @classmethod
-    def re_init(
-        cls,
-        query: str,
-        state: ActivitiesState,
-        parent_class: Any,
-        **kwargs: Dict[str, Any],
-    ):
+    def re_init(cls, **kwargs: Dict[str, Any]):
         """Re-initialize the input class with given keyword arguments.
 
         Args:
-            query (str): The SQL query attribute to fetch the query from parent class.
-            state (ActivitiesState): State object for the activity.
-            parent_class (Any): Parent class object.
             **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
+
+        Returns:
+            SQLQueryInput: An instance of the SQLQueryInput class.
         """
-        engine = kwargs.get("engine")
-        if not engine:
-            engine = (
-                state.sql_client.engine if state else parent_class.sql_client.engine
+        # Extract the key parameters from kwargs
+        query = str(kwargs.get("query", ""))
+        state = kwargs.get("state")
+        parent_class = kwargs.get("parent_class")
+        temp_table_sql_query = kwargs.get("temp_table_sql_query")
+
+        if isinstance(temp_table_sql_query, str) or temp_table_sql_query is None:
+            processed_temp_table_sql_query = temp_table_sql_query
+        else:
+            # Convert to string or set to None if invalid
+            processed_temp_table_sql_query = (
+                str(temp_table_sql_query) if temp_table_sql_query else None
             )
 
-        kwargs["engine"] = engine
-        kwargs["query"] = _get_sql_query(
-            query, kwargs, parent_class, kwargs.get("temp_table_sql_query")
+        # Extract the engine from state or parent_class
+        engine = kwargs.get("engine")
+        if not engine:
+            if (
+                state
+                and hasattr(state, "sql_client")
+                and state.sql_client
+                and hasattr(state.sql_client, "engine")
+            ):
+                engine = state.sql_client.engine
+            elif (
+                parent_class
+                and hasattr(parent_class, "sql_client")
+                and parent_class.sql_client
+                and hasattr(parent_class.sql_client, "engine")
+            ):
+                engine = parent_class.sql_client.engine
+
+        # Get the processed SQL query
+        processed_query = _get_sql_query(
+            query, kwargs, parent_class, processed_temp_table_sql_query
         )
-        return cls(**kwargs)
+
+        # Create a new instance with cleaned parameters
+        chunk_size = kwargs.get("chunk_size")
+        if not isinstance(chunk_size, (int, type(None))):
+            chunk_size = 100000  # Default if invalid type
+
+        return cls(
+            query=processed_query,
+            engine=engine,
+            chunk_size=chunk_size,
+            temp_table_sql_query=processed_temp_table_sql_query,
+        )
 
     def _read_sql_query(
         self, session: Session
@@ -146,14 +188,17 @@ class SQLQueryInput(Input):
             Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
+        if not self.engine:
+            raise ValueError("Engine is not defined")
+
         with self.engine.connect() as conn:
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    async def get_batched_dataframe(self) -> AsyncIterator[pd.DataFrame]:
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
-            Iterator[pd.DataFrame]: Iterator yielding batches of query results.
+            AsyncIterator[pd.DataFrame]: Iterator yielding batches of query results.
 
         Raises:
             ValueError: If engine is a string instead of SQLAlchemy engine.
@@ -165,15 +210,28 @@ class SQLQueryInput(Input):
 
             if self.async_session:
                 async with self.async_session() as session:
-                    return await session.run_sync(self._read_sql_query)
+                    result = await session.run_sync(self._read_sql_query)
+                    if isinstance(result, pd.DataFrame):
+                        yield result
+                    else:
+                        for df in result:
+                            yield df
+                    return
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return await asyncio.get_event_loop().run_in_executor(
+                    result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
+                    if isinstance(result, pd.DataFrame):
+                        yield result
+                    else:
+                        for df in result:
+                            yield df
+                    return
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
+            raise e
 
     async def get_dataframe(self) -> pd.DataFrame:
         """Get all query results as a single pandas DataFrame asynchronously.
@@ -191,15 +249,36 @@ class SQLQueryInput(Input):
 
             if self.async_session:
                 async with self.async_session() as session:
-                    return await session.run_sync(self._read_sql_query)
+                    result = await session.run_sync(self._read_sql_query)
+                    if isinstance(result, pd.DataFrame):
+                        return result
+                    else:
+                        # Combine all batches into a single DataFrame
+                        all_data = []
+                        for df in result:
+                            all_data.append(df)
+                        if all_data:
+                            return pd.concat(all_data)
+                        return pd.DataFrame()
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return await asyncio.get_event_loop().run_in_executor(
+                    result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
+                    if isinstance(result, pd.DataFrame):
+                        return result
+                    else:
+                        # Combine all batches into a single DataFrame
+                        all_data = []
+                        for df in result:
+                            all_data.append(df)
+                        if all_data:
+                            return pd.concat(all_data)
+                        return pd.DataFrame()
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
+            raise e
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.
@@ -219,25 +298,44 @@ class SQLQueryInput(Input):
             https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
-            # Daft uses ConnectorX to read data from SQL by default for supported connectors
-            # If a connection string is passed, it will use ConnectorX to read data
-            # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
+            # Import daft locally
             import daft
+
+            # Create an empty DataFrame as fallback
+
+            if not self.engine:
+                raise ValueError("Engine is not defined")
 
             if isinstance(self.engine, str):
                 return daft.read_sql(self.query, self.engine)
-            return daft.read_sql(self.query, lambda: self.engine.connect())
+
+            # Use a safe connect function that checks for None
+            def safe_connect():
+                if self.engine is None:
+                    raise ValueError("Engine is None")
+                return self.engine.connect()
+
+            # Use the safe connect function in the lambda
+            return daft.read_sql(self.query, lambda: safe_connect())
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
+            # When an error occurs, create and return an empty daft DataFrame
+            try:
+                import daft
 
-    async def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
+                return daft.DataFrame()
+            except Exception:
+                # Re-raise the original error if we can't create an empty DataFrame
+                raise e
+
+    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """Get query results as batched daft DataFrames.
 
         This method reads data using pandas in batches since daft does not support
         batch reading. Each pandas DataFrame is then converted to a daft DataFrame.
 
         Returns:
-            Iterator[daft.DataFrame]: Iterator yielding batches of query results
+            AsyncIterator[daft.DataFrame]: Iterator yielding batches of query results
                 as daft DataFrames.
 
         Raises:
@@ -254,9 +352,9 @@ class SQLQueryInput(Input):
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 
-            batched_dataframe = await self.get_batched_dataframe()
-            for dataframe in batched_dataframe:
+            async for dataframe in self.get_batched_dataframe():
                 daft_dataframe = daft.from_pandas(dataframe)
                 yield daft_dataframe
         except Exception as e:
             logger.error(f"Error reading batched data(daft) from SQL: {str(e)}")
+            raise e

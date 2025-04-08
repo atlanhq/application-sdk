@@ -2,18 +2,19 @@ import asyncio
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
-from application_sdk.clients.utils import get_workflow_client
 from temporalio import activity, workflow
+
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.application.fastapi import Application, EventWorkflowTrigger
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.clients.workflow import WorkflowConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.eventstore import (
+    WORKFLOW_END_EVENT,
     AtlanEvent,
     CustomEvent,
     EventStore,
-    WORKFLOW_END_EVENT,
     WorkflowEndEvent,
 )
 from application_sdk.worker import Worker
@@ -91,8 +92,8 @@ class SampleWorkflow(WorkflowInterface):
             heartbeat_timeout=timedelta(seconds=10),
         )
 
-    @classmethod
-    def get_activities(cls, activities: SampleActivities) -> List[Callable[..., Any]]:
+    @staticmethod
+    def get_activities(activities: SampleActivities) -> List[Callable[..., Any]]:
         return [activities.activity_1, activities.activity_2]
 
 
@@ -116,7 +117,9 @@ async def start_worker():
 
 
 async def start_fast_api_app():
-    workflow_client = get_workflow_client(application_name=WorkflowConstants.APPLICATION_NAME.value)
+    workflow_client = get_workflow_client(
+        application_name=WorkflowConstants.APPLICATION_NAME.value
+    )
     await workflow_client.load()
 
     app = Application(

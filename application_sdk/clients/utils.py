@@ -4,7 +4,7 @@ from application_sdk.clients.workflow import WorkflowConstants, WorkflowEngineTy
 
 def get_workflow_client(
     engine_type: WorkflowEngineType = WorkflowEngineType.TEMPORAL,
-    application_name: str = WorkflowConstants.APPLICATION_NAME.value
+    application_name: str = WorkflowConstants.APPLICATION_NAME.value,
 ):
     """
     Get a workflow client based on the engine type.

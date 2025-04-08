@@ -1,5 +1,6 @@
 import os
 from concurrent.futures import Future
+from typing import AsyncIterator
 from unittest.mock import patch
 
 import daft
@@ -102,7 +103,7 @@ class TestDaftDecoratorsIceberg:
         async def func(batch_input: daft.DataFrame, output, **kwargs):
             await output.write_batched_daft_dataframe(batch_input)
 
-        await func()
+        await func(batch_input=None, output=None)
 
         table = self.catalog.load_table("default.test_table")
         data_scan = table.scan().to_arrow()
@@ -133,7 +134,7 @@ class TestDaftDecoratorsIceberg:
             assert batch_input.count_rows() == 10
             await output.write_daft_dataframe(batch_input)
 
-        await func()
+        await func(batch_input=None, output=None)
 
         table = self.catalog.load_table("default.test_table_two")
         data_scan = table.scan().to_arrow()
@@ -161,12 +162,12 @@ class TestDaftDecoratorsIceberg:
                 iceberg_table="test_table_three",
             ),
         )
-        async def func(batch_input: daft.DataFrame, output, **kwargs):
+        async def func(batch_input: AsyncIterator[daft.DataFrame], output, **kwargs):
             async for chunk in batch_input:
                 assert chunk.count_rows() == expected_row_count.pop(0)
                 await output.write_daft_dataframe(chunk)
 
-        await func()
+        await func(batch_input=None, output=None)  # type: ignore
 
         table = self.catalog.load_table("default.test_table_three")
         data_scan = table.scan().to_arrow()
@@ -194,7 +195,7 @@ class TestDaftDecoratorsIceberg:
             await output.write_daft_dataframe(batch_input.transform(add_1))
             return batch_input
 
-        await func()
+        await func(batch_input=None, output=None)
 
         table = self.catalog.load_table("default.test_table_four")
         data_scan = table.scan().to_arrow()

@@ -2,7 +2,7 @@ import asyncio
 import inspect
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -61,7 +61,7 @@ async def prepare_fn_kwargs(
     get_dataframe_fn: Callable[..., Any],
     get_batched_dataframe_fn: Callable[..., Any],
     kwargs: Dict[str, Any],
-    fn_args: Dict[str, Any],
+    fn_args: Tuple[Any, ...],
     fn_kwargs: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Prepare the keyword arguments for the function.
@@ -72,7 +72,7 @@ async def prepare_fn_kwargs(
         get_dataframe_fn: Function to get a single dataframe.
         get_batched_dataframe_fn: Function to get batched dataframes.
         kwargs: Keyword arguments to prepare.
-        fn_args: Function arguments.
+        fn_args: Function arguments as a tuple.
         fn_kwargs: Function keyword arguments.
 
     Returns:
@@ -136,9 +136,9 @@ async def run_process(
     fn: Callable[..., Any],
     get_dataframe_fn: Callable[..., Any],
     get_batched_dataframe_fn: Callable[..., Any],
-    args: Dict[str, Any],
+    args: Tuple[Any, ...],
     kwargs: Dict[str, Any],
-    fn_args: Dict[str, Any],
+    fn_args: Tuple[Any, ...],
     fn_kwargs: Dict[str, Any],
 ) -> Any:
     """Process input data through a function.
@@ -153,7 +153,7 @@ async def run_process(
         get_batched_dataframe_fn: Function to get batched dataframes.
         args: Positional arguments for the workflow function.
         kwargs: Additional keyword arguments for the workflow function.
-        fn_args: Function arguments.
+        fn_args: Function arguments as a tuple.
         fn_kwargs: Function keyword arguments.
 
     Returns:
@@ -264,7 +264,7 @@ def transform(*args: Any, **kwargs: Any):
 
     def wrapper(fn: Callable[..., Any]):
         @wraps(fn)
-        async def inner(*fn_args: Dict[str, Any], **fn_kwargs: Dict[str, Any]):
+        async def inner(*fn_args: Any, **fn_kwargs: Any):
             return await run_process(
                 fn=fn,
                 get_dataframe_fn=Input.get_dataframe,
@@ -361,7 +361,7 @@ def transform_daft(*args: Any, **kwargs: Any):
 
     def wrapper(fn):
         @wraps(fn)
-        async def inner(*fn_args: Dict[str, Any], **fn_kwargs: Dict[str, Any]):
+        async def inner(*fn_args: Any, **fn_kwargs: Any):
             return await run_process(
                 fn=fn,
                 get_dataframe_fn=Input.get_daft_dataframe,

@@ -117,7 +117,7 @@ class TestDaftDecoratorsParquet:
             await output.write_daft_dataframe(transformed)
             return batch_input
 
-        await func()
+        await func(batch_input=None, output=None)  # type: ignore
 
         # Verify output
         output_file = f"{self.test_dir}/output_1.parquet"

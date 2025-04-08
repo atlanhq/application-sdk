@@ -8,7 +8,7 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import run_sync, transform
+from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.json import JsonInput
 from application_sdk.inputs.secretstore import SecretStoreInput

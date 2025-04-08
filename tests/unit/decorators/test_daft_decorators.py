@@ -1,7 +1,7 @@
 import os
 from concurrent.futures import Future
 from types import TracebackType
-from typing import Any, Callable, Iterator, List
+from typing import Any, AsyncIterator, Callable, List
 from unittest.mock import patch
 
 import daft
@@ -51,7 +51,9 @@ class TestDaftDecorators:
         """
         Clean up the test clients
         """
-        os.remove("/tmp/test_connectorx.db")
+        test_db_path = "/tmp/test_connectorx.db"
+        if os.path.exists(test_db_path):
+            os.remove(test_db_path)
 
     @given(
         value=st.integers(
@@ -80,12 +82,14 @@ class TestDaftDecorators:
                 engine=engine, query="SELECT value FROM test_table"
             )
         )
-        async def func(batch_input: Iterator[daft.DataFrame], **kwargs: Any) -> None:
+        async def func(
+            batch_input: AsyncIterator[daft.DataFrame], **kwargs: Any
+        ) -> None:
             async for chunk in batch_input:
                 assert chunk.count_rows() == 1
                 assert chunk.select("value").to_pandas().iloc[0, 0] == value
 
-        await func()
+        await func(batch_input=None)  # type: ignore
 
     @given(
         values=st.lists(
@@ -129,7 +133,7 @@ class TestDaftDecorators:
             result_values = batch_input.select("value").to_pandas()["value"].tolist()
             assert sorted(result_values) == sorted(values)
 
-        await func()
+        await func(batch_input=None)
 
     @given(
         values=st.lists(
@@ -178,7 +182,9 @@ class TestDaftDecorators:
                 engine=engine, query="SELECT * FROM numbers", chunk_size=chunk_size
             )
         )
-        async def func(batch_input: Iterator[daft.DataFrame], **kwargs: Any) -> None:
+        async def func(
+            batch_input: AsyncIterator[daft.DataFrame], **kwargs: Any
+        ) -> None:
             all_values = []
             chunks_seen = 0
             async for chunk in batch_input:
@@ -189,7 +195,7 @@ class TestDaftDecorators:
             assert chunks_seen == len(expected_chunks)
             assert sorted(all_values) == sorted(values)
 
-        await func()
+        await func(batch_input=None)  # type: ignore
 
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
@@ -219,7 +225,7 @@ class TestDaftDecorators:
         async def func(batch_input: daft.DataFrame, **kwargs):
             assert batch_input.count_rows() == 10
 
-        await func()
+        await func(batch_input=None)
 
     async def test_json_input(self) -> None:
         # Create a sample JSON file for input
@@ -240,12 +246,12 @@ class TestDaftDecorators:
             ),
         )
         async def func(
-            batch_input: Iterator[daft.DataFrame], out1: JsonOutput, **kwargs: Any
+            batch_input: AsyncIterator[daft.DataFrame], out1: JsonOutput, **kwargs: Any
         ) -> None:
             async for chunk in batch_input:
                 await out1.write_daft_dataframe(chunk.transform(add_1))
 
-        await func()
+        await func(batch_input=None, out1=None)  # type: ignore
         # Check files generated
         with open("/tmp/tests/test_daft_decorator/raw/schema/1.json") as f:
             assert f.read().strip() == '{"value":1}\n{"value":2}'

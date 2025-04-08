@@ -162,7 +162,7 @@ class SQLHandler(HandlerInterface):
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
         databases = []
-        async for batch in self.sql_client.run_query(self.fetch_databases_sql):
+        async for batch in self.sql_client.run_query(self.fetch_databases_sql or ""):
             for row in batch:
                 databases.append(
                     {self.database_result_key: row[self.database_result_key]}
@@ -171,9 +171,10 @@ class SQLHandler(HandlerInterface):
 
     async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
         """Fetch schemas for a specific database."""
-        if not self.sql_client:
+        if not self.sql_client or not self.fetch_schemas_sql:
             raise ValueError("SQL Client not defined")
         schemas = []
+
         schema_query = self.fetch_schemas_sql.format(database_name=database)
         async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
@@ -349,9 +350,19 @@ class SQLHandler(HandlerInterface):
         try:
             min_version = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
             client_version = None
+            if not self.sql_client:
+                logger.info("SQL client not defined")
+                return {
+                    "success": True,
+                    "successMessage": "Client version check skipped - SQL client not defined",
+                    "failureMessage": "",
+                }
 
             # Try to get the version from the sql_client dialect
-            if hasattr(self.sql_client, "engine"):
+            if (
+                hasattr(self.sql_client, "engine")
+                and self.sql_client.engine is not None
+            ):
                 version_info = self.sql_client.engine.dialect.server_version_info
                 if version_info:
                     # Handle tuple version info (like (15, 4))

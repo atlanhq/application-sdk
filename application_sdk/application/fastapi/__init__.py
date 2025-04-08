@@ -1,13 +1,13 @@
-from typing import Any, Callable, Dict, List, Optional, Type, Union, cast
+from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 import fastapi
 from fastapi import status
-from fastapi.responses import JSONResponse
-from application_sdk.common.constants import ApplicationConstants
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
+from starlette.requests import Request
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
@@ -28,6 +28,7 @@ from application_sdk.application.fastapi.models import (
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
+from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.docgen import AtlanDocsGenerator
@@ -82,11 +83,12 @@ class Application(AtlanApplicationInterface):
 
     # Declare class attributes with proper typing
     app: Any
-    temporal_client: Optional[TemporalClient]
+    workflow_client: Optional[WorkflowClient]
     workflow_router: Any
     pubsub_router: Any
     events_router: Any
     handler: Optional[HandlerInterface]
+    templates: Jinja2Templates
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
@@ -106,11 +108,12 @@ class Application(AtlanApplicationInterface):
         Args:
             lifespan: Optional lifespan manager for the FastAPI application.
             handler: Handler for processing application operations.
-            temporal_client: Client for Temporal workflow operations.
+            workflow_client: Client for Temporal workflow operations.
         """
         # First, set the instance variables
         self.handler = handler
-        self.temporal_client = temporal_client
+        self.workflow_client = workflow_client
+        self.templates = Jinja2Templates(directory=frontend_templates_path)
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -178,7 +181,6 @@ class Application(AtlanApplicationInterface):
         self.app.include_router(self.pubsub_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-
     async def home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
             "index.html",
@@ -216,11 +218,11 @@ class Application(AtlanApplicationInterface):
 
         # Create a closure for the start_workflow function that captures wf_class directly
         async def start_workflow(body: WorkflowRequest) -> WorkflowResponse:
-            if not self.temporal_client:
+            if not self.workflow_client:
                 raise Exception("Temporal client not initialized")
 
             # Use the captured wf_class variable, which is guaranteed to be non-None
-            workflow_data = await self.temporal_client.start_workflow(
+            workflow_data = await self.workflow_client.start_workflow(
                 body.model_dump(), workflow_class=wf_class
             )
 
@@ -317,7 +319,6 @@ class Application(AtlanApplicationInterface):
             methods=["POST"],
         )
 
-
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.home)
@@ -361,10 +362,10 @@ class Application(AtlanApplicationInterface):
                     trigger.workflow_class,
                     event,
                 )
-
-                await self.workflow_client.start_workflow(
-                    workflow_args=event, workflow_class=trigger.workflow_class
-                )
+                if trigger.workflow_class:
+                    await self.workflow_client.start_workflow(
+                        workflow_args=event, workflow_class=trigger.workflow_class
+                    )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         """Test authentication credentials.
@@ -516,7 +517,8 @@ class Application(AtlanApplicationInterface):
         return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(
-        self, host: str = ApplicationConstants.APP_HOST.value,
+        self,
+        host: str = ApplicationConstants.APP_HOST.value,
         port: int = ApplicationConstants.APP_PORT.value,
     ) -> None:
         """Start the FastAPI application server.
@@ -536,4 +538,3 @@ class Application(AtlanApplicationInterface):
             )
         )
         await server.serve()
-

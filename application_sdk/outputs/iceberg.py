@@ -58,11 +58,12 @@ class IcebergOutput(Output):
                 return
             # convert the pandas dataframe to a daft dataframe
             daft_dataframe = daft.from_pandas(dataframe)
-            self.write_daft_dataframe(daft_dataframe)
+            await self.write_daft_dataframe(daft_dataframe)
         except Exception as e:
             activity.logger.error(
                 f"Error writing pandas dataframe to iceberg table: {str(e)}"
             )
+            raise e
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """
@@ -71,9 +72,16 @@ class IcebergOutput(Output):
         try:
             if dataframe.count_rows() == 0:
                 return
-            # Create a new table in the iceberg catalog
-            self.chunk_count += 1
-            self.total_record_count += dataframe.count_rows()
+
+            # Initialize counters if they're None
+            if self.chunk_count is None:
+                self.chunk_count = 0
+            if self.total_record_count is None:
+                self.total_record_count = 0
+
+            # Update counters
+            self.chunk_count = self.chunk_count + 1
+            self.total_record_count = self.total_record_count + dataframe.count_rows()
 
             # check if iceberg table is already created
             if isinstance(self.iceberg_table, Table):
@@ -91,3 +99,4 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing daft dataframe to iceberg table: {str(e)}"
             )
+            raise e
