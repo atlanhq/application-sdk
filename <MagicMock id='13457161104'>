@@ -1,0 +1,129 @@
+Message with dict: {'key1': 'value1', 'key2': 123}
+Message with list: ['item1', 'item2', 123]
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::agg, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::eval_expression_list, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+Using python executor
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: PyMicroPartition::to_table, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
+IOStatsContext: MicroPartition::concat, Gets: 0, Heads: 0, Lists: 0, BytesRead: 0, AvgGetSize: 0, BytesUploaded: 0, AvgPutSize: 0
