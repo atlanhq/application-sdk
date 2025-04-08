@@ -181,9 +181,19 @@ class TestInterface:
         """
         extracted_dir_path = f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
         data = []
-        for f_name in glob(f"{extracted_dir_path}/*.json"):
-            with open(f_name, "rb") as f:
-                data.extend([orjson.loads(line) for line in f])
+
+        # Check if there are json or parquet files in the extracted directory
+        files_list = glob(f"{extracted_dir_path}/*.json") or glob(
+            f"{extracted_dir_path}/*.parquet"
+        )
+        for f_name in files_list or []:
+            if f_name.endswith(".parquet"):
+                df = pd.read_parquet(f_name)
+                data.extend(df.to_dict(orient="records"))
+            if f_name.endswith(".json"):
+                with open(f_name, "rb") as f:
+                    data.extend([orjson.loads(line) for line in f])
+
         if not data:
             raise FileNotFoundError(
                 f"No data found in the extracted directory: {extracted_dir_path}"
