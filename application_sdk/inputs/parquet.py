@@ -132,7 +132,10 @@ class ParquetInput(Input):
         try:
             import daft
 
-            path = f"{self.path}{self.file_names[0].split('/')[0]}"
+            if self.file_names:
+                path = f"{self.path}{self.file_names[0].split('/')[0]}"
+            else:
+                path = self.path
             await self.download_files(path)
             return daft.read_parquet(f"{path}/*.parquet")
         except Exception as e:

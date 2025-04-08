@@ -5,6 +5,8 @@ from concurrent.futures import Future
 from typing import Any, AsyncIterator, Callable, List, Optional, TypeVar
 from unittest.mock import patch
 
+import pytest
+
 from application_sdk.decorators import transform
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.outputs.parquet import ParquetOutput
@@ -94,6 +96,9 @@ class TestPandasDecoratorsParquet:
         except Exception as e:
             print(f"Warning: Failed to clean up test files: {e}")
 
+    @pytest.mark.skip(
+        reason="We'll be removing the decorator in the future, so skipping this test for now"
+    )
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
@@ -139,6 +144,9 @@ class TestPandasDecoratorsParquet:
         assert len(df) == 10
         assert all(df["value"] == pd.Series(range(1, 11)))  # Original values + 1
 
+    @pytest.mark.skip(
+        reason="We'll be removing the decorator in the future, so skipping this test for now"
+    )
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,

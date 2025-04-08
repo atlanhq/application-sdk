@@ -72,7 +72,7 @@ class JsonInput(Input):
         kwargs["download_file_prefix"] = kwargs.get("output_prefix", "")
         return cls(**kwargs)
 
-    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe

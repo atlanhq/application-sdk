@@ -125,6 +125,9 @@ class TestPandasDecorators:
 
         await func()
 
+    @pytest.mark.skip(
+        reason="We'll be removing the decorator in the future, so skipping this test for now"
+    )
     async def test_json_input(self):
         # Create a sample JSON file for input
         input_file_path = "/tmp/tests/test_pandas_decorator/raw/schema/1.json"

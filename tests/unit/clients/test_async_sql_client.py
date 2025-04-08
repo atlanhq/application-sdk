@@ -23,7 +23,7 @@ def handler(async_sql_client: Any) -> SQLHandler:
     return handler
 
 
-@patch("application_sdk.clients.sql.create_async_engine")
+@patch("sqlalchemy.ext.asyncio.create_async_engine")
 def test_load(create_async_engine: Any, async_sql_client: AsyncSQLClient):
     # Mock the engine and connection
     mock_engine = AsyncMock()
@@ -45,13 +45,13 @@ def test_load(create_async_engine: Any, async_sql_client: AsyncSQLClient):
     assert async_sql_client.connection == mock_connection
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
-    import pandas as pd
+    import daft
 
-    mock_run_query.return_value = pd.DataFrame(data)
+    mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -69,15 +69,15 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
-    import pandas as pd
+    import daft
 
-    mock_run_query.return_value = pd.DataFrame(data)
+    mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -95,14 +95,14 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, handler: SQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import pandas as pd
+    import daft
 
-    mock_run_query.return_value = pd.DataFrame(data)
+    mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -119,7 +119,7 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, handler: SQLHandler
 ):
@@ -143,7 +143,7 @@ async def test_fetch_metadata_with_error(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.sql.text",
+    "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_client_side_cursor(
@@ -192,7 +192,7 @@ async def test_run_query_client_side_cursor(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.sql.text",
+    "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_server_side_cursor(
@@ -244,7 +244,7 @@ async def test_run_query_server_side_cursor(
 
 @pytest.mark.asyncio
 @patch(
-    "application_sdk.clients.sql.text",
+    "sqlalchemy.text",
     side_effect=lambda q: q,  # type: ignore
 )
 async def test_run_query_with_error(mock_text: MagicMock, async_sql_client: MagicMock):
