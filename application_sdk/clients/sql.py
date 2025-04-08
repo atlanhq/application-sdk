@@ -20,12 +20,9 @@ from temporalio import activity
 
 from application_sdk.clients import ClientInterface
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 
 activity.logger = get_logger(__name__)
-
-
-class SQLConstants(Enum):
-    USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
 
 
 class SQLClient(ClientInterface):
@@ -46,11 +43,11 @@ class SQLClient(ClientInterface):
     engine = None
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
-    use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
+    use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR.value
 
     def __init__(
         self,
-        use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value,
+        use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR.value,
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):

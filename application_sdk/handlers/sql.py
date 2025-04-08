@@ -14,6 +14,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.decorators import transform
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.constants import SQL_SERVER_MIN_VERSION
 
 logger = get_logger(__name__)
 
@@ -335,7 +336,7 @@ class SQLHandler(HandlerInterface):
 
         logger.info("Checking client version")
         try:
-            min_version = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
+            min_version = SQL_SERVER_MIN_VERSION
             client_version = None
 
             # Try to get the version from the sql_client dialect

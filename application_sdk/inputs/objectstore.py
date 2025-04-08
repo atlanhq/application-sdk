@@ -6,12 +6,12 @@ from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import OBJECT_STORE_NAME
 
 activity.logger = get_logger(__name__)
 
 
 class ObjectStoreInput:
-    OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
     OBJECT_GET_OPERATION = "get"
 
     @classmethod
@@ -35,7 +35,7 @@ class ObjectStoreInput:
 
             try:
                 response = client.invoke_binding(
-                    binding_name=cls.OBJECT_STORE_NAME,
+                    binding_name=OBJECT_STORE_NAME,
                     operation=cls.OBJECT_GET_OPERATION,
                     binding_metadata=metadata,
                 )

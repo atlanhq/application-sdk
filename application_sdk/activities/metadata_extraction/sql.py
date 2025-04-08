@@ -6,7 +6,6 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
-from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.decorators import run_sync, transform
 from application_sdk.handlers.sql import SQLHandler
@@ -16,6 +15,10 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    APP_TENANT_ID
+)
 
 activity.logger = get_logger(__name__)
 
@@ -127,9 +130,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         self._state[workflow_id].sql_client = sql_client
         self._state[workflow_id].transformer = self.transformer_class(
-            connector_name=ApplicationConstants.APPLICATION_NAME.value,
+            connector_name=APPLICATION_NAME,
             connector_type="sql",
-            tenant_id=ApplicationConstants.TENANT_ID.value,
+            tenant_id=APP_TENANT_ID,
         )
 
     async def _clean_state(self):

@@ -1,20 +1,18 @@
 """State store for the application."""
 
 import json
-import os
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import STATE_STORE_NAME
 
 activity.logger = get_logger(__name__)
 
 
 class StateStoreOutput:
-    STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
-
     @classmethod
     def save_state(cls, key: str, value: Dict[str, Any]) -> None:
         """Save state to the store.
@@ -29,7 +27,7 @@ class StateStoreOutput:
         try:
             with DaprClient() as client:
                 client.save_state(
-                    store_name=cls.STATE_STORE_NAME,
+                    store_name=STATE_STORE_NAME,
                     key=key,
                     value=json.dumps(value),
                 )

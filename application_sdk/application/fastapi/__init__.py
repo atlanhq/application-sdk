@@ -1,6 +1,5 @@
 from typing import Any, Callable, List, Optional, Type
 
-from application_sdk.common.constants import ApplicationConstants
 from fastapi import APIRouter, FastAPI, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -25,13 +24,23 @@ from application_sdk.application.fastapi.models import (
 )
 from application_sdk.application.fastapi.routers.server import get_server_router
 from application_sdk.application.fastapi.utils import internal_server_error_handler
-from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
+from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
+from application_sdk.constants import (
+    APP_HOST,
+    APP_PORT,
+    APP_DASHBOARD_HOST,
+    APP_DASHBOARD_PORT,
+    APP_TENANT_ID,
+    APPLICATION_NAME,
+    WORKFLOW_UI_HOST,
+    WORKFLOW_UI_PORT,
+)
 
 logger = get_logger(__name__)
 
@@ -158,14 +167,14 @@ class Application(AtlanApplicationInterface):
             "index.html",
             {
                 "request": request,
-                "app_dashboard_http_port": ApplicationConstants.APP_DASHBOARD_PORT.value,
-                "app_dashboard_http_host": ApplicationConstants.APP_DASHBOARD_HOST.value,
-                "app_http_port": ApplicationConstants.APP_PORT.value,
-                "app_http_host": ApplicationConstants.APP_HOST.value,
-                "tenant_id": ApplicationConstants.TENANT_ID.value,
-                "app_name": ApplicationConstants.APPLICATION_NAME.value,
-                "workflow_ui_host": WorkflowConstants.UI_HOST.value,
-                "workflow_ui_port": WorkflowConstants.UI_PORT.value,
+                "app_dashboard_http_port": APP_DASHBOARD_PORT,
+                "app_dashboard_http_host": APP_DASHBOARD_HOST,
+                "app_http_port": APP_PORT,
+                "app_http_host": APP_HOST,
+                "tenant_id": APP_TENANT_ID,
+                "app_name": APPLICATION_NAME,
+                "workflow_ui_host": WORKFLOW_UI_HOST,
+                "workflow_ui_port": WORKFLOW_UI_PORT
             },
         )
 
@@ -456,8 +465,8 @@ class Application(AtlanApplicationInterface):
         return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(
-        self, host: str = ApplicationConstants.APP_HOST.value,
-        port: int = ApplicationConstants.APP_PORT.value,
+        self, host: str = APP_HOST,
+        port: int = APP_PORT,
     ) -> None:
         """Start the FastAPI application server.
 

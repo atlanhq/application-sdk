@@ -1,10 +1,11 @@
 from application_sdk.clients.temporal import TemporalWorkflowClient
-from application_sdk.clients.workflow import WorkflowConstants, WorkflowEngineType
+from application_sdk.clients.workflow import WorkflowEngineType
+from application_sdk.constants import APPLICATION_NAME
 
 
 def get_workflow_client(
     engine_type: WorkflowEngineType = WorkflowEngineType.TEMPORAL,
-    application_name: str = WorkflowConstants.APPLICATION_NAME.value
+    application_name: str = APPLICATION_NAME
 ):
     """
     Get a workflow client based on the engine type.

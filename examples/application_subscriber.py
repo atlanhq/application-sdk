@@ -6,7 +6,7 @@ from application_sdk.clients.utils import get_workflow_client
 from temporalio import activity, workflow
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.application.fastapi import Application, EventWorkflowTrigger
-from application_sdk.clients.workflow import WorkflowConstants
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.eventstore import (
@@ -98,7 +98,7 @@ class SampleWorkflow(WorkflowInterface):
 
 async def start_worker():
     workflow_client = get_workflow_client(
-        application_name=WorkflowConstants.APPLICATION_NAME.value,
+        application_name=APPLICATION_NAME,
     )
     await workflow_client.load()
 
@@ -116,7 +116,7 @@ async def start_worker():
 
 
 async def start_fast_api_app():
-    workflow_client = get_workflow_client(application_name=WorkflowConstants.APPLICATION_NAME.value)
+    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
     await workflow_client.load()
 
     app = Application(
