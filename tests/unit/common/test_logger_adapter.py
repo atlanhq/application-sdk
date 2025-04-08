@@ -113,7 +113,7 @@ def test_process_with_workflow_context():
             assert msg == expected_msg
 
 
-@given(workflow_info_strategy())
+@given(workflow_info_strategy())  # type: ignore
 @pytest.mark.skip(
     reason="Failing due to AssertionError: assert 'Test message...orkflow_type}' == 'Test message...n ID:  Type: '"
 )
@@ -166,7 +166,7 @@ def test_process_with_activity_context():
             assert msg == expected_msg
 
 
-@given(activity_info_strategy())
+@given(activity_info_strategy())  # type: ignore
 def test_process_with_generated_activity_context(activity_info: mock.Mock):
     """Test process() method with generated activity information."""
     with create_logger_adapter() as logger_adapter:

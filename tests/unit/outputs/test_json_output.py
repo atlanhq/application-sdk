@@ -70,7 +70,7 @@ async def test_write_dataframe_empty(base_output_path: str) -> None:
     reason="Failing due to hypothesis error: Invalid size min_size=-8432831563820742370 < 0"
 )
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-@given(df=dataframe_strategy())
+@given(df=dataframe_strategy())  # type: ignore
 @pytest.mark.asyncio
 async def test_write_dataframe_single_chunk(
     base_output_path: str, df: pd.DataFrame
@@ -104,7 +104,7 @@ async def test_write_dataframe_single_chunk(
     reason="Failing due to hypothesis error: Invalid size min_size=-16824 < 0"
 )
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-@given(df=dataframe_strategy(), chunk_size=chunk_size_strategy)
+@given(df=dataframe_strategy(), chunk_size=chunk_size_strategy)  # type: ignore
 @pytest.mark.asyncio
 async def test_write_dataframe_multiple_chunks(
     base_output_path: str, df: pd.DataFrame, chunk_size: int

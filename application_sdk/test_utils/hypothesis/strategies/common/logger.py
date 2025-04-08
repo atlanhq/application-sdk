@@ -1,6 +1,5 @@
 """Hypothesis strategies for testing logger components."""
 
-from typing import Optional
 from unittest import mock
 
 from hypothesis import strategies as st
@@ -8,7 +7,7 @@ from hypothesis.strategies import DrawFn
 
 
 @st.composite
-def workflow_info_strategy(draw: Optional[DrawFn] = None) -> mock.Mock:
+def workflow_info_strategy(draw: DrawFn) -> mock.Mock:
     """Strategy for generating workflow info test data.
 
     Args:
@@ -38,7 +37,7 @@ def workflow_info_strategy(draw: Optional[DrawFn] = None) -> mock.Mock:
 
 
 @st.composite
-def activity_info_strategy(draw: Optional[DrawFn] = None) -> mock.Mock:
+def activity_info_strategy(draw: DrawFn) -> mock.Mock:
     """Strategy for generating activity info test data.
 
     Args:

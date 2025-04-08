@@ -1,5 +1,4 @@
 from pathlib import Path
-from typing import Any, Optional
 
 import pandas as pd
 from hypothesis import strategies as st
@@ -44,7 +43,7 @@ dataframe_columns_strategy = st.lists(column_name_strategy)
 
 
 @composite
-def dataframe_strategy(draw: Optional[Any] = None) -> pd.DataFrame:
+def dataframe_strategy(draw) -> pd.DataFrame:
     """Generate a pandas DataFrame with random data."""
     columns = draw(dataframe_columns_strategy)
     num_rows = draw(st.integers())
