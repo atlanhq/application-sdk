@@ -161,7 +161,6 @@ class Application(AtlanApplicationInterface):
         self.app.include_router(self.pubsub_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-
     async def home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
             "index.html",
@@ -283,7 +282,6 @@ class Application(AtlanApplicationInterface):
             self.on_event,
             methods=["POST"],
         )
-
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""

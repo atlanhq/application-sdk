@@ -10,7 +10,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
+from application_sdk.decorators import transform_daft
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -136,9 +136,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @transform(
-        batch_input=SQLQueryInput(query="sql_query"),
-        raw_output=JsonOutput(output_suffix="/raw/query"),
+    @transform_daft(
+        batch_input=SQLQueryInput(query="sql_query", chunk_size=None),
+        raw_output=JsonOutput(output_suffix="/raw/query", chunk_size=100000),
     )
     async def fetch_queries(
         self,
@@ -157,7 +157,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         """
 
         try:
-            await raw_output.write_batched_dataframe(batch_input)
+            await raw_output.write_daft_dataframe(batch_input.to_pylist())
 
             logger.info(
                 "Query fetch completed, %s records processed",

@@ -8,7 +8,7 @@ import inspect
 from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
 
-import pandas as pd
+import orjson
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesState
@@ -19,10 +19,12 @@ from application_sdk.outputs.objectstore import ObjectStoreOutput
 activity.logger = get_logger(__name__)
 
 
-def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821
+def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
     """
     Helper method to check if the dataframe has any rows
     """
+    import pandas as pd
+
     if isinstance(dataframe, pd.DataFrame):
         return dataframe.empty
 
@@ -67,7 +69,7 @@ class Output(ABC):
     async def write_batched_dataframe(
         self,
         batched_dataframe: Union[
-            AsyncGenerator[pd.DataFrame, None], Generator[pd.DataFrame, None, None]
+            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
         ],
     ):
         """Write a batched pandas DataFrame to Output.
@@ -94,7 +96,7 @@ class Output(ABC):
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     @abstractmethod
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to the output destination.
 
         Args:
@@ -187,8 +189,8 @@ class Output(ABC):
 
             # Write the statistics to a json file
             output_file_name = f"{self.output_path}/statistics.json.ignore"
-            dataframe = pd.DataFrame(statistics, index=[0])
-            dataframe.to_json(output_file_name, orient="records", lines=True)
+            with open(output_file_name, "w") as f:
+                f.write(orjson.dumps(statistics).decode("utf-8"))
 
             # Push the file to the object store
             await ObjectStoreOutput.push_file_to_object_store(

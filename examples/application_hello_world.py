@@ -1,10 +1,10 @@
 import asyncio
 from typing import Any, Callable, Dict, Sequence
 
-from application_sdk.clients.utils import get_workflow_client
 from temporalio import workflow
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface

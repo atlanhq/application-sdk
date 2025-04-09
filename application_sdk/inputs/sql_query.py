@@ -2,13 +2,6 @@ import asyncio
 import concurrent
 from typing import Any, Dict, Iterator, Optional, Union
 
-import pandas as pd
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.orm.session import Session
-
 from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
@@ -62,16 +55,16 @@ class SQLQueryInput(Input):
     """
 
     query: str
-    engine: Optional[Union[Engine, str]]
+    engine: Optional[Union["Engine", str]]
     chunk_size: Optional[int]
     state: Optional[ActivitiesState] = None
-    async_session: Optional[AsyncSession] = None
+    async_session: Optional["AsyncSession"] = None
     temp_table_sql_query: Optional[str] = None
 
     def __init__(
         self,
         query: str,
-        engine: Optional[Union[Engine, str]] = None,
+        engine: Optional[Union["Engine", str]] = None,
         chunk_size: Optional[int] = 100000,
         temp_table_sql_query: Optional[str] = None,
         **kwargs: Dict[str, Any],
@@ -88,10 +81,8 @@ class SQLQueryInput(Input):
         self.engine = engine
         self.chunk_size = chunk_size
         self.temp_table_sql_query = temp_table_sql_query
-        if self.engine and isinstance(self.engine, AsyncEngine):
-            self.async_session = sessionmaker(
-                self.engine, expire_on_commit=False, class_=AsyncSession
-            )
+        self.engine = engine
+        self.async_session = None
 
     @classmethod
     def re_init(
@@ -122,35 +113,59 @@ class SQLQueryInput(Input):
         return cls(**kwargs)
 
     def _read_sql_query(
-        self, session: Session
-    ) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
+        self, session: "Session"
+    ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided session.
 
         Args:
             session: SQLAlchemy session for database operations.
 
         Returns:
-            Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
+            Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
+        import pandas as pd
+        from sqlalchemy import text
+
         conn = session.connection()
         return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    def _execute_query(self) -> Union[pd.DataFrame, Iterator[pd.DataFrame]]:
+    def _execute_query_daft(
+        self,
+    ) -> Union["daft.DataFrame", Iterator["daft.DataFrame"]]:
+        """Execute SQL query using the provided engine and daft.
+
+        Returns:
+            Union["daft.DataFrame", Iterator["daft.DataFrame"]]: Query results as DataFrame
+                or iterator of DataFrames if chunked.
+        """
+        # Daft uses ConnectorX to read data from SQL by default for supported connectors
+        # If a connection string is passed, it will use ConnectorX to read data
+        # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
+        import daft
+
+        if isinstance(self.engine, str):
+            return daft.read_sql(self.query, self.engine)
+        return daft.read_sql(self.query, self.engine.connect)
+
+    def _execute_query(self) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided engine and pandas.
 
         Returns:
-            Union[pd.DataFrame, Iterator[pd.DataFrame]]: Query results as DataFrame
+            Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
         with self.engine.connect() as conn:
+            import pandas as pd
+            from sqlalchemy import text
+
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    async def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
-            Iterator[pd.DataFrame]: Iterator yielding batches of query results.
+            Iterator["pd.DataFrame"]: Iterator yielding batches of query results.
 
         Raises:
             ValueError: If engine is a string instead of SQLAlchemy engine.
@@ -159,6 +174,15 @@ class SQLQueryInput(Input):
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
+
+            from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+            if self.engine and isinstance(self.engine, AsyncEngine):
+                from sqlalchemy.orm import sessionmaker
+
+                self.async_session = sessionmaker(
+                    self.engine, expire_on_commit=False, class_=AsyncSession
+                )
 
             if self.async_session:
                 async with self.async_session() as session:
@@ -172,7 +196,7 @@ class SQLQueryInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
-    async def get_dataframe(self) -> pd.DataFrame:
+    async def get_dataframe(self) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
 
         Returns:
@@ -185,6 +209,15 @@ class SQLQueryInput(Input):
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
+
+            from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
+
+            if self.engine and isinstance(self.engine, AsyncEngine):
+                from sqlalchemy.orm import sessionmaker
+
+                self.async_session = sessionmaker(
+                    self.engine, expire_on_commit=False, class_=AsyncSession
+                )
 
             if self.async_session:
                 async with self.async_session() as session:
@@ -216,14 +249,11 @@ class SQLQueryInput(Input):
             https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
-            # Daft uses ConnectorX to read data from SQL by default for supported connectors
-            # If a connection string is passed, it will use ConnectorX to read data
-            # For unsupported connectors and if directly engine is passed, it will use SQLAlchemy
-            import daft
-
-            if isinstance(self.engine, str):
-                return daft.read_sql(self.query, self.engine)
-            return daft.read_sql(self.query, lambda: self.engine.connect())
+            # Run the blocking operation in a thread pool
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return await asyncio.get_event_loop().run_in_executor(
+                    executor, self._execute_query_daft
+                )
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 

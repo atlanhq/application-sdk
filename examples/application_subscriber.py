@@ -2,18 +2,18 @@ import asyncio
 from datetime import timedelta
 from typing import Any, Callable, Dict, List
 
-from application_sdk.clients.utils import get_workflow_client
 from temporalio import activity, workflow
+
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.application.fastapi import Application, EventWorkflowTrigger
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.eventstore import (
+    WORKFLOW_END_EVENT,
     AtlanEvent,
     CustomEvent,
     EventStore,
-    WORKFLOW_END_EVENT,
     WorkflowEndEvent,
 )
 from application_sdk.worker import Worker

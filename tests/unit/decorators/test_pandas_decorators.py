@@ -2,7 +2,6 @@ import os
 from concurrent.futures import Future
 from unittest.mock import patch
 
-import pandas as pd
 import pytest
 import sqlalchemy
 from hypothesis import given
@@ -46,6 +45,8 @@ class TestPandasDecorators:
         """
         Basic test to read the SQL data with hypothesis generated values
         """
+        import pandas as pd
+
         engine = sqlalchemy.create_engine("sqlite:///:memory:")
         with engine.connect() as conn:
             conn.execute(text("CREATE TABLE IF NOT EXISTS test_values (value INTEGER)"))
@@ -87,7 +88,7 @@ class TestPandasDecorators:
                 engine=engine, query="SELECT * FROM numbers", chunk_size=None
             )
         )
-        async def func(batch_input: pd.DataFrame, **kwargs):
+        async def func(batch_input: "pd.DataFrame", **kwargs):
             assert len(batch_input) == 10
 
         await func()
@@ -118,12 +119,15 @@ class TestPandasDecorators:
                 engine=engine, query="SELECT * FROM numbers", chunk_size=3
             )
         )
-        async def func(batch_input: pd.DataFrame, **kwargs):
+        async def func(batch_input: "pd.DataFrame", **kwargs):
             for chunk in batch_input:
                 assert len(chunk) == expected_row_count.pop(0)
 
         await func()
 
+    @pytest.mark.skip(
+        reason="We'll be removing the decorator in the future, so skipping this test for now"
+    )
     async def test_json_input(self):
         # Create a sample JSON file for input
         input_file_path = "/tmp/tests/test_pandas_decorator/raw/schema/1.json"

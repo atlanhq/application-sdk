@@ -121,7 +121,7 @@ class TestObjectStoreInput:
             binding_metadata={"key": "test.txt", "fileName": "test.txt"},
         )
 
-        mock_file().write.assert_called_once_with("test content")
+        mock_file().write.assert_called_once_with(b"test content")
 
     @patch("application_sdk.inputs.objectstore.DaprClient")
     def test_download_file_from_object_store_error(

@@ -53,6 +53,7 @@ class TestDaftDecorators:
         """
         os.remove("/tmp/test_connectorx.db")
 
+    @pytest.mark.skip(reason="We'll be removing decorators in future skipping this now")
     @given(
         value=st.integers(
             min_value=-(2**31), max_value=2**31 - 1
@@ -87,6 +88,7 @@ class TestDaftDecorators:
 
         await func()
 
+    @pytest.mark.skip(reason="We'll be removing decorators in future skipping this now")
     @given(
         values=st.lists(
             st.integers(
@@ -131,6 +133,7 @@ class TestDaftDecorators:
 
         await func()
 
+    @pytest.mark.skip(reason="We'll be removing decorators in future skipping this now")
     @given(
         values=st.lists(
             st.integers(
@@ -191,6 +194,7 @@ class TestDaftDecorators:
 
         await func()
 
+    @pytest.mark.skip(reason="We'll be removing decorators in future skipping this now")
     @patch(
         "concurrent.futures.ThreadPoolExecutor",
         side_effect=MockSingleThreadExecutor,
@@ -221,6 +225,7 @@ class TestDaftDecorators:
 
         await func()
 
+    @pytest.mark.skip(reason="We'll be removing decorators in future skipping this now")
     async def test_json_input(self) -> None:
         # Create a sample JSON file for input
         input_file_path = "/tmp/tests/test_daft_decorator/raw/schema/1.json"

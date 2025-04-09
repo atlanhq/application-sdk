@@ -1,6 +1,6 @@
+from abc import ABC, abstractmethod
 from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
-from abc import ABC, abstractmethod
 
 from application_sdk.workflows import WorkflowInterface
 
@@ -25,9 +25,7 @@ class WorkflowClient(ABC):
 
     @abstractmethod
     async def start_workflow(
-        self, 
-        workflow_args: Dict[str, Any], 
-        workflow_class: Type['WorkflowInterface']
+        self, workflow_args: Dict[str, Any], workflow_class: Type["WorkflowInterface"]
     ) -> Dict[str, Any]:
         """Start a workflow execution.
 

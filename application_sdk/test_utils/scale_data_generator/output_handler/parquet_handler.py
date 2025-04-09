@@ -1,7 +1,6 @@
 from pathlib import Path
 from typing import Any, Dict
 
-import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -28,6 +27,8 @@ class ParquetFormatHandler(OutputFormatHandler):
 
     def _write_batch(self, table_name: str) -> None:
         if self.file_handlers[table_name]["records"]:
+            import pandas as pd
+
             df = pd.DataFrame(self.file_handlers[table_name]["records"])
             table = pa.Table.from_pandas(df)
             file_path = Path(self.file_handlers[table_name]["path"])

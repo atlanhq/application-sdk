@@ -20,11 +20,11 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.constants import (
     APPLICATION_NAME,
+    MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
     WORKFLOW_PORT,
     WORKFLOW_NAMESPACE,
-    WORKFLOW_MAX_TIMEOUT_HOURS,
-    MAX_CONCURRENT_ACTIVITIES
+    WORKFLOW_MAX_TIMEOUT_HOURS
 )
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
@@ -44,6 +44,7 @@ logger = get_logger(__name__)
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
+
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
