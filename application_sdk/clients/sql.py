@@ -43,11 +43,11 @@ class SQLClient(ClientInterface):
     engine = None
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
-    use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR.value
+    use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
 
     def __init__(
         self,
-        use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR.value,
+        use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
@@ -56,7 +56,7 @@ class SQLClient(ClientInterface):
 
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
-                Defaults to SQLConstants.USE_SERVER_SIDE_CURSOR.value.
+                Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
             sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
                 connection arguments. Defaults to {}.
