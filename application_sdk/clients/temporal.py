@@ -18,6 +18,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
@@ -30,13 +31,13 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
-from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
 
 logger = get_logger(__name__)
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
+
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -290,7 +291,9 @@ class TemporalWorkflowClient(WorkflowClient):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[int] = WorkflowConstants.MAX_CONCURRENT_ACTIVITIES.value,
+        max_concurrent_activities: Optional[
+            int
+        ] = WorkflowConstants.MAX_CONCURRENT_ACTIVITIES.value,
     ) -> Worker:
         """Create a Temporal worker.
 

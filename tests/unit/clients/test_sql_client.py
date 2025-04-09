@@ -2,7 +2,6 @@ import asyncio
 from typing import Any, Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pandas as pd
 import pytest
 from hypothesis import HealthCheck, given, settings
 
@@ -36,7 +35,7 @@ def handler(sql_client: Any) -> SQLHandler:
     return handler
 
 
-@patch("application_sdk.clients.sql.create_engine")
+@patch("sqlalchemy.create_engine")
 def test_load(mock_create_engine: Any, sql_client: SQLClient):
     """Test basic loading functionality with fixed configuration"""
     # Mock the engine and connection
@@ -69,7 +68,7 @@ def test_load_property_based(
     connect_args: Dict[str, Any],
 ):
     """Property-based test for loading with various credentials and connection arguments"""
-    with patch("application_sdk.clients.sql.create_engine") as mock_create_engine:
+    with patch("sqlalchemy.create_engine") as mock_create_engine:
         # Mock the engine and connection
         mock_engine = MagicMock()
         mock_connection = MagicMock()
@@ -92,11 +91,13 @@ def test_load_property_based(
         assert sql_client.connection == mock_connection
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
     """Test basic metadata fetching with fixed configuration"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.return_value = pd.DataFrame(data)
+    import daft
+
+    mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -121,7 +122,7 @@ async def test_fetch_metadata_property_based(
 ):
     """Property-based test for fetching metadata with various arguments and data"""
     with patch(
-        "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe"
+        "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe"
     ) as mock_run_query:
         # Update handler with the test arguments
         if "database_alias_key" in args:
@@ -142,7 +143,9 @@ async def test_fetch_metadata_property_based(
             }
             test_data.append(test_row)
 
-        mock_run_query.return_value = pd.DataFrame(test_data)
+        import daft
+
+        mock_run_query.return_value = daft.from_pylist(test_data)
 
         # Run prepare_metadata
         result = await handler.prepare_metadata({"metadata_sql": args["metadata_sql"]})
@@ -159,13 +162,15 @@ async def test_fetch_metadata_property_based(
                 assert handler.schema_result_key in row
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, handler: SQLHandler
 ):
     """Test metadata fetching without database alias key"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.return_value = pd.DataFrame(data)
+    import daft
+
+    mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -183,13 +188,15 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, handler: SQLHandler
 ):
     """Test metadata fetching with custom result keys"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    mock_run_query.return_value = pd.DataFrame(data)
+    import daft
+
+    mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
     metadata_sql = "SELECT * FROM information_schema.tables"
@@ -205,7 +212,7 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, handler: SQLHandler
 ):
@@ -229,7 +236,7 @@ async def test_fetch_metadata_with_error(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql.text")
+@patch("sqlalchemy.text")
 @patch(
     "application_sdk.clients.sql.asyncio.get_running_loop",
     new_callable=MagicMock,
@@ -306,7 +313,7 @@ async def test_run_query(
 
 
 @pytest.mark.asyncio
-@patch("application_sdk.clients.sql.text")
+@patch("sqlalchemy.text")
 @patch(
     "application_sdk.clients.sql.asyncio.get_running_loop",
     new_callable=MagicMock,
@@ -354,7 +361,7 @@ def test_connection_string_property_based(
     sql_client: SQLClient, connection_string: str
 ):
     """Property-based test for various connection string formats"""
-    with patch("application_sdk.clients.sql.create_engine") as mock_create_engine:
+    with patch("sqlalchemy.create_engine") as mock_create_engine:
         # Mock the engine and connection
         mock_engine = MagicMock()
         mock_connection = MagicMock()
@@ -389,7 +396,7 @@ async def test_run_query_property_based(
     query_result: Dict[str, Any],
 ):
     """Property-based test for query execution with various result structures"""
-    with patch("application_sdk.clients.sql.text") as mock_text, patch(
+    with patch("sqlalchemy.text") as mock_text, patch(
         "application_sdk.clients.sql.asyncio.get_running_loop",
         new_callable=MagicMock,
     ) as mock_get_running_loop:
@@ -435,7 +442,7 @@ async def test_run_query_error_property_based(
     error_type: str,
 ):
     """Property-based test for query execution with various error scenarios"""
-    with patch("application_sdk.clients.sql.text") as mock_text, patch(
+    with patch("sqlalchemy.text") as mock_text, patch(
         "application_sdk.clients.sql.asyncio.get_running_loop",
         new_callable=MagicMock,
     ) as mock_get_running_loop:

@@ -12,14 +12,15 @@ from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from application_sdk.common.aws_utils import generate_aws_rds_token_with_iam_role, generate_aws_rds_token_with_iam_user
-from application_sdk.common.utils import parse_credentials_extra
-from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
+from application_sdk.common.aws_utils import (
+    generate_aws_rds_token_with_iam_role,
+    generate_aws_rds_token_with_iam_user,
+)
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import parse_credentials_extra
 
 activity.logger = get_logger(__name__)
 
@@ -79,6 +80,8 @@ class SQLClient(ClientInterface):
         """
         self.credentials = credentials
         try:
+            from sqlalchemy import create_engine
+
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.sql_alchemy_connect_args,
@@ -99,8 +102,8 @@ class SQLClient(ClientInterface):
 
     def get_iam_user_token(self):
         """
-            Get the IAM user token for the database.
-            This is a temporary token that is used to authenticate the IAM user to the database.
+        Get the IAM user token for the database.
+        This is a temporary token that is used to authenticate the IAM user to the database.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials["username"]
@@ -128,8 +131,8 @@ class SQLClient(ClientInterface):
 
     def get_iam_role_token(self):
         """
-            Get the IAM role token for the database.
-            This is a temporary token that is used to authenticate the IAM role to the database.
+        Get the IAM role token for the database.
+        This is a temporary token that is used to authenticate the IAM role to the database.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -161,7 +164,7 @@ class SQLClient(ClientInterface):
 
     def get_auth_token(self) -> str:
         """
-            Get the auth token for the SQL source.
+        Get the auth token for the SQL source.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -179,9 +182,11 @@ class SQLClient(ClientInterface):
         encoded_token = quote_plus(token)
         return encoded_token
 
-    def add_source_connection_params(self, connection_string: str, source_connection_params: Dict[str, Any]) -> str:
+    def add_source_connection_params(
+        self, connection_string: str, source_connection_params: Dict[str, Any]
+    ) -> str:
         """
-            Add the source connection params to the connection string.
+        Add the source connection params to the connection string.
         """
         for key, value in source_connection_params.items():
             if "?" not in connection_string:
@@ -222,6 +227,8 @@ class SQLClient(ClientInterface):
 
         with ThreadPoolExecutor() as pool:
             try:
+                from sqlalchemy import text
+
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
@@ -259,8 +266,8 @@ class AsyncSQLClient(SQLClient):
         engine (AsyncEngine | None): Async SQLAlchemy engine instance.
     """
 
-    connection: AsyncConnection | None = None
-    engine: AsyncEngine | None = None
+    connection: "AsyncConnection"
+    engine: "AsyncEngine"
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish an asynchronous database connection.
@@ -273,6 +280,8 @@ class AsyncSQLClient(SQLClient):
         """
         self.credentials = credentials
         try:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.sql_alchemy_connect_args,
@@ -311,6 +320,8 @@ class AsyncSQLClient(SQLClient):
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
+            from sqlalchemy import text
+
             if use_server_side_cursor:
                 await self.connection.execution_options(yield_per=batch_size)
 

@@ -11,15 +11,6 @@ from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.atlas.sql import (
-    Column,
-    Database,
-    Function,
-    Procedure,
-    Schema,
-    Table,
-    TagAttachment,
-)
 from application_sdk.transformers.common.utils import process_text
 
 logger = get_logger(__name__)
@@ -55,6 +46,16 @@ class AtlasTransformer(TransformerInterface):
                 current_epoch (str): Current epoch timestamp.
                 connection_qualified_name (str): Qualified name for the connection.
         """
+        from application_sdk.transformers.atlas.sql import (
+            Column,
+            Database,
+            Function,
+            Procedure,
+            Schema,
+            Table,
+            TagAttachment,
+        )
+
         self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
         self.tenant_id = tenant_id

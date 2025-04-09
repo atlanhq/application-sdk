@@ -264,7 +264,6 @@ def get_safe_num_threads():
     return get_actual_cpu_count() * 2 or 2
 
 
-
 def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
     """
     Parse the 'extra' field from credentials, handling both string and dict inputs.

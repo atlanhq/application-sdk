@@ -1,6 +1,6 @@
-from typing import Any, AsyncGenerator, Dict, Generator, List, Optional, Type
+from typing import Any, Dict, Iterator, Optional, Type
 
-import pandas as pd
+import daft
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -8,12 +8,13 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import run_sync, transform
+from application_sdk.decorators import run_sync, transform_daft
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.inputs.json import JsonInput
+from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
+from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
@@ -147,17 +148,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
         await super()._clean_state()
 
-    @run_sync
     def _process_rows(
         self,
-        results: pd.DataFrame,
+        results: "daft.DataFrame",
         typename: str,
         workflow_id: str,
         workflow_run_id: str,
         state: SQLMetadataExtractionActivitiesState,
         connection_name: Optional[str],
         connection_qualified_name: Optional[str],
-    ) -> List[Optional[Dict[str, Any]]]:
+    ) -> Iterator[Dict[str, Any]]:
         """Process DataFrame rows and transform them into metadata.
 
         Args:
@@ -172,12 +172,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             list: List of transformed metadata dictionaries
         """
-        transformed_metadata_list = []
-        for row in results.to_dict(orient="records"):
+        if not state.transformer:
+            raise ValueError("Transformer is not set")
+        for row in results.iter_rows():
             try:
-                if not state.transformer:
-                    raise ValueError("Transformer is not set")
-
                 transformed_metadata: Optional[Dict[str, Any]] = (
                     state.transformer.transform_metadata(
                         typename,
@@ -188,28 +186,24 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                         connection_qualified_name=connection_qualified_name,
                     )
                 )
-                if transformed_metadata is not None:
-                    transformed_metadata_list.append(transformed_metadata)
+                if transformed_metadata:
+                    yield transformed_metadata
                 else:
                     activity.logger.warning(f"Skipped invalid {typename} data: {row}")
             except Exception as row_error:
                 activity.logger.error(
                     f"Error processing row for {typename}: {row_error}"
                 )
-        return transformed_metadata_list
 
-    async def _transform_batch(
+    def _transform_batch(
         self,
-        results,
+        results: "daft.DataFrame",
         typename: str,
+        state: SQLMetadataExtractionActivitiesState,
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
     ):
-        state: SQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
-        )
-
         connection_name = workflow_args.get("connection", {}).get(
             "connection_name", None
         )
@@ -217,10 +211,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             "connection_qualified_name", None
         )
 
-        # Replace NaN with None to avoid issues with JSON serialization
-        results = results.replace({float("nan"): None})
-
-        transformed_metadata_list = await self._process_rows(
+        yield from self._process_rows(
             results,
             typename,
             workflow_id,
@@ -230,18 +221,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             connection_qualified_name,
         )
 
-        return pd.DataFrame(transformed_metadata_list)
-
     @activity.defn
     @auto_heartbeater
-    @transform(
-        batch_input=SQLQueryInput(query="fetch_database_sql"),
-        raw_output=JsonOutput(output_suffix="/raw/database"),
+    @transform_daft(
+        batch_input=SQLQueryInput(query="fetch_database_sql", chunk_size=None),
+        raw_output=ParquetOutput(output_suffix="/raw/database"),
     )
     async def fetch_databases(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch databases from the source database.
@@ -254,19 +243,19 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="database")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
-        batch_input=SQLQueryInput(query="fetch_schema_sql"),
-        raw_output=JsonOutput(output_suffix="/raw/schema"),
+    @transform_daft(
+        batch_input=SQLQueryInput(query="fetch_schema_sql", chunk_size=None),
+        raw_output=ParquetOutput(output_suffix="/raw/schema"),
     )
     async def fetch_schemas(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch schemas from the source database.
@@ -279,22 +268,23 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="schema")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
+    @transform_daft(
         batch_input=SQLQueryInput(
             query="fetch_table_sql",
             temp_table_sql_query="tables_extraction_temp_table_regex_sql",
+            chunk_size=None,
         ),
-        raw_output=JsonOutput(output_suffix="/raw/table"),
+        raw_output=ParquetOutput(output_suffix="/raw/table"),
     )
     async def fetch_tables(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch tables from the source database.
@@ -307,22 +297,23 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="table")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
+    @transform_daft(
         batch_input=SQLQueryInput(
             query="fetch_column_sql",
             temp_table_sql_query="column_extraction_temp_table_regex_sql",
+            chunk_size=None,
         ),
-        raw_output=JsonOutput(output_suffix="/raw/column"),
+        raw_output=ParquetOutput(output_suffix="/raw/column"),
     )
     async def fetch_columns(
         self,
-        batch_input: Generator[pd.DataFrame, None, None],
-        raw_output: JsonOutput,
+        batch_input,
+        raw_output: ParquetOutput,
         **kwargs: Dict[str, Any],
     ):
         """Fetch columns from the source database.
@@ -335,18 +326,18 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_batched_dataframe(batch_input)
+        await raw_output.write_daft_dataframe(batch_input)
         return await raw_output.get_statistics(typename="column")
 
     @activity.defn
     @auto_heartbeater
-    @transform(
-        raw_input=JsonInput(path="/raw/"),
-        transformed_output=JsonOutput(output_suffix="/transformed/"),
+    @transform_daft(
+        raw_input=ParquetInput(path="/raw/", chunk_size=None),
+        transformed_output=JsonOutput(output_suffix="/transformed", chunk_size=100000),
     )
     async def transform_data(
         self,
-        raw_input: AsyncGenerator[pd.DataFrame, None],
+        raw_input: "daft.DataFrame",
         transformed_output: JsonOutput,
         **kwargs: Dict[str, Any],
     ):
@@ -362,13 +353,14 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        async for input in raw_input:
-            transformed_chunk = await self._transform_batch(
-                input,
-                kwargs.get("typename"),
-                kwargs.get("workflow_id"),
-                kwargs.get("workflow_run_id"),
-                kwargs,
-            )
-            await transformed_output.write_dataframe(transformed_chunk)
+        state: SQLMetadataExtractionActivitiesState = await self._get_state(kwargs)
+        transformed_chunk = self._transform_batch(
+            raw_input,
+            kwargs.get("typename"),
+            state,
+            kwargs.get("workflow_id"),
+            kwargs.get("workflow_run_id"),
+            kwargs,
+        )
+        await transformed_output.write_daft_dataframe(transformed_chunk)
         return await transformed_output.get_statistics()

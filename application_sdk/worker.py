@@ -37,7 +37,7 @@ class Worker:
         self,
         workflow_client: WorkflowClient | None = None,
         workflow_activities: Sequence[CallableType] = [],
-        passthrough_modules: List[str] = ["application_sdk", "pandas","os", "app"],
+        passthrough_modules: List[str] = ["application_sdk", "pandas", "os", "app"],
         workflow_classes: List[Any] = [],
         max_concurrent_activities: Optional[int] = None,
     ):

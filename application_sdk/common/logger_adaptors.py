@@ -1,7 +1,6 @@
 import logging
 import os
 import sys
-import logging
 from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Tuple
@@ -27,6 +26,7 @@ OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
 ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
 LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
+
 # Add a Loguru handler for the Python logging system
 class InterceptHandler(logging.Handler):
     def emit(self, record):
@@ -49,12 +49,15 @@ class InterceptHandler(logging.Handler):
 
         # Add logger_name to extra to prevent KeyError
         logger_extras = {"logger_name": record.name}
-        
+
         logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
             level, record.getMessage()
         )
 
-logging.basicConfig(level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()])
+
+logging.basicConfig(
+    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
+)
 
 # Add these constants
 SEVERITY_MAPPING = {

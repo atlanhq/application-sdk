@@ -1,8 +1,8 @@
 import os
+from abc import ABC, abstractmethod
 from datetime import timedelta
 from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
-from abc import ABC, abstractmethod
 
 from application_sdk.workflows import WorkflowInterface
 
@@ -15,7 +15,9 @@ class WorkflowConstants(Enum):
     UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
     UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
 
-    WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1")))
+    WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
+        hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
+    )
     MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
 
@@ -39,9 +41,7 @@ class WorkflowClient(ABC):
 
     @abstractmethod
     async def start_workflow(
-        self, 
-        workflow_args: Dict[str, Any], 
-        workflow_class: Type['WorkflowInterface']
+        self, workflow_args: Dict[str, Any], workflow_class: Type["WorkflowInterface"]
     ) -> Dict[str, Any]:
         """Start a workflow execution.
 

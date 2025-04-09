@@ -1,6 +1,5 @@
 from typing import Any, Dict, Iterator, Optional
 
-import pandas as pd
 from pyiceberg.table import Table
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -31,7 +30,7 @@ class IcebergInput(Input):
         self.table = table
         self.chunk_size = chunk_size
 
-    def get_dataframe(self) -> pd.DataFrame:
+    def get_dataframe(self) -> "pd.DataFrame":
         """
         Method to read the data from the iceberg table
         and return as a single combined pandas dataframe
@@ -42,7 +41,7 @@ class IcebergInput(Input):
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table: {str(e)}")
 
-    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
         # We are not implementing this method as we have to parition the daft dataframe
         # using dataframe.into_partitions() method. This method does all the paritions in memory
         # and using that can cause out of memory issues.
