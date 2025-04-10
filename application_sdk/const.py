@@ -10,13 +10,34 @@ SELECT datname as database_name FROM pg_database WHERE datname = current_databas
 
 FETCH_SCHEMA_SQL = """
 SELECT
+    s.table_name,
+    s.table_schema,
+    s.table_catalog,
+    s.table_type,
+    s.table_comment,
+    s.table_character_set_name,
+    s.table_collation_name,
+    s.table_row_count,
+    s.table_size,
+    s.table_created_at,
+    s.table_updated_at,
+    s.table_engine,
+    s.table_version,
+    s.table_row_format,
+    s.table_auto_increment,
+    s.table_comment,
+    s.table_character_set_name,
+    s.table_collation_name,
     s.*
 FROM
     information_schema.schemata s
 WHERE
     s.schema_name NOT LIKE 'pg_%'
-    AND s.schema_name != 'information_schema'
+    AND s.schema_name NOT LIKE 'pg_internal'
+    AND s.schema_name NOT LIKE 'information_schema'
+    AND s.schema_name NOT LIKE 'pg_test'
     AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}'
+    
     AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
 """
 
