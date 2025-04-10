@@ -1,0 +1,29 @@
+language: python
+tone_instructions: "Professional, concise, and constructive"
+early_access: true
+
+reviews:
+  profile: "Senior Python Developer"
+
+  path_instructions:
+    - path: "const*.py"
+      instructions: |
+        Check for:
+        - Query performance and optimization (e.g., use of indexes, query structure, filters before joins, etc.)
+        - Avoiding SELECT * and using explicit column selection
+        - Proper pagination (LIMIT/OFFSET) if needed
+        - Avoiding N+1 query issues
+        - Use of prepared statements or parameterized queries to avoid SQL injection
+
+    - path: "**/*.py"
+      instructions: |
+        Review Python code for:
+        - Code consistency with PEP8 guidelines
+        - Clear variable/function names
+        - DRY (Don’t Repeat Yourself) principles
+        - Readability and maintainability
+        - Proper exception handling
+        - Usage of built-in functions and idiomatic Python
+
+chat:
+  auto-reply: true
