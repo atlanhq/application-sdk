@@ -1,9 +1,8 @@
-language: python
 tone_instructions: "Professional, concise, and constructive"
 early_access: true
 
 reviews:
-  profile: "Senior Python Developer"
+  profile: "chill"
 
   path_instructions:
     - path: "const*.py"
