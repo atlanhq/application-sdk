@@ -6,7 +6,7 @@ all workflow implementations in the application SDK.
 
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Callable, Dict, Sequence, Type
+from typing import Any, Callable, Dict, Optional, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -33,12 +33,16 @@ class WorkflowInterface(ABC):
     """
 
     activities_cls: Type[ActivitiesInterface]
+    atlan_publish_activities_cls: Type[Any]
 
-    default_heartbeat_timeout: timedelta | None = timedelta(seconds=10)
+    # TODO: move this to a common place
+    E2E_WORKFLOW_ARGS_KEY = "e2e_run"
+
+    default_heartbeat_timeout: timedelta | None = timedelta(seconds=300)
     default_start_to_close_timeout: timedelta | None = timedelta(hours=2)
 
     @staticmethod
-    def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
+    def get_activities(activities: Optional[ActivitiesInterface]) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities for this workflow.
 
         This method must be implemented by subclasses to define the activities
@@ -98,3 +102,6 @@ class WorkflowInterface(ABC):
         except Exception as e:
             logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
             raise
+
+    async def run_atlan_publish_activities(self, workflow_args: Dict[str, Any]) -> None:
+        raise NotImplementedError("Run Atlan Publish Activities method not implemented")

@@ -294,6 +294,7 @@ class TemporalWorkflowClient(WorkflowClient):
         max_concurrent_activities: Optional[
             int
         ] = WorkflowConstants.MAX_CONCURRENT_ACTIVITIES.value,
+        *args: Any, **kwargs: Any
     ) -> Worker:
         """Create a Temporal worker.
 
@@ -325,6 +326,8 @@ class TemporalWorkflowClient(WorkflowClient):
             # Disabled EventInterceptor for now
             # interceptors=[EventInterceptor()],
             interceptors=[],
+             *args,
+            **kwargs
         )
 
     async def get_workflow_run_status(

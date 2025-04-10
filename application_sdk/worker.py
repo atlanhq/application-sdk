@@ -6,6 +6,7 @@ including their initialization, configuration, and execution.
 
 import asyncio
 import threading
+import multiprocessing
 from typing import Any, List, Optional, Sequence
 
 import uvloop
@@ -13,6 +14,19 @@ from temporalio.types import CallableType
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
+
+
+import threading
+from concurrent.futures.process import ProcessPoolExecutor
+from concurrent.futures.thread import ThreadPoolExecutor
+from typing import Any, List, Sequence
+
+import uvloop
+from temporalio.types import CallableType
+from temporalio.worker import SharedStateManager
+
+from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import get_safe_num_threads, get_actual_cpu_count
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -40,6 +54,7 @@ class Worker:
         passthrough_modules: List[str] = ["application_sdk", "pandas", "os", "app"],
         workflow_classes: List[Any] = [],
         max_concurrent_activities: Optional[int] = None,
+        is_sync_activities: bool = False,
     ):
         """Initialize the Worker.
 
@@ -59,6 +74,28 @@ class Worker:
         self.workflow_classes = workflow_classes
         self.passthrough_modules = passthrough_modules
         self.max_concurrent_activities = max_concurrent_activities
+
+
+        if is_sync_activities:
+            self.max_concurrent_activities = get_actual_cpu_count()
+
+        activity_executor = ThreadPoolExecutor(get_safe_num_threads())
+        kwargs = {}
+        if is_sync_activities:
+            # https://github.com/temporalio/samples-python/blob/main/hello/hello_activity_multiprocess.py
+            activity_executor = ProcessPoolExecutor(get_actual_cpu_count())
+            kwargs = {
+                "shared_state_manager": SharedStateManager.create_from_multiprocessing(multiprocessing.Manager())
+            }
+
+        self.worker = self.workflow_client.create_worker(
+            activities=self.workflow_activities,
+            workflow_classes=self.workflow_classes,
+            passthrough_modules=self.passthrough_modules,
+            max_concurrent_activities=self.max_concurrent_activities,
+            activity_executor=activity_executor,
+            **kwargs,
+        )
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
@@ -81,26 +118,20 @@ class Worker:
         """
         if daemon:
             worker_thread = threading.Thread(
-                target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
+                target=lambda: asyncio.run(self.worker.run()), daemon=True
             )
             worker_thread.start()
+            logger.info(f"Worker started in daemon thread on task queue: {self.workflow_client.worker_task_queue}")
             return
 
         if not self.workflow_client:
             raise ValueError("Workflow client is not set")
 
         try:
-            worker = self.workflow_client.create_worker(
-                activities=self.workflow_activities,
-                workflow_classes=self.workflow_classes,
-                passthrough_modules=self.passthrough_modules,
-                max_concurrent_activities=self.max_concurrent_activities,
-            )
-
             logger.info(
                 f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
             )
-            await worker.run()
+            await self.worker.run()
         except Exception as e:
-            logger.error(f"Error starting worker: {e}")
+            logger.error(f"Error running worker: {e}")
             raise e
