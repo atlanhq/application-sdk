@@ -1,7 +1,7 @@
 import glob
 import json
 import os
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
@@ -262,3 +262,33 @@ def get_safe_num_threads():
         2  # Minimum of 2 threads returned
     """
     return get_actual_cpu_count() * 2 or 2
+
+
+def get_value_for_attr(obj: Union[Dict[str, Any], Any], attr: str, default: Any = None):
+    """Gets a nested attribute value from a dictionary using path notation.
+
+    Traverses a dictionary using forward slash separated path notation to access nested values.
+    Returns a default value if the path doesn't exist or resolves to None.
+
+    Args:
+        obj (Dict[str, Any]): Dictionary to traverse
+        attr (str): Forward slash separated path to the desired value (e.g. "a/b/c")
+        default (Any, optional): Value to return if path doesn't exist. Defaults to None.
+
+    Returns:
+        Any: The value at the specified path, or the default value if not found
+
+    Examples:
+        >>> data = {"a": {"b": {"c": 123}}}
+        >>> get_value_for_attr(data, "a/b/c")
+        123
+        >>> get_value_for_attr(data, "x/y/z", default="not found")
+        'not found'
+    """
+    if attr is None:
+        return default
+    for attr_name in attr.split("/"):
+        obj = obj.get(attr_name)
+        if obj is None:
+            break
+    return obj or default

@@ -1,29 +1,48 @@
-import asyncio
-from typing import Any, Dict
-
-from application_sdk.clients.temporal import TemporalClient
-from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.workers.atlan.utilities import UtilitiesAtlanWorker
-from application_sdk.workflows.atlan.utilities import UtilitiesAtlanWorkflow
-
-APPLICATION_NAME = "diff"
-
-logger = get_logger(__name__)
+from application_sdk.diff.models import DiffProcessorConfig
+from application_sdk.diff.processor import DiffProcessor
 
 
-async def application_diff() -> Dict[str, Any]:
-    utilities_client = TemporalClient(application_name=UtilitiesAtlanWorker.TASK_QUEUE)
-    await utilities_client.load()
+def main():
+    """
+    Example script demonstrating usage of DiffProcessor.
 
-    utilities_worker = UtilitiesAtlanWorker(client=utilities_client)
+    Processes transformed data files to:
+    1. Load and chunk data from JSON files
+    2. Hash record attributes for comparison
+    3. Partition data for parallel processing
+    4. Calculate diffs between records
+    5. Export results in Parquet format
 
-    workflow_response = await utilities_client.start_workflow(
-        workflow_args={}, workflow_class=UtilitiesAtlanWorkflow
+    Example input JSON:
+    {
+        "typeName": "Table",
+        "attributes": {
+            "qualifiedName": "db.table1",
+            "name": "table1",
+            "description": "A table"
+        },
+        "customAttributes": {
+            "owner": "team1"
+        }
+    }
+    """
+    # Configure the diff processor
+    config = DiffProcessorConfig(
+        ignore_columns=[],  # Ignore these fields when hashing
+        num_partitions=4,  # Split data into 4 partitions
+        output_prefix="/Users/junaid/atlan/debug/postgres/mosaic/diff",  # Write results here
+        chunk_size=10,
     )
 
-    await utilities_worker.start()
-    return workflow_response
+    # Initialize processor
+    processor = DiffProcessor()
+
+    # Process transformed data files
+    processor.process(
+        transformed_data_prefix="/Users/junaid/atlan/debug/postgres/mosaic/atlan-postgres-1688410509-cron-1742926860/atlan-postgres-1688410509-cron-1742926860/4ac936b2-bde1-4a7c-b726-799942f1d6ea/transformed",
+        config=config,
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(application_diff())
+    main()

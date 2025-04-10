@@ -5,8 +5,10 @@ from collections import defaultdict
 from typing import List, Optional
 
 import daft
+import orjson
 from daft import col
 from temporalio import activity
+from xxhash import xxh3_128
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import get_logger
@@ -58,16 +60,19 @@ class DiffCalculator:
         )
         logger.info("Hash columns added to transformed data")
 
+        if not self.current_state:
+            logger.info("No current state provided. Marking all entities as new.")
+            transformed_data_with_hash = transformed_data_with_hash.with_column(
+                "diffState", daft.lit(DiffState.NEW.value)
+            )
+
         output_handler = JsonOutput(  # type: ignore
             output_suffix="",
             output_path="/Users/junaid/atlan/debug/postgres/mosaic/diff",
         )
         logger.info(f"Writing transformed data to {output_handler}")
-        output_handler.write_daft_dataframe(dataframe=transformed_data_with_hash)  # type: ignore
+        await output_handler.write_daft_dataframe(dataframe=transformed_data_with_hash)  # type: ignore
         logger.info("Transformed data written successfully")
-
-        if not self.current_state:
-            logger.info("No current state provided. Marking all entities as new.")
 
         if self.use_append_pattern:
             logger.info("Using append pattern")
@@ -178,85 +183,44 @@ class DiffCalculator:
         logger.info(f"{transformed_data}")
 
         keys_to_hash = ["attributes", "customAttributes", "classifications", "terms"]
-        hash_dataframes: List[daft.DataFrame] = []
 
         for key in keys_to_hash:
             logger.info(f"Processing hash for {key}")
             if key not in transformed_data.column_names:
                 continue
 
-            if key == "attributes":
-                key_df = transformed_data.select(
-                    col("typeName"),
-                    col("attributes").struct.get("*"),
-                )
-            else:
-                key_df = transformed_data.select(
-                    col("typeName"),
-                    col("attributes").struct.get("qualifiedName"),
-                    col(key).struct.get("*"),
-                )
-
-            key_hash_df = self.compute_row_hash(
-                key_df,
-                columns_to_ignore=columns_to_ignore,
-                row_hash_column_name=f"{key}Hash",
+            transformed_data = transformed_data.with_column(
+                f"{key}Hash", self.hash(col=transformed_data[key])
             )
-            hash_dataframes.append(key_hash_df)
             logger.info(f"Hash computation completed for {key}")
 
-        result = hash_dataframes[0]
-        for hash_df in hash_dataframes[1:]:
-            result = result.join(hash_df, on=["typeName", "qualifiedName"])
-        logger.info("Joined all hash DataFrames")
-
         # Combine typeName, qualifiedName and all hash columns to compute diffHash
-        diff_hash_columns: List[str] = []
-        diff_hash_columns.append("CAST(typeName AS STRING)")
-        diff_hash_columns.append("CAST(qualifiedName AS STRING)")
-
-        for key in keys_to_hash:
-            if key in transformed_data.column_names:
-                diff_hash_columns.append(f"CAST({key}Hash AS STRING)")
+        diff_hash_columns = ",".join(
+            [
+                "typeName",
+                "struct_get(attributes, 'qualifiedName')",
+                *[
+                    f"{key}Hash"
+                    for key in keys_to_hash
+                    if key in transformed_data.column_names
+                ],
+            ]
+        )
 
         result = daft.sql(f"""
-            SELECT *, HASH(CONCAT({",".join(diff_hash_columns)})) AS diffHash FROM result
+            SELECT *, HASH(CONCAT({diff_hash_columns})) AS diffHash FROM transformed_data
         """)
         logger.info("Hash columns added successfully")
         return result
 
     @staticmethod
-    def compute_row_hash(
-        df: daft.DataFrame,
-        columns_to_ignore: List[str] = [],
-        sort_columns: bool = True,
-        row_hash_column_name: str = "row_hash",
-    ) -> daft.DataFrame:
-        """
-        Create a hashed column for the dataframe
-        Args:
-            df: DataFrame to create hashed column
-            columns_order: Order of columns to be used for hashing
-            ignore_columns: Columns to ignore while creating the hash
-        Returns:
-            DataFrame with hashed column
-        """
-        logger.info(f"Computing row hash with {len(columns_to_ignore)} ignored columns")
-
-        columns = [column.name() for column in df.columns]
-        columns = list(filter(lambda c: c not in columns_to_ignore, columns))
-
-        if sort_columns:
-            columns.sort()
-            logger.info("Columns sorted for consistent hashing")
-
-        concat_expr = ",".join([f"""CAST({column} AS STRING)""" for column in columns])
-
-        df = daft.sql(f"""
-            SELECT *, HASH(CONCAT({concat_expr})) AS {row_hash_column_name} FROM df
-        """)
-        logger.info(f"Row hash computed and stored in column {row_hash_column_name}")
-        return df
+    @daft.udf(return_dtype=daft.DataType.string())
+    def hash(col: daft.Series) -> List[str]:
+        # TODO: Add support for ignoring keys
+        return [
+            xxh3_128(orjson.dumps(x, option=orjson.OPT_SORT_KEYS)).hexdigest()
+            for x in col
+        ]
 
 
 class DiffAtlanActivities(ActivitiesInterface):
