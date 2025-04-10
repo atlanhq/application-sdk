@@ -2,10 +2,11 @@ tone_instructions: "Professional, concise, and constructive"
 early_access: true
 
 reviews:
-  profile: "chill"
+  profile: "assertive"
+  request_changes_workflow : true
 
   path_instructions:
-    - path: "const*.py"
+    - path: "application_sdk/const.py"
       instructions: |
         Check for:
         - Query performance and optimization (e.g., use of indexes, query structure, filters before joins, etc.)
