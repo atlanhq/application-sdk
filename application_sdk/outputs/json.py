@@ -4,7 +4,6 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import orjson
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
 from application_sdk.outputs import Output
@@ -40,7 +39,6 @@ class JsonOutput(Output):
         output_path (str): Path where JSON files will be written.
         output_prefix (str): Prefix for files when uploading to object store.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
-        state (Optional[ActivitiesState]): State object for tracking activity statistics.
         chunk_start (Optional[int]): Starting index for chunk numbering.
         buffer_size (int): Size of the buffer in bytes.
         chunk_size (int): Maximum number of records per chunk.
@@ -57,7 +55,6 @@ class JsonOutput(Output):
         output_path: Optional[str] = None,
         output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
-        state: Optional[ActivitiesState] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 100000,
         chunk_size: Optional[int] = None,
@@ -98,56 +95,19 @@ class JsonOutput(Output):
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
-        self.state = state
 
-    @classmethod
-    def re_init(
-        cls,
-        output_path: str,
-        typename: Optional[str] = None,
-        chunk_count: int = 0,
-        total_record_count: int = 0,
-        chunk_start: Optional[int] = None,
-        output_suffix: str = None,
-        **kwargs: Dict[str, Any],
-    ):
-        """Re-initialize the output class with given keyword arguments.
-
-        Args:
-            output_path (str): Path where JSON files will be written.
-            typename (str, optional): Type name of the entity e.g database, schema, table.
-                Defaults to None.
-            chunk_count (int, optional): Initial chunk count.
-                Defaults to 0.
-            total_record_count (int, optional): Initial total record count.
-                Defaults to 0.
-            chunk_start (Optional[int], optional): Starting index for chunk numbering.
-                Defaults to None.
-            output_suffix (str, optional): Suffix for output files.
-                Defaults to None.
-            kwargs (Dict[str, Any]): Additional keyword arguments.
-        """
-        output_path = f"{output_path}{output_suffix}"
+        self.output_path = os.path.join(output_path, output_suffix)
         if typename:
-            output_path = f"{output_path}/{typename}"
-        os.makedirs(f"{output_path}", exist_ok=True)
+            self.output_path = os.path.join(self.output_path, typename)
+        os.makedirs(self.output_path, exist_ok=True)
 
         # For Query Extraction
         start_marker = kwargs.get("start_marker")
         end_marker = kwargs.get("end_marker")
         if start_marker and end_marker:
-            kwargs["path_gen"] = (
+            self.path_gen = (
                 lambda chunk_start, chunk_count: f"{start_marker}_{end_marker}.json"
             )
-        return cls(
-            output_suffix=output_suffix,
-            output_path=output_path,
-            typename=typename,
-            chunk_count=chunk_count,
-            total_record_count=total_record_count,
-            chunk_start=chunk_start,
-            **kwargs,
-        )
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to JSON files.
@@ -240,6 +200,8 @@ class JsonOutput(Output):
         Note:
             If the buffer is empty or has no records, the method returns without writing.
         """
+        import pandas as pd
+
         if not self.buffer or not self.current_buffer_size:
             return
         combined_dataframe = pd.concat(self.buffer)

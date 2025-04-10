@@ -1,10 +1,9 @@
 import os
-from typing import Any, Dict, Optional
+from typing import Literal, Optional
 
 import daft
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -31,16 +30,14 @@ class ParquetOutput(Output):
 
     def __init__(
         self,
-        output_path: Optional[str] = None,
-        output_suffix: Optional[str] = None,
-        output_prefix: Optional[str] = None,
+        output_path: str = "",
+        output_suffix: str = "",
+        output_prefix: str = "",
         typename: Optional[str] = None,
-        mode: str = "append",
+        write_mode: Literal["append", "overwrite", "overwrite-partitions"] = "append",
         chunk_size: Optional[int] = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
-        state: Optional[ActivitiesState] = None,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the Parquet output handler.
 
@@ -53,22 +50,20 @@ class ParquetOutput(Output):
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
             chunk_count (int, optional): Initial chunk count. Defaults to 0.
-            state (Optional[ActivitiesState], optional): State object for the activity.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
         self.output_prefix = output_prefix
         self.typename = typename
-        self.mode = mode
+        self.write_mode = write_mode
         self.chunk_size = chunk_size
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
-        self.state = state
 
         # Create output directory
-        self.output_path = f"{output_path}{output_suffix}"
-        if typename:
-            self.output_path = f"{self.output_path}/{typename}"
+        self.output_path = os.path.join(self.output_path, self.output_suffix)
+        if self.typename:
+            self.output_path = os.path.join(self.output_path, self.typename)
         os.makedirs(self.output_path, exist_ok=True)
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
@@ -84,12 +79,7 @@ class ParquetOutput(Output):
             # Update counters
             self.chunk_count += 1
             self.total_record_count += len(dataframe)
-
-            # Generate output file path
-            file_path = f"{self.output_path}{self.output_suffix}"
-            if self.typename:
-                file_path = f"{file_path}/{self.typename}"
-            file_path = f"{file_path}_{self.chunk_count}.parquet"
+            file_path = f"{self.output_path}/{self.chunk_count}.parquet"
 
             # Write the dataframe to parquet using pandas native method
             dataframe.to_parquet(
@@ -124,7 +114,7 @@ class ParquetOutput(Output):
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
                 self.output_path,
-                write_mode="overwrite" if self.mode == "overwrite" else "append",
+                write_mode=self.write_mode,
             )
 
             # Upload the file to object store

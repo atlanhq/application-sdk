@@ -1,43 +1,11 @@
 import asyncio
 import concurrent
-from typing import Any, Dict, Iterator, Optional, Union
+from typing import Iterator, Optional, Union
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import prepare_query
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
-
-
-def _get_sql_query(
-    query_attribute: str,
-    workflow_args: Dict[str, Any],
-    parent_class: Optional[Any],
-    temp_table_sql_query: str | None = None,
-) -> str:
-    """Get the SQL query to execute.
-
-    Returns:
-        str: The SQL query to execute.
-    """
-    # Check if the parent class has the query defined and process the same
-    if parent_class and hasattr(parent_class, query_attribute):
-        if temp_table_sql_query and hasattr(parent_class, temp_table_sql_query):
-            return prepare_query(
-                getattr(parent_class, query_attribute),
-                workflow_args,
-                getattr(parent_class, temp_table_sql_query),
-            )
-        else:
-            return prepare_query(getattr(parent_class, query_attribute), workflow_args)
-
-    # Check if the workflow_args have the query defined and process the same
-    # This is applicable in case of query miner workflow
-    if workflow_args.get(query_attribute):
-        return workflow_args.get(query_attribute)
-
-    return query_attribute
 
 
 class SQLQueryInput(Input):
@@ -50,24 +18,17 @@ class SQLQueryInput(Input):
         query (str): The SQL query to execute.
         engine (Union[Engine, str]): SQLAlchemy engine or connection string.
         chunk_size (Optional[int]): Number of rows to fetch per batch.
-        state (Optional[ActivitiesState]): State object for the activity.
-        async_session: Async session maker for database operations.
     """
 
     query: str
-    engine: Optional[Union["Engine", str]]
+    engine: Union["Engine", str]
     chunk_size: Optional[int]
-    state: Optional[ActivitiesState] = None
-    async_session: Optional["AsyncSession"] = None
-    temp_table_sql_query: Optional[str] = None
 
     def __init__(
         self,
         query: str,
-        engine: Optional[Union["Engine", str]] = None,
+        engine: Union["Engine", str],
         chunk_size: Optional[int] = 100000,
-        temp_table_sql_query: Optional[str] = None,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the async SQL query input handler.
 
@@ -80,37 +41,7 @@ class SQLQueryInput(Input):
         self.query = query
         self.engine = engine
         self.chunk_size = chunk_size
-        self.temp_table_sql_query = temp_table_sql_query
         self.engine = engine
-        self.async_session = None
-
-    @classmethod
-    def re_init(
-        cls,
-        query: str,
-        state: ActivitiesState,
-        parent_class: Any,
-        **kwargs: Dict[str, Any],
-    ):
-        """Re-initialize the input class with given keyword arguments.
-
-        Args:
-            query (str): The SQL query attribute to fetch the query from parent class.
-            state (ActivitiesState): State object for the activity.
-            parent_class (Any): Parent class object.
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-        """
-        engine = kwargs.get("engine")
-        if not engine:
-            engine = (
-                state.sql_client.engine if state else parent_class.sql_client.engine
-            )
-
-        kwargs["engine"] = engine
-        kwargs["query"] = _get_sql_query(
-            query, kwargs, parent_class, kwargs.get("temp_table_sql_query")
-        )
-        return cls(**kwargs)
 
     def _read_sql_query(
         self, session: "Session"
@@ -177,15 +108,16 @@ class SQLQueryInput(Input):
 
             from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+            async_session = None
             if self.engine and isinstance(self.engine, AsyncEngine):
                 from sqlalchemy.orm import sessionmaker
 
-                self.async_session = sessionmaker(
+                async_session = sessionmaker(
                     self.engine, expire_on_commit=False, class_=AsyncSession
                 )
 
-            if self.async_session:
-                async with self.async_session() as session:
+            if async_session:
+                async with async_session() as session:
                     return await session.run_sync(self._read_sql_query)
             else:
                 # Run the blocking operation in a thread pool
@@ -212,15 +144,16 @@ class SQLQueryInput(Input):
 
             from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
+            async_session = None
             if self.engine and isinstance(self.engine, AsyncEngine):
                 from sqlalchemy.orm import sessionmaker
 
-                self.async_session = sessionmaker(
+                async_session = sessionmaker(
                     self.engine, expire_on_commit=False, class_=AsyncSession
                 )
 
-            if self.async_session:
-                async with self.async_session() as session:
+            if async_session:
+                async with async_session() as session:
                     return await session.run_sync(self._read_sql_query)
             else:
                 # Run the blocking operation in a thread pool
