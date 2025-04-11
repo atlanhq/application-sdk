@@ -25,11 +25,11 @@ def _get_sql_query(
     workflow_args: Dict[str, Any],
     parent_class: Optional[Any],
     temp_table_sql_query: Optional[str] = None,
-) -> str:
+) -> Union[str, None]:
     """Get the SQL query to execute.
 
     Returns:
-        str: The SQL query to execute.
+        Union[str, None]: The SQL query to execute.
     """
     # Check if the parent class has the query defined and process the same
     if parent_class and hasattr(parent_class, query_attribute):
@@ -37,10 +37,10 @@ def _get_sql_query(
         if temp_table_sql_query and hasattr(parent_class, temp_table_sql_query):
             temp_value = getattr(parent_class, temp_table_sql_query)
             result = prepare_query(query_value, workflow_args, temp_value)
-            return result if isinstance(result, str) else ""
+            return result if isinstance(result, str) else None
         else:
             result = prepare_query(query_value, workflow_args)
-            return result if isinstance(result, str) else ""
+            return result if isinstance(result, str) else None
 
     # Check if the workflow_args have the query defined and process the same
     # This is applicable in case of query miner workflow
@@ -53,12 +53,8 @@ def _get_sql_query(
         if isinstance(query, str):
             return query
 
-    # Return the query attribute itself if it's a string
-    if isinstance(query_attribute, str):
-        return query_attribute
-
-    # Last resort to avoid returning None
-    return ""
+    # Return the query attribute itself if it's a string, otherwise return None
+    return query_attribute if isinstance(query_attribute, str) else None
 
 
 class SQLQueryInput(Input):
@@ -153,6 +149,8 @@ class SQLQueryInput(Input):
         processed_query = _get_sql_query(
             query, kwargs, parent_class, processed_temp_table_sql_query
         )
+        if processed_query is None:
+            raise ValueError("Query is not defined")
 
         # Create a new instance with cleaned parameters
         chunk_size = kwargs.get("chunk_size")
