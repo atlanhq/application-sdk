@@ -1,8 +1,8 @@
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
-import fastapi
 from fastapi import status
+from fastapi.applications import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
@@ -38,10 +38,6 @@ from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-
-# Remove the problematic type aliases
-# APIRouter = FastAPIRouter
-# FastAPI = FastAPIApp
 
 
 class WorkflowTrigger(BaseModel):
@@ -118,14 +114,14 @@ class Application(AtlanApplicationInterface):
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
-            self.app = fastapi.FastAPI(lifespan=lifespan)
+            self.app = FastAPI(lifespan=lifespan)
         else:
-            self.app = fastapi.FastAPI()
+            self.app = FastAPI()
 
         # Create router instances using the renamed import
-        self.workflow_router = fastapi.APIRouter()
-        self.pubsub_router = fastapi.APIRouter()
-        self.events_router = fastapi.APIRouter()
+        self.workflow_router = APIRouter()
+        self.pubsub_router = APIRouter()
+        self.events_router = APIRouter()
 
         # Set up the application
         error_handler = internal_server_error_handler  # Store as local variable
