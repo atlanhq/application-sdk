@@ -18,8 +18,6 @@ import uuid
 import psutil
 from fastapi import status
 from fastapi.responses import JSONResponse
-
-# Import with alias to avoid naming conflicts
 from fastapi.routing import APIRouter
 
 from application_sdk.common.logger_adaptors import get_logger
