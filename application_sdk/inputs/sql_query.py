@@ -241,33 +241,13 @@ class SQLQueryInput(Input):
 
             if self.async_session:
                 async with self.async_session() as session:
-                    result = await session.run_sync(self._read_sql_query)
-                    if isinstance(result, pd.DataFrame):
-                        return result
-                    else:
-                        # Combine all batches into a single DataFrame
-                        all_data = []
-                        for df in result:
-                            all_data.append(df)
-                        if all_data:
-                            return pd.concat(all_data)
-                        return pd.DataFrame()
+                    return await session.run_sync(self._read_sql_query)
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    result = await asyncio.get_event_loop().run_in_executor(
+                    return await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
-                    if isinstance(result, pd.DataFrame):
-                        return result
-                    else:
-                        # Combine all batches into a single DataFrame
-                        all_data = []
-                        for df in result:
-                            all_data.append(df)
-                        if all_data:
-                            return pd.concat(all_data)
-                        return pd.DataFrame()
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
             raise e
