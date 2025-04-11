@@ -39,7 +39,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 3
             assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
@@ -62,7 +62,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 0
             assert isinstance(result, list)
@@ -81,7 +81,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 1
             assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
@@ -100,7 +100,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 1
             assert result[0] == {"DATABASE": "db1", "SCHEMA": "schema1"}
@@ -121,7 +121,7 @@ class TestPrepareMetadata:
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
             with pytest.raises(KeyError) as exc_info:
-                await handler.prepare_metadata({})
+                await handler.prepare_metadata()
             assert "TABLE_SCHEMA" in str(exc_info.value)
             mock_get_dataframe.assert_called_once()
 
@@ -140,7 +140,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 3
             assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}
@@ -163,7 +163,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 3
             assert result[0] == {"TABLE_CATALOG": "db-1", "TABLE_SCHEMA": "schema-1"}
@@ -186,7 +186,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert (
                 len(result) == 3
@@ -206,7 +206,7 @@ class TestPrepareMetadata:
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = None
             with pytest.raises(Exception):
-                await handler.prepare_metadata({})
+                await handler.prepare_metadata()
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
@@ -225,7 +225,7 @@ class TestPrepareMetadata:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             mock_get_dataframe.return_value = df
-            result = await handler.prepare_metadata({})
+            result = await handler.prepare_metadata()
 
             assert len(result) == 1
             assert result[0] == {"TABLE_CATALOG": "db1", "TABLE_SCHEMA": "schema1"}

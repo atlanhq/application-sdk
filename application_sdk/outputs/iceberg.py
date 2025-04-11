@@ -1,4 +1,4 @@
-from typing import Any, Dict, Union
+from typing import Union
 
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
@@ -23,7 +23,6 @@ class IcebergOutput(Output):
         mode: str = "append",
         total_record_count: int = 0,
         chunk_count: int = 0,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the Iceberg output class.
 
@@ -34,7 +33,6 @@ class IcebergOutput(Output):
             mode (str, optional): Write mode for the iceberg table. Defaults to "append".
             total_record_count (int, optional): Total record count written to the iceberg table. Defaults to 0.
             chunk_count (int, optional): Number of chunks written to the iceberg table. Defaults to 0.
-            kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count

@@ -46,17 +46,6 @@ class TestOutput:
         """Set up test fixtures."""
         self.output = self.ConcreteOutput("/test/path", "/test/prefix")
 
-    def test_re_init(self):
-        """Test re_init class method."""
-        kwargs: Dict[str, Any] = {
-            "output_path": "/new/path",
-            "output_prefix": "/new/prefix",
-        }
-        new_output = self.ConcreteOutput.re_init(**kwargs)
-        assert isinstance(new_output, self.ConcreteOutput)
-        assert new_output.output_path == "/new/path"
-        assert new_output.output_prefix == "/new/prefix"
-
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_sync(self):
         """Test write_batched_dataframe with sync generator."""

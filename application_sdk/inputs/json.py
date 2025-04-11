@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Iterator, List, Optional
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
@@ -21,7 +21,6 @@ class JsonInput(Input):
         file_names: Optional[List[str]] = None,
         download_file_prefix: Optional[str] = None,
         chunk_size: Optional[int] = None,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the JsonInput class.
 
@@ -30,7 +29,6 @@ class JsonInput(Input):
             file_names (Optional[List[str]]): The list of files to read.
             download_file_prefix (Optional[str]): The prefix path in object store.
             chunk_size (Optional[int]): The chunk size to read the data. If None, uses config value.
-            **kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
         self.path = path
         settings = get_settings()
@@ -54,23 +52,6 @@ class JsonInput(Input):
             except Exception as e:
                 logger.error(f"Error downloading file {file_name}: {str(e)}")
                 raise e
-
-    @classmethod
-    def re_init(
-        cls,
-        path: str,
-        **kwargs: Dict[str, Any],
-    ):
-        """Re-initialize the input class with given keyword arguments.
-
-        Args:
-            path (str): The additional path to the input directory.
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-        """
-        output_path = kwargs.get("output_path", "")
-        kwargs["path"] = f"{output_path}{path}"
-        kwargs["download_file_prefix"] = kwargs.get("output_prefix", "")
-        return cls(**kwargs)
 
     async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
         """

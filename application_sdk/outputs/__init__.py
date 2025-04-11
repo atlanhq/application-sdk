@@ -11,7 +11,6 @@ from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
 import orjson
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -55,16 +54,6 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
-    state: Optional[ActivitiesState] = None
-
-    @classmethod
-    def re_init(cls, **kwargs: Dict[str, Any]):
-        """Re-initialize the output class with given keyword arguments.
-
-        Args:
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-        """
-        return cls(**kwargs)
 
     async def write_batched_dataframe(
         self,

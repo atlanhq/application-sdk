@@ -1,4 +1,4 @@
-from typing import Any, Dict, Iterator, Optional
+from typing import Iterator, Optional
 
 from pyiceberg.table import Table
 
@@ -16,16 +16,13 @@ class IcebergInput(Input):
     table: Table
     chunk_size: Optional[int]
 
-    def __init__(
-        self, table: Table, chunk_size: Optional[int] = 100000, **kwargs: Dict[str, Any]
-    ):
+    def __init__(self, table: Table, chunk_size: Optional[int] = 100000):
         """Initialize the Iceberg input class.
 
         Args:
             table (Table): Iceberg table object.
             chunk_size (Optional[int], optional): Number of rows per batch.
                 Defaults to 100000.
-            kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
         self.table = table
         self.chunk_size = chunk_size
