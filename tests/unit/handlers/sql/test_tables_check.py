@@ -41,9 +41,6 @@ def sql_handler() -> SQLHandler:
     return handler
 
 
-# Note: The tables_check method is decorated with @transform which transforms the input
-# from a DataFrame to Dict[str, Any] internally. While the linter shows type errors,
-# the actual runtime behavior is correct.
 async def test_tables_check_success(sql_handler: SQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
