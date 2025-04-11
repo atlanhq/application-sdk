@@ -10,7 +10,6 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform_daft
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
