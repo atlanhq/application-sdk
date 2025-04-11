@@ -264,7 +264,7 @@ class JsonInput(Input):
         # Return an AsyncIterator that wraps the async generator
         return AsyncDaftDataFrameIterator(_get_batched_daft_dataframe_helper())
 
-    async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+    async def get_daft_dataframe(self) -> Union["daft.DataFrame", None]:  # noqa: F821
         """Get a single daft DataFrame.
 
         Returns:
@@ -282,15 +282,7 @@ class JsonInput(Input):
                     if dataframe_concat is None
                     else dataframe_concat.concat(json_dataframe)
                 )
-            return (
-                dataframe_concat if dataframe_concat is not None else daft.DataFrame()
-            )
+            return dataframe_concat if dataframe_concat is not None else None
         except Exception as e:
             logger.error(f"Error reading data from JSON using daft: {str(e)}")
-            # Try to return an empty daft DataFrame
-            try:
-                import daft
-
-                return daft.DataFrame()
-            except ImportError:
-                raise e
+            return None
