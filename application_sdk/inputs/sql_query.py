@@ -270,35 +270,13 @@ class SQLQueryInput(Input):
             https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
-            # Import daft locally
-            import daft
-
-            # Create an empty DataFrame as fallback
-
-            if not self.engine:
-                raise ValueError("Engine is not defined")
-
-            if isinstance(self.engine, str):
-                return daft.read_sql(self.query, self.engine)
-
-            # Use a safe connect function that checks for None
-            def safe_connect():
-                if self.engine is None:
-                    raise ValueError("Engine is None")
-                return self.engine.connect()
-
-            # Use the safe connect function in the lambda
-            return daft.read_sql(self.query, lambda: safe_connect())
+            # Run the blocking operation in a thread pool
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                return await asyncio.get_event_loop().run_in_executor(
+                    executor, self._execute_query_daft
+                )
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
-            # When an error occurs, create and return an empty daft DataFrame
-            try:
-                import daft
-
-                return daft.DataFrame()
-            except Exception:
-                # Re-raise the original error if we can't create an empty DataFrame
-                raise e
 
     async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """Get query results as batched daft DataFrames.
