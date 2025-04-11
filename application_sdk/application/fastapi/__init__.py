@@ -4,6 +4,7 @@ from typing import Any, Callable, List, Optional, Type
 import fastapi
 from fastapi import status
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
@@ -84,9 +85,9 @@ class Application(AtlanApplicationInterface):
     # Declare class attributes with proper typing
     app: Any
     workflow_client: Optional[WorkflowClient]
-    workflow_router: Any
-    pubsub_router: Any
-    events_router: Any
+    workflow_router: APIRouter
+    pubsub_router: APIRouter
+    events_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
 
