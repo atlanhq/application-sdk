@@ -34,15 +34,19 @@ class TestOutput:
 
         async def write_dataframe(self, dataframe: pd.DataFrame):
             """Implement abstract method."""
-            if self.total_record_count is not None:
-                self.total_record_count += len(dataframe)
+            assert (
+                self.total_record_count is not None
+            ), "total_record_count should not be None"
+            self.total_record_count += len(dataframe)
             if self.chunk_count is not None:
                 self.chunk_count += 1
 
         async def write_daft_dataframe(self, dataframe: Any):  # type: ignore
             """Implement abstract method."""
-            if self.total_record_count is not None:
-                self.total_record_count += 1  # Mock implementation
+            assert (
+                self.total_record_count is not None
+            ), "total_record_count should not be None"
+            self.total_record_count += 1  # Mock implementation
             if self.chunk_count is not None:
                 self.chunk_count += 1
 
