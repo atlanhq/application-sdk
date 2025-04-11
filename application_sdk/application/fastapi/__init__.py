@@ -210,9 +210,6 @@ class Application(AtlanApplicationInterface):
         if workflow_class is None:
             raise ValueError("workflow_class cannot be None")
 
-        # Use a separate variable to avoid modifying the input parameter
-        wf_class = workflow_class
-
         # Create a closure for the start_workflow function that captures wf_class directly
         async def start_workflow(body: WorkflowRequest) -> WorkflowResponse:
             if not self.workflow_client:
@@ -220,7 +217,7 @@ class Application(AtlanApplicationInterface):
 
             # Use the captured wf_class variable, which is guaranteed to be non-None
             workflow_data = await self.workflow_client.start_workflow(
-                body.model_dump(), workflow_class=wf_class
+                body.model_dump(), workflow_class=workflow_class
             )
 
             return WorkflowResponse(
