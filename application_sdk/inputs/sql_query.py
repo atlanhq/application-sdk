@@ -211,9 +211,6 @@ class SQLQueryInput(Input):
                     result = await session.run_sync(self._read_sql_query)
                     if isinstance(result, pd.DataFrame):
                         yield result
-                    else:
-                        for df in result:
-                            yield df
                     return
             else:
                 # Run the blocking operation in a thread pool
@@ -223,9 +220,6 @@ class SQLQueryInput(Input):
                     )
                     if isinstance(result, pd.DataFrame):
                         yield result
-                    else:
-                        for df in result:
-                            yield df
                     return
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
