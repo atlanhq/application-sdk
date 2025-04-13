@@ -1,6 +1,7 @@
 """Object store interface for the application."""
 
 import os
+from typing import List
 
 import orjson
 from dapr.clients import DaprClient
@@ -15,6 +16,49 @@ class ObjectStoreInput:
     OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
     OBJECT_GET_OPERATION = "get"
     OBJECT_LIST_OPERATION = "list"
+
+    @classmethod
+    def list_files_from_object_store(
+        cls,
+        relative_path: str = "",
+    ) -> List[str]:
+        """
+        Lists all files in the object store for a given prefix path.
+
+        Args:
+            relative_path (str): The relative path from the prefix to list. Defaults to empty string.
+
+        Returns:
+            list: A list of file paths found in the object store.
+
+        Raises:
+            Exception: If there's an error listing files from the object store.
+        """
+        try:
+            with DaprClient() as client:
+                metadata = {"fileName": relative_path}
+                try:
+                    # Invoke the object store binding with list operation
+                    response = client.invoke_binding(
+                        binding_name=cls.OBJECT_STORE_NAME,
+                        operation=cls.OBJECT_LIST_OPERATION,
+                        binding_metadata=metadata,
+                    )
+                    file_list = orjson.loads(response.data.decode("utf-8"))
+                    activity.logger.debug(
+                        f"Successfully listed {len(file_list)} files from: {relative_path}"
+                    )
+                    return file_list
+                except Exception as e:
+                    activity.logger.error(
+                        f"Error listing files in object store path {relative_path}: {str(e)}"
+                    )
+                    raise e
+        except Exception as e:
+            activity.logger.error(
+                f"Error connecting to object store: {str(e)}"
+            )
+            raise e
 
     @classmethod
     def download_files_from_object_store(
@@ -33,31 +77,15 @@ class ObjectStoreInput:
             Exception: If there's an error downloading any file from the object store.
         """
         try:
-            # # Ensure the local directory exists
-            # if not os.path.exists(download_file_prefix):
-            #     os.makedirs(download_file_prefix)
-
-            # List all files in the object store path
-            with DaprClient() as client:
-                relative_path = os.path.relpath(file_path, download_file_prefix)
-                metadata = {"fileName": relative_path}
-                try:
-                    # Assuming the object store binding supports a "list" operation
-                    response = client.invoke_binding(
-                        binding_name=cls.OBJECT_STORE_NAME,
-                        operation=cls.OBJECT_LIST_OPERATION,
-                        binding_metadata=metadata,
-                    )
-                    file_list = orjson.loads(response.data.decode("utf-8"))
-                except Exception as e:
-                    activity.logger.error(
-                        f"Error listing files in object store path {download_file_prefix}: {str(e)}"
-                    )
-                    raise e
+            # Calculate the relative path
+            relative_path = os.path.relpath(file_path, download_file_prefix)
+            
+            # List all files in the object store path using the new function
+            file_list = cls.list_files_from_object_store(relative_path)
 
             if not file_list:
                 activity.logger.info(
-                    f"No files found in object store path: {download_file_prefix}"
+                    f"No files found in object store path: {download_file_prefix}/{relative_path}"
                 )
                 return
 
