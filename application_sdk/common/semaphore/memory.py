@@ -52,7 +52,7 @@ class InMemorySemaphore(Semaphore):
         resource_id: str,
         lock_owner: str,
         permits: int = 1,
-        max_permits: int = 1,
+        max_permits: int = 5,
     ) -> bool:
         """Acquire permits from a semaphore.
 
@@ -182,4 +182,4 @@ class InMemorySemaphore(Semaphore):
 
         except Exception as e:
             logger.error(f"Failed to get available permits: {str(e)}")
-            raise e 
+            raise e
