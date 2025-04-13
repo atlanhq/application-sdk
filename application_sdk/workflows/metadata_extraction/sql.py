@@ -17,9 +17,11 @@ from application_sdk.activities.metadata_extraction.sql import (
 from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.publish_app.activities.atlas import AtlasPublishAtlanActivities
+from application_sdk.publish_app.models.plan import DiffStatus, PublishPlan
+from application_sdk.publish_app.worker import AtlasPublishAtlanWorker
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
-from application_sdk.utilities_app.activities.publish.atlas import AtlasPublishAtlanActivities
-from application_sdk.utilities_app.worker import AtlasPublishAtlanWorker
+
 workflow.logger = get_logger(__name__)
 
 
@@ -177,7 +179,8 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             The workflow uses a retry policy with maximum 6 attempts and backoff
             coefficient of 2.
         """
-        await super().run(workflow_config)
+        # FIXME(inishchith): Skipped for testing purpose, will be removed later
+        # await super().run(workflow_config)
 
         workflow_id = workflow_config["workflow_id"]
         workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
@@ -220,8 +223,12 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ),
         ]
 
-        await asyncio.gather(*fetch_and_transforms)
-        workflow.logger.info(f"Metadata extraction and transformation completed for {workflow_id}")
+        # FIXME(inishchith): Skipped for testing purpose, will be removed later
+        if False:
+            await asyncio.gather(*fetch_and_transforms)
+            workflow.logger.info(
+                f"Metadata extraction and transformation completed for {workflow_id}"
+            )
 
         if workflow_args.get(self.E2E_WORKFLOW_ARGS_KEY):
             await self.run_atlan_publish_activities(workflow_args)
@@ -234,6 +241,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Args:
             workflow_args (Dict[str, Any]): Configuration for the workflow execution
         """
+        # FIXME(inishchith): move this to a method under AtlasPublishAtlanWorkflow
+        # this should ideally be setup(), plan(), publish(), delete(), cleanup()
+
         workflow.logger.info("Running Atlan publish activities")
 
         retry_policy = RetryPolicy(
@@ -241,12 +251,26 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             backoff_coefficient=2,
         )
 
-        # FIXME: this is a dummy config, will be replaced with the actual config
+        await workflow.execute_activity_method(
+            self.atlan_publish_activities_cls.setup_connection_entity,
+            {
+                "connection_name": "postgres",
+            },
+            retry_policy=retry_policy,
+            task_queue=AtlasPublishAtlanWorker.TASK_QUEUE,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+            summary="Setting up connection entity for Atlas publish workflow",
+        )
+
+        # FIXME(inishchith): this is a dummy config, will be replaced with the actual config
+        # FIXME(inishchith): add support for manual publish ordering
         plan_args = {
             "publish_chunk_count": 10,
             "concurrency": 10,
             "high_density_assets": ["Columns", "TablePartitions"],
         }
+
         plan = await workflow.execute_activity_method(
             self.atlan_publish_activities_cls.plan,
             plan_args,
@@ -254,20 +278,65 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             task_queue=AtlasPublishAtlanWorker.TASK_QUEUE,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            summary="Generating publish plan for Atlas publish workflow",
         )
 
-        workflow.logger.info(f"Plan: {plan}")
+        # FIXME (inishchith): the plan size could be huge, we need to find a work-around here.
+        workflow.logger.debug(f"Plan: {plan}")
 
-        for asset_type in plan["assets_types"]:
-            for asset_type_name in asset_type:
-                workflow.logger.info(f"Publishing {asset_type_name}")
-                await workflow.execute_activity_method(
-                    self.atlan_publish_activities_cls.publish,
-                    {
-                        "asset_type": asset_type_name,
-                    },
-                    task_queue=AtlasPublishAtlanWorker.TASK_QUEUE,
-                    start_to_close_timeout=self.default_start_to_close_timeout,
-                    heartbeat_timeout=self.default_heartbeat_timeout,
-                )
+        # Convert plan to PublishPlan if it's a dictionary
+        if isinstance(plan, dict):
+            publish_plan = PublishPlan.from_dict(plan)
+        else:
+            publish_plan = plan
+
+        parallel_delete_activities = []
+        # FIXME(inishchith): incomplete implementation
+        for publish_order in publish_plan.publish_order:
+            parallel_publish_activities = []
+            for asset_type in publish_order:
+                for diff_status, assignments in publish_plan.asset_type_assignments.get(
+                    asset_type, {}
+                ).items():
+                    if diff_status == DiffStatus.DELETE:
+                        parallel_delete_activities.append(
+                            workflow.execute_activity_method(
+                                self.atlan_publish_activities_cls.dummy_delete,
+                                {
+                                    "asset_type": asset_type,
+                                    "assignment": assignments,
+                                    # FIXME(inishchith): dummy entry, should come from the workflow args
+                                    "username": "nishchith",
+                                },
+                                task_queue=AtlasPublishAtlanWorker.TASK_QUEUE,
+                                start_to_close_timeout=self.default_start_to_close_timeout,
+                                heartbeat_timeout=self.default_heartbeat_timeout,
+                                summary="Deleting assets from Atlas",
+                            )
+                        )
+                        continue
+
+                    # FIXME(inishchith): spawn based on the processing strategy, needs to REFACTOR the plan
+                    # NOTE: For now will go ahead with the type level publish
+                    parallel_publish_activities.append(
+                        workflow.execute_activity_method(
+                            self.atlan_publish_activities_cls.publish,
+                            # self.atlan_publish_activities_cls.dummy_publish,
+                            {
+                                "asset_type": asset_type,
+                                "assignment": assignments,
+                                # FIXME(inishchith): dummy entry, should come from the workflow args
+                                "username": "nishchith",
+                            },
+                            task_queue=AtlasPublishAtlanWorker.TASK_QUEUE,
+                            start_to_close_timeout=self.default_start_to_close_timeout,
+                            heartbeat_timeout=self.default_heartbeat_timeout,
+                            summary="Publishing assets to Atlas",
+                        )
+                    )
+            await asyncio.gather(*parallel_publish_activities)
+
+        # perform delete
+        await asyncio.gather(*parallel_delete_activities)
+
         workflow.logger.info("Atlan publish activities completed")

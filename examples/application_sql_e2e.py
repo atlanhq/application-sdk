@@ -46,8 +46,8 @@ from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
+from application_sdk.publish_app.worker import AtlasPublishAtlanWorker
 from application_sdk.worker import Worker
-from application_sdk.utilities_app.worker import AtlasPublishAtlanWorker
 from application_sdk.workflows.metadata_extraction.sql import (
     SQLMetadataExtractionWorkflow,
 )
@@ -173,7 +173,9 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    publish_client = get_workflow_client(application_name=AtlasPublishAtlanWorker.TASK_QUEUE)
+    publish_client = get_workflow_client(
+        application_name=AtlasPublishAtlanWorker.TASK_QUEUE
+    )
     await publish_client.load()
     publish_worker = AtlasPublishAtlanWorker(publish_client)
     await publish_worker.start(daemon)

@@ -35,14 +35,16 @@ class WorkflowInterface(ABC):
     activities_cls: Type[ActivitiesInterface]
     atlan_publish_activities_cls: Type[Any]
 
-    # TODO: move this to a common place
+    # FIXME(inishchith): move this to a common place
     E2E_WORKFLOW_ARGS_KEY = "e2e_run"
 
     default_heartbeat_timeout: timedelta | None = timedelta(seconds=300)
     default_start_to_close_timeout: timedelta | None = timedelta(hours=2)
 
     @staticmethod
-    def get_activities(activities: Optional[ActivitiesInterface]) -> Sequence[Callable[..., Any]]:
+    def get_activities(
+        activities: Optional[ActivitiesInterface],
+    ) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities for this workflow.
 
         This method must be implemented by subclasses to define the activities
