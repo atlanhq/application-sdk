@@ -37,7 +37,7 @@ from pyatlan.model.assets import Database
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
-from application_sdk.clients.sql import AsyncSQLClient
+from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
@@ -54,7 +54,7 @@ DATABASE_DIALECT = "postgresql"
 logger = get_logger(__name__)
 
 
-class PostgreSQLClient(AsyncSQLClient):
+class PostgreSQLClient(SQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
         return f"postgresql+psycopg://{self.credentials['username']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"

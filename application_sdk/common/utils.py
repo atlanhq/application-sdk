@@ -1,7 +1,22 @@
+import asyncio
 import glob
+import inspect
 import json
 import os
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
+from concurrent.futures import ThreadPoolExecutor
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
@@ -10,6 +25,10 @@ from application_sdk.outputs.statestore import StateStoreOutput
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 
 def prepare_query(
@@ -291,3 +310,42 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(f"Invalid JSON in credentials extra field: {e}")
 
     return extra  # We know it's a Dict[str, Any] due to the Union type and str check
+
+
+async def to_async(
+    func: Callable[..., Any], *args: Dict[str, Any], **kwargs: Dict[str, Any]
+) -> Iterator[Union["pd.DataFrame", "daft.DataFrame"]]:  # noqa: F821
+    """Convert a synchronous method to an asynchronous one.
+
+    Args:
+        func: The function to convert to async.
+        *args: Positional arguments to pass to the function.
+        **kwargs: Keyword arguments to pass to the function.
+
+    Returns:
+        An iterator containing either a pandas DataFrame or a daft DataFrame.
+    """
+    if inspect.iscoroutinefunction(func):
+        return await func(*args, **kwargs)
+    else:
+        executor = ThreadPoolExecutor()
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(executor, func, *args, **kwargs)
+
+
+def run_sync(func):
+    """Run a function in a thread pool executor.
+
+    Args:
+        func: The function to run in thread pool.
+
+    Returns:
+        An async wrapper function that runs the input function in a thread pool.
+    """
+
+    async def wrapper(*args, **kwargs):
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor() as pool:
+            return await loop.run_in_executor(pool, func, *args, **kwargs)
+
+    return wrapper

@@ -1,6 +1,5 @@
-from typing import TYPE_CHECKING, Any, Dict, Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
-import pandas as pd
 from pyiceberg.table import Table
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -8,6 +7,7 @@ from application_sdk.inputs import Input
 
 if TYPE_CHECKING:
     import daft
+    import pandas as pd
 
 logger = get_logger(__name__)
 
@@ -20,21 +20,18 @@ class IcebergInput(Input):
     table: Table
     chunk_size: Optional[int]
 
-    def __init__(
-        self, table: Table, chunk_size: Optional[int] = 100000, **kwargs: Dict[str, Any]
-    ):
+    def __init__(self, table: Table, chunk_size: Optional[int] = 100000):
         """Initialize the Iceberg input class.
 
         Args:
             table (Table): Iceberg table object.
             chunk_size (Optional[int], optional): Number of rows per batch.
                 Defaults to 100000.
-            kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
         self.table = table
         self.chunk_size = chunk_size
 
-    def get_dataframe(self) -> pd.DataFrame:
+    def get_dataframe(self) -> "pd.DataFrame":
         """
         Method to read the data from the iceberg table
         and return as a single combined pandas dataframe
@@ -45,7 +42,7 @@ class IcebergInput(Input):
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table: {str(e)}")
 
-    def get_batched_dataframe(self) -> Iterator[pd.DataFrame]:
+    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
         # We are not implementing this method as we have to parition the daft dataframe
         # using dataframe.into_partitions() method. This method does all the paritions in memory
         # and using that can cause out of memory issues.

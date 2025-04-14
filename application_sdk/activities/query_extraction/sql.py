@@ -10,7 +10,6 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -133,28 +132,34 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @transform(
-        batch_input=SQLQueryInput(query="sql_query"),
-        raw_output=JsonOutput(output_suffix="/raw/query"),
-    )
     async def fetch_queries(
         self,
-        batch_input,
-        raw_output: JsonOutput,
-        **kwargs,
+        workflow_args: Dict[str, Any],
     ):
         """Fetch and process queries from the database.
         Args:
-            batch_input: Input DataFrame containing the queries
-            raw_output: JsonOutput object for writing results
-            **kwargs: Additional keyword arguments
+            workflow_args: Dictionary containing workflow configuration
 
         Returns:
             None
         """
 
         try:
-            await raw_output.write_batched_dataframe(batch_input)
+            state = await self._get_state(workflow_args)
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=self.fetch_queries_sql,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
+
+            raw_output = JsonOutput(
+                output_prefix=workflow_args["output_prefix"],
+                output_path=workflow_args["output_path"],
+                output_suffix="/raw/query",
+                chunk_size=100000,
+            )
+            await raw_output.write_daft_dataframe(sql_input)
 
             logger.info(
                 "Query fetch completed, %s records processed",

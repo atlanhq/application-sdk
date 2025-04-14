@@ -1,7 +1,7 @@
 """Unit tests for output interface."""
 
-from typing import Any, Dict
-from unittest.mock import patch
+from typing import Any
+from unittest.mock import AsyncMock, mock_open, patch
 
 import pandas as pd
 import pytest
@@ -53,17 +53,6 @@ class TestOutput:
     def setup_method(self):
         """Set up test fixtures."""
         self.output = self.ConcreteOutput("/test/path", "/test/prefix")
-
-    def test_re_init(self):
-        """Test re_init class method."""
-        kwargs: Dict[str, Any] = {
-            "output_path": "/new/path",
-            "output_prefix": "/new/prefix",
-        }
-        new_output = self.ConcreteOutput.re_init(**kwargs)
-        assert isinstance(new_output, self.ConcreteOutput)
-        assert new_output.output_path == "/new/path"
-        assert new_output.output_prefix == "/new/prefix"
 
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_sync(self):
@@ -129,14 +118,26 @@ class TestOutput:
         self.output.total_record_count = 100
         self.output.chunk_count = 5
 
-        with patch("pandas.DataFrame.to_json") as mock_to_json, patch(
-            "application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store"
+        # Mock the open function, orjson.dumps, and push_file_to_object_store
+        with patch("builtins.open", mock_open()) as mock_file, patch(
+            "orjson.dumps",
+            return_value=b'{"total_record_count": 100, "chunk_count": 5}',
+        ) as mock_orjson, patch(
+            "application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store",
+            new_callable=AsyncMock,
         ) as mock_push:
+            # Call the method
             stats = await self.output.write_statistics()
 
+            # Assertions
             assert stats == {"total_record_count": 100, "chunk_count": 5}
-            mock_to_json.assert_called_once()
-            mock_push.assert_called_once()
+            mock_file.assert_called_once_with("/test/path/statistics.json.ignore", "w")
+            mock_orjson.assert_called_once_with(
+                {"total_record_count": 100, "chunk_count": 5}
+            )
+            mock_push.assert_awaited_once_with(
+                "/test/prefix", "/test/path/statistics.json.ignore"
+            )
 
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):

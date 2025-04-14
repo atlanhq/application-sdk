@@ -1,10 +1,9 @@
 import os
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
-import pandas as pd
+import daft
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -13,6 +12,7 @@ activity.logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     import daft
+    import pandas as pd
 
 
 class ParquetOutput(Output):
@@ -34,16 +34,14 @@ class ParquetOutput(Output):
 
     def __init__(
         self,
-        output_path: str,
-        output_suffix: str,
-        output_prefix: str,
+        output_path: str = "",
+        output_suffix: str = "",
+        output_prefix: str = "",
         typename: Optional[str] = None,
-        mode: str = "append",
-        chunk_size: int = 100000,
+        write_mode: Literal["append", "overwrite", "overwrite-partitions"] = "append",
+        chunk_size: Optional[int] = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
-        state: Optional[ActivitiesState] = None,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the Parquet output handler.
 
@@ -56,25 +54,24 @@ class ParquetOutput(Output):
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
             chunk_count (int, optional): Initial chunk count. Defaults to 0.
-            state (Optional[ActivitiesState], optional): State object for the activity.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
         self.output_prefix = output_prefix
         self.typename = typename
-        self.mode = mode
+        self.write_mode = write_mode
         self.chunk_size = chunk_size
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
-        self.state = state
 
         # Create output directory
-        full_path = f"{output_path}{output_suffix}"
-        if typename:
-            full_path = f"{full_path}/{typename}"
-        os.makedirs(full_path, exist_ok=True)
+        if self.output_path and self.output_suffix:
+            self.output_path = os.path.join(self.output_path, self.output_suffix)
+            if self.typename:
+                self.output_path = os.path.join(self.output_path, self.typename)
+            os.makedirs(self.output_path, exist_ok=True)
 
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
@@ -85,18 +82,14 @@ class ParquetOutput(Output):
                 return
 
             # Update counters
-            self.chunk_count = 1 if self.chunk_count is None else self.chunk_count + 1
-            self.total_record_count = (
-                len(dataframe)
-                if self.total_record_count is None
-                else self.total_record_count + len(dataframe)
-            )
+            self.chunk_count += 1
+            self.total_record_count += len(dataframe)
 
-            # Generate output file path
-            file_path = f"{self.output_path}{self.output_suffix}"
-            if self.typename:
-                file_path = f"{file_path}/{self.typename}"
-            file_path = f"{file_path}_{self.chunk_count}.parquet"
+            if not self.output_path:
+                activity.logger.warning("Output path not specified, skipping write")
+                return
+
+            file_path = os.path.join(self.output_path, f"{self.chunk_count}.parquet")
 
             # Write the dataframe to parquet using pandas native method
             dataframe.to_parquet(
@@ -113,38 +106,33 @@ class ParquetOutput(Output):
             )
             raise
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):
         """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
         """
         try:
-            if dataframe.count_rows() == 0:
+            row_count = dataframe.count_rows()
+            if row_count == 0:
                 return
 
             # Update counters
-            self.chunk_count = 1 if self.chunk_count is None else self.chunk_count + 1
-            self.total_record_count = (
-                dataframe.count_rows()
-                if self.total_record_count is None
-                else self.total_record_count + dataframe.count_rows()
-            )
+            self.chunk_count += 1
+            self.total_record_count += row_count
 
-            # Generate output file path
-            file_path = f"{self.output_path}{self.output_suffix}"
-            if self.typename:
-                file_path = f"{file_path}/{self.typename}"
-            file_path = f"{file_path}_{self.chunk_count}.parquet"
+            if not self.output_path:
+                activity.logger.warning("Output path not specified, skipping write")
+                return
 
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
-                file_path,
-                write_mode="overwrite" if self.mode == "overwrite" else "append",
+                self.output_path,
+                write_mode=self.write_mode,
             )
 
             # Upload the file to object store
-            await self.upload_file(file_path)
+            await self.upload_file(self.output_path)
         except Exception as e:
             activity.logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
             raise
@@ -155,9 +143,13 @@ class ParquetOutput(Output):
         Args:
             local_file_path (str): Path to the local file to upload.
         """
+        if not self.output_prefix:
+            activity.logger.info("Output prefix not specified, skipping upload")
+            return
+
         activity.logger.info(
             f"Uploading file: {local_file_path} to {self.output_prefix}"
         )
-        await ObjectStoreOutput.push_file_to_object_store(
+        await ObjectStoreOutput.push_files_to_object_store(
             self.output_prefix, local_file_path
         )

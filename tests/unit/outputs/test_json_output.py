@@ -27,22 +27,15 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 @pytest.mark.asyncio
 async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
     # Create a safe output path by joining base_output_path with config's output_path
-    # Ensure we have a simple, safe path
-    safe_path = str(Path(base_output_path) / (config["output_path"] or "default"))
-
-    # Create a clean output suffix that's safe
-    output_suffix = config["output_suffix"] if config["output_suffix"] else "/default"
-    if not output_suffix.startswith("/"):
-        output_suffix = "/" + output_suffix
-
-    json_output = JsonOutput.re_init(  # type: ignore
+    safe_path = str(Path(base_output_path) / config["output_path"])
+    json_output = JsonOutput(  # type: ignore
         output_path=safe_path,
-        output_suffix=output_suffix,
+        output_suffix=config["output_suffix"],
         output_prefix=config["output_prefix"] or "test",
         chunk_size=max(1, config["chunk_size"]),
     )
     assert json_output.output_path is not None
-    assert json_output.output_path.endswith(output_suffix)
+    assert json_output.output_path.endswith(config["output_suffix"])
     assert json_output.output_prefix == (config["output_prefix"] or "test")
     assert json_output.chunk_size == max(1, config["chunk_size"])
     assert os.path.exists(str(json_output.output_path))
@@ -50,8 +43,8 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
 
 @pytest.mark.asyncio
 async def test_write_dataframe_empty(base_output_path: str) -> None:
-    json_output = JsonOutput.re_init(  # type: ignore
-        output_suffix="/tests/raw",
+    json_output = JsonOutput(  # type: ignore
+        output_suffix="tests/raw",
         output_path=base_output_path,
         output_prefix="test_prefix",
         chunk_size=100000,
@@ -67,20 +60,16 @@ async def test_write_dataframe_empty(base_output_path: str) -> None:
 
 
 @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-@given(df=dataframe_strategy())  # type: ignore
+@given(df=dataframe_strategy(), chunk_size=chunk_size_strategy)  # type: ignore
 @pytest.mark.asyncio
 async def test_write_dataframe_single_chunk(
-    base_output_path: str, df: pd.DataFrame
+    base_output_path: str, df: pd.DataFrame, chunk_size: int
 ) -> None:
     with patch(
         "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
     ) as mock_push:
-        chunk_size = (
-            len(df) + 1
-        )  # Ensure single chunk by making chunk size larger than df
-
-        json_output = JsonOutput.re_init(  # type: ignore
-            output_suffix="/tests/raw",
+        json_output = JsonOutput(  # type: ignore
+            output_suffix="tests/raw",
             output_path=base_output_path,
             output_prefix="test_prefix",
             chunk_size=max(1, chunk_size),  # Ensure chunk size is positive
@@ -118,8 +107,8 @@ async def test_write_dataframe_multiple_chunks(
     with patch(
         "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
     ) as mock_push:
-        json_output = JsonOutput.re_init(  # type: ignore
-            output_suffix="/tests/raw",
+        json_output = JsonOutput(  # type: ignore
+            output_suffix="tests/raw",
             output_path=base_output_path,
             output_prefix="test_prefix",
             chunk_size=chunk_size,
@@ -155,8 +144,8 @@ async def test_write_dataframe_multiple_chunks(
 
 @pytest.mark.asyncio
 async def test_write_dataframe_error(base_output_path: str) -> None:
-    json_output = JsonOutput.re_init(
-        output_suffix="/tests/raw",
+    json_output = JsonOutput(  # type: ignore
+        output_suffix="tests/raw",
         output_path=base_output_path,
         output_prefix="test_prefix",
         chunk_size=100000,

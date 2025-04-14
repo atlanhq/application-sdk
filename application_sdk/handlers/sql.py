@@ -5,13 +5,12 @@ import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import pandas as pd
 from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
+from application_sdk.common.utils import prepare_query
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
@@ -59,18 +58,20 @@ class SQLHandler(HandlerInterface):
         """
         await self.sql_client.load(credentials)
 
-    @transform(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
-    async def prepare_metadata(
-        self,
-        sql_input: pd.DataFrame,
-        **kwargs: Dict[str, Any],
-    ) -> List[Dict[Any, Any]]:
+    async def prepare_metadata(self) -> List[Dict[Any, Any]]:
         """
         Method to fetch and prepare the databases and schemas metadata
         """
+        if self.metadata_sql is None:
+            raise ValueError("metadata_sql is not defined")
+
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
+        )
+        sql_input = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
-            for row in sql_input.to_dict(orient="records"):
+            for row in sql_input.to_pylist():
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -82,27 +83,7 @@ class SQLHandler(HandlerInterface):
             raise exc
         return result
 
-    @transform(
-        sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
-    )
-    async def _run_test_auth(
-        self,
-        sql_input: pd.DataFrame,
-        **kwargs: Dict[str, Any],
-    ) -> bool:
-        """
-        Internal implementation of authentication test with transform decorator.
-        """
-        try:
-            sql_input.to_dict(orient="records")
-            return True
-        except Exception as exc:
-            logger.error(
-                f"Failed to authenticate with the given credentials: {str(exc)}"
-            )
-            raise exc
-
-    async def test_auth(self, *args: Any, **kwargs: Any) -> bool:
+    async def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
@@ -110,7 +91,14 @@ class SQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            return await self._run_test_auth(**kwargs)
+            sql_input = SQLQueryInput(
+                engine=self.sql_client.engine,
+                query=self.test_authentication_sql,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
+            sql_input.to_pylist()
+            return True
         except Exception as exc:
             logger.error(
                 f"Failed to authenticate with the given credentials: {str(exc)}"
@@ -161,8 +149,11 @@ class SQLHandler(HandlerInterface):
         """Fetch only database information."""
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
+        if self.fetch_databases_sql is None:
+            raise ValueError("fetch_databases_sql is not defined")
+
         databases = []
-        async for batch in self.sql_client.run_query(self.fetch_databases_sql or ""):
+        async for batch in self.sql_client.run_query(self.fetch_databases_sql):
             for row in batch:
                 databases.append(
                     {self.database_result_key: row[self.database_result_key]}
@@ -171,10 +162,11 @@ class SQLHandler(HandlerInterface):
 
     async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
         """Fetch schemas for a specific database."""
-        if not self.sql_client or not self.fetch_schemas_sql:
+        if not self.sql_client:
             raise ValueError("SQL Client not defined")
         schemas = []
-
+        if self.fetch_schemas_sql is None:
+            raise ValueError("fetch_schemas_sql is not defined")
         schema_query = self.fetch_schemas_sql.format(database_name=database)
         async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
@@ -300,25 +292,32 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @transform(
-        sql_input=SQLQueryInput(
-            query="tables_check_sql",
-            chunk_size=None,
-            temp_table_sql_query="temp_table_regex_sql",
-        )
-    )
     async def tables_check(
         self,
-        sql_input: pd.DataFrame,
-        **kwargs: Dict[str, Any],
+        payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
         logger.info("Starting tables check")
+        if self.tables_check_sql is None:
+            raise ValueError("tables_check_sql is not defined")
+        query = prepare_query(
+            query=self.tables_check_sql,
+            workflow_args=payload,
+            temp_table_regex_sql=self.temp_table_regex_sql,
+        )
+        if not query:
+            raise ValueError("tables_check_sql is not defined")
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine,
+            query=query,
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_daft_dataframe()
         try:
             result = 0
-            for row in sql_input.to_dict(orient="records"):
+            for row in sql_input.to_pylist():
                 result += row["count"]
 
             return {
@@ -350,31 +349,27 @@ class SQLHandler(HandlerInterface):
         try:
             min_version = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
             client_version = None
-            if not self.sql_client:
-                logger.info("SQL client not defined")
-                return {
-                    "success": True,
-                    "successMessage": "Client version check skipped - SQL client not defined",
-                    "failureMessage": "",
-                }
 
             # Try to get the version from the sql_client dialect
             if (
                 hasattr(self.sql_client, "engine")
                 and self.sql_client.engine is not None
             ):
-                version_info = self.sql_client.engine.dialect.server_version_info
-                if version_info:
-                    # Handle tuple version info (like (15, 4))
-                    client_version = ".".join(str(x) for x in version_info)
-                    logger.info(
-                        f"Detected client version from dialect: {client_version}"
-                    )
+                if hasattr(self.sql_client.engine, "dialect"):
+                    version_info = self.sql_client.engine.dialect.server_version_info
+                    if version_info:
+                        # Handle tuple version info (like (15, 4))
+                        client_version = ".".join(str(x) for x in version_info)
+                        logger.info(
+                            f"Detected client version from dialect: {client_version}"
+                        )
 
             # If dialect version not available and get_client_version_sql is defined, use SQL query
             if not client_version and self.get_client_version_sql:
+                # We've verified get_client_version_sql is not None in the condition above
+                get_client_version_sql: str = self.get_client_version_sql
                 sql_input = await SQLQueryInput(
-                    query=self.get_client_version_sql,
+                    query=get_client_version_sql,
                     engine=self.sql_client.engine,
                     chunk_size=None,
                 ).get_dataframe()

@@ -1,7 +1,7 @@
 from typing import Any, Optional, Type
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pandas as pd
+import daft
 import pytest
 from sqlalchemy.engine import Engine
 
@@ -41,19 +41,17 @@ def sql_handler() -> SQLHandler:
     return handler
 
 
-# Note: The tables_check method is decorated with @transform which transforms the input
-# from a DataFrame to Dict[str, Any] internally. While the linter shows type errors,
-# the actual runtime behavior is correct.
 async def test_tables_check_success(sql_handler: SQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
-    mock_df = pd.DataFrame([{"count": 5}])
-    if sql_handler.sql_client.engine is not None:
-        sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
-            MagicMock()
-        )
-    with patch("pandas.read_sql_query", return_value=mock_df):
-        result = await sql_handler.tables_check()
+    if not sql_handler.sql_client.engine:
+        raise ValueError("Engine is not initialized")
+    mock_df = daft.from_pylist([{"count": 5}])
+    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+        MagicMock()
+    )  # type: ignore
+    with patch("daft.read_sql", return_value=mock_df):
+        result = await sql_handler.tables_check(payload={})
         assert result["success"] is True
         assert "Table count: 5" in result["successMessage"]
 
@@ -61,13 +59,14 @@ async def test_tables_check_success(sql_handler: SQLHandler) -> None:
 async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
     """Test tables check with empty response."""
     # Create a mock DataFrame with zero count
-    mock_df = pd.DataFrame([{"count": 0}])
-    if sql_handler.sql_client.engine is not None:
-        sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
-            MagicMock()
-        )  # type: ignore
-    with patch("pandas.read_sql_query", return_value=mock_df):
-        result = await sql_handler.tables_check()
+    if not sql_handler.sql_client.engine:
+        raise ValueError("Engine is not initialized")
+    mock_df = daft.from_pylist([{"count": 0}])
+    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+        MagicMock()
+    )  # type: ignore
+    with patch("daft.read_sql", return_value=mock_df):
+        result = await sql_handler.tables_check(payload={})
         assert result["success"] is True
         assert "Table count: 0" in result["successMessage"]
 
@@ -75,13 +74,14 @@ async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
 async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
     """Test tables check with failure response."""
     # Create a DataFrame with invalid data that will cause an error
-    mock_df = pd.DataFrame([{"wrong_column": "invalid"}])  # Missing 'count' column
-    if sql_handler.sql_client.engine is not None:
-        sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
-            MagicMock()
-        )
-    with patch("pandas.read_sql_query", return_value=mock_df):
-        result = await sql_handler.tables_check()
+    if not sql_handler.sql_client.engine:
+        raise ValueError("Engine is not initialized")
+    mock_df = daft.from_pylist([{"wrong_column": "invalid"}])  # Missing 'count' column
+    sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
+        MagicMock()
+    )  # type: ignore
+    with patch("daft.read_sql", return_value=mock_df):
+        result = await sql_handler.tables_check(payload={})
         assert result["success"] is False
         assert "Tables check failed" in result["failureMessage"]
         assert (

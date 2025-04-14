@@ -8,10 +8,9 @@ import inspect
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Dict, Generator, Optional, Union
 
-import pandas as pd
+import orjson
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -20,14 +19,20 @@ activity.logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     import daft
+    import pandas as pd
 
 
-def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:
+def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
     """
     Helper method to check if the dataframe has any rows
     """
-    if isinstance(dataframe, pd.DataFrame):
-        return dataframe.empty
+    try:
+        import pandas as pd
+
+        if isinstance(dataframe, pd.DataFrame):
+            return dataframe.empty
+    except ImportError:
+        activity.logger.warning("Module pandas not found")
 
     try:
         import daft
@@ -52,25 +57,15 @@ class Output(ABC):
         chunk_count (int): Number of chunks the output was split into.
     """
 
-    output_path: str | None = None
-    output_prefix: str | None = None
-    total_record_count: int | None = None
-    chunk_count: int | None = None
-    state: Optional[ActivitiesState] = None
-
-    @classmethod
-    def re_init(cls, **kwargs: Dict[str, Any]):
-        """Re-initialize the output class with given keyword arguments.
-
-        Args:
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-        """
-        return cls(**kwargs)
+    output_path: str
+    output_prefix: str
+    total_record_count: int
+    chunk_count: int
 
     async def write_batched_dataframe(
         self,
         batched_dataframe: Union[
-            AsyncGenerator[pd.DataFrame, None], Generator[pd.DataFrame, None, None]
+            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
         ],
     ):
         """Write a batched pandas DataFrame to Output.
@@ -85,6 +80,8 @@ class Output(ABC):
             If the DataFrame is empty, the method returns without writing.
         """
         try:
+            import pandas as pd
+
             # Handle based on type - first check AsyncGenerator specifically
             if inspect.isasyncgen(batched_dataframe):
                 async for dataframe in batched_dataframe:
@@ -113,9 +110,10 @@ class Output(ABC):
                 )
         except Exception as e:
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
+            raise e
 
     @abstractmethod
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to the output destination.
 
         Args:
@@ -180,6 +178,7 @@ class Output(ABC):
             activity.logger.error(
                 f"Error writing batched daft dataframe to json: {str(e)}"
             )
+            raise e
 
     @abstractmethod
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
@@ -232,15 +231,23 @@ class Output(ABC):
                 "chunk_count": self.chunk_count,
             }
 
-            # Write the statistics to a json file
-            output_file_name = f"{self.output_path}/statistics.json.ignore"
-            dataframe = pd.DataFrame(statistics, index=[0])
-            dataframe.to_json(output_file_name, orient="records", lines=True)
+            # Only write statistics if we have a valid output path
+            if hasattr(self, "output_path") and self.output_path:
+                # Write the statistics to a json file
+                import os
 
-            # Push the file to the object store
-            await ObjectStoreOutput.push_file_to_object_store(
-                self.output_prefix, output_file_name
-            )
+                output_file_name = os.path.join(
+                    self.output_path, "statistics.json.ignore"
+                )
+                with open(output_file_name, "w") as f:
+                    f.write(orjson.dumps(statistics).decode("utf-8"))
+
+                # Push the file to the object store if we have a prefix
+                if hasattr(self, "output_prefix") and self.output_prefix:
+                    await ObjectStoreOutput.push_file_to_object_store(
+                        self.output_prefix, output_file_name
+                    )
             return statistics
         except Exception as e:
             activity.logger.error(f"Error writing statistics: {str(e)}")
+            raise e
