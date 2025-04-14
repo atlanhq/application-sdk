@@ -3,9 +3,6 @@ import logging
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
-import daft
-import pandas as pd
-
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
@@ -13,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     import daft
+    import pandas as pd
 
 
 class ParquetInput(Input):
