@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, AsyncIterator, List, Optional
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
@@ -59,25 +59,10 @@ class JsonInput(Input):
                 logger.error(f"Error downloading file {file_name}: {str(e)}")
                 raise e
 
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+    async def get_batched_dataframe(self) -> AsyncIterator["pd.DataFrame"]:
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
-        """
-        # This is a synchronous wrapper for the async method
-        import asyncio
-
-        async def _wrapper_coroutine():
-            result = []
-            async for item in self._get_batched_dataframe_async():
-                result.append(item)
-            return result
-
-        return iter(asyncio.run(_wrapper_coroutine()))
-
-    async def _get_batched_dataframe_async(self) -> AsyncIterator["pd.DataFrame"]:
-        """
-        Async implementation of get_batched_dataframe
         """
         try:
             import pandas as pd
@@ -97,18 +82,10 @@ class JsonInput(Input):
             logger.error(f"Error reading batched data from JSON: {str(e)}")
             raise e
 
-    def get_dataframe(self) -> "pd.DataFrame":
+    async def get_dataframe(self) -> "pd.DataFrame":
         """
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
-        """
-        import asyncio
-
-        return asyncio.run(self._get_dataframe_async())
-
-    async def _get_dataframe_async(self) -> "pd.DataFrame":
-        """
-        Async implementation of get_dataframe
         """
         try:
             import pandas as pd
@@ -132,28 +109,10 @@ class JsonInput(Input):
             logger.error(f"Error reading data from JSON: {str(e)}")
             raise e
 
-    def get_batched_daft_dataframe(
-        self,
-    ) -> Union[Iterator["daft.DataFrame"], AsyncIterator["daft.DataFrame"]]:
+    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:
         """
         Method to read the data from the json files in the path
         and return as a batched daft dataframe
-        """
-        import asyncio
-
-        async def _wrapper_coroutine():
-            result = []
-            async for item in self._get_batched_daft_dataframe_async():
-                result.append(item)
-            return result
-
-        return iter(asyncio.run(_wrapper_coroutine()))
-
-    async def _get_batched_daft_dataframe_async(
-        self,
-    ) -> AsyncIterator["daft.DataFrame"]:
-        """
-        Async implementation of get_batched_daft_dataframe
         """
         try:
             import daft
@@ -174,18 +133,10 @@ class JsonInput(Input):
             logger.error(f"Error reading batched data from JSON: {str(e)}")
             raise e
 
-    def get_daft_dataframe(self) -> "daft.DataFrame":
+    async def get_daft_dataframe(self) -> "daft.DataFrame":
         """
         Method to read the data from the json files in the path
         and return as a single combined daft dataframe
-        """
-        import asyncio
-
-        return asyncio.run(self._get_daft_dataframe_async())
-
-    async def _get_daft_dataframe_async(self) -> "daft.DataFrame":
-        """
-        Async implementation of get_daft_dataframe
         """
         try:
             import daft

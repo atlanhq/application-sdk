@@ -16,7 +16,9 @@ class Input(ABC):
     """
 
     @abstractmethod
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+    def get_batched_dataframe(
+        self,
+    ) -> Union[Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]]:
         """
         Get an iterator of batched pandas DataFrames.
 
