@@ -41,9 +41,6 @@ def sql_handler() -> SQLHandler:
     return handler
 
 
-# Note: The tables_check method is decorated with @transform which transforms the input
-# from a DataFrame to Dict[str, Any] internally. While the linter shows type errors,
-# the actual runtime behavior is correct.
 async def test_tables_check_success(sql_handler: SQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
@@ -52,7 +49,7 @@ async def test_tables_check_success(sql_handler: SQLHandler) -> None:
         MagicMock()
     )  # type: ignore
     with patch("daft.read_sql", return_value=mock_df):
-        result = await sql_handler.tables_check()
+        result = await sql_handler.tables_check(payload={})
         assert result["success"] is True
         assert "Table count: 5" in result["successMessage"]
 
@@ -65,7 +62,7 @@ async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
         MagicMock()
     )  # type: ignore
     with patch("daft.read_sql", return_value=mock_df):
-        result = await sql_handler.tables_check()
+        result = await sql_handler.tables_check(payload={})
         assert result["success"] is True
         assert "Table count: 0" in result["successMessage"]
 
@@ -78,7 +75,7 @@ async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
         MagicMock()
     )  # type: ignore
     with patch("daft.read_sql", return_value=mock_df):
-        result = await sql_handler.tables_check()
+        result = await sql_handler.tables_check(payload={})
         assert result["success"] is False
         assert "Tables check failed" in result["failureMessage"]
         assert (

@@ -1,3 +1,4 @@
+import os
 from typing import Any, Dict, Iterator, Optional, Type
 
 import daft
@@ -7,7 +8,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import run_sync, transform_daft
+from application_sdk.common.utils import prepare_query
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -226,16 +227,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    @transform_daft(
-        batch_input=SQLQueryInput(query="fetch_database_sql", chunk_size=None),
-        raw_output=ParquetOutput(output_suffix="/raw/database"),
-    )
-    async def fetch_databases(
-        self,
-        batch_input,
-        raw_output: ParquetOutput,
-        **kwargs: Dict[str, Any],
-    ):
+    async def fetch_databases(self, workflow_args: Dict[str, Any]):
         """Fetch databases from the source database.
 
         Args:
@@ -246,21 +238,27 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_daft_dataframe(batch_input)
+        state = await self._get_state(workflow_args)
+        sql_input = SQLQueryInput(
+            engine=state.sql_client.engine,
+            query=prepare_query(
+                query=self.fetch_database_sql, workflow_args=workflow_args
+            ),
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_daft_dataframe()
+
+        raw_output = ParquetOutput(
+            output_prefix=workflow_args.get("output_prefix"),
+            output_path=workflow_args.get("output_path"),
+            output_suffix="raw/database",
+        )
+        await raw_output.write_daft_dataframe(sql_input)
         return await raw_output.get_statistics(typename="database")
 
     @activity.defn
     @auto_heartbeater
-    @transform_daft(
-        batch_input=SQLQueryInput(query="fetch_schema_sql", chunk_size=None),
-        raw_output=ParquetOutput(output_suffix="/raw/schema"),
-    )
-    async def fetch_schemas(
-        self,
-        batch_input,
-        raw_output: ParquetOutput,
-        **kwargs: Dict[str, Any],
-    ):
+    async def fetch_schemas(self, workflow_args: Dict[str, Any]):
         """Fetch schemas from the source database.
 
         Args:
@@ -271,25 +269,27 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_daft_dataframe(batch_input)
+        state = await self._get_state(workflow_args)
+        sql_input = SQLQueryInput(
+            engine=state.sql_client.engine,
+            query=prepare_query(
+                query=self.fetch_schema_sql, workflow_args=workflow_args
+            ),
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_daft_dataframe()
+
+        raw_output = ParquetOutput(
+            output_prefix=workflow_args.get("output_prefix"),
+            output_path=workflow_args.get("output_path"),
+            output_suffix="raw/schema",
+        )
+        await raw_output.write_daft_dataframe(sql_input)
         return await raw_output.get_statistics(typename="schema")
 
     @activity.defn
     @auto_heartbeater
-    @transform_daft(
-        batch_input=SQLQueryInput(
-            query="fetch_table_sql",
-            temp_table_sql_query="tables_extraction_temp_table_regex_sql",
-            chunk_size=None,
-        ),
-        raw_output=ParquetOutput(output_suffix="/raw/table"),
-    )
-    async def fetch_tables(
-        self,
-        batch_input,
-        raw_output: ParquetOutput,
-        **kwargs: Dict[str, Any],
-    ):
+    async def fetch_tables(self, workflow_args: Dict[str, Any]):
         """Fetch tables from the source database.
 
         Args:
@@ -300,25 +300,29 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_daft_dataframe(batch_input)
+        state = await self._get_state(workflow_args)
+        sql_input = SQLQueryInput(
+            engine=state.sql_client.engine,
+            query=prepare_query(
+                query=self.fetch_table_sql,
+                workflow_args=workflow_args,
+                temp_table_regex_sql=self.tables_extraction_temp_table_regex_sql,
+            ),
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_daft_dataframe()
+
+        raw_output = ParquetOutput(
+            output_prefix=workflow_args.get("output_prefix"),
+            output_path=workflow_args.get("output_path"),
+            output_suffix="raw/table",
+        )
+        await raw_output.write_daft_dataframe(sql_input)
         return await raw_output.get_statistics(typename="table")
 
     @activity.defn
     @auto_heartbeater
-    @transform_daft(
-        batch_input=SQLQueryInput(
-            query="fetch_column_sql",
-            temp_table_sql_query="column_extraction_temp_table_regex_sql",
-            chunk_size=None,
-        ),
-        raw_output=ParquetOutput(output_suffix="/raw/column"),
-    )
-    async def fetch_columns(
-        self,
-        batch_input,
-        raw_output: ParquetOutput,
-        **kwargs: Dict[str, Any],
-    ):
+    async def fetch_columns(self, workflow_args: Dict[str, Any]):
         """Fetch columns from the source database.
 
         Args:
@@ -329,20 +333,31 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        await raw_output.write_daft_dataframe(batch_input)
+        state = await self._get_state(workflow_args)
+        sql_input = SQLQueryInput(
+            engine=state.sql_client.engine,
+            query=prepare_query(
+                query=self.fetch_column_sql,
+                workflow_args=workflow_args,
+                temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
+            ),
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_daft_dataframe()
+
+        raw_output = ParquetOutput(
+            output_prefix=workflow_args.get("output_prefix"),
+            output_path=workflow_args.get("output_path"),
+            output_suffix="raw/column",
+        )
+        await raw_output.write_daft_dataframe(sql_input)
         return await raw_output.get_statistics(typename="column")
 
     @activity.defn
     @auto_heartbeater
-    @transform_daft(
-        raw_input=ParquetInput(path="/raw/", chunk_size=None),
-        transformed_output=JsonOutput(output_suffix="/transformed", chunk_size=100000),
-    )
     async def transform_data(
         self,
-        raw_input: "daft.DataFrame",
-        transformed_output: JsonOutput,
-        **kwargs: Dict[str, Any],
+        workflow_args: Dict[str, Any],
     ):
         """Transforms raw data into the required format.
 
@@ -356,14 +371,31 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        state: SQLMetadataExtractionActivitiesState = await self._get_state(kwargs)
+        state: SQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        raw_input = ParquetInput(
+            path=os.path.join(workflow_args.get("output_path"), "raw"),
+            input_prefix=workflow_args.get("output_prefix"),
+            file_names=workflow_args.get("file_names"),
+            chunk_size=None,
+        )
+        raw_input = await raw_input.get_daft_dataframe()
+
         transformed_chunk = self._transform_batch(
             raw_input,
-            kwargs.get("typename"),
+            workflow_args.get("typename"),
             state,
-            kwargs.get("workflow_id"),
-            kwargs.get("workflow_run_id"),
-            kwargs,
+            workflow_args.get("workflow_id"),
+            workflow_args.get("workflow_run_id"),
+            workflow_args,
+        )
+
+        transformed_output = JsonOutput(
+            output_prefix=workflow_args.get("output_prefix"),
+            output_path=workflow_args.get("output_path"),
+            output_suffix="transformed",
+            typename=workflow_args.get("typename"),
         )
         await transformed_output.write_daft_dataframe(transformed_chunk)
         return await transformed_output.get_statistics()

@@ -10,7 +10,7 @@ from packaging import version
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform_daft
+from application_sdk.common.utils import prepare_query
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.constants import SQL_SERVER_MIN_VERSION
@@ -59,15 +59,15 @@ class SQLHandler(HandlerInterface):
         """
         await self.sql_client.load(credentials)
 
-    @transform_daft(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
-    async def prepare_metadata(
-        self,
-        sql_input: "daft.DataFrame",
-        **kwargs: Dict[str, Any],
-    ) -> List[Dict[Any, Any]]:
+    async def prepare_metadata(self) -> List[Dict[Any, Any]]:
         """
         Method to fetch and prepare the databases and schemas metadata
         """
+
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
+        )
+        sql_input = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
             for row in sql_input.to_pylist():
@@ -82,14 +82,7 @@ class SQLHandler(HandlerInterface):
             raise exc
         return result
 
-    @transform_daft(
-        sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
-    )
-    async def test_auth(
-        self,
-        sql_input: "daft.DataFrame",
-        **kwargs: Dict[str, Any],
-    ) -> bool:
+    async def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
@@ -97,6 +90,12 @@ class SQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
+            sql_input = SQLQueryInput(
+                engine=self.sql_client.engine,
+                query=self.test_authentication_sql,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
             sql_input.to_pylist()
             return True
         except Exception as exc:
@@ -287,22 +286,22 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @transform_daft(
-        sql_input=SQLQueryInput(
-            query="tables_check_sql",
-            chunk_size=None,
-            temp_table_sql_query="temp_table_regex_sql",
-        )
-    )
     async def tables_check(
         self,
-        sql_input: "daft.DataFrame",
-        **kwargs: Dict[str, Any],
+        payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
         logger.info("Starting tables check")
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine,
+            query=prepare_query(
+                self.tables_check_sql, payload, self.temp_table_regex_sql
+            ),
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_daft_dataframe()
         try:
             result = 0
             for row in sql_input.to_pylist():

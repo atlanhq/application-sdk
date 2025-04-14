@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Iterator
+from typing import Iterator
 
 from application_sdk.common.logger_adaptors import get_logger
 
@@ -10,19 +10,6 @@ class Input(ABC):
     """
     Abstract base class for input data sources.
     """
-
-    @classmethod
-    def re_init(cls, **kwargs: Dict[str, Any]):
-        """
-        Re-initialize the input class with given keyword arguments.
-
-        Args:
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-
-        Returns:
-            Input: An instance of the input class.
-        """
-        return cls(**kwargs)
 
     @abstractmethod
     def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:

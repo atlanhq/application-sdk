@@ -100,13 +100,10 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
     mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
-    metadata_sql = "SELECT * FROM information_schema.tables"
+    handler.metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
-    args = {
-        "metadata_sql": metadata_sql,
-    }
-    result = await handler.prepare_metadata(args)
+    result = await handler.prepare_metadata()
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -147,8 +144,10 @@ async def test_fetch_metadata_property_based(
 
         mock_run_query.return_value = daft.from_pylist(test_data)
 
+        handler.metadata_sql = args["metadata_sql"]
+
         # Run prepare_metadata
-        result = await handler.prepare_metadata({"metadata_sql": args["metadata_sql"]})
+        result = await handler.prepare_metadata()
 
         # Assertions
         assert len(result) == len(test_data)
@@ -173,15 +172,12 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
-    metadata_sql = "SELECT * FROM information_schema.tables"
+    handler.metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata
     handler.database_alias_key = "TABLE_CATALOG"
     handler.schema_alias_key = "TABLE_SCHEMA"
-    args = {
-        "metadata_sql": metadata_sql,
-    }
-    result = await handler.prepare_metadata(args)
+    result = await handler.prepare_metadata()
 
     # Assertions
     assert result == [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -199,13 +195,12 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.return_value = daft.from_pylist(data)
 
     # Sample SQL query
-    metadata_sql = "SELECT * FROM information_schema.tables"
+    handler.metadata_sql = "SELECT * FROM information_schema.tables"
     handler.database_result_key = "DATABASE"
     handler.schema_result_key = "SCHEMA"
 
     # Run fetch_metadata
-    args = {"metadata_sql": metadata_sql}
-    result = await handler.prepare_metadata(args)
+    result = await handler.prepare_metadata()
 
     # Assertions
     assert result == [{"DATABASE": "test_db", "SCHEMA": "test_schema"}]
@@ -220,16 +215,13 @@ async def test_fetch_metadata_with_error(
     mock_run_query.side_effect = Exception("Simulated query failure")
 
     # Sample SQL query
-    metadata_sql = "SELECT * FROM information_schema.tables"
+    handler.metadata_sql = "SELECT * FROM information_schema.tables"
 
     # Run fetch_metadata and expect it to raise an exception
     with pytest.raises(Exception, match="Simulated query failure"):
-        args = {
-            "metadata_sql": metadata_sql,
-            "database_alias_key": "TABLE_CATALOG",
-            "schema_alias_key": "TABLE_SCHEMA",
-        }
-        await handler.prepare_metadata(args)
+        handler.database_alias_key = ("TABLE_CATALOG",)
+        handler.schema_alias_key = ("TABLE_SCHEMA",)
+        await handler.prepare_metadata()
 
     # Assertions
     mock_run_query.assert_called_once_with()

@@ -1,7 +1,7 @@
 import glob
 import logging
 import os
-from typing import Any, AsyncIterator, Dict, List, Optional
+from typing import AsyncIterator, List, Optional
 
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
@@ -21,7 +21,6 @@ class ParquetInput(Input):
         chunk_size: Optional[int] = 100000,
         input_prefix: Optional[str] = None,
         file_names: Optional[List[str]] = None,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the Parquet input class.
 
@@ -31,29 +30,13 @@ class ParquetInput(Input):
                 Defaults to 100000.
             input_prefix (Optional[str], optional): Prefix for files when reading from object store.
                 If provided, files will be read from object store. Defaults to None.
-            kwargs (Dict[str, Any]): Additional keyword arguments.
+            file_names (Optional[List[str]], optional): List of file names to read.
+                Defaults to None.
         """
         self.path = path
         self.chunk_size = chunk_size
         self.input_prefix = input_prefix
         self.file_names = file_names
-
-    @classmethod
-    def re_init(
-        cls,
-        path: str,
-        **kwargs: Dict[str, Any],
-    ):
-        """Re-initialize the input class with given keyword arguments.
-
-        Args:
-            path (str): The additional path to the input directory.
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-        """
-        output_path = kwargs.get("output_path", "")
-        kwargs["path"] = f"{output_path}{path}"
-        kwargs["input_prefix"] = kwargs.get("output_prefix", "")
-        return cls(**kwargs)
 
     async def download_files(self, remote_file_path: str) -> str:
         """Read a file from the object store.
@@ -133,7 +116,7 @@ class ParquetInput(Input):
             import daft
 
             if self.file_names:
-                path = f"{self.path}{self.file_names[0].split('/')[0]}"
+                path = f"{self.path}/{self.file_names[0].split('/')[0]}"
             else:
                 path = self.path
             await self.download_files(path)

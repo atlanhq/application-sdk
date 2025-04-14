@@ -33,7 +33,7 @@ class TestAuthenticationHandler:
             mock_get_dataframe.return_value = mock_df
 
             # Test authentication
-            result = await handler.test_auth({})
+            result = await handler.test_auth()
 
             # Verify success
             assert result is True
@@ -51,7 +51,7 @@ class TestAuthenticationHandler:
 
             # Test authentication and expect exception
             with pytest.raises(Exception) as exc_info:
-                await handler.test_auth({})
+                await handler.test_auth()
 
             # Verify error
             assert str(exc_info.value) == "Authentication failed"
@@ -69,7 +69,7 @@ class TestAuthenticationHandler:
             mock_get_dataframe.return_value = mock_df
 
             # Test authentication should still succeed as DataFrame is valid
-            result = await handler.test_auth({})
+            result = await handler.test_auth()
 
             # Verify success
             assert result is True
@@ -87,7 +87,7 @@ class TestAuthenticationHandler:
 
             # Test authentication and expect exception
             with pytest.raises(AttributeError) as exc_info:
-                await handler.test_auth({})
+                await handler.test_auth()
 
             # Verify error and call
             assert "object has no attribute 'to_pylist'" in str(exc_info.value)
@@ -109,7 +109,7 @@ class TestAuthenticationHandler:
 
             # Test authentication and expect exception
             with pytest.raises(Exception) as exc_info:
-                await handler.test_auth({})
+                await handler.test_auth()
 
             # Verify error and call
             assert str(exc_info.value) == "DataFrame conversion error"
@@ -128,7 +128,7 @@ class TestAuthenticationHandler:
             mock_get_dataframe.return_value = mock_df
 
             # Test authentication
-            result = await handler.test_auth({})
+            result = await handler.test_auth()
 
             # Verify success and correct query was used
             assert result is True
