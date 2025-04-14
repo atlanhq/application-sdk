@@ -92,7 +92,6 @@ class WorkflowInterface(ABC):
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
-            logger.info("Workflow completed successfully")
             return result
 
         except Exception as e:
