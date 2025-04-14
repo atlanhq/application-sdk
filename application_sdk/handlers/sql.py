@@ -283,7 +283,7 @@ class SQLHandler(HandlerInterface):
             # Handle wildcard case
             if filtered_schemas == "*":
                 continue
-                
+
             # Handle list case
             if isinstance(filtered_schemas, list):
                 for schema in filtered_schemas:

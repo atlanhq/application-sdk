@@ -92,7 +92,9 @@ class TestOutput:
         assert self.output.total_record_count == 0
         assert self.output.chunk_count == 0
 
-    @pytest.mark.skip(reason="Output class re-raises exceptions, which makes this test difficult")
+    @pytest.mark.skip(
+        reason="Output class re-raises exceptions, which makes this test difficult"
+    )
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_error(self):
         """Test write_batched_dataframe error handling."""
@@ -108,7 +110,7 @@ class TestOutput:
             # Now the test won't actually try to call write_dataframe
             with pytest.raises(Exception, match="Test error"):
                 await self.output.write_batched_dataframe(generate_error())
-            
+
             # Assert the error was logged before being re-raised
             mock_logger.assert_called_once()
             message = mock_logger.call_args[0][0]
@@ -127,7 +129,7 @@ class TestOutput:
         """Test write_statistics successful case."""
         self.output.total_record_count = 100
         self.output.chunk_count = 5
-        
+
         # Get the path from the test's temporary directory
         stats_path = f"{self.output.output_path}/statistics.json.ignore"
 
@@ -148,24 +150,24 @@ class TestOutput:
             mock_orjson.assert_called_once_with(
                 {"total_record_count": 100, "chunk_count": 5}
             )
-            mock_push.assert_awaited_once_with(
-                "test_prefix", stats_path
-            )
+            mock_push.assert_awaited_once_with("test_prefix", stats_path)
 
-    @pytest.mark.skip(reason="Output class re-raises exceptions, which makes this test difficult")
+    @pytest.mark.skip(
+        reason="Output class re-raises exceptions, which makes this test difficult"
+    )
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):
         """Test write_statistics error handling."""
         # Create a specific exception to test error handling
         test_error = Exception("Test statistics error")
-        
+
         # Mock orjson.dumps to raise an exception
         with patch("orjson.dumps", side_effect=test_error), patch.object(
             activity.logger, "error"
         ) as mock_logger:
             with pytest.raises(Exception, match="Test statistics error"):
                 await self.output.write_statistics()
-            
+
             # Check that the error was logged before being re-raised
             mock_logger.assert_called_once()
             assert "Error writing statistics" in mock_logger.call_args[0][0]

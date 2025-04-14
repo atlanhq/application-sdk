@@ -1,6 +1,4 @@
 import os
-from pathlib import Path
-from typing import Any, Dict
 from unittest.mock import patch
 
 import pandas as pd
@@ -24,11 +22,11 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
 @pytest.mark.asyncio
 async def test_init(base_output_path: str) -> None:
     """Test initialization using hardcoded values instead of Hypothesis strategies"""
-    # Use fixed values 
+    # Use fixed values
     output_suffix = "tests/raw"
     output_prefix = "test_prefix"
     chunk_size = 10
-    
+
     json_output = JsonOutput(  # type: ignore
         output_path=base_output_path,
         output_suffix=output_suffix,

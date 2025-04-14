@@ -229,16 +229,6 @@ class SQLQueryInput(Input):
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
             raise e
 
-    def get_daft_dataframe(self) -> "daft.DataFrame":
-        """Get query results as a daft DataFrame.
-
-        Returns:
-            daft.DataFrame: Query results as a daft DataFrame.
-        """
-        import asyncio
-
-        return asyncio.run(self._get_daft_dataframe_async())
-
     async def _get_daft_dataframe_async(self) -> "daft.DataFrame":
         """Async implementation of get_daft_dataframe"""
         try:
@@ -304,6 +294,8 @@ class SQLQueryInput(Input):
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":
         """Get query results as a daft DataFrame.
+
+        This method can be awaited directly or run synchronously depending on context.
 
         Returns:
             daft.DataFrame: Query results as a daft DataFrame.
