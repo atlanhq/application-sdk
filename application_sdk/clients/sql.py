@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface

@@ -1,6 +1,8 @@
 import os
 from typing import Iterator, List, Optional
 
+import pandas as pd
+
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
 from application_sdk.inputs import Input
