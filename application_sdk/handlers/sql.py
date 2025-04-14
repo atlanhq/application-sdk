@@ -1,10 +1,10 @@
 import asyncio
 import json
-import os
 import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from application_sdk.common.utils import read_sql_files
 from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
@@ -17,6 +17,7 @@ from application_sdk.constants import SQL_SERVER_MIN_VERSION
 
 logger = get_logger(__name__)
 
+queries = read_sql_files(queries_prefix="app/sql")
 
 class SQLConstants(Enum):
     """
@@ -37,18 +38,20 @@ class SQLHandler(HandlerInterface):
     sql_client: SQLClient
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
-    get_client_version_sql: str | None = None
-    # Variables for fetching metadata
-    metadata_sql: str | None = None
-    tables_check_sql: str | None = None
-    fetch_databases_sql: str | None = None
-    fetch_schemas_sql: str | None = None
+    get_client_version_sql: str | None = queries.get("GET_CLIENT_VERSION")
+    
+
+    metadata_sql: str | None = queries.get("FILTER_METADATA")
+    tables_check_sql: str | None = queries.get("TABLES_CHECK")
+    fetch_databases_sql: str | None = queries.get("FETCH_DATABASES")
+    fetch_schemas_sql: str | None = queries.get("FETCH_SCHEMAS")
+
+    temp_table_regex_sql: str | None = queries.get("TABLES_CHECK_TEMP_TABLE_REGEX")
+
     database_alias_key: str = SQLConstants.DATABASE_ALIAS_KEY.value
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
-
-    temp_table_regex_sql: str = ""
 
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client

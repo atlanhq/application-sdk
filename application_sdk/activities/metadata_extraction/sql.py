@@ -1,6 +1,7 @@
 import os
 from typing import Any, Dict, Iterator, Optional, Type
 
+from application_sdk.common.utils import read_sql_files
 import daft
 from temporalio import activity
 
@@ -24,6 +25,7 @@ from application_sdk.constants import (
 
 activity.logger = get_logger(__name__)
 
+queries = read_sql_files(queries_prefix="app/sql")
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState):
     """State class for SQL metadata extraction activities.
@@ -65,13 +67,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
 
     _state: Dict[str, SQLMetadataExtractionActivitiesState] = {}
 
-    fetch_database_sql = None
-    fetch_schema_sql = None
-    fetch_table_sql = None
-    fetch_column_sql = None
+    fetch_database_sql = queries.get("DATABASE_EXTRACTION")
+    fetch_schema_sql = queries.get("SCHEMA_EXTRACTION")
+    fetch_table_sql = queries.get("TABLE_EXTRACTION")
+    fetch_column_sql = queries.get("COLUMN_EXTRACTION")
 
-    tables_extraction_temp_table_regex_sql = ""
-    column_extraction_temp_table_regex_sql = ""
+    tables_extraction_temp_table_regex_sql = queries.get("TABLE_EXTRACTION_TEMP_TABLE_REGEX")
+    column_extraction_temp_table_regex_sql = queries.get("COLUMN_EXTRACTION_TEMP_TABLE_REGEX")
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
