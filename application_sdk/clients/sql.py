@@ -224,6 +224,9 @@ class SQLClient(ClientInterface):
             raise ValueError("Connection is not established")
         loop = asyncio.get_running_loop()
 
+        if self.use_server_side_cursor:
+            self.connection.execution_options(yield_per=batch_size)
+
         activity.logger.info("Running query: {query}", query=query)
 
         with ThreadPoolExecutor() as pool:
