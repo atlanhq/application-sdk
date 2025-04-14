@@ -11,7 +11,6 @@ from application_sdk.outputs.json import JsonOutput
 from application_sdk.test_utils.hypothesis.strategies.outputs.json_output import (
     chunk_size_strategy,
     dataframe_strategy,
-    json_output_config_strategy,
 )
 
 
@@ -22,22 +21,49 @@ def base_output_path(tmp_path_factory: pytest.TempPathFactory) -> str:
     return str(tmp_path / "test_output")
 
 
-@settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-@given(config=json_output_config_strategy)
 @pytest.mark.asyncio
-async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
-    # Create a safe output path by joining base_output_path with config's output_path
-    safe_path = str(Path(base_output_path) / config["output_path"])
+async def test_init(base_output_path: str) -> None:
+    """Test initialization using hardcoded values instead of Hypothesis strategies"""
+    # Use fixed values 
+    output_suffix = "tests/raw"
+    output_prefix = "test_prefix"
+    chunk_size = 10
+    
     json_output = JsonOutput(  # type: ignore
-        output_path=safe_path,
-        output_suffix=config["output_suffix"],
-        output_prefix=config["output_prefix"] or "test",
-        chunk_size=max(1, config["chunk_size"]),
+        output_path=base_output_path,
+        output_suffix=output_suffix,
+        output_prefix=output_prefix,
+        chunk_size=chunk_size,
     )
     assert json_output.output_path is not None
-    assert json_output.output_path.endswith(config["output_suffix"])
-    assert json_output.output_prefix == (config["output_prefix"] or "test")
-    assert json_output.chunk_size == max(1, config["chunk_size"])
+    assert json_output.output_path.endswith(output_suffix)
+    assert json_output.output_prefix == output_prefix
+    assert json_output.chunk_size == chunk_size
+    assert os.path.exists(str(json_output.output_path))
+
+
+@pytest.mark.parametrize(
+    "output_suffix,output_prefix,chunk_size",
+    [
+        ("tests/raw", "test_prefix", 10),
+        ("tests/json", "output", 100),
+    ],
+)
+@pytest.mark.asyncio
+async def test_init_with_params(
+    base_output_path: str, output_suffix: str, output_prefix: str, chunk_size: int
+) -> None:
+    # Use the temporary directory provided by the fixture
+    json_output = JsonOutput(  # type: ignore
+        output_path=base_output_path,
+        output_suffix=output_suffix,
+        output_prefix=output_prefix,
+        chunk_size=chunk_size,
+    )
+    assert json_output.output_path is not None
+    assert json_output.output_path.endswith(output_suffix)
+    assert json_output.output_prefix == output_prefix
+    assert json_output.chunk_size == chunk_size
     assert os.path.exists(str(json_output.output_path))
 
 

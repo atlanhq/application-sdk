@@ -41,6 +41,7 @@ def sql_handler() -> SQLHandler:
     return handler
 
 
+@pytest.mark.asyncio
 async def test_tables_check_success(sql_handler: SQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
@@ -56,6 +57,7 @@ async def test_tables_check_success(sql_handler: SQLHandler) -> None:
         assert "Table count: 5" in result["successMessage"]
 
 
+@pytest.mark.asyncio
 async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
     """Test tables check with empty response."""
     # Create a mock DataFrame with zero count
@@ -71,6 +73,7 @@ async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
         assert "Table count: 0" in result["successMessage"]
 
 
+@pytest.mark.asyncio
 async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
     """Test tables check with failure response."""
     # Create a DataFrame with invalid data that will cause an error

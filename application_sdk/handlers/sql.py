@@ -68,10 +68,10 @@ class SQLHandler(HandlerInterface):
         sql_input = SQLQueryInput(
             engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
         )
-        sql_input = await sql_input.get_daft_dataframe()
+        df = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
-            for row in sql_input.to_pylist():
+            for row in df.to_pylist():
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -96,8 +96,8 @@ class SQLHandler(HandlerInterface):
                 query=self.test_authentication_sql,
                 chunk_size=None,
             )
-            sql_input = await sql_input.get_daft_dataframe()
-            sql_input.to_pylist()
+            df = await sql_input.get_daft_dataframe()
+            df.to_pylist()
             return True
         except Exception as exc:
             logger.error(
@@ -283,7 +283,7 @@ class SQLHandler(HandlerInterface):
             # Handle wildcard case
             if filtered_schemas == "*":
                 continue
-
+                
             # Handle list case
             if isinstance(filtered_schemas, list):
                 for schema in filtered_schemas:

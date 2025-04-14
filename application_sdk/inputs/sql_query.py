@@ -301,3 +301,11 @@ class SQLQueryInput(Input):
         except Exception as e:
             logger.error(f"Error reading batched data(daft) from SQL: {str(e)}")
             raise e
+
+    async def get_daft_dataframe(self) -> "daft.DataFrame":
+        """Get query results as a daft DataFrame.
+
+        Returns:
+            daft.DataFrame: Query results as a daft DataFrame.
+        """
+        return await self._get_daft_dataframe_async()
