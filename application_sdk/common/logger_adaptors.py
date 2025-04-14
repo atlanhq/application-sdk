@@ -66,6 +66,7 @@ SEVERITY_MAPPING = {
     "WARNING": SeverityNumber.WARN,
     "ERROR": SeverityNumber.ERROR,
     "CRITICAL": SeverityNumber.FATAL,
+    "ACTIVITY": SeverityNumber.INFO,  # Using INFO severity for activity level
 }
 
 
@@ -76,6 +77,9 @@ class AtlanLoggerAdapter:
         # Bind the logger name when creating the logger instance
         self.logger = logger
         logger.remove()
+
+        # Register custom log level for activity
+        logger.level("ACTIVITY", no=25, color="<cyan>", icon="🔵")
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
@@ -271,6 +275,27 @@ class AtlanLoggerAdapter:
     def critical(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).critical(msg, *args)
+        
+    def activity(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+        """Log an activity-specific message with activity context.
+        
+        This method is specifically designed for logging activity-related information.
+        It automatically adds activity context if available and formats the message
+        with activity-specific information.
+        
+        Args:
+            msg: The message to log
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments
+        """
+        # Add activity-specific tag to kwargs
+        kwargs["log_type"] = "activity"
+        
+        # Process the message with context
+        msg, kwargs = self.process(msg, kwargs)
+        
+        # Log with the custom ACTIVITY level
+        self.logger.bind(**kwargs).log("ACTIVITY", msg, *args)
 
 
 # Create a singleton instance of the logger
