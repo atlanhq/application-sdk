@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 
@@ -16,7 +16,9 @@ class Input(ABC):
     """
 
     @abstractmethod
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+    def get_batched_dataframe(
+        self,
+    ) -> Union[Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]]:
         """
         Get an iterator of batched pandas DataFrames.
 

@@ -1,7 +1,7 @@
 import glob
 import logging
 import os
-from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional
 
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
@@ -27,7 +27,6 @@ class ParquetInput(Input):
         file_names: Optional[List[str]] = None,
     ):
         """Initialize the Parquet input class.
-
         Args:
             path (str): Path to parquet file or directory containing parquet files.
             chunk_size (Optional[int], optional): Number of rows per batch.
@@ -44,10 +43,8 @@ class ParquetInput(Input):
 
     async def download_files(self, remote_file_path: str) -> str:
         """Read a file from the object store.
-
         Args:
             remote_file_path (str): Path to the remote file in object store.
-
         Returns:
             str: Path to the downloaded local file.
         """
@@ -68,7 +65,6 @@ class ParquetInput(Input):
         """
         Method to read the data from the parquet file(s)
         and return as a single combined pandas dataframe.
-
         Returns:
             "pd.DataFrame": Combined dataframe from all parquet files.
         """
@@ -97,7 +93,6 @@ class ParquetInput(Input):
         """
         Method to read the data from the parquet file(s) in batches
         and return as an iterator of pandas dataframes.
-
         Returns:
             Iterator["pd.DataFrame"]: Iterator of pandas dataframes.
         """
@@ -139,7 +134,6 @@ class ParquetInput(Input):
         """
         Method to read the data from the parquet file(s)
         and return as a single combined daft dataframe.
-
         Returns:
             daft.DataFrame: Combined daft dataframe from all parquet files.
         """
@@ -176,10 +170,9 @@ class ParquetInput(Input):
 
     def get_batched_daft_dataframe(
         self,
-    ) -> Union[Iterator["daft.DataFrame"], AsyncIterator["daft.DataFrame"]]:
+    ) -> Iterator["daft.DataFrame"]:
         """
         Get batched daft dataframe from parquet file(s)
-
         Returns:
             Union[Iterator["daft.DataFrame"], AsyncIterator["daft.DataFrame"]]: An iterator of daft DataFrames
         """
