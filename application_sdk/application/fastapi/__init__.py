@@ -3,12 +3,12 @@ from typing import Any, Callable, List, Optional, Type
 # Import with full paths to avoid naming conflicts
 from fastapi import status
 from fastapi.applications import FastAPI
+from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from starlette.requests import Request
 from uvicorn import Config, Server
 
 from application_sdk.application import AtlanApplicationInterface
