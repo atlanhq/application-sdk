@@ -8,7 +8,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
-from application_sdk.common.error_codes import ApplicationErrorCodes
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers.sql import SQLHandler
@@ -195,7 +195,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
             except Exception as row_error:
                 activity.logger.error(
                     f"Error processing row for {typename}: {row_error}",
-                    ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_PARSE_ERROR,
+                    ApplicationFrameworkErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_PARSE_ERROR,
                 )
 
     def _transform_batch(
@@ -258,7 +258,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         except Exception as e:
             activity.logger.error(
                 f"Failed to fetch databases: {e}",
-                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+                ApplicationFrameworkErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
             )
             raise
 
@@ -296,7 +296,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         except Exception as e:
             activity.logger.error(
                 f"Failed to fetch schemas: {e}",
-                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+                ApplicationFrameworkErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
             )
             raise
 
@@ -336,7 +336,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         except Exception as e:
             activity.logger.error(
                 f"Failed to fetch tables: {e}",
-                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+                ApplicationFrameworkErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
             )
             raise
 
@@ -376,7 +376,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         except Exception as e:
             activity.logger.error(
                 f"Failed to fetch columns: {e}",
-                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+                ApplicationFrameworkErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
             )
             raise
 
@@ -430,6 +430,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         except Exception as e:
             activity.logger.error(
                 f"Failed to transform data: {e}",
-                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_ERROR,
+                ApplicationFrameworkErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_ERROR,
             )
             raise
