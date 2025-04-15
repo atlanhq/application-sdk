@@ -44,7 +44,7 @@ class ObjectStoreInput:
                 try:
                     # Assuming the object store binding supports a "list" operation
                     response = client.invoke_binding(
-                        binding_name=cls.OBJECT_STORE_NAME,
+                        binding_name=OBJECT_STORE_NAME,
                         operation=cls.OBJECT_LIST_OPERATION,
                         binding_metadata=metadata,
                     )

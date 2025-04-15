@@ -174,9 +174,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 state store.
 
         Note:
-            - The workflow uses a retry policy with maximum 6 attempts and backoff
+            The workflow uses a retry policy with maximum 6 attempts and backoff
             coefficient of 2.
-            - In case you override the run method, annotate it with @workflow.run
+            In case you override the run method, annotate it with @workflow.run
         """
         await super().run(workflow_config)
 
