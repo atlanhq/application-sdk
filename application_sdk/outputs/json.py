@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
 from temporalio import activity
@@ -8,11 +8,11 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-activity.logger = get_logger(__name__)
-
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+
+activity.logger = get_logger(__name__)
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
@@ -64,7 +64,7 @@ class JsonOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
-        **kwargs: Any,
+        **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
 
@@ -85,7 +85,7 @@ class JsonOutput(Output):
             path_gen (Callable, optional): Function to generate file paths.
                 Defaults to path_gen function.
         """
-        self.output_path = output_path or ""
+        self.output_path = output_path
         self.output_suffix = output_suffix
         self.output_prefix = output_prefix
         self.typename = typename
@@ -98,12 +98,13 @@ class JsonOutput(Output):
         self.current_buffer_size = 0
         self.path_gen = path_gen
 
-        # Handle potential None values
-        if self.output_path and self.output_suffix:
-            self.output_path = os.path.join(self.output_path, self.output_suffix)
-            if typename:
-                self.output_path = os.path.join(self.output_path, typename)
-            os.makedirs(self.output_path, exist_ok=True)
+        if not self.output_path:
+            raise ValueError("output_path is required")
+
+        self.output_path = os.path.join(self.output_path, output_suffix)
+        if typename:
+            self.output_path = os.path.join(self.output_path, typename)
+        os.makedirs(self.output_path, exist_ok=True)
 
         # For Query Extraction
         start_marker = kwargs.get("start_marker")
@@ -177,30 +178,23 @@ class JsonOutput(Output):
             # If the buffer reaches the specified size, write it to the file
             if self.chunk_size and len(buffer) >= self.chunk_size:
                 self.chunk_count += 1
-                if self.output_path:
-                    output_file_name = os.path.join(
-                        self.output_path,
-                        self.path_gen(self.chunk_start, self.chunk_count),
-                    )
-                    with open(output_file_name, "w") as f:
-                        f.writelines(buffer)
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                with open(output_file_name, "w") as f:
+                    f.writelines(buffer)
                 buffer.clear()  # Clear the buffer
 
         # Write any remaining rows in the buffer
-        if buffer and self.output_path:
+        if buffer:
             self.chunk_count += 1
-            output_file_name = os.path.join(
-                self.output_path, self.path_gen(self.chunk_start, self.chunk_count)
-            )
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
             with open(output_file_name, "w") as f:
                 f.writelines(buffer)
             buffer.clear()
 
-        # Push the file to the object store if both path and prefix are defined
-        if self.output_path and self.output_prefix:
-            await ObjectStoreOutput.push_files_to_object_store(
-                self.output_prefix, self.output_path
-            )
+        # Push the file to the object store
+        await ObjectStoreOutput.push_files_to_object_store(
+            self.output_prefix, self.output_path
+        )
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
@@ -211,39 +205,23 @@ class JsonOutput(Output):
         Note:
             If the buffer is empty or has no records, the method returns without writing.
         """
+        import pandas as pd
+
         if not self.buffer or not self.current_buffer_size:
             return
+        combined_dataframe = pd.concat(self.buffer)
 
-        try:
-            import pandas as pd
+        # Write DataFrame to JSON file
+        if not combined_dataframe.empty:
+            self.chunk_count += 1
+            self.total_record_count += len(combined_dataframe)
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+            combined_dataframe.to_json(output_file_name, orient="records", lines=True)
 
-            combined_dataframe = pd.concat(self.buffer)
+            # Push the file to the object store
+            await ObjectStoreOutput.push_file_to_object_store(
+                self.output_prefix, output_file_name
+            )
 
-            # Write DataFrame to JSON file
-            if not combined_dataframe.empty and self.output_path:
-                self.chunk_count = (
-                    1 if self.chunk_count is None else self.chunk_count + 1
-                )
-                self.total_record_count = (
-                    len(combined_dataframe)
-                    if self.total_record_count is None
-                    else self.total_record_count + len(combined_dataframe)
-                )
-                output_file_name = os.path.join(
-                    self.output_path, self.path_gen(self.chunk_start, self.chunk_count)
-                )
-                combined_dataframe.to_json(
-                    output_file_name, orient="records", lines=True
-                )
-
-                # Push the file to the object store if prefix is defined
-                if self.output_prefix:
-                    await ObjectStoreOutput.push_file_to_object_store(
-                        self.output_prefix, output_file_name
-                    )
-
-            self.buffer.clear()
-            self.current_buffer_size = 0
-        except Exception as e:
-            activity.logger.error(f"Error flushing buffer to json: {str(e)}")
-            raise e
+        self.buffer.clear()
+        self.current_buffer_size = 0
