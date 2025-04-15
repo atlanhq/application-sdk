@@ -88,7 +88,7 @@ class Application(AtlanApplicationInterface):
     """
 
     # Declare class attributes with proper typing
-    app: Any
+    app: FastAPI
     workflow_client: Optional[WorkflowClient]
     workflow_router: APIRouter
     pubsub_router: APIRouter
