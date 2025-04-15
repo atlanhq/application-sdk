@@ -7,11 +7,11 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 
-activity.logger = get_logger(__name__)
-
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+
+activity.logger = get_logger(__name__)
 
 
 class IcebergOutput(Output):
@@ -44,9 +44,6 @@ class IcebergOutput(Output):
         self.iceberg_namespace = iceberg_namespace
         self.iceberg_table = iceberg_table
         self.mode = mode
-        # Add these attributes required by the Output base class
-        self.output_path = ""
-        self.output_prefix = ""
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """
@@ -64,7 +61,6 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing pandas dataframe to iceberg table: {str(e)}"
             )
-            raise e
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """
@@ -73,16 +69,9 @@ class IcebergOutput(Output):
         try:
             if dataframe.count_rows() == 0:
                 return
-
-            # Initialize counters if they're None
-            if self.chunk_count is None:
-                self.chunk_count = 0
-            if self.total_record_count is None:
-                self.total_record_count = 0
-
-            # Update counters
-            self.chunk_count = self.chunk_count + 1
-            self.total_record_count = self.total_record_count + dataframe.count_rows()
+            # Create a new table in the iceberg catalog
+            self.chunk_count += 1
+            self.total_record_count += dataframe.count_rows()
 
             # check if iceberg table is already created
             if isinstance(self.iceberg_table, Table):
@@ -100,4 +89,3 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing daft dataframe to iceberg table: {str(e)}"
             )
-            raise e
