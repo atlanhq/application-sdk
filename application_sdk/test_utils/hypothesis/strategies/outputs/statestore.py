@@ -41,24 +41,17 @@ common_credential_keys = st.sampled_from(
 uuid_strategy = st.uuids().map(str)
 
 
-# draw is optional, but we need to pass it to the composite strategy
 @composite
 def credentials_strategy(draw) -> Dict[str, Any]:
     """Generate a dictionary of credentials with common keys."""
     # Always include username and password as they're most common
-    num_fields = draw(st.integers(min_value=2, max_value=10))
+    num_fields = draw(st.integers(min_value=2))
     required_keys = ["username", "password"]
-
-    # Ensure we don't request more unique keys than available
-    # common_credential_keys has 17 elements, but we already used 2 for required_keys
-    # So the max available is 15
-    optional_keys_count = min(num_fields - 2, 15)
-
     optional_keys = draw(
         st.lists(
             common_credential_keys,
-            min_size=optional_keys_count,
-            max_size=optional_keys_count,
+            min_size=num_fields - 2,
+            max_size=num_fields - 2,
             unique=True,
         )
     )
