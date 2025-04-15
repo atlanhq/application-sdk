@@ -18,7 +18,7 @@ class ObjectStoreOutput:
     async def push_file_to_object_store(
         cls, output_prefix: str, file_path: str
     ) -> None:
-        """Pushes a single file to the object
+        """Pushes a single file to the object store.
 
         Args:
             output_prefix (str): The base path to calculate relative paths from.
