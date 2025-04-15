@@ -1,5 +1,8 @@
 import os 
 from datetime import timedelta
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=".env")
 
 # Application Constants
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
