@@ -310,28 +310,6 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
 
     return extra  # We know it's a Dict[str, Any] due to the Union type and str check
 
-
-async def to_async(
-    func: Callable[..., Any], *args: Dict[str, Any], **kwargs: Dict[str, Any]
-) -> Iterator[Union["pd.DataFrame", "daft.DataFrame"]]:  # noqa: F821
-    """Convert a synchronous method to an asynchronous one.
-
-    Args:
-        func: The function to convert to async.
-        *args: Positional arguments to pass to the function.
-        **kwargs: Keyword arguments to pass to the function.
-
-    Returns:
-        An iterator containing either a pandas DataFrame or a daft DataFrame.
-    """
-    if inspect.iscoroutinefunction(func):
-        return await func(*args, **kwargs)
-    else:
-        executor = ThreadPoolExecutor()
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(executor, func, *args, **kwargs)
-
-
 def run_sync(func):
     """Run a function in a thread pool executor.
 
