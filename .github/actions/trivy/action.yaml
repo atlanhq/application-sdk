@@ -70,11 +70,13 @@ runs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-vuln-results.sarif'
+        category: 'trivy-vulnerability'
 
     - name: Upload Secret Scan Results
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-secret-results.sarif'
+        category: 'trivy-secret'
 
     - name: Set up Python
       if: inputs.add-report-comment-to-pr == 'true'
