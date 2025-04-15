@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Iterator, Optional, Type, Tuple
+from typing import Any, Dict, Iterator, Optional, Tuple, Type
 
 import daft
 from temporalio import activity
@@ -226,13 +226,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
 
     def _validate_output_args(self, workflow_args: Dict[str, Any]) -> Tuple[str, str]:
         """Validates output prefix and path arguments.
-        
+
         Args:
             workflow_args: Arguments passed to the workflow.
-            
+
         Returns:
             Tuple containing output_prefix and output_path.
-            
+
         Raises:
             ValueError: If output_prefix or output_path is not provided.
         """
@@ -243,33 +243,41 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             raise ValueError("No output prefix or path provided")
         return output_prefix, output_path
 
-    def _validate_query(self, query_template: Optional[str], entity_type: str) -> None:
+    def _validate_query(self, query_template: Optional[str], entity_type: str) -> str:
         """Validates that a query template exists.
-        
+
         Args:
             query_template: SQL query template to validate.
             entity_type: Type of entity (database, schema, table, column).
-            
+
+        Returns:
+            The validated query template.
+
         Raises:
             ValueError: If query_template is None.
         """
         if not query_template:
             activity.logger.warning(f"No {entity_type} query provided")
             raise ValueError(f"No {entity_type} query provided")
+        return query_template
 
-    def _validate_prepared_query(self, query: str, entity_type: str) -> None:
+    def _validate_prepared_query(self, query: Optional[str], entity_type: str) -> str:
         """Validates that a prepared query exists.
-        
+
         Args:
             query: Prepared SQL query to validate.
             entity_type: Type of entity (database, schema, table, column).
-            
+
+        Returns:
+            The validated query.
+
         Raises:
             ValueError: If query is empty.
         """
         if not query:
             activity.logger.warning(f"No {entity_type} query provided")
             raise ValueError(f"No {entity_type} query provided")
+        return query
 
     @activity.defn
     @auto_heartbeater
@@ -284,21 +292,21 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        self._validate_query(self.fetch_database_sql, "database")
+        fetch_database = self._validate_query(self.fetch_database_sql, "database")
 
         output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
-        query = prepare_query(
-            query=self.fetch_database_sql, workflow_args=workflow_args
+        prepared_query = prepare_query(
+            query=fetch_database, workflow_args=workflow_args
         )
 
-        self._validate_prepared_query(query, "database")
+        validated_query = self._validate_prepared_query(prepared_query, "database")
 
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
-            query=query,
+            query=validated_query,
             chunk_size=None,
         )
         sql_input = await sql_input.get_daft_dataframe()
@@ -324,19 +332,19 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        self._validate_query(self.fetch_schema_sql, "schema")
+        fetch_schema = self._validate_query(self.fetch_schema_sql, "schema")
 
         output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
-        query = prepare_query(query=self.fetch_schema_sql, workflow_args=workflow_args)
+        prepared_query = prepare_query(query=fetch_schema, workflow_args=workflow_args)
 
-        self._validate_prepared_query(query, "schema")
+        validated_query = self._validate_prepared_query(prepared_query, "schema")
 
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
-            query=query,
+            query=validated_query,
             chunk_size=None,
         )
         sql_input = await sql_input.get_daft_dataframe()
@@ -362,19 +370,19 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        self._validate_query(self.fetch_table_sql, "table")
+        fetch_table = self._validate_query(self.fetch_table_sql, "table")
 
         output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
-        query = prepare_query(query=self.fetch_table_sql, workflow_args=workflow_args)
+        prepared_query = prepare_query(query=fetch_table, workflow_args=workflow_args)
 
-        self._validate_prepared_query(query, "table")
+        validated_query = self._validate_prepared_query(prepared_query, "table")
 
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
-            query=query,
+            query=validated_query,
             chunk_size=None,
         )
         sql_input = await sql_input.get_daft_dataframe()
@@ -400,23 +408,23 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        self._validate_query(self.fetch_column_sql, "column")
+        fetch_column = self._validate_query(self.fetch_column_sql, "column")
 
         output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
-        query = prepare_query(
-            query=self.fetch_column_sql,
+        prepared_query = prepare_query(
+            query=fetch_column,
             workflow_args=workflow_args,
             temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
         )
 
-        self._validate_prepared_query(query, "column")
+        validated_query = self._validate_prepared_query(prepared_query, "column")
 
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
-            query=query,
+            query=validated_query,
             chunk_size=None,
         )
         sql_input = await sql_input.get_daft_dataframe()
@@ -449,7 +457,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         """
 
         output_prefix, output_path = self._validate_output_args(workflow_args)
-        
+
         typename = workflow_args.get("typename")
         workflow_id = workflow_args.get("workflow_id")
         workflow_run_id = workflow_args.get("workflow_run_id")
