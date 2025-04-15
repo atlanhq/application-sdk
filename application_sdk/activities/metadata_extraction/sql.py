@@ -1,5 +1,5 @@
 import os
-from typing import Any, Dict, Iterator, Optional, Type
+from typing import Any, Dict, Iterator, Optional, Type, Tuple
 
 import daft
 from temporalio import activity
@@ -224,6 +224,53 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             connection_qualified_name,
         )
 
+    def _validate_output_args(self, workflow_args: Dict[str, Any]) -> Tuple[str, str]:
+        """Validates output prefix and path arguments.
+        
+        Args:
+            workflow_args: Arguments passed to the workflow.
+            
+        Returns:
+            Tuple containing output_prefix and output_path.
+            
+        Raises:
+            ValueError: If output_prefix or output_path is not provided.
+        """
+        output_prefix = workflow_args.get("output_prefix")
+        output_path = workflow_args.get("output_path")
+        if not output_prefix or not output_path:
+            activity.logger.warning("No output prefix or path provided")
+            raise ValueError("No output prefix or path provided")
+        return output_prefix, output_path
+
+    def _validate_query(self, query_template: Optional[str], entity_type: str) -> None:
+        """Validates that a query template exists.
+        
+        Args:
+            query_template: SQL query template to validate.
+            entity_type: Type of entity (database, schema, table, column).
+            
+        Raises:
+            ValueError: If query_template is None.
+        """
+        if not query_template:
+            activity.logger.warning(f"No {entity_type} query provided")
+            raise ValueError(f"No {entity_type} query provided")
+
+    def _validate_prepared_query(self, query: str, entity_type: str) -> None:
+        """Validates that a prepared query exists.
+        
+        Args:
+            query: Prepared SQL query to validate.
+            entity_type: Type of entity (database, schema, table, column).
+            
+        Raises:
+            ValueError: If query is empty.
+        """
+        if not query:
+            activity.logger.warning(f"No {entity_type} query provided")
+            raise ValueError(f"No {entity_type} query provided")
+
     @activity.defn
     @auto_heartbeater
     async def fetch_databases(self, workflow_args: Dict[str, Any]):
@@ -237,15 +284,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        if not self.fetch_database_sql:
-            activity.logger.warning("No database query provided")
-            raise ValueError("No database query provided")
+        self._validate_query(self.fetch_database_sql, "database")
 
-        output_prefix = workflow_args.get("output_prefix")
-        output_path = workflow_args.get("output_path")
-        if not output_prefix or not output_path:
-            activity.logger.warning("No output prefix or path provided")
-            raise ValueError("No output prefix or path provided")
+        output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
@@ -253,9 +294,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             query=self.fetch_database_sql, workflow_args=workflow_args
         )
 
-        if not query:
-            activity.logger.warning("No database query provided")
-            raise ValueError("No database query provided")
+        self._validate_prepared_query(query, "database")
 
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
@@ -285,23 +324,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        if not self.fetch_schema_sql:
-            activity.logger.warning("No schema query provided")
-            raise ValueError("No schema query provided")
+        self._validate_query(self.fetch_schema_sql, "schema")
 
-        output_prefix = workflow_args.get("output_prefix")
-        output_path = workflow_args.get("output_path")
-        if not output_prefix or not output_path:
-            activity.logger.warning("No output prefix or path provided")
-            raise ValueError("No output prefix or path provided")
+        output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
         query = prepare_query(query=self.fetch_schema_sql, workflow_args=workflow_args)
 
-        if not query:
-            activity.logger.warning("No schema query provided")
-            raise ValueError("No schema query provided")
+        self._validate_prepared_query(query, "schema")
+
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
             query=query,
@@ -330,23 +362,16 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        if not self.fetch_table_sql:
-            activity.logger.warning("No table query provided")
-            raise ValueError("No table query provided")
+        self._validate_query(self.fetch_table_sql, "table")
 
-        output_prefix = workflow_args.get("output_prefix")
-        output_path = workflow_args.get("output_path")
-        if not output_prefix or not output_path:
-            activity.logger.warning("No output prefix or path provided")
-            raise ValueError("No output prefix or path provided")
+        output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
         query = prepare_query(query=self.fetch_table_sql, workflow_args=workflow_args)
 
-        if not query:
-            activity.logger.warning("No table query provided")
-            raise ValueError("No table query provided")
+        self._validate_prepared_query(query, "table")
+
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
             query=query,
@@ -375,15 +400,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        if not self.fetch_column_sql:
-            activity.logger.warning("No column query provided")
-            raise ValueError("No column query provided")
+        self._validate_query(self.fetch_column_sql, "column")
 
-        output_prefix = workflow_args.get("output_prefix")
-        output_path = workflow_args.get("output_path")
-        if not output_prefix or not output_path:
-            activity.logger.warning("No output prefix or path provided")
-            raise ValueError("No output prefix or path provided")
+        output_prefix, output_path = self._validate_output_args(workflow_args)
 
         state = await self._get_state(workflow_args)
 
@@ -393,9 +412,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
         )
 
-        if not query:
-            activity.logger.warning("No column query provided")
-            raise ValueError("No column query provided")
+        self._validate_prepared_query(query, "column")
 
         sql_input = SQLQueryInput(
             engine=state.sql_client.engine,
@@ -431,20 +448,14 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 - chunk_count: Number of chunks processed
         """
 
-        output_prefix = workflow_args.get("output_prefix")
-        output_path = workflow_args.get("output_path")
+        output_prefix, output_path = self._validate_output_args(workflow_args)
+        
         typename = workflow_args.get("typename")
         workflow_id = workflow_args.get("workflow_id")
         workflow_run_id = workflow_args.get("workflow_run_id")
-        if (
-            not output_prefix
-            or not output_path
-            or not typename
-            or not workflow_id
-            or not workflow_run_id
-        ):
-            activity.logger.warning("No output prefix or path provided")
-            raise ValueError("No output prefix or path provided")
+        if not typename or not workflow_id or not workflow_run_id:
+            activity.logger.warning("Missing required workflow arguments")
+            raise ValueError("Missing required workflow arguments")
 
         state: SQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
