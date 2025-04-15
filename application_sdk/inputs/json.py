@@ -2,7 +2,6 @@ import os
 from typing import Iterator, List, Optional
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.config import get_settings
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
@@ -31,8 +30,7 @@ class JsonInput(Input):
             chunk_size (Optional[int]): The chunk size to read the data. If None, uses config value.
         """
         self.path = path
-        settings = get_settings()
-        self.chunk_size = chunk_size or settings.chunk_size
+        self.chunk_size = 100000
         self.file_names = file_names
         self.download_file_prefix = download_file_prefix
 

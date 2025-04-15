@@ -8,13 +8,11 @@ from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
-
+from application_sdk.constants import STATE_STORE_NAME
 activity.logger = get_logger(__name__)
 
 
 class StateStoreInput:
-    STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
-
     @classmethod
     def get_state(cls, key: str) -> Dict[str, Any]:
         """Get state from the store.
@@ -31,7 +29,7 @@ class StateStoreInput:
         """
         try:
             with DaprClient() as client:
-                state = client.get_state(store_name=cls.STATE_STORE_NAME, key=key)
+                state = client.get_state(store_name=STATE_STORE_NAME, key=key)
                 if not state.data:
                     raise ValueError(f"State not found for key: {key}")
                 return json.loads(state.data)

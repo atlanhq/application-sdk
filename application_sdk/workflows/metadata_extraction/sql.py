@@ -14,10 +14,12 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
-from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
+from application_sdk.constants import (
+    APPLICATION_NAME,
+)
 
 workflow.logger = get_logger(__name__)
 
@@ -40,7 +42,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         SQLMetadataExtractionActivities
     )
 
-    application_name: str = ApplicationConstants.APPLICATION_NAME.value
+    application_name: str = APPLICATION_NAME
 
     @staticmethod
     def get_activities(
@@ -174,6 +176,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Note:
             The workflow uses a retry policy with maximum 6 attempts and backoff
             coefficient of 2.
+            In case you override the run method, annotate it with @workflow.run
         """
         await super().run(workflow_config)
 
@@ -195,29 +198,26 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
+        fetch_functions = self.get_fetch_functions()
         fetch_and_transforms = [
-            self.fetch_and_transform(
-                self.activities_cls.fetch_databases,
-                workflow_args,
-                retry_policy,
-            ),
-            self.fetch_and_transform(
-                self.activities_cls.fetch_schemas,
-                workflow_args,
-                retry_policy,
-            ),
-            self.fetch_and_transform(
-                self.activities_cls.fetch_tables,
-                workflow_args,
-                retry_policy,
-            ),
-            self.fetch_and_transform(
-                self.activities_cls.fetch_columns,
-                workflow_args,
-                retry_policy,
-            ),
+            self.fetch_and_transform(fetch_function, workflow_args, retry_policy)
+            for fetch_function in fetch_functions
         ]
 
         await asyncio.gather(*fetch_and_transforms)
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
+
+
+    def get_fetch_functions(self) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]:
+        """Get the fetch functions for the SQL metadata extraction workflow.
+
+        Returns:
+            List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]: A list of fetch operations.
+        """
+        return [
+            self.activities_cls.fetch_databases,
+            self.activities_cls.fetch_schemas,
+            self.activities_cls.fetch_tables,
+            self.activities_cls.fetch_columns,
+        ]

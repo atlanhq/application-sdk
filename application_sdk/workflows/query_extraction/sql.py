@@ -14,7 +14,9 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
-from application_sdk.common.constants import ApplicationConstants
+from application_sdk.constants import (
+    APPLICATION_NAME,
+)
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
@@ -44,7 +46,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     sql_client: SQLClient | None = None
 
-    application_name: str = ApplicationConstants.APPLICATION_NAME.value
+    application_name: str = APPLICATION_NAME
     batch_size: int = 100000
     default_heartbeat_timeout: timedelta | None = timedelta(seconds=300)
 
