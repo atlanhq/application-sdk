@@ -1,6 +1,6 @@
 import asyncio
 import concurrent
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Optional, Union
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
@@ -98,41 +98,15 @@ class SQLQueryInput(Input):
 
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    def get_batched_dataframe(
-        self,
-    ) -> Union[Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]]:
-        """
-        Get query results as batched pandas DataFrames.
-
-        This method wraps the async implementation for synchronous use.
+    async def get_batched_dataframe(self) -> AsyncIterator["pd.DataFrame"]:  # noqa: F821
+        """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
-            Iterator["pd.DataFrame"]: Iterator yielding batches of query results.
+            AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
 
         Raises:
             ValueError: If engine is a string instead of SQLAlchemy engine.
             Exception: If there's an error executing the query.
-        """
-        import asyncio
-
-        async_gen = self._get_batched_dataframe_async()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            results = []
-            while True:
-                try:
-                    batch = loop.run_until_complete(async_gen.__anext__())
-                    results.append(batch)
-                except StopAsyncIteration:
-                    break
-            return iter(results)
-        finally:
-            loop.close()
-
-    async def _get_batched_dataframe_async(self) -> AsyncIterator["pd.DataFrame"]:
-        """
-        Async implementation of get_batched_dataframe
         """
         try:
             if isinstance(self.engine, str):
@@ -149,30 +123,31 @@ class SQLQueryInput(Input):
                 )
 
             if async_session:
-                # Type checking workaround for AsyncSession
-                session_obj: Any = None
-                async with async_session() as session:  # type: ignore
-                    session_obj = session
-                    result = await session_obj.run_sync(self._read_sql_query)
-                    for chunk in result:
-                        yield chunk
+                async with async_session() as session:
+                    result = await session.run_sync(self._read_sql_query)
+                    # Convert regular iterator to async iterator
+                    if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
+                        for item in result:
+                            yield item
+                    else:
+                        yield result  # Single dataframe case
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
-                    for chunk in result:
-                        yield chunk
+                    # Convert regular iterator to async iterator
+                    if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
+                        for item in result:
+                            yield item
+                    else:
+                        yield result  # Single dataframe case
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
-            raise e
 
-    def get_dataframe(self) -> "pd.DataFrame":
-        """
-        Get all query results as a single pandas DataFrame.
-
-        This method wraps the async implementation for synchronous use.
+    async def get_dataframe(self) -> "pd.DataFrame":
+        """Get all query results as a single pandas DataFrame asynchronously.
 
         Returns:
             pd.DataFrame: Query results as a DataFrame.
@@ -181,20 +156,6 @@ class SQLQueryInput(Input):
             ValueError: If engine is a string instead of SQLAlchemy engine.
             Exception: If there's an error executing the query.
         """
-        import asyncio
-
-        async_func = self._get_dataframe_async()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(async_func)
-        finally:
-            loop.close()
-
-    async def _get_dataframe_async(self) -> "pd.DataFrame":
-        """
-        Async implementation of get_dataframe
-        """
         try:
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
@@ -210,114 +171,60 @@ class SQLQueryInput(Input):
                 )
 
             if async_session:
-                # Type checking workaround for AsyncSession
-                session_obj: Any = None
-                async with async_session() as session:  # type: ignore
-                    session_obj = session
-                    df = await session_obj.run_sync(self._read_sql_query)
-                    # Ensure we're returning a DataFrame, not an iterator
-                    import pandas as pd
-
-                    if isinstance(df, Iterator):
-                        result = pd.concat(list(df), ignore_index=True)
-                        return result
-                    return df
+                async with async_session() as session:
+                    return await session.run_sync(self._read_sql_query)
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    df = await asyncio.get_event_loop().run_in_executor(
+                    return await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
-                    # Ensure we're returning a DataFrame, not an iterator
-                    import pandas as pd
-
-                    if isinstance(df, Iterator):
-                        result = pd.concat(list(df), ignore_index=True)
-                        return result
-                    return df
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-            raise e
 
-    def get_daft_dataframe(self) -> "daft.DataFrame":
-        """
-        Get query results as a daft DataFrame.
+    async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+        """Get query results as a daft DataFrame.
 
-        This method wraps the async implementation for synchronous use.
+        This method uses ConnectorX to read data from SQL for supported connectors.
+        For unsupported connectors and direct engine usage, it falls back to SQLAlchemy.
 
         Returns:
             daft.DataFrame: Query results as a daft DataFrame.
-        """
-        import asyncio
 
-        async_func = self._get_daft_dataframe_async()
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(async_func)
-        finally:
-            loop.close()
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
 
-    async def _get_daft_dataframe_async(self) -> "daft.DataFrame":
-        """
-        Async implementation of get_daft_dataframe
+        Note:
+            For ConnectorX supported sources, see:
+            https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                result = await asyncio.get_event_loop().run_in_executor(
+                return await asyncio.get_event_loop().run_in_executor(
                     executor, self._execute_query_daft
                 )
-                # If result is an iterator, take just the first item
-                import daft
-
-                if isinstance(result, Iterator):
-                    # Take the first DataFrame from the iterator
-                    for df in result:
-                        return df
-                    # If iterator is empty, return empty DataFrame
-                    return daft.DataFrame()
-                return result
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
-            raise e
 
-    def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:
-        """
-        Get query results as batched daft DataFrames.
+    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
+        """Get query results as batched daft DataFrames.
 
-        This method wraps the async implementation for synchronous use.
+        This method reads data using pandas in batches since daft does not support
+        batch reading. Each pandas DataFrame is then converted to a daft DataFrame.
 
         Returns:
-            Iterator[daft.DataFrame]: Iterator yielding batches of query results
+            AsyncIterator[daft.DataFrame]: Async iterator yielding batches of query results
                 as daft DataFrames.
-        """
-        import asyncio
 
-        def run_async():
-            async_gen = self._get_batched_daft_dataframe_async()
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                results = []
-                while True:
-                    try:
-                        future = asyncio.ensure_future(async_gen.__anext__())
-                        batch = loop.run_until_complete(future)
-                        results.append(batch)
-                    except StopAsyncIteration:
-                        break
-                return results
-            finally:
-                loop.close()
+        Raises:
+            ValueError: If engine is a string instead of SQLAlchemy engine.
+            Exception: If there's an error executing the query.
 
-        return iter(run_async())
-
-    async def _get_batched_daft_dataframe_async(
-        self,
-    ) -> AsyncIterator["daft.DataFrame"]:
-        """
-        Async implementation of get_batched_daft_dataframe
+        Note:
+            This method uses pandas for batch reading since daft does not support
+            reading data in batches natively.
         """
         try:
             import daft
@@ -325,11 +232,9 @@ class SQLQueryInput(Input):
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 
-            # Don't await the iterator directly, iterate through it with async for
-            gen = self._get_batched_dataframe_async()
-            async for dataframe in gen:
+            # Use async for to consume the AsyncIterator properly
+            async for dataframe in self.get_batched_dataframe():
                 daft_dataframe = daft.from_pandas(dataframe)
                 yield daft_dataframe
         except Exception as e:
             logger.error(f"Error reading batched data(daft) from SQL: {str(e)}")
-            raise e
