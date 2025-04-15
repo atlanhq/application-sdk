@@ -5691,4 +5691,4 @@ workflows = ["dapr", "orjson", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "69a29c9115d50af8a45aef880cd48e9d5db552986a7bac41eacc2ed056b46315"
+content-hash = "fc2e46254edd113dc5176b2b2ae021f8515f451095af8baa437a37a31d35d404"
