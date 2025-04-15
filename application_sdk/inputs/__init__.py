@@ -44,7 +44,9 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
+    def get_batched_daft_dataframe(
+        self,
+    ) -> Union[Iterator["daft.DataFrame"], AsyncIterator["daft.DataFrame"]]:  # noqa: F821
         """
         Get an iterator of batched daft DataFrames.
 
