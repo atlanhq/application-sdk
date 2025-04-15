@@ -1,6 +1,9 @@
 import os
 from typing import Iterator, List, Optional
 
+import pandas as pd
+
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
 from application_sdk.inputs import Input
@@ -50,7 +53,10 @@ class JsonInput(Input):
                         os.path.join(self.path, file_name),
                     )
             except Exception as e:
-                logger.error(f"Error downloading file {file_name}: {str(e)}")
+                logger.error(
+                    f"Error downloading file {file_name}: {str(e)}",
+                    error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.JSON_DOWNLOAD_ERROR,
+                )
                 raise e
 
     async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
@@ -72,7 +78,10 @@ class JsonInput(Input):
                 for chunk in json_reader_obj:
                     yield chunk
         except Exception as e:
-            logger.error(f"Error reading batched data from JSON: {str(e)}")
+            logger.error(
+                f"Error reading batched data from JSON: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.JSON_BATCH_ERROR,
+            )
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """
@@ -82,18 +91,17 @@ class JsonInput(Input):
         try:
             import pandas as pd
 
-            dataframes = []
             await self.download_files()
-            for file_name in self.file_names or []:
-                dataframes.append(
-                    pd.read_json(
-                        os.path.join(self.path, file_name),
-                        lines=True,
-                    )
-                )
-            return pd.concat(dataframes, ignore_index=True)
+            if len(self.file_names or []) == 1:
+                return pd.read_json(os.path.join(self.path, self.file_names[0]))
+            else:
+                return pd.read_json(os.path.join(self.path, "*.json"))
         except Exception as e:
-            logger.error(f"Error reading data from JSON: {str(e)}")
+            logger.error(
+                f"Error reading data from JSON: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.JSON_READ_ERROR,
+            )
+            raise e
 
     async def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
         """
@@ -111,7 +119,10 @@ class JsonInput(Input):
                 )
                 yield json_reader_obj
         except Exception as e:
-            logger.error(f"Error reading batched data from JSON: {str(e)}")
+            logger.error(
+                f"Error reading batched data from JSON: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.JSON_DAFT_ERROR,
+            )
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
@@ -122,7 +133,13 @@ class JsonInput(Input):
             import daft
 
             await self.download_files()
-            directory = os.path.join(self.path, self.file_names[0].split("/")[0])
-            return daft.read_json(path=f"{directory}/*.json")
+            if len(self.file_names or []) == 1:
+                return daft.read_json(os.path.join(self.path, self.file_names[0]))
+            else:
+                return daft.read_json(os.path.join(self.path, "*.json"))
         except Exception as e:
-            logger.error(f"Error reading data from JSON using daft: {str(e)}")
+            logger.error(
+                f"Error reading data from JSON using Daft: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.JSON_DAFT_READ_ERROR,
+            )
+            raise e

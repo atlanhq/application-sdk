@@ -39,7 +39,6 @@ from application_sdk.activities.metadata_extraction.sql import (
 )
 from application_sdk.clients.sql import SQLClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.transformers.atlas import AtlasTransformer

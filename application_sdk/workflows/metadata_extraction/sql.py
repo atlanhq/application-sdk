@@ -15,6 +15,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.constants import ApplicationConstants
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -218,6 +219,13 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ),
         ]
 
-        await asyncio.gather(*fetch_and_transforms)
-
-        workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
+        try:
+            await asyncio.gather(*fetch_and_transforms)
+            workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
+        except Exception as e:
+            workflow.logger.error(
+                f"SQL metadata extraction workflow failed: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.WorkflowErrorCodes.SQL_METADATA_EXTRACTION_ERROR,
+                exc_info=True,
+            )
+            raise

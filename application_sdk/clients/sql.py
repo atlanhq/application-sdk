@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -19,13 +20,14 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
 
 activity.logger = get_logger(__name__)
 
 
-class SQLConstants(Enum):
+class SQLClientConstants(Enum):
     USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
 
 
@@ -47,11 +49,11 @@ class SQLClient(ClientInterface):
     engine = None
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
-    use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
+    use_server_side_cursor: bool = SQLClientConstants.USE_SERVER_SIDE_CURSOR.value
 
     def __init__(
         self,
-        use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value,
+        use_server_side_cursor: bool = SQLClientConstants.USE_SERVER_SIDE_CURSOR.value,
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
@@ -60,7 +62,7 @@ class SQLClient(ClientInterface):
 
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
-                Defaults to SQLConstants.USE_SERVER_SIDE_CURSOR.value.
+                Defaults to SQLClientConstants.USE_SERVER_SIDE_CURSOR.value.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
             sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
                 connection arguments. Defaults to {}.
@@ -89,7 +91,12 @@ class SQLClient(ClientInterface):
             )
             self.connection = self.engine.connect()
         except Exception as e:
-            activity.logger.error(f"Error loading SQL client: {str(e)}")
+            activity.logger.error(
+                f"Error loading SQL client: {str(e)}",
+                extra={
+                    "error_code": ApplicationFrameworkErrorCodes.ClientErrorCodes.SQL_CLIENT_LOAD_ERROR
+                },
+            )
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -248,7 +255,11 @@ class SQLClient(ClientInterface):
                     yield results
             except Exception as e:
                 activity.logger.error(
-                    "Error running query in batch: {error}", error=str(e)
+                    "Error running query in batch: {error}",
+                    error=str(e),
+                    extra={
+                        "error_code": ApplicationFrameworkErrorCodes.ClientErrorCodes.SQL_CLIENT_QUERY_ERROR
+                    },
                 )
                 raise e
 

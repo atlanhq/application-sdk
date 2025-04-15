@@ -17,6 +17,7 @@ from typing import (
     Union,
 )
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.statestore import StateStoreOutput
@@ -87,7 +88,10 @@ def prepare_query(
             exclude_views=exclude_views,
         )
     except Exception as e:
-        logger.error(f"Error preparing query [{query}]:  {e}")
+        logger.error(
+            f"Error preparing query [{query}]:  {e}",
+            error_code=ApplicationFrameworkErrorCodes.CommonErrorCodes.QUERY_PREPARATION_ERROR,
+        )
         return None
 
 

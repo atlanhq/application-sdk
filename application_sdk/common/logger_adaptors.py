@@ -3,7 +3,7 @@ import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
@@ -169,6 +169,13 @@ class AtlanLoggerAdapter:
                 else:
                     attributes[key] = str(value)
 
+        # Add error_code if present
+        if (
+            "error_code" in record["extra"]
+            and record["extra"]["error_code"] is not None
+        ):
+            attributes["error_code"] = record["extra"]["error_code"]
+
         return LogRecord(
             timestamp=int(record["time"].timestamp() * 1e9),
             observed_timestamp=time_ns(),
@@ -264,7 +271,24 @@ class AtlanLoggerAdapter:
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).warning(msg, *args)
 
-    def error(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def error(
+        self,
+        msg: str,
+        error_code: Optional[str] = None,
+        *args: Any,
+        **kwargs: Dict[str, Any],
+    ):
+        """
+        Log an error message with an optional error code.
+
+        Args:
+            msg: The error message
+            error_code: Optional error code to include in the log
+            *args: Additional positional arguments
+            **kwargs: Additional keyword arguments
+        """
+        if error_code is not None:
+            kwargs["error_code"] = error_code
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).error(msg, *args)
 

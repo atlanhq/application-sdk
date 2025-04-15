@@ -7,6 +7,7 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 
 activity.logger = get_logger(__name__)
@@ -33,10 +34,17 @@ class StateStoreInput:
             with DaprClient() as client:
                 state = client.get_state(store_name=cls.STATE_STORE_NAME, key=key)
                 if not state.data:
+                    activity.logger.error(
+                        f"State not found for key: {key}",
+                        error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.STATE_STORE_ERROR,
+                    )
                     raise ValueError(f"State not found for key: {key}")
                 return json.loads(state.data)
         except Exception as e:
-            activity.logger.error(f"Failed to extract state: {str(e)}")
+            activity.logger.error(
+                f"Failed to extract state: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.STATE_STORE_ERROR,
+            )
             raise e
 
     @classmethod
@@ -54,6 +62,17 @@ class StateStoreInput:
             Exception: If there's an error with the Dapr client operations.
         """
         if not config_id:
+            activity.logger.error(
+                "Invalid configuration ID provided",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.STATE_STORE_ERROR,
+            )
             raise ValueError("Invalid configuration ID provided.")
-        config = cls.get_state(f"config_{config_id}")
-        return config
+        try:
+            config = cls.get_state(f"config_{config_id}")
+            return config
+        except Exception as e:
+            activity.logger.error(
+                f"Error extracting configuration: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.STATE_STORE_ERROR,
+            )
+            raise e

@@ -1,12 +1,15 @@
-import glob
-import logging
 import os
-from typing import AsyncIterator, List, Optional
+from typing import AsyncIterator, Iterator, List, Optional
 
+import daft
+import pandas as pd
+
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ParquetInput(Input):
@@ -38,95 +41,80 @@ class ParquetInput(Input):
         self.input_prefix = input_prefix
         self.file_names = file_names
 
-    async def download_files(self, remote_file_path: str) -> str:
-        """Read a file from the object store.
+    async def download_files(self):
+        """Download the files from the object store to the local path"""
+        if not self.file_names:
+            logger.debug("No files to download")
+            return
 
-        Args:
-            remote_file_path (str): Path to the remote file in object store.
-
-        Returns:
-            str: Path to the downloaded local file.
-        """
-        if os.path.isdir(remote_file_path):
-            parquet_files = glob.glob(os.path.join(remote_file_path, "*.parquet"))
-            if not parquet_files:
-                logger.info(
-                    f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
+        for file_name in self.file_names or []:
+            try:
+                if not os.path.exists(os.path.join(self.path, file_name)):
+                    ObjectStoreInput.download_file_from_object_store(
+                        os.path.join(self.input_prefix, file_name),
+                        os.path.join(self.path, file_name),
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Error downloading file {file_name}: {str(e)}",
+                    error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.PARQUET_DOWNLOAD_ERROR,
                 )
-                ObjectStoreInput.download_files_from_object_store(
-                    self.input_prefix, remote_file_path
-                )
+                raise e
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """
-        Method to read the data from the parquet file(s)
-        and return as a single combined pandas dataframe.
-
-        Returns:
-            "pd.DataFrame": Combined dataframe from all parquet files.
+        Method to read the data from the parquet files in the path
+        and return as a single combined pandas dataframe
         """
         try:
             import pandas as pd
 
-            path = self.path
-            if self.input_prefix:
-                path = await self.download_files(self.path)
-            # Use pandas native read_parquet which can handle both single files and directories
-            return pd.read_parquet(path)
-        except Exception as e:
-            logger.error(f"Error reading data from parquet file(s): {str(e)}")
-            # Re-raise to match IcebergInput behavior
-            raise
-
-    async def get_batched_dataframe(self) -> AsyncIterator["pd.DataFrame"]:
-        """
-        Method to read the data from the parquet file(s) in batches
-        and return as an async iterator of pandas dataframes.
-
-        Returns:
-            AsyncIterator["pd.DataFrame"]: Async iterator of pandas dataframes.
-        """
-        try:
-            import pandas as pd
-
-            path = self.path
-            if self.input_prefix:
-                path = await self.download_files(self.path)
-            df = pd.read_parquet(path)
-            if self.chunk_size:
-                for i in range(0, len(df), self.chunk_size):
-                    yield df.iloc[i : i + self.chunk_size]
+            await self.download_files()
+            if len(self.file_names or []) == 1:
+                return pd.read_parquet(os.path.join(self.path, self.file_names[0]))
             else:
-                yield df
+                return pd.read_parquet(os.path.join(self.path, "*.parquet"))
         except Exception as e:
             logger.error(
-                f"Error reading data from parquet file(s) in batches: {str(e)}"
+                f"Error reading data from Parquet: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.PARQUET_READ_ERROR,
             )
-            raise
+
+    async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+        """
+        Method to read the data from the parquet files in the path
+        and return as a batched pandas dataframe
+        """
+        try:
+            import pandas as pd
+
+            await self.download_files()
+            for file_name in self.file_names or []:
+                yield pd.read_parquet(os.path.join(self.path, file_name))
+        except Exception as e:
+            logger.error(
+                f"Error reading batched data from Parquet: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.PARQUET_BATCH_ERROR,
+            )
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
-        Method to read the data from the parquet file(s)
-        and return as a single combined daft dataframe.
-
-        Returns:
-            daft.DataFrame: Combined daft dataframe from all parquet files.
+        Method to read the data from the parquet files in the path
+        and return as a single combined daft dataframe
         """
         try:
             import daft
 
-            if self.file_names:
-                path = f"{self.path}/{self.file_names[0].split('/')[0]}"
+            await self.download_files()
+            if len(self.file_names or []) == 1:
+                return daft.read_parquet(os.path.join(self.path, self.file_names[0]))
             else:
-                path = self.path
-            await self.download_files(path)
-            return daft.read_parquet(f"{path}/*.parquet")
+                return daft.read_parquet(os.path.join(self.path, "*.parquet"))
         except Exception as e:
             logger.error(
-                f"Error reading data from parquet file(s) using daft: {str(e)}"
+                f"Error reading data from Parquet using daft: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.PARQUET_DAFT_ERROR,
             )
-            # Re-raise to match IcebergInput behavior
-            raise
 
     async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:
         """
@@ -141,7 +129,7 @@ class ParquetInput(Input):
 
             path = self.path
             if self.input_prefix:
-                path = await self.download_files(self.path)
+                path = await self.download_files()
             # Use daft's native chunking through _chunk_size parameter
             df_iterator = daft.read_parquet(path, _chunk_size=self.chunk_size)
             for batch_df in df_iterator:

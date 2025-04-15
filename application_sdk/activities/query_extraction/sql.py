@@ -9,6 +9,7 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
+from application_sdk.common.error_codes import ApplicationErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -172,6 +173,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             logger.error(
                 "Query fetch failed %s",
                 e,
+                ApplicationErrorCodes.ActivityErrorCodes.QUERY_EXTRACTION_SQL_ERROR,
                 exc_info=True,
             )
             raise
@@ -364,7 +366,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 sql_client=sql_client,
             )
         except Exception as e:
-            logger.error(f"Failed to parallelize queries: {e}")
+            logger.error(
+                f"Failed to parallelize queries: {e}",
+                ApplicationErrorCodes.ActivityErrorCodes.QUERY_EXTRACTION_ERROR,
+            )
             raise e
 
         logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")

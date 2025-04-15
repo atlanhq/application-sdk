@@ -20,6 +20,7 @@ from temporalio.worker.workflow_sandbox import (
 
 from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
 from application_sdk.common.constants import ApplicationConstants
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
@@ -267,7 +268,12 @@ class TemporalWorkflowClient(WorkflowClient):
                 "handle": handle,  # Return the handle so it can be used to get the result
             }
         except WorkflowFailureError as e:
-            logger.error(f"Workflow failure: {e}")
+            logger.error(
+                f"Workflow failure: {e}",
+                extra={
+                    "error_code": ApplicationFrameworkErrorCodes.ClientErrorCodes.TEMPORAL_CLIENT_WORKFLOW_ERROR
+                },
+            )
             raise e
 
     async def stop_workflow(self, workflow_id: str, run_id: str) -> None:
@@ -283,7 +289,12 @@ class TemporalWorkflowClient(WorkflowClient):
             )
             await workflow_handle.terminate()
         except Exception as e:
-            logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
+            logger.error(
+                f"Error terminating workflow {workflow_id} {run_id}: {e}",
+                extra={
+                    "error_code": ApplicationFrameworkErrorCodes.ClientErrorCodes.TEMPORAL_CLIENT_WORKFLOW_ERROR
+                },
+            )
             raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
 
     def create_worker(
@@ -383,7 +394,12 @@ class TemporalWorkflowClient(WorkflowClient):
                     "status": "NOT_FOUND",
                     "execution_duration_seconds": 0,
                 }
-            logger.error(f"Error getting workflow status: {e}")
+            logger.error(
+                f"Error getting workflow status: {e}",
+                extra={
+                    "error_code": ApplicationFrameworkErrorCodes.ClientErrorCodes.TEMPORAL_CLIENT_WORKFLOW_ERROR
+                },
+            )
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
             )

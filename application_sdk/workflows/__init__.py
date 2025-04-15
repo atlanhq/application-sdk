@@ -12,6 +12,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 
@@ -96,5 +97,9 @@ class WorkflowInterface(ABC):
             return result
 
         except Exception as e:
-            logger.error(f"Workflow execution failed: {str(e)}", exc_info=True)
+            logger.error(
+                f"Workflow execution failed: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.WorkflowErrorCodes.WORKFLOW_EXECUTION_ERROR,
+                exc_info=True,
+            )
             raise

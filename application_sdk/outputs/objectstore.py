@@ -5,6 +5,7 @@ import os
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 
 activity.logger = get_logger(__name__)
@@ -33,7 +34,10 @@ class ObjectStoreOutput:
                 with open(file_path, "rb") as f:
                     file_content = f.read(1024 * 1024 * 10)  # Read up to 10MB
             except IOError as e:
-                activity.logger.error(f"Error reading file {file_path}: {str(e)}")
+                activity.logger.error(
+                    f"Error reading file {file_path}: {str(e)}",
+                    error_code=ApplicationFrameworkErrorCodes.OutputErrorCodes.OBJECT_STORE_READ_ERROR,
+                )
                 raise e
 
             relative_path = os.path.relpath(file_path, output_prefix)
@@ -53,7 +57,8 @@ class ObjectStoreOutput:
                 activity.logger.debug(f"Successfully pushed file: {relative_path}")
             except Exception as e:
                 activity.logger.error(
-                    f"Error pushing file {relative_path} to object store: {str(e)}"
+                    f"Error pushing file {relative_path} to object store: {str(e)}",
+                    error_code=ApplicationFrameworkErrorCodes.OutputErrorCodes.OBJECT_STORE_WRITE_ERROR,
                 )
                 raise e
 
@@ -91,6 +96,7 @@ class ObjectStoreOutput:
             )
         except Exception as e:
             activity.logger.error(
-                f"An unexpected error occurred while pushing files to object store: {str(e)}"
+                f"An unexpected error occurred while pushing files to object store: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.OutputErrorCodes.OBJECT_STORE_ERROR,
             )
             raise e

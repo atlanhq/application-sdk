@@ -8,6 +8,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.constants import ApplicationConstants
+from application_sdk.common.error_codes import ApplicationErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers.sql import SQLHandler
@@ -193,7 +194,8 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                     activity.logger.warning(f"Skipped invalid {typename} data: {row}")
             except Exception as row_error:
                 activity.logger.error(
-                    f"Error processing row for {typename}: {row_error}"
+                    f"Error processing row for {typename}: {row_error}",
+                    ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_PARSE_ERROR,
                 )
 
     def _transform_batch(
@@ -235,23 +237,30 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state = await self._get_state(workflow_args)
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=prepare_query(
-                query=self.fetch_database_sql, workflow_args=workflow_args
-            ),
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
+        try:
+            state = await self._get_state(workflow_args)
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepare_query(
+                    query=self.fetch_database_sql, workflow_args=workflow_args
+                ),
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        raw_output = ParquetOutput(
-            output_prefix=workflow_args.get("output_prefix"),
-            output_path=workflow_args.get("output_path"),
-            output_suffix="raw/database",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="database")
+            raw_output = ParquetOutput(
+                output_prefix=workflow_args.get("output_prefix"),
+                output_path=workflow_args.get("output_path"),
+                output_suffix="raw/database",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="database")
+        except Exception as e:
+            activity.logger.error(
+                f"Failed to fetch databases: {e}",
+                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+            )
+            raise
 
     @activity.defn
     @auto_heartbeater
@@ -266,23 +275,30 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state = await self._get_state(workflow_args)
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=prepare_query(
-                query=self.fetch_schema_sql, workflow_args=workflow_args
-            ),
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
+        try:
+            state = await self._get_state(workflow_args)
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepare_query(
+                    query=self.fetch_schema_sql, workflow_args=workflow_args
+                ),
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        raw_output = ParquetOutput(
-            output_prefix=workflow_args.get("output_prefix"),
-            output_path=workflow_args.get("output_path"),
-            output_suffix="raw/schema",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="schema")
+            raw_output = ParquetOutput(
+                output_prefix=workflow_args.get("output_prefix"),
+                output_path=workflow_args.get("output_path"),
+                output_suffix="raw/schema",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="schema")
+        except Exception as e:
+            activity.logger.error(
+                f"Failed to fetch schemas: {e}",
+                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+            )
+            raise
 
     @activity.defn
     @auto_heartbeater
@@ -297,25 +313,32 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state = await self._get_state(workflow_args)
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=prepare_query(
-                query=self.fetch_table_sql,
-                workflow_args=workflow_args,
-                temp_table_regex_sql=self.tables_extraction_temp_table_regex_sql,
-            ),
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
+        try:
+            state = await self._get_state(workflow_args)
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepare_query(
+                    query=self.fetch_table_sql,
+                    workflow_args=workflow_args,
+                    temp_table_regex_sql=self.tables_extraction_temp_table_regex_sql,
+                ),
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        raw_output = ParquetOutput(
-            output_prefix=workflow_args.get("output_prefix"),
-            output_path=workflow_args.get("output_path"),
-            output_suffix="raw/table",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="table")
+            raw_output = ParquetOutput(
+                output_prefix=workflow_args.get("output_prefix"),
+                output_path=workflow_args.get("output_path"),
+                output_suffix="raw/table",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="table")
+        except Exception as e:
+            activity.logger.error(
+                f"Failed to fetch tables: {e}",
+                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+            )
+            raise
 
     @activity.defn
     @auto_heartbeater
@@ -330,25 +353,32 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state = await self._get_state(workflow_args)
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=prepare_query(
-                query=self.fetch_column_sql,
-                workflow_args=workflow_args,
-                temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
-            ),
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
+        try:
+            state = await self._get_state(workflow_args)
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepare_query(
+                    query=self.fetch_column_sql,
+                    workflow_args=workflow_args,
+                    temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
+                ),
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        raw_output = ParquetOutput(
-            output_prefix=workflow_args.get("output_prefix"),
-            output_path=workflow_args.get("output_path"),
-            output_suffix="raw/column",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="column")
+            raw_output = ParquetOutput(
+                output_prefix=workflow_args.get("output_prefix"),
+                output_path=workflow_args.get("output_path"),
+                output_suffix="raw/column",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="column")
+        except Exception as e:
+            activity.logger.error(
+                f"Failed to fetch columns: {e}",
+                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_SQL_ERROR,
+            )
+            raise
 
     @activity.defn
     @auto_heartbeater
@@ -368,31 +398,38 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        state: SQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
-        )
-        raw_input = ParquetInput(
-            path=os.path.join(workflow_args.get("output_path"), "raw"),
-            input_prefix=workflow_args.get("output_prefix"),
-            file_names=workflow_args.get("file_names"),
-            chunk_size=None,
-        )
-        raw_input = await raw_input.get_daft_dataframe()
+        try:
+            state: SQLMetadataExtractionActivitiesState = await self._get_state(
+                workflow_args
+            )
+            raw_input = ParquetInput(
+                path=os.path.join(workflow_args.get("output_path"), "raw"),
+                input_prefix=workflow_args.get("output_prefix"),
+                file_names=workflow_args.get("file_names"),
+                chunk_size=None,
+            )
+            raw_input = await raw_input.get_daft_dataframe()
 
-        transformed_chunk = self._transform_batch(
-            raw_input,
-            workflow_args.get("typename"),
-            state,
-            workflow_args.get("workflow_id"),
-            workflow_args.get("workflow_run_id"),
-            workflow_args,
-        )
+            transformed_chunk = self._transform_batch(
+                raw_input,
+                workflow_args.get("typename"),
+                state,
+                workflow_args.get("workflow_id"),
+                workflow_args.get("workflow_run_id"),
+                workflow_args,
+            )
 
-        transformed_output = JsonOutput(
-            output_prefix=workflow_args.get("output_prefix"),
-            output_path=workflow_args.get("output_path"),
-            output_suffix="transformed",
-            typename=workflow_args.get("typename"),
-        )
-        await transformed_output.write_daft_dataframe(transformed_chunk)
-        return await transformed_output.get_statistics()
+            transformed_output = JsonOutput(
+                output_prefix=workflow_args.get("output_prefix"),
+                output_path=workflow_args.get("output_path"),
+                output_suffix="transformed",
+                typename=workflow_args.get("typename"),
+            )
+            await transformed_output.write_daft_dataframe(transformed_chunk)
+            return await transformed_output.get_statistics()
+        except Exception as e:
+            activity.logger.error(
+                f"Failed to transform data: {e}",
+                ApplicationErrorCodes.ActivityErrorCodes.METADATA_EXTRACTION_ERROR,
+            )
+            raise

@@ -11,6 +11,7 @@ from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
 from pyatlan.utils import init_guid, validate_required_fields
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers.common.utils import build_atlas_qualified_name
 
@@ -86,6 +87,10 @@ class Procedure(assets.Procedure):
                 "entity_class": Procedure,
             }
         except AssertionError as e:
+            logger.error(
+                f"Error creating Procedure Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating Procedure Entity: {str(e)}")
 
 
@@ -138,6 +143,10 @@ class Database(assets.Database):
                 "entity_class": Database,
             }
         except AssertionError as e:
+            logger.error(
+                f"Error creating Database Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating Database Entity: {str(e)}")
 
 
@@ -207,6 +216,10 @@ class Schema(assets.Schema):
                 "entity_class": Schema,
             }
         except AssertionError as e:
+            logger.error(
+                f"Error creating Schema Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating Schema Entity: {str(e)}")
 
 
@@ -439,6 +452,10 @@ class Table(assets.Table):
                 "entity_class": table_type,
             }
         except AssertionError as e:
+            logger.error(
+                f"Error creating Table Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating Table Entity: {str(e)}")
 
 
@@ -606,6 +623,10 @@ class Column(assets.Column):
                 "entity_class": Column,
             }
         except AssertionError as e:
+            logger.error(
+                f"Error creating Column Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating Column Entity: {str(e)}")
 
 
@@ -845,6 +866,10 @@ class Function(assets.Function):
                 "entity_class": Function,
             }
         except AssertionError as e:
+            logger.error(
+                f"Error creating Function Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating Function Entity: {str(e)}")
 
 
@@ -1131,4 +1156,8 @@ class TagAttachment(assets.TagAttachment):
                 "entity_class": TagAttachment,
             }
         except Exception as e:
+            logger.error(
+                f"Error creating TagAttachment Entity: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_VALIDATION_ERROR,
+            )
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")

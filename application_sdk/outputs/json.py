@@ -1,9 +1,12 @@
+import json
 import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import orjson
+import pandas as pd
 from temporalio import activity
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.config import get_settings
 from application_sdk.outputs import Output
@@ -146,7 +149,11 @@ class JsonOutput(Output):
             await self._flush_buffer()
 
         except Exception as e:
-            activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+            activity.logger.error(
+                f"Error writing dataframe to json: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.OutputErrorCodes.JSON_WRITE_ERROR,
+            )
+            raise e
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to JSON files.
@@ -220,3 +227,68 @@ class JsonOutput(Output):
 
         self.buffer.clear()
         self.current_buffer_size = 0
+
+    @classmethod
+    async def write_dataframe_to_json(
+        cls, df, output_path: str, file_name: str = "output.json"
+    ) -> None:
+        """Writes a DataFrame to a JSON file.
+
+        Args:
+            df: The DataFrame to write
+            output_path (str): The directory path where the JSON file will be written
+            file_name (str, optional): The name of the JSON file. Defaults to "output.json"
+
+        Raises:
+            Exception: If there's an error writing the DataFrame to JSON
+        """
+        try:
+            # Convert DataFrame to list of dictionaries
+            records = df.to_dict("records")
+
+            # Create output directory if it doesn't exist
+            os.makedirs(output_path, exist_ok=True)
+
+            # Write to JSON file
+            file_path = os.path.join(output_path, file_name)
+            with open(file_path, "w") as f:
+                json.dump(records, f, indent=2)
+
+            activity.logger.info(f"Successfully wrote DataFrame to {file_path}")
+
+        except Exception as e:
+            activity.logger.error(
+                f"Error writing DataFrame to JSON: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.OutputErrorCodes.JSON_WRITE_ERROR,
+            )
+            raise e
+
+    @classmethod
+    async def write_batched_dataframes_to_json(
+        cls, dfs: List[Any], output_path: str, file_prefix: str = "output"
+    ) -> None:
+        """Writes multiple DataFrames to separate JSON files.
+
+        Args:
+            dfs (List[Any]): List of DataFrames to write
+            output_path (str): The directory path where the JSON files will be written
+            file_prefix (str, optional): Prefix for the JSON files. Defaults to "output"
+
+        Raises:
+            Exception: If there's an error writing the DataFrames to JSON
+        """
+        try:
+            for i, df in enumerate(dfs):
+                file_name = f"{file_prefix}_{i}.json"
+                await cls.write_dataframe_to_json(df, output_path, file_name)
+
+            activity.logger.info(
+                f"Successfully wrote {len(dfs)} DataFrames to JSON files"
+            )
+
+        except Exception as e:
+            activity.logger.error(
+                f"Error writing batched DataFrames to JSON: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.OutputErrorCodes.JSON_BATCH_WRITE_ERROR,
+            )
+            raise e

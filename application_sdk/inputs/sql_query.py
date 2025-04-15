@@ -2,6 +2,12 @@ import asyncio
 import concurrent
 from typing import Iterator, Optional, Union
 
+import daft
+import pandas as pd
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
+
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
@@ -126,7 +132,11 @@ class SQLQueryInput(Input):
                         executor, self._execute_query
                     )
         except Exception as e:
-            logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
+            logger.error(
+                f"Error reading batched data(pandas) from SQL: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.SQL_QUERY_BATCH_ERROR,
+            )
+            raise e
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """Get all query results as a single pandas DataFrame asynchronously.
@@ -162,7 +172,11 @@ class SQLQueryInput(Input):
                         executor, self._execute_query
                     )
         except Exception as e:
-            logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
+            logger.error(
+                f"Error reading data(pandas) from SQL: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.SQL_QUERY_PANDAS_ERROR,
+            )
+            raise e
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.
@@ -188,7 +202,11 @@ class SQLQueryInput(Input):
                     executor, self._execute_query_daft
                 )
         except Exception as e:
-            logger.error(f"Error reading data(daft) from SQL: {str(e)}")
+            logger.error(
+                f"Error reading data(daft) from SQL: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.SQL_QUERY_DAFT_ERROR,
+            )
+            raise e
 
     async def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
         """Get query results as batched daft DataFrames.
@@ -219,4 +237,8 @@ class SQLQueryInput(Input):
                 daft_dataframe = daft.from_pandas(dataframe)
                 yield daft_dataframe
         except Exception as e:
-            logger.error(f"Error reading batched data(daft) from SQL: {str(e)}")
+            logger.error(
+                f"Error reading batched data(daft) from SQL: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.SQL_QUERY_DAFT_ERROR,
+            )
+            raise e

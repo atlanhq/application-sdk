@@ -6,6 +6,7 @@ import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 
 activity.logger = get_logger(__name__)
@@ -51,7 +52,8 @@ class ObjectStoreInput:
                     file_list = orjson.loads(response.data.decode("utf-8"))
                 except Exception as e:
                     activity.logger.error(
-                        f"Error listing files in object store path {download_file_prefix}: {str(e)}"
+                        f"Error listing files in object store path {download_file_prefix}: {str(e)}",
+                        error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.OBJECT_STORE_ERROR,
                     )
                     raise e
 
@@ -75,7 +77,8 @@ class ObjectStoreInput:
             )
         except Exception as e:
             activity.logger.error(
-                f"Error downloading files from object store: {str(e)}"
+                f"Error downloading files from object store: {str(e)}",
+                error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.OBJECT_STORE_DOWNLOAD_ERROR,
             )
             raise e
 
@@ -113,6 +116,7 @@ class ObjectStoreInput:
                 activity.logger.debug(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
                 activity.logger.error(
-                    f"Error downloading file {relative_path} to object store: {str(e)}"
+                    f"Error downloading file {relative_path} to object store: {str(e)}",
+                    error_code=ApplicationFrameworkErrorCodes.InputErrorCodes.OBJECT_STORE_READ_ERROR,
                 )
                 raise e

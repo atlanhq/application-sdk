@@ -9,6 +9,7 @@ from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers import HandlerInterface
@@ -77,7 +78,10 @@ class SQLHandler(HandlerInterface):
                     }
                 )
         except Exception as exc:
-            logger.error(f"Failed to fetch metadata: {str(exc)}")
+            logger.error(
+                f"Failed to fetch metadata: {str(exc)}",
+                error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.SQL_HANDLER_METADATA_ERROR,
+            )
             raise exc
         return result
 
@@ -99,7 +103,8 @@ class SQLHandler(HandlerInterface):
             return True
         except Exception as exc:
             logger.error(
-                f"Failed to authenticate with the given credentials: {str(exc)}"
+                f"Failed to authenticate with the given credentials: {str(exc)}",
+                error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.SQL_HANDLER_AUTH_ERROR,
             )
             raise exc
 
@@ -140,7 +145,10 @@ class SQLHandler(HandlerInterface):
                 else:
                     raise ValueError(f"Invalid metadata type: {metadata_type}")
             except Exception as e:
-                logger.error(f"Failed to fetch metadata: {str(e)}")
+                logger.error(
+                    f"Failed to fetch metadata: {str(e)}",
+                    error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.SQL_HANDLER_METADATA_ERROR,
+                )
                 raise
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
@@ -201,7 +209,11 @@ class SQLHandler(HandlerInterface):
 
             logger.info("Preflight check completed successfully")
         except Exception as exc:
-            logger.error("Error during preflight check", exc_info=True)
+            logger.error(
+                "Error during preflight check",
+                error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.PREFLIGHT_CHECK_ERROR,
+                exc_info=True,
+            )
             results["error"] = f"Preflight check failed: {str(exc)}"
         return results
 
@@ -235,7 +247,11 @@ class SQLHandler(HandlerInterface):
                 else "",
             }
         except Exception as exc:
-            logger.error("Error during schema and database check", exc_info=True)
+            logger.error(
+                "Error during schema and database check",
+                error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.PREFLIGHT_SCHEMA_ERROR,
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "successMessage": "",
@@ -312,7 +328,11 @@ class SQLHandler(HandlerInterface):
                 "failureMessage": "",
             }
         except Exception as exc:
-            logger.error("Error during tables check", exc_info=True)
+            logger.error(
+                "Error during tables check",
+                error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.PREFLIGHT_TABLE_ERROR,
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "successMessage": "",
@@ -401,7 +421,11 @@ class SQLHandler(HandlerInterface):
                 else "",
             }
         except Exception as exc:
-            logger.error(f"Error during client version check: {exc}", exc_info=True)
+            logger.error(
+                f"Error during client version check: {exc}",
+                error_code=ApplicationFrameworkErrorCodes.HandlerErrorCodes.PREFLIGHT_VERSION_ERROR,
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "successMessage": "",

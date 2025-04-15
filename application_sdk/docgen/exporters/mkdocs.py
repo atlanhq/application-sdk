@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, HttpUrl
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.models.manifest import DocsManifest
@@ -95,20 +96,28 @@ class MkDocsExporter:
         Args:
             export_path (str): Directory to write mkdocs.yml
         """
-        config = self.generate_config()
-        config.nav = self.generate_nav(pages=pages)
+        try:
+            config = self.generate_config()
+            config.nav = self.generate_nav(pages=pages)
 
-        with open(os.path.join(self.export_path, "mkdocs.yml"), "w") as f:
-            yaml.dump(json.loads(config.model_dump_json()), f)
+            with open(os.path.join(self.export_path, "mkdocs.yml"), "w") as f:
+                yaml.dump(json.loads(config.model_dump_json()), f)
 
-        docs_dir = os.path.join(self.export_path, "docs")
-        os.makedirs(docs_dir, exist_ok=True)
+            docs_dir = os.path.join(self.export_path, "docs")
+            os.makedirs(docs_dir, exist_ok=True)
 
-        for page in pages:
-            with open(os.path.join(docs_dir, f"{page.id}.md"), "w") as f:
-                f.write(page.content)
+            for page in pages:
+                with open(os.path.join(docs_dir, f"{page.id}.md"), "w") as f:
+                    f.write(page.content)
 
-        self.logger.info(f"Documentation exported to {self.export_path}")
+            self.logger.info(f"Documentation exported to {self.export_path}")
+        except Exception as e:
+            error_msg = f"Failed to export documentation: {str(e)}"
+            self.logger.error(
+                error_msg,
+                error_code=ApplicationFrameworkErrorCodes.DocgenErrorCodes.DOCGEN_EXPORT_ERROR,
+            )
+            raise Exception(error_msg) from e
 
     def generate_nav(self, pages: List[Page]) -> List[Dict[str, Any]]:
         """Generate navigation structure from manifest pages.

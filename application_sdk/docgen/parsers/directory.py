@@ -4,7 +4,11 @@ import os
 from typing import Callable, List, Tuple
 
 import pydantic
-from loguru import logger
+
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
+from application_sdk.common.logger_adaptors import get_logger
+
+logger = get_logger(__name__)
 
 
 class DocsSubDirectory(enum.Enum):
@@ -196,7 +200,7 @@ class DirectoryParser:
         ]
 
         if not files:
-            self.logger.debug(
+            logger.debug(
                 f"No files found in {subdir.value} directory at {os.path.join(self.docs_directory, subdir.value)}"
             )
             return True
@@ -204,7 +208,15 @@ class DirectoryParser:
         results: List[bool] = []
 
         for validator in validators:
-            results.append(all([validator(file) for file in files]))
+            validation_results = [validator(file) for file in files]
+            if not all(validation_results):
+                invalid_files = [f for f, r in zip(files, validation_results) if not r]
+                error_msg = f"Invalid files found in {subdir.value} directory: {', '.join(invalid_files)}"
+                logger.error(
+                    error_msg,
+                    error_code=ApplicationFrameworkErrorCodes.DocgenErrorCodes.DIRECTORY_VALIDATION_ERROR,
+                )
+            results.append(all(validation_results))
 
         return all(results)
 

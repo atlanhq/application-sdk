@@ -11,7 +11,11 @@ from typing import Any, Dict, Tuple
 
 import yaml
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.docgen.models.manifest import DocsManifest
+
+logger = get_logger(__name__)
 
 # List of possible manifest file names
 MANIFEST_FILE_NAMES: Tuple[str, ...] = (
@@ -54,9 +58,14 @@ class ManifestParser:
             os.path.join(self.docs_directory, name) for name in MANIFEST_FILE_NAMES
         ]
 
-        raise FileNotFoundError(
+        error_msg = (
             f"Could not find manifest file. Tried paths: {', '.join(paths_tried)}"
         )
+        logger.error(
+            error_msg,
+            error_code=ApplicationFrameworkErrorCodes.DocgenErrorCodes.MANIFEST_NOT_FOUND_ERROR,
+        )
+        raise FileNotFoundError(error_msg)
 
     @staticmethod
     def read_manifest_file(file_path: str) -> Dict[str, Any]:
@@ -77,9 +86,19 @@ class ManifestParser:
                 manifest = yaml.safe_load(f)
                 return manifest
             except yaml.YAMLError as e:
-                raise yaml.YAMLError(f"Failed to parse YAML manifest: {str(e)}") from e
+                error_msg = f"Failed to parse YAML manifest: {str(e)}"
+                logger.error(
+                    error_msg,
+                    error_code=ApplicationFrameworkErrorCodes.DocgenErrorCodes.MANIFEST_YAML_ERROR,
+                )
+                raise yaml.YAMLError(error_msg) from e
             except Exception as e:
-                raise IOError(f"Error reading manifest file: {str(e)}") from e
+                error_msg = f"Error reading manifest file: {str(e)}"
+                logger.error(
+                    error_msg,
+                    error_code=ApplicationFrameworkErrorCodes.DocgenErrorCodes.MANIFEST_PARSE_ERROR,
+                )
+                raise IOError(error_msg) from e
 
     def parse_manifest(self) -> DocsManifest:
         """Parse the customer documentation manifest file.

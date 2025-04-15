@@ -1,5 +1,6 @@
 from typing import Union
 
+import pandas as pd
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity

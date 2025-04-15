@@ -1,5 +1,10 @@
 import os
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
+from application_sdk.common.logger_adaptors import get_logger
+
+logger = get_logger(__name__)
+
 
 def get_region_name_from_hostname(hostname: str) -> str:
     """
@@ -68,6 +73,10 @@ def generate_aws_rds_token_with_iam_role(
         return token
 
     except ClientError as e:
+        logger.error(
+            f"Failed to assume role: {str(e)}",
+            error_code=ApplicationFrameworkErrorCodes.CommonErrorCodes.AWS_ROLE_ERROR,
+        )
         raise Exception(f"Failed to assume role: {str(e)}")
 
 
@@ -106,4 +115,8 @@ def generate_aws_rds_token_with_iam_user(
         )
         return token
     except Exception as e:
+        logger.error(
+            f"Failed to get user credentials: {str(e)}",
+            error_code=ApplicationFrameworkErrorCodes.CommonErrorCodes.AWS_CREDENTIALS_ERROR,
+        )
         raise Exception(f"Failed to get user credentials: {str(e)}")

@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional, Type
 
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import process_text
@@ -143,10 +144,14 @@ class AtlasTransformer(TransformerInterface):
                     typename,
                     str(e),
                     extra={"data": data},
+                    error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_TRANSFORMATION_ERROR,
                 )
                 return None
         else:
-            logger.error(f"Unknown typename: {typename}")
+            logger.error(
+                f"Unknown typename: {typename}",
+                error_code=ApplicationFrameworkErrorCodes.TransformationErrorCodes.ATLAS_TYPE_ERROR,
+            )
             return None
 
     def _enrich_entity_with_metadata(

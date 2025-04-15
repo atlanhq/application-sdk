@@ -6,6 +6,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
+from application_sdk.common.error_codes import ApplicationFrameworkErrorCodes
 from application_sdk.common.logger_adaptors import get_logger, request_context
 
 logger = get_logger(__name__)
@@ -65,6 +66,7 @@ class LogMiddleware(BaseHTTPMiddleware):
                     "error": str(e),
                     "duration_ms": round(duration * 1000, 2),
                     "request_id": request_id,
+                    "error_code": ApplicationFrameworkErrorCodes.ApplicationErrorCodes.MIDDLEWARE_ERROR,
                 },
                 exc_info=True,
             )
