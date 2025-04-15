@@ -261,24 +261,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             raise ValueError(f"No {entity_type} query provided")
         return query_template
 
-    def _validate_prepared_query(self, query: Optional[str], entity_type: str) -> str:
-        """Validates that a prepared query exists.
-
-        Args:
-            query: Prepared SQL query to validate.
-            entity_type: Type of entity (database, schema, table, column).
-
-        Returns:
-            The validated query.
-
-        Raises:
-            ValueError: If query is empty.
-        """
-        if not query:
-            activity.logger.warning(f"No {entity_type} query provided")
-            raise ValueError(f"No {entity_type} query provided")
-        return query
-
     @activity.defn
     @auto_heartbeater
     async def fetch_databases(self, workflow_args: Dict[str, Any]):
@@ -292,32 +274,34 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        fetch_database = self._validate_query(self.fetch_database_sql, "database")
+        try:
+            fetch_database = self._validate_query(self.fetch_database_sql, "database")
 
-        output_prefix, output_path = self._validate_output_args(workflow_args)
+            output_prefix, output_path = self._validate_output_args(workflow_args)
 
-        state = await self._get_state(workflow_args)
+            state = await self._get_state(workflow_args)
 
-        prepared_query = prepare_query(
-            query=fetch_database, workflow_args=workflow_args
-        )
+            prepared_query = prepare_query(
+                query=fetch_database, workflow_args=workflow_args
+            )
 
-        validated_query = self._validate_prepared_query(prepared_query, "database")
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepared_query,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=validated_query,
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
-
-        raw_output = ParquetOutput(
-            output_prefix=output_prefix,
-            output_path=output_path,
-            output_suffix="raw/database",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="database")
+            raw_output = ParquetOutput(
+                output_prefix=output_prefix,
+                output_path=output_path,
+                output_suffix="raw/database",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="database")
+        except Exception as e:
+            activity.logger.error(f"Error fetching databases: {e}")
+            return None
 
     @activity.defn
     @auto_heartbeater
@@ -332,30 +316,34 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        fetch_schema = self._validate_query(self.fetch_schema_sql, "schema")
+        try:
+            fetch_schema = self._validate_query(self.fetch_schema_sql, "schema")
 
-        output_prefix, output_path = self._validate_output_args(workflow_args)
+            output_prefix, output_path = self._validate_output_args(workflow_args)
 
-        state = await self._get_state(workflow_args)
+            state = await self._get_state(workflow_args)
 
-        prepared_query = prepare_query(query=fetch_schema, workflow_args=workflow_args)
+            prepared_query = prepare_query(
+                query=fetch_schema, workflow_args=workflow_args
+            )
 
-        validated_query = self._validate_prepared_query(prepared_query, "schema")
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepared_query,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=validated_query,
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
-
-        raw_output = ParquetOutput(
-            output_prefix=output_prefix,
-            output_path=output_path,
-            output_suffix="raw/schema",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="schema")
+            raw_output = ParquetOutput(
+                output_prefix=output_prefix,
+                output_path=output_path,
+                output_suffix="raw/schema",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="schema")
+        except Exception as e:
+            activity.logger.error(f"Error fetching schemas: {e}")
+            return None
 
     @activity.defn
     @auto_heartbeater
@@ -370,30 +358,34 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        fetch_table = self._validate_query(self.fetch_table_sql, "table")
+        try:
+            fetch_table = self._validate_query(self.fetch_table_sql, "table")
 
-        output_prefix, output_path = self._validate_output_args(workflow_args)
+            output_prefix, output_path = self._validate_output_args(workflow_args)
 
-        state = await self._get_state(workflow_args)
+            state = await self._get_state(workflow_args)
 
-        prepared_query = prepare_query(query=fetch_table, workflow_args=workflow_args)
+            prepared_query = prepare_query(
+                query=fetch_table, workflow_args=workflow_args
+            )
 
-        validated_query = self._validate_prepared_query(prepared_query, "table")
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepared_query,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=validated_query,
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
-
-        raw_output = ParquetOutput(
-            output_prefix=output_prefix,
-            output_path=output_path,
-            output_suffix="raw/table",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="table")
+            raw_output = ParquetOutput(
+                output_prefix=output_prefix,
+                output_path=output_path,
+                output_suffix="raw/table",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="table")
+        except Exception as e:
+            activity.logger.error(f"Error fetching tables: {e}")
+            return None
 
     @activity.defn
     @auto_heartbeater
@@ -408,34 +400,36 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        fetch_column = self._validate_query(self.fetch_column_sql, "column")
+        try:
+            fetch_column = self._validate_query(self.fetch_column_sql, "column")
 
-        output_prefix, output_path = self._validate_output_args(workflow_args)
+            output_prefix, output_path = self._validate_output_args(workflow_args)
 
-        state = await self._get_state(workflow_args)
+            state = await self._get_state(workflow_args)
 
-        prepared_query = prepare_query(
-            query=fetch_column,
-            workflow_args=workflow_args,
-            temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
-        )
+            prepared_query = prepare_query(
+                query=fetch_column,
+                workflow_args=workflow_args,
+                temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
+            )
 
-        validated_query = self._validate_prepared_query(prepared_query, "column")
+            sql_input = SQLQueryInput(
+                engine=state.sql_client.engine,
+                query=prepared_query,
+                chunk_size=None,
+            )
+            sql_input = await sql_input.get_daft_dataframe()
 
-        sql_input = SQLQueryInput(
-            engine=state.sql_client.engine,
-            query=validated_query,
-            chunk_size=None,
-        )
-        sql_input = await sql_input.get_daft_dataframe()
-
-        raw_output = ParquetOutput(
-            output_prefix=output_prefix,
-            output_path=output_path,
-            output_suffix="raw/column",
-        )
-        await raw_output.write_daft_dataframe(sql_input)
-        return await raw_output.get_statistics(typename="column")
+            raw_output = ParquetOutput(
+                output_prefix=output_prefix,
+                output_path=output_path,
+                output_suffix="raw/column",
+            )
+            await raw_output.write_daft_dataframe(sql_input)
+            return await raw_output.get_statistics(typename="column")
+        except Exception as e:
+            activity.logger.error(f"Error fetching columns: {e}")
+            return None
 
     @activity.defn
     @auto_heartbeater

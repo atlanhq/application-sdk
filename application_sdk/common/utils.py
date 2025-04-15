@@ -12,7 +12,6 @@ from typing import (
     Dict,
     Iterator,
     List,
-    Optional,
     Tuple,
     TypeVar,
     Union,
@@ -33,7 +32,7 @@ if TYPE_CHECKING:
 
 def prepare_query(
     query: str, workflow_args: Dict[str, Any], temp_table_regex_sql: str = ""
-) -> Optional[str]:
+) -> str:
     """
     Prepares a SQL query by applying include and exclude filters, and optional
     configurations for temporary table regex, empty tables, and views.
@@ -93,7 +92,7 @@ def prepare_query(
         )
     except Exception as e:
         logger.error(f"Error preparing query [{query}]:  {e}")
-        return None
+        raise e
 
 
 def prepare_filters(
