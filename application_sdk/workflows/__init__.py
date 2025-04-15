@@ -6,7 +6,7 @@ all workflow implementations in the application SDK.
 
 from abc import ABC
 from datetime import timedelta
-from typing import Any, Callable, Dict, Generic, Sequence, Type, TypeVar
+from typing import Any, Callable, Dict, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -18,37 +18,35 @@ from application_sdk.inputs.statestore import StateStoreInput
 
 logger = get_logger(__name__)
 
-T = TypeVar("T", bound=ActivitiesInterface)
-
 
 @workflow.defn
-class WorkflowInterface(ABC, Generic[T]):
+class WorkflowInterface(ABC):
     """Abstract base class for all workflow implementations.
 
     This class defines the interface that all workflows must implement and provides
     common functionality for workflow execution.
 
     Attributes:
-        activities_cls (Type[T]): The activities class to be used
+        activities_cls (Type[ActivitiesInterface]): The activities class to be used
             by the workflow.
         default_heartbeat_timeout (timedelta): The default heartbeat timeout for the
             workflow.
     """
 
-    activities_cls: Type[T]
+    activities_cls: Type[ActivitiesInterface]
 
     default_heartbeat_timeout: timedelta = HEARTBEAT_TIMEOUT
     default_start_to_close_timeout: timedelta = START_TO_CLOSE_TIMEOUT
 
     @staticmethod
-    def get_activities(activities: T) -> Sequence[Callable[..., Any]]:
+    def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities for this workflow.
 
         This method must be implemented by subclasses to define the activities
         that will be executed as part of the workflow.
 
         Args:
-            activities (T): The activities interface instance.
+            activities (ActivitiesInterface): The activities interface instance.
 
         Returns:
             Sequence[Callable[..., Any]]: List of activity methods to be executed.

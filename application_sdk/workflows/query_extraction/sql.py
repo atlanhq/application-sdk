@@ -5,13 +5,12 @@ databases. It handles batch processing of queries and manages the workflow state
 """
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
+from typing import Any, Callable, Coroutine, Dict, List, Sequence
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import APPLICATION_NAME
@@ -36,8 +35,6 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         application_name (str): Name of the application.
         batch_size (int): Size of each batch for processing.
     """
-
-    activities_cls: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
 
     fetch_queries_sql = ""
 
