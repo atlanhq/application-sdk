@@ -18,8 +18,14 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
-from application_sdk.common.constants import ApplicationConstants
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    MAX_CONCURRENT_ACTIVITIES,
+    WORKFLOW_HOST,
+    WORKFLOW_PORT,
+    WORKFLOW_NAMESPACE,
+    WORKFLOW_MAX_TIMEOUT_HOURS
+)
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
@@ -31,6 +37,7 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
+from application_sdk.clients.workflow import WorkflowClient
 
 logger = get_logger(__name__)
 
@@ -161,12 +168,12 @@ class TemporalWorkflowClient(WorkflowClient):
         self.application_name = (
             application_name
             if application_name
-            else ApplicationConstants.APPLICATION_NAME.value
+            else APPLICATION_NAME
         )
         self.worker_task_queue = self.get_worker_task_queue()
-        self.host = host if host else WorkflowConstants.HOST.value
-        self.port = port if port else WorkflowConstants.PORT.value
-        self.namespace = namespace if namespace else WorkflowConstants.NAMESPACE.value
+        self.host = host if host else WORKFLOW_HOST
+        self.port = port if port else WORKFLOW_PORT
+        self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
         workflow.logger = get_logger(__name__)
         activity.logger = get_logger(__name__)
@@ -260,7 +267,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
-                execution_timeout=WorkflowConstants.WORKFLOW_MAX_TIMEOUT_HOURS.value,
+                execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
@@ -299,9 +306,7 @@ class TemporalWorkflowClient(WorkflowClient):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[
-            int
-        ] = WorkflowConstants.MAX_CONCURRENT_ACTIVITIES.value,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
     ) -> Worker:
         """Create a Temporal worker.
 

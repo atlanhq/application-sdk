@@ -1,13 +1,13 @@
 import os
 from typing import Any, Dict, Iterator, Optional, Tuple, Type
 
+from application_sdk.common.utils import read_sql_files
 import daft
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
-from application_sdk.common.constants import ApplicationConstants
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers.sql import SQLHandler
@@ -18,9 +18,14 @@ from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    APP_TENANT_ID
+)
 
 activity.logger = get_logger(__name__)
 
+queries = read_sql_files(queries_prefix="app/sql")
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
     """State class for SQL metadata extraction activities.
@@ -59,13 +64,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             Defaults to an empty string.
     """
 
-    fetch_database_sql: Optional[str] = None
-    fetch_schema_sql: Optional[str] = None
-    fetch_table_sql: Optional[str] = None
-    fetch_column_sql: Optional[str] = None
+    fetch_database_sql = queries.get("DATABASE_EXTRACTION")
+    fetch_schema_sql = queries.get("SCHEMA_EXTRACTION")
+    fetch_table_sql = queries.get("TABLE_EXTRACTION")
+    fetch_column_sql = queries.get("COLUMN_EXTRACTION")
 
-    tables_extraction_temp_table_regex_sql: str = ""
-    column_extraction_temp_table_regex_sql: str = ""
+    tables_extraction_temp_table_regex_sql = queries.get("TABLE_EXTRACTION_TEMP_TABLE_REGEX")
+    column_extraction_temp_table_regex_sql = queries.get("COLUMN_EXTRACTION_TEMP_TABLE_REGEX")
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -126,14 +131,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
 
         self._state[workflow_id].sql_client = sql_client
 
-        # Create transformer with required parameters from ApplicationConstants
-        transformer_params = {
-            "connector_name": ApplicationConstants.APPLICATION_NAME.value,
-            "connector_type": "sql",
-            "tenant_id": ApplicationConstants.TENANT_ID.value,
-        }
         self._state[workflow_id].transformer = self.transformer_class(
-            **transformer_params
+            connector_name=APPLICATION_NAME,
+            connector_type="sql",
+            tenant_id=APP_TENANT_ID,
         )
 
     async def _clean_state(self):

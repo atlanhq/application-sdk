@@ -2,6 +2,7 @@ import json
 from typing import Any, Dict, Generator
 from unittest.mock import MagicMock, patch
 
+from application_sdk.constants import STATE_STORE_NAME
 import pytest
 from hypothesis import HealthCheck, given, settings
 
@@ -41,7 +42,7 @@ def mock_dapr_output_client() -> Generator[MagicMock, None, None]:
 
 
 def test_state_store_name() -> None:
-    assert StateStoreInput.STATE_STORE_NAME == "statestore"
+    assert STATE_STORE_NAME == "statestore"
 
 
 @pytest.mark.skip(
