@@ -182,7 +182,9 @@ async def test_check_client_version_comparison(
     )
 
     # Set minimum version environment variable
-    monkeypatch.setattr("application_sdk.handlers.sql.SQL_SERVER_MIN_VERSION", min_version)
+    monkeypatch.setattr(
+        "application_sdk.handlers.sql.SQL_SERVER_MIN_VERSION", min_version
+    )
 
     result = await handler.check_client_version()
 

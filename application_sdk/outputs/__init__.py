@@ -9,6 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
 
 import orjson
+import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics

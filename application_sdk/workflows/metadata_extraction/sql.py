@@ -15,11 +15,9 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
-from application_sdk.constants import (
-    APPLICATION_NAME,
-)
 
 workflow.logger = get_logger(__name__)
 
@@ -208,8 +206,9 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
 
-
-    def get_fetch_functions(self) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]:
+    def get_fetch_functions(
+        self,
+    ) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]:
         """Get the fetch functions for the SQL metadata extraction workflow.
 
         Returns:

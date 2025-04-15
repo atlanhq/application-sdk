@@ -2,6 +2,11 @@ import asyncio
 import concurrent
 from typing import Iterator, Optional, Union
 
+import daft
+import pandas as pd
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
+
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
@@ -21,13 +26,13 @@ class SQLQueryInput(Input):
     """
 
     query: str
-    engine: Union["Engine", str]
+    engine: Union[Engine, str]
     chunk_size: Optional[int]
 
     def __init__(
         self,
         query: str,
-        engine: Union["Engine", str],
+        engine: Union[Engine, str],
         chunk_size: Optional[int] = 100000,
     ):
         """Initialize the async SQL query input handler.

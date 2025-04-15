@@ -1,5 +1,6 @@
-import os 
+import os
 from datetime import timedelta
+
 from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env")
@@ -20,7 +21,9 @@ WORKFLOW_PORT = os.getenv("ATLAN_WORKFLOW_PORT", "7233")
 WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
 WORKFLOW_UI_HOST = os.getenv("ATLAN_WORKFLOW_UI_HOST", "localhost")
 WORKFLOW_UI_PORT = os.getenv("ATLAN_WORKFLOW_UI_PORT", "8233")
-WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1")))
+WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
+    hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1"))
+)
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
 # Workflow Constants

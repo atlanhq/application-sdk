@@ -18,15 +18,16 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk.clients.workflow import WorkflowClient
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import (
     APPLICATION_NAME,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
-    WORKFLOW_PORT,
+    WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
-    WORKFLOW_MAX_TIMEOUT_HOURS
+    WORKFLOW_PORT,
 )
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -37,7 +38,6 @@ from application_sdk.outputs.eventstore import (
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
-from application_sdk.clients.workflow import WorkflowClient
 
 logger = get_logger(__name__)
 
@@ -166,9 +166,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.client = None
         self.worker = None
         self.application_name = (
-            application_name
-            if application_name
-            else APPLICATION_NAME
+            application_name if application_name else APPLICATION_NAME
         )
         self.worker_task_queue = self.get_worker_task_queue()
         self.host = host if host else WORKFLOW_HOST

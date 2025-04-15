@@ -1,7 +1,6 @@
 import os
 from typing import Any, AsyncIterator, Dict, Optional, Type
 
-from application_sdk.common.utils import read_sql_files
 import daft
 from temporalio import activity
 
@@ -9,7 +8,8 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import prepare_query
+from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -18,14 +18,11 @@ from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
-from application_sdk.constants import (
-    APPLICATION_NAME,
-    APP_TENANT_ID
-)
 
 activity.logger = get_logger(__name__)
 
 queries = read_sql_files(queries_prefix="app/sql")
+
 
 class SQLMetadataExtractionActivitiesState(ActivitiesState):
     """State class for SQL metadata extraction activities.
@@ -72,8 +69,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
     fetch_table_sql = queries.get("TABLE_EXTRACTION")
     fetch_column_sql = queries.get("COLUMN_EXTRACTION")
 
-    tables_extraction_temp_table_regex_sql = queries.get("TABLE_EXTRACTION_TEMP_TABLE_REGEX")
-    column_extraction_temp_table_regex_sql = queries.get("COLUMN_EXTRACTION_TEMP_TABLE_REGEX")
+    tables_extraction_temp_table_regex_sql = queries.get(
+        "TABLE_EXTRACTION_TEMP_TABLE_REGEX"
+    )
+    column_extraction_temp_table_regex_sql = queries.get(
+        "COLUMN_EXTRACTION_TEMP_TABLE_REGEX"
+    )
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler

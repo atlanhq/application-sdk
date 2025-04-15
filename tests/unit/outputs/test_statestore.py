@@ -2,10 +2,10 @@ import json
 from typing import Any, Dict, Generator
 from unittest.mock import MagicMock, patch
 
-from application_sdk.constants import STATE_STORE_NAME
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.constants import STATE_STORE_NAME
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.secretstore import SecretStoreOutput
