@@ -4,20 +4,20 @@ import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from application_sdk.common.utils import read_sql_files
 from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import SQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import prepare_query
+from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.constants import SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
-from application_sdk.constants import SQL_SERVER_MIN_VERSION
 
 logger = get_logger(__name__)
 
 queries = read_sql_files(queries_prefix="app/sql")
+
 
 class SQLConstants(Enum):
     """
@@ -39,7 +39,6 @@ class SQLHandler(HandlerInterface):
     # Variables for testing authentication
     test_authentication_sql: str = "SELECT 1;"
     get_client_version_sql: str | None = queries.get("GET_CLIENT_VERSION")
-    
 
     metadata_sql: str | None = queries.get("FILTER_METADATA")
     tables_check_sql: str | None = queries.get("TABLES_CHECK")
@@ -55,6 +54,24 @@ class SQLHandler(HandlerInterface):
 
     def __init__(self, sql_client: SQLClient | None = None):
         self.sql_client = sql_client
+
+    def _validate_query(self, query_template: Optional[str], entity_type: str) -> str:
+        """Validates that a query template exists.
+
+        Args:
+            query_template: SQL query template to validate.
+            entity_type: Type of entity (database, schema, table, column).
+
+        Returns:
+            The validated query template.
+
+        Raises:
+            ValueError: If query_template is None.
+        """
+        if not query_template:
+            logger.warning(f"No {entity_type} query provided")
+            raise ValueError(f"No {entity_type} query provided")
+        return query_template
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
@@ -304,12 +321,14 @@ class SQLHandler(HandlerInterface):
         Method to check the count of tables
         """
         logger.info("Starting tables check")
-        if self.tables_check_sql is None:
-            raise ValueError("tables_check_sql is not defined")
+        tables_check = self._validate_query(self.tables_check_sql, "table")
+        temp_table_regex = self._validate_query(
+            self.temp_table_regex_sql, "temp table regex"
+        )
         query = prepare_query(
-            query=self.tables_check_sql,
+            query=tables_check,
             workflow_args=payload,
-            temp_table_regex_sql=self.temp_table_regex_sql,
+            temp_table_regex_sql=temp_table_regex,
         )
         if not query:
             raise ValueError("tables_check_sql is not defined")

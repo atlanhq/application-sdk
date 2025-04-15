@@ -31,20 +31,20 @@ from application_sdk.application.fastapi.utils import internal_server_error_hand
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
-from application_sdk.docgen import AtlanDocsGenerator
-from application_sdk.handlers import HandlerInterface
-from application_sdk.outputs.eventstore import AtlanEvent, EventStore
-from application_sdk.workflows import WorkflowInterface
 from application_sdk.constants import (
-    APP_HOST,
-    APP_PORT,
     APP_DASHBOARD_HOST,
     APP_DASHBOARD_PORT,
+    APP_HOST,
+    APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
+from application_sdk.docgen import AtlanDocsGenerator
+from application_sdk.handlers import HandlerInterface
+from application_sdk.outputs.eventstore import AtlanEvent, EventStore
+from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 
@@ -199,7 +199,7 @@ class Application(AtlanApplicationInterface):
                 "tenant_id": APP_TENANT_ID,
                 "app_name": APPLICATION_NAME,
                 "workflow_ui_host": WORKFLOW_UI_HOST,
-                "workflow_ui_port": WORKFLOW_UI_PORT
+                "workflow_ui_port": WORKFLOW_UI_PORT,
             },
         )
 
@@ -520,7 +520,8 @@ class Application(AtlanApplicationInterface):
         return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
 
     async def start(
-        self, host: str = APP_HOST,
+        self,
+        host: str = APP_HOST,
         port: int = APP_PORT,
     ) -> None:
         """Start the FastAPI application server.

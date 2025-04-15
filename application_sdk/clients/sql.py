@@ -8,12 +8,10 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
-from application_sdk.common.utils import parse_credentials_extra
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -22,6 +20,7 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_user,
 )
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 
 activity.logger = get_logger(__name__)

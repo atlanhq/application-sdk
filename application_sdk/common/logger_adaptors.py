@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
@@ -15,20 +14,21 @@ from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
 from application_sdk.constants import (
-    LOG_LEVEL,
-    SERVICE_NAME,
-    SERVICE_VERSION,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_EXPORTER_OTLP_ENDPOINT,
     ENABLE_OTLP_LOGS,
-    OTEL_WF_NODE_NAME,
+    LOG_LEVEL,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_QUEUE_SIZE,
+    OTEL_RESOURCE_ATTRIBUTES,
+    OTEL_WF_NODE_NAME,
+    SERVICE_NAME,
+    SERVICE_VERSION,
 )
+
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
-
 
 
 # Add a Loguru handler for the Python logging system

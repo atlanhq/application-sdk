@@ -5,7 +5,7 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from typing import Any, Callable, Dict, List, Sequence, Type
+from typing import Any, Callable, Dict, List, Sequence, Type, TypeVar
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -15,13 +15,14 @@ from application_sdk.activities.metadata_extraction.sql import (
     SQLMetadataExtractionActivities,
 )
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
-from application_sdk.constants import (
-    APPLICATION_NAME,
-)
 
 workflow.logger = get_logger(__name__)
+
+# Type variable for SQLMetadataExtractionActivities
+T = TypeVar("T", bound=SQLMetadataExtractionActivities)
 
 
 @workflow.defn
@@ -209,13 +210,16 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
 
-
-    def get_fetch_functions(self) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]:
+    def get_fetch_functions(
+        self,
+    ) -> List[Any]:  # Use Any to avoid the complex type signature
         """Get the fetch functions for the SQL metadata extraction workflow.
 
         Returns:
-            List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]: A list of fetch operations.
+            List of fetch activity methods used for metadata extraction
         """
+        # Type annotation is causing issues because these are instance methods
+        # that include self parameter. Using Any for now.
         return [
             self.activities_cls.fetch_databases,
             self.activities_cls.fetch_schemas,

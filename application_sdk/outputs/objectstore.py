@@ -7,8 +7,8 @@ from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
-
 from application_sdk.constants import OBJECT_STORE_NAME
+
 activity.logger = get_logger(__name__)
 
 
@@ -87,11 +87,11 @@ class ObjectStoreOutput:
                     file_path = os.path.join(root, file)
                     await cls.push_file_to_object_store(output_prefix, file_path)
 
-            logger.info(
+            activity.logger.info(
                 f"Completed pushing data from {input_files_path} to object store"
             )
         except Exception as e:
-            logger.error(
+            activity.logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e
