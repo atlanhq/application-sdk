@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
+from application_sdk.common.utils import parse_credentials_extra
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
