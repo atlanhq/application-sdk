@@ -79,7 +79,7 @@ class AtlanLoggerAdapter:
         logger.remove()
 
         # Register custom log level for activity
-        if "ACTIVITY" not in logger._levels:
+        if logger.level("ACTIVITY", no=None) is None:
             logger.level("ACTIVITY", no=20, color="<cyan>", icon="🔵")
 
         # Update format string to use the bound logger_name
