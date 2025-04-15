@@ -151,32 +151,24 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
 
         await super()._clean_state()
 
-    def _process_rows(
+    async def _transform_batch(
         self,
         results: "daft.DataFrame",
         typename: str,
+        state: SQLMetadataExtractionActivitiesState,
         workflow_id: str,
         workflow_run_id: str,
-        state: SQLMetadataExtractionActivitiesState,
-        connection_name: Optional[str],
-        connection_qualified_name: Optional[str],
-    ) -> Iterator[Dict[str, Any]]:
-        """Process DataFrame rows and transform them into metadata.
-
-        Args:
-            results: DataFrame containing the rows to process
-            typename: Type of data being transformed
-            workflow_id: Current workflow ID
-            workflow_run_id: Current workflow run ID
-            state: Current activity state
-            connection_name: Name of the connection
-            connection_qualified_name: Qualified name of the connection
-
-        Returns:
-            list: List of transformed metadata dictionaries
-        """
+        workflow_args: Dict[str, Any],
+    ) -> AsyncIterator[Dict[str, Any]]:
+        connection_name = workflow_args.get("connection", {}).get(
+            "connection_name", None
+        )
+        connection_qualified_name = workflow_args.get("connection", {}).get(
+            "connection_qualified_name", None
+        )
         if not state.transformer:
             raise ValueError("Transformer is not set")
+
         for row in results.iter_rows():
             try:
                 transformed_metadata: Optional[Dict[str, Any]] = (
@@ -278,7 +270,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             activity.logger.warning(f"No {entity_type} query provided")
             raise ValueError(f"No {entity_type} query provided")
         return query
-
+      
     @activity.defn
     @auto_heartbeater
     async def fetch_databases(self, workflow_args: Dict[str, Any]):
