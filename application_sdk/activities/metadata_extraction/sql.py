@@ -430,9 +430,6 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-        if not self.transform_data_sql:
-            activity.logger.warning("No transform data query provided")
-            raise ValueError("No transform data query provided")
 
         output_prefix = workflow_args.get("output_prefix")
         output_path = workflow_args.get("output_path")
