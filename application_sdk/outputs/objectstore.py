@@ -1,7 +1,6 @@
 """Object store interface for the application."""
 
 import os
-from typing import Optional
 
 from dapr.clients import DaprClient
 from temporalio import activity
@@ -17,9 +16,9 @@ class ObjectStoreOutput:
 
     @classmethod
     async def push_file_to_object_store(
-        cls, output_prefix: Optional[str], file_path: str
-    ):
-        """Push a file to the object store.
+        cls, output_prefix: str, file_path: str
+    ) -> None:
+        """Pushes a single file to the object
 
         Args:
             output_prefix (str): The base path to calculate relative paths from.
