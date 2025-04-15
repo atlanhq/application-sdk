@@ -37,6 +37,7 @@ runs:
         output: 'trivy-vuln-results.json'
         exit-code: '0'
         scanners: 'vuln'
+        severity: 'CRITICAL,HIGH'
       env:
         TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
@@ -62,6 +63,7 @@ runs:
         output: 'trivy-secret-results.json'
         exit-code: '0'
         scanners: 'secret'
+        severity: 'CRITICAL,HIGH'
       env:
         TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
