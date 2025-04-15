@@ -79,7 +79,8 @@ class AtlanLoggerAdapter:
         logger.remove()
 
         # Register custom log level for activity
-        logger.level("ACTIVITY", no=20, color="<cyan>", icon="🔵")
+        if "ACTIVITY" not in logger._levels:
+            logger.level("ACTIVITY", no=20, color="<cyan>", icon="🔵")
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
