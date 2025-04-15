@@ -8,11 +8,11 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-activity.logger = get_logger(__name__)
-
 if TYPE_CHECKING:
     import daft
     import pandas as pd
+
+activity.logger = get_logger(__name__)
 
 
 class ParquetOutput(Output):
@@ -65,11 +65,10 @@ class ParquetOutput(Output):
         self.chunk_count = chunk_count
 
         # Create output directory
-        if self.output_path and self.output_suffix:
-            self.output_path = os.path.join(self.output_path, self.output_suffix)
-            if self.typename:
-                self.output_path = os.path.join(self.output_path, self.typename)
-            os.makedirs(self.output_path, exist_ok=True)
+        self.output_path = os.path.join(self.output_path, self.output_suffix)
+        if self.typename:
+            self.output_path = os.path.join(self.output_path, self.typename)
+        os.makedirs(self.output_path, exist_ok=True)
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -84,12 +83,7 @@ class ParquetOutput(Output):
             # Update counters
             self.chunk_count += 1
             self.total_record_count += len(dataframe)
-
-            if not self.output_path:
-                activity.logger.warning("Output path not specified, skipping write")
-                return
-
-            file_path = os.path.join(self.output_path, f"{self.chunk_count}.parquet")
+            file_path = f"{self.output_path}/{self.chunk_count}.parquet"
 
             # Write the dataframe to parquet using pandas native method
             dataframe.to_parquet(
@@ -106,7 +100,7 @@ class ParquetOutput(Output):
             )
             raise
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):
+    async def write_daft_dataframe(self, dataframe: daft.DataFrame):  # noqa: F821
         """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
@@ -120,10 +114,6 @@ class ParquetOutput(Output):
             # Update counters
             self.chunk_count += 1
             self.total_record_count += row_count
-
-            if not self.output_path:
-                activity.logger.warning("Output path not specified, skipping write")
-                return
 
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
@@ -143,10 +133,6 @@ class ParquetOutput(Output):
         Args:
             local_file_path (str): Path to the local file to upload.
         """
-        if not self.output_prefix:
-            activity.logger.info("Output prefix not specified, skipping upload")
-            return
-
         activity.logger.info(
             f"Uploading file: {local_file_path} to {self.output_prefix}"
         )
