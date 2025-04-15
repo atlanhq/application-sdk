@@ -21,7 +21,6 @@ class TestPrepareMetadata:
         handler.schema_alias_key = "TABLE_SCHEMA"
         handler.database_result_key = "TABLE_CATALOG"
         handler.schema_result_key = "TABLE_SCHEMA"
-        handler.metadata_sql = "SELECT * FROM information_schema.tables"
         return handler
 
     @pytest.mark.asyncio
