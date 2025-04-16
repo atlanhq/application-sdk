@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     metadata_args_strategy,
@@ -22,7 +22,7 @@ from application_sdk.test_utils.hypothesis.strategies.sql_client import (
 
 @pytest.fixture
 def sql_client():
-    client = SQLClient()
+    client = BaseSQLClient()
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
 

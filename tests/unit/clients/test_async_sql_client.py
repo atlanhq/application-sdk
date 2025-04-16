@@ -4,13 +4,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from application_sdk.clients.sql import AsyncSQLClient
+from application_sdk.clients.sql import AsyncBaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
 @pytest.fixture
 def async_sql_client():
-    client = AsyncSQLClient()
+    client = AsyncBaseSQLClient()
     client.get_sqlalchemy_connection_string = lambda: "test_connection_string"
     return client
 

@@ -53,7 +53,7 @@ class MinerArgs(BaseModel):
     )
 
 
-class SQLQueryExtractionActivitiesState(ActivitiesState):
+class BaseSQLQueryExtractionActivitiesState(ActivitiesState):
     """State model for SQL query extraction activities.
 
     This class holds the state required for SQL query extraction activities,
@@ -83,7 +83,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
 
-    _state: Dict[str, SQLQueryExtractionActivitiesState] = {}
+    _state: Dict[str, BaseSQLQueryExtractionActivitiesState] = {}
 
     sql_client_class: Type[SQLClient] = SQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -127,7 +127,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = SQLQueryExtractionActivitiesState(
+        self._state[get_workflow_id()] = BaseSQLQueryExtractionActivitiesState(
             sql_client=sql_client,
             handler=handler,
             workflow_args=workflow_args,
@@ -340,7 +340,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If query parallelization fails
         """
-        state: SQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))

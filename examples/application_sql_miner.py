@@ -23,7 +23,7 @@ from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
@@ -104,7 +104,7 @@ class SampleSQLMinerActivities(SQLQueryExtractionActivities):
     fetch_queries_sql = FETCH_QUERIES_SQL
 
 
-class SnowflakeSQLClient(SQLClient):
+class SQLClient(BaseSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.credentials["password"])
         base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"

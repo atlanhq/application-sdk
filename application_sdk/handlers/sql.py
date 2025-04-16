@@ -37,8 +37,8 @@ class SQLHandler(HandlerInterface):
 
     sql_client: SQLClient
     # Variables for testing authentication
-    test_authentication_sql: str = "SELECT 1;"
-    get_client_version_sql: str | None = queries.get("GET_CLIENT_VERSION")
+    test_authentication_sql: str = queries.get("TEST_AUTHENTICATION", "SELECT 1;")
+    client_version_sql: str | None = queries.get("CLIENT_VERSION")
     
 
     metadata_sql: str | None = queries.get("FILTER_METADATA")
@@ -328,7 +328,7 @@ class SQLHandler(HandlerInterface):
         """
         Check if the client version meets the minimum required version.
 
-        If get_client_version_sql is not defined by the implementing app,
+        If client_version_sql is not defined by the implementing app,
         this check will be skipped and return success.
 
         Returns:
@@ -350,10 +350,10 @@ class SQLHandler(HandlerInterface):
                         f"Detected client version from dialect: {client_version}"
                     )
 
-            # If dialect version not available and get_client_version_sql is defined, use SQL query
-            if not client_version and self.get_client_version_sql:
+            # If dialect version not available and client_version_sql is defined, use SQL query
+            if not client_version and self.client_version_sql:
                 sql_input = await SQLQueryInput(
-                    query=self.get_client_version_sql,
+                    query=self.client_version_sql,
                     engine=self.sql_client.engine,
                     chunk_size=None,
                 ).get_dataframe()
