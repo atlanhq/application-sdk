@@ -57,7 +57,7 @@ def convert_trivy_to_markdown(
     if is_secret_report:
         summary_table_items.append("Secrets")
 
-    results_data = trivy_data.get("Results")
+    results_data = trivy_data.get("Results") or []
     artifact_name = trivy_data.get("ArtifactName", "Unknown Artifact")
     artifact_type = trivy_data.get("ArtifactType", "Unknown Type")
 
