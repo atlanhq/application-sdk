@@ -5,6 +5,7 @@ databases. It handles batch processing of queries and manages the workflow state
 """
 
 import asyncio
+from datetime import timedelta
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
@@ -44,6 +45,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     application_name: str = APPLICATION_NAME
     batch_size: int = 100000
+    default_heartbeat_timeout: timedelta = timedelta(seconds=300)
 
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
 
