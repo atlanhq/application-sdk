@@ -38,6 +38,7 @@ def sql_handler() -> SQLHandler:
     sql_client = MockSQLClient()
     handler = SQLHandler(sql_client)
     handler.tables_check_sql = "SELECT COUNT(*) as count FROM tables"
+    handler.temp_table_regex_sql = "WHERE table_name NOT LIKE 'temp%'"
     return handler
 
 

@@ -257,6 +257,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 query=fetch_database, workflow_args=workflow_args
             )
 
+            if prepared_query is None:
+                activity.logger.warning("No database query provided")
+                return None
+
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=prepared_query,
@@ -299,6 +303,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 query=fetch_schema, workflow_args=workflow_args
             )
 
+            if prepared_query is None:
+                activity.logger.warning("No schema query provided")
+                return None
+
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=prepared_query,
@@ -340,6 +348,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             prepared_query = prepare_query(
                 query=fetch_table, workflow_args=workflow_args
             )
+
+            if prepared_query is None:
+                activity.logger.warning("No table query provided")
+                return None
 
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
@@ -387,6 +399,10 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 workflow_args=workflow_args,
                 temp_table_regex_sql=column_extraction_temp_table_regex,
             )
+
+            if prepared_query is None:
+                activity.logger.warning("No column query provided")
+                return None
 
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,

@@ -61,6 +61,7 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing pandas dataframe to iceberg table: {str(e)}"
             )
+            raise e
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """
@@ -89,3 +90,4 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing daft dataframe to iceberg table: {str(e)}"
             )
+            raise e

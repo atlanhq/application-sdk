@@ -3,7 +3,7 @@ import glob
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Awaitable, Callable, Dict, List, Tuple, TypeVar, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
@@ -16,7 +16,7 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 def prepare_query(
     query: str, workflow_args: Dict[str, Any], temp_table_regex_sql: str = ""
-) -> str:
+) -> Optional[str]:
     """
     Prepares a SQL query by applying include and exclude filters, and optional
     configurations for temporary table regex, empty tables, and views.
@@ -76,7 +76,7 @@ def prepare_query(
         )
     except Exception as e:
         logger.error(f"Error preparing query [{query}]:  {e}")
-        raise e
+        return None
 
 
 def prepare_filters(
