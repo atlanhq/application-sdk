@@ -3,14 +3,14 @@ from unittest.mock import AsyncMock, Mock, patch
 import daft
 import pytest
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
 class TestAuthenticationHandler:
     @pytest.fixture
     def mock_sql_client(self) -> Mock:
-        client = Mock(spec=SQLClient)
+        client = Mock(spec=BaseSQLClient)
         client.engine = Mock()
         return client
 

@@ -6,7 +6,7 @@ from hypothesis import HealthCheck, Phase, given, settings
 from hypothesis import strategies as st
 
 from application_sdk.application.fastapi.models import MetadataType
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.test_utils.hypothesis.strategies.handlers.sql.sql_metadata import (
     database_list_strategy,
@@ -51,7 +51,7 @@ class AsyncIteratorMock(Generic[T]):
 
 @pytest.fixture
 def mock_sql_client() -> MagicMock:
-    client = MagicMock(spec=SQLClient)
+    client = MagicMock(spec=BaseSQLClient)
     client.run_query = MagicMock()  # Use regular MagicMock instead of AsyncMock
     return client
 
