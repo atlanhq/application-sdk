@@ -61,6 +61,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             Defaults to an empty string.
     """
 
+    _state: Dict[str, ActivitiesState[SQLHandler]] = {}
     fetch_database_sql = queries.get("DATABASE_EXTRACTION")
     fetch_schema_sql = queries.get("SCHEMA_EXTRACTION")
     fetch_table_sql = queries.get("TABLE_EXTRACTION")
