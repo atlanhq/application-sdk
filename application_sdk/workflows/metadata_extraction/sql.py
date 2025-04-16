@@ -88,25 +88,28 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
         """
-        raw_stat = await workflow.execute_activity_method(
+        raw_statistics = await workflow.execute_activity_method(
             fetch_fn,
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
-        raw_stat = ActivityStatistics.model_validate(raw_stat)
+        if raw_statistics is None:
+            return
+
+        activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
 
-        if raw_stat is None or raw_stat.chunk_count == 0:
+        if activity_statistics is None or activity_statistics.chunk_count == 0:
             # to handle the case where the fetch_fn returns None or no chunks
             return
 
-        if raw_stat.typename is None:
+        if activity_statistics.typename is None:
             raise ValueError("Invalid typename")
 
         batches, chunk_starts = self.get_transform_batches(
-            raw_stat.chunk_count, raw_stat.typename
+            activity_statistics.chunk_count, activity_statistics.typename
         )
 
         for i in range(len(batches)):
@@ -114,7 +117,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 workflow.execute_activity_method(
                     self.activities_cls.transform_data,
                     {
-                        "typename": raw_stat.typename,
+                        "typename": activity_statistics.typename,
                         "file_names": batches[i],
                         "chunk_start": chunk_starts[i],
                         **workflow_args,
