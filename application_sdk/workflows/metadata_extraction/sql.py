@@ -65,6 +65,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_schemas,
             activities.fetch_tables,
             activities.fetch_columns,
+            activities.fetch_procedures,
             activities.transform_data,
         ]
 
@@ -220,4 +221,5 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             self.activities_cls.fetch_schemas,
             self.activities_cls.fetch_tables,
             self.activities_cls.fetch_columns,
+            self.activities_cls.fetch_procedures,
         ]
