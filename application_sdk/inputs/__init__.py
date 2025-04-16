@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from typing import Iterator
 
+import pandas as pd
+
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)

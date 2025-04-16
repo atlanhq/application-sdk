@@ -1,21 +1,9 @@
 import asyncio
 import glob
-import inspect
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Tuple,
-    TypeVar,
-    Union,
-)
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
@@ -305,6 +293,7 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError(f"Invalid JSON in credentials extra field: {e}")
 
     return extra  # We know it's a Dict[str, Any] due to the Union type and str check
+
 
 def run_sync(func):
     """Run a function in a thread pool executor.

@@ -2,13 +2,15 @@ import os
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import orjson
+import pandas as pd
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
@@ -144,7 +146,7 @@ class JsonOutput(Output):
             await self._flush_buffer()
 
         except Exception as e:
-            activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+            logger.error(f"Error writing dataframe to json: {str(e)}")
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to JSON files.

@@ -14,7 +14,8 @@ from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 WORKFLOW_END_EVENT = "workflow_end"
 WORKFLOW_START_EVENT = "workflow_start"
@@ -180,4 +181,4 @@ class EventStore:
                 data_content_type="application/json",
             )
 
-        activity.logger.info(f"Published event to {topic_name}")
+        logger.info(f"Published event to {topic_name}")

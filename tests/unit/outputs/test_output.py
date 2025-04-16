@@ -1,6 +1,6 @@
 """Unit tests for output interface."""
 
-from typing import Any, Dict
+from typing import Any
 from unittest.mock import AsyncMock, mock_open, patch
 
 import pandas as pd

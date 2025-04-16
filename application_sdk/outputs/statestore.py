@@ -9,7 +9,8 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import STATE_STORE_NAME
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 class StateStoreOutput:
@@ -31,9 +32,9 @@ class StateStoreOutput:
                     key=key,
                     value=json.dumps(value),
                 )
-                activity.logger.info(f"State stored successfully with key: {key}")
+                logger.info(f"State stored successfully with key: {key}")
         except Exception as e:
-            activity.logger.error(f"Failed to store state: {str(e)}")
+            logger.error(f"Failed to store state: {str(e)}")
             raise e
 
     @classmethod

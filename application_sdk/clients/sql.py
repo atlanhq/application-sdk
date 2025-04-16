@@ -8,11 +8,10 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from application_sdk.common.utils import parse_credentials_extra
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -21,9 +20,11 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_user,
 )
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 class SQLClient(ClientInterface):
@@ -86,7 +87,7 @@ class SQLClient(ClientInterface):
             )
             self.connection = self.engine.connect()
         except Exception as e:
-            activity.logger.error(f"Error loading SQL client: {str(e)}")
+            logger.error(f"Error loading SQL client: {str(e)}")
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -218,7 +219,7 @@ class SQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info("Running query: {query}", query=query)
+        logger.info("Running query: {query}", query=query)
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -242,12 +243,10 @@ class SQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                activity.logger.error(
-                    "Error running query in batch: {error}", error=str(e)
-                )
+                logger.error("Error running query in batch: {error}", error=str(e))
                 raise e
 
-        activity.logger.info("Query execution completed")
+        logger.info("Query execution completed")
 
 
 class AsyncSQLClient(SQLClient):
@@ -284,7 +283,7 @@ class AsyncSQLClient(SQLClient):
             )
             self.connection = await self.engine.connect()
         except Exception as e:
-            activity.logger.error(f"Error establishing database connection: {str(e)}")
+            logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
@@ -311,7 +310,7 @@ class AsyncSQLClient(SQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info("Running query: {query}", query=query)
+        logger.info("Running query: {query}", query=query)
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -339,7 +338,7 @@ class AsyncSQLClient(SQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error("Error executing query: {error}", error=str(e))
+            logger.error("Error executing query: {error}", error=str(e))
             raise
 
-        activity.logger.info("Query execution completed")
+        logger.info("Query execution completed")
