@@ -167,20 +167,18 @@ class SQLMetadataExtractionActivities(ActivitiesInterface):
         if not state.transformer:
             raise ValueError("Transformer is not set")
 
-        for row in results.iter_rows():
+        transformed_df = state.transformer.transform_metadata(
+            typename,
+            results,
+            workflow_id=workflow_id,
+            workflow_run_id=workflow_run_id,
+            connection_name=connection_name,
+            connection_qualified_name=connection_qualified_name,
+        )
+        for row in transformed_df.iter_rows():
             try:
-                transformed_metadata: Optional[Dict[str, Any]] = (
-                    state.transformer.transform_metadata(
-                        typename,
-                        row,
-                        workflow_id=workflow_id,
-                        workflow_run_id=workflow_run_id,
-                        connection_name=connection_name,
-                        connection_qualified_name=connection_qualified_name,
-                    )
-                )
-                if transformed_metadata:
-                    yield transformed_metadata
+                if row:
+                    yield row
                 else:
                     activity.logger.warning(f"Skipped invalid {typename} data: {row}")
             except Exception as row_error:
