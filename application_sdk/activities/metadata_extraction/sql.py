@@ -67,11 +67,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     _state: Dict[str, BaseSQLMetadataExtractionActivitiesState] = {}
 
-    fetch_database_sql = queries.get("DATABASE_EXTRACTION")
-    fetch_schema_sql = queries.get("SCHEMA_EXTRACTION")
-    fetch_table_sql = queries.get("TABLE_EXTRACTION")
-    fetch_column_sql = queries.get("COLUMN_EXTRACTION")
-    fetch_procedure_sql = queries.get("PROCEDURE_EXTRACTION")
+    fetch_database_sql = queries.get("EXTRACT_DATABASE")
+    fetch_schema_sql = queries.get("EXTRACT_SCHEMA")
+    fetch_table_sql = queries.get("EXTRACT_TABLE")
+    fetch_column_sql = queries.get("EXTRACT_COLUMN")
+    fetch_procedure_sql = queries.get("EXTRACT_PROCEDURE")
 
     tables_extraction_temp_table_regex_sql = queries.get("TABLE_EXTRACTION_TEMP_TABLE_REGEX")
     column_extraction_temp_table_regex_sql = queries.get("COLUMN_EXTRACTION_TEMP_TABLE_REGEX")

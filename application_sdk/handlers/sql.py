@@ -43,8 +43,8 @@ class SQLHandler(HandlerInterface):
 
     metadata_sql: str | None = queries.get("FILTER_METADATA")
     tables_check_sql: str | None = queries.get("TABLES_CHECK")
-    fetch_databases_sql: str | None = queries.get("FETCH_DATABASES")
-    fetch_schemas_sql: str | None = queries.get("FETCH_SCHEMAS")
+    fetch_databases_sql: str | None = queries.get("EXTRACT_DATABASE")
+    fetch_schemas_sql: str | None = queries.get("EXTRACT_SCHEMA")
 
     temp_table_regex_sql: str | None = queries.get("TABLES_CHECK_TEMP_TABLE_REGEX")
 
