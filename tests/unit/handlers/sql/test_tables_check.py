@@ -5,11 +5,11 @@ import daft
 import pytest
 from sqlalchemy.engine import Engine
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
-class MockSQLClient(SQLClient):
+class MockBaseSQLClient(BaseSQLClient):
     def __init__(self):
         super().__init__()
         self.run_query = AsyncMock()
@@ -35,7 +35,7 @@ class MockSQLClient(SQLClient):
 
 @pytest.fixture
 def sql_handler() -> SQLHandler:
-    sql_client = MockSQLClient()
+    sql_client = MockBaseSQLClient()
     handler = SQLHandler(sql_client)
     handler.tables_check_sql = "SELECT COUNT(*) as count FROM tables"
     return handler

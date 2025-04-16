@@ -8,7 +8,7 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -53,19 +53,19 @@ class MinerArgs(BaseModel):
     )
 
 
-class SQLQueryExtractionActivitiesState(ActivitiesState):
+class BaseSQLQueryExtractionActivitiesState(ActivitiesState):
     """State model for SQL query extraction activities.
 
     This class holds the state required for SQL query extraction activities,
     including the SQL client and handler instances.
 
     Attributes:
-        sql_client (SQLClient): Client for SQL database operations.
+        sql_client (BaseSQLClient): Client for SQL database operations.
         handler (SQLHandler): Handler for SQL-specific operations.
         workflow_args (Dict[str, Any]): Arguments passed to the workflow.
     """
 
-    sql_client: SQLClient
+    sql_client: BaseSQLClient
     handler: SQLHandler
     workflow_args: Dict[str, Any]
 
@@ -78,28 +78,28 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     Attributes:
         _state (Dict[str, StateModel]): Internal state storage.
-        sql_client_class (Type[SQLClient]): Class for SQL client operations.
+        sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
 
-    _state: Dict[str, SQLQueryExtractionActivitiesState] = {}
+    _state: Dict[str, BaseSQLQueryExtractionActivitiesState] = {}
 
-    sql_client_class: Type[SQLClient] = SQLClient
+    sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[SQLHandler] = SQLHandler
 
     fetch_queries_sql: str
 
     def __init__(
         self,
-        sql_client_class: Optional[Type[SQLClient]] = None,
+        sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[SQLHandler]] = None,
     ):
         """Initialize the SQL query extraction activities.
 
         Args:
-            sql_client_class (Type[SQLClient], optional): Class for SQL client operations.
-                Defaults to SQLClient.
+            sql_client_class (Type[BaseSQLClient], optional): Class for SQL client operations.
+                Defaults to BaseSQLClient.
             handler_class (Type[SQLHandler], optional): Class for SQL handling operations.
                 Defaults to SQLHandler.
         """
@@ -127,7 +127,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = SQLQueryExtractionActivitiesState(
+        self._state[get_workflow_id()] = BaseSQLQueryExtractionActivitiesState(
             sql_client=sql_client,
             handler=handler,
             workflow_args=workflow_args,
@@ -186,7 +186,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_ranged_replace_to: str,
         ranged_sql_start_key: str,
         ranged_sql_end_key: str,
-        sql_client: SQLClient,
+        sql_client: BaseSQLClient,
     ):
         """Processes a single chunk of the query, collecting timestamp ranges.
 
@@ -199,7 +199,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_ranged_replace_to: SQL fragment with range placeholders
             ranged_sql_start_key: Placeholder for range start timestamp
             ranged_sql_end_key: Placeholder for range end timestamp
-            sql_client: SQLClient instance for executing queries
+            sql_client: BaseSQLClient instance for executing queries
 
         Returns:
             List[Dict[str, Any]]: List of chunked queries with their metadata
@@ -340,7 +340,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If query parallelization fails
         """
-        state: SQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))

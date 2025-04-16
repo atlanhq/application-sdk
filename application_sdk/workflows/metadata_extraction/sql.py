@@ -12,7 +12,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
-    SQLMetadataExtractionActivities,
+    BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import APPLICATION_NAME
@@ -23,7 +23,7 @@ workflow.logger = get_logger(__name__)
 
 
 @workflow.defn
-class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
+class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     """Workflow for extracting metadata from SQL databases.
 
     This workflow orchestrates the extraction of metadata from SQL databases, including
@@ -31,25 +31,25 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     of metadata in batches for efficient processing.
 
     Attributes:
-        activities_cls (Type[SQLMetadataExtractionActivities]): The activities class
+        activities_cls (Type[BaseSQLMetadataExtractionActivities]): The activities class
             containing the implementation of metadata extraction operations.
         application_name (str): Name of the application, set to "sql-connector".
     """
 
-    activities_cls: Type[SQLMetadataExtractionActivities] = (
-        SQLMetadataExtractionActivities
+    activities_cls: Type[BaseSQLMetadataExtractionActivities] = (
+        BaseSQLMetadataExtractionActivities
     )
 
     application_name: str = APPLICATION_NAME
 
     @staticmethod
     def get_activities(
-        activities: SQLMetadataExtractionActivities,
+        activities: BaseSQLMetadataExtractionActivities,
     ) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities to be executed by the workflow.
 
         Args:
-            activities (SQLMetadataExtractionActivities): The activities instance
+            activities (BaseSQLMetadataExtractionActivities): The activities instance
                 containing the metadata extraction operations.
 
         Returns:
