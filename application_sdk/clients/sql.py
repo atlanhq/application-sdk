@@ -27,7 +27,7 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 
-class SQLClient(ClientInterface):
+class BaseSQLClient(ClientInterface):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -249,10 +249,10 @@ class SQLClient(ClientInterface):
         logger.info("Query execution completed")
 
 
-class AsyncSQLClient(SQLClient):
+class AsyncBaseSQLClient(BaseSQLClient):
     """Asynchronous SQL client for database operations.
 
-    This class extends SQLClient to provide asynchronous database operations,
+    This class extends BaseSQLClient to provide asynchronous database operations,
     with support for batch processing and server-side cursors.
 
     Attributes:
