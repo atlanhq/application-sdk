@@ -58,6 +58,10 @@ def prepare_query(
         Exception: If query preparation fails. Error is logged and None is returned.
     """
     try:
+        if not query:
+            logger.warning("SQL query is not set.")
+            return None
+
         metadata = workflow_args.get("metadata", {})
 
         # using "or" instead of default correct defaults are set in case of empty string
