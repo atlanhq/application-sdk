@@ -57,69 +57,105 @@ def convert_trivy_to_markdown(
     if is_secret_report:
         summary_table_items.append("Secrets")
 
-    results = trivy_data.get("Results", [])
-    if not results:
+    results_data = trivy_data.get("Results")
+    artifact_name = trivy_data.get("ArtifactName", "Unknown Artifact")
+    artifact_type = trivy_data.get("ArtifactType", "Unknown Type")
+
+    if results_data is None:
         if is_vuln_report and is_secret_report:
             summary_table_items.extend(["No targets scanned", "-", "-", "-"])
         elif is_vuln_report:
-            summary_table_items.extend(["No targets scanned", "-", "-"])
+            summary_table_items.extend(
+                [f"`{artifact_name}`", artifact_type, "Scan Error?"]
+            )
         elif is_secret_report:
-            summary_table_items.extend(["No targets scanned", "-", "-"])
+            summary_table_items.extend(
+                [f"`{artifact_name}`", artifact_type, "Scan Error?"]
+            )
         else:
             summary_table_items.extend(["No targets scanned", "-"])
+        results_list = []
 
-    for result in results:
-        target = f"`{result.get('Target', 'Unknown Target')}`"
-        result_type = result.get("Type", "Unknown Type")
-        summary_table_items.extend([target, result_type])
-
+    elif isinstance(results_data, list) and not results_data:
+        target_display = f"`{artifact_name}`"
+        row_data = [target_display, artifact_type]
         if is_vuln_report:
-            severity_counts = {}
-            vulnerabilities = result.get("Vulnerabilities", [])
-            for vuln in vulnerabilities:
-                severity = vuln.get("Severity", "UNKNOWN")
-                severity_counts[severity] = severity_counts.get(severity, 0) + 1
-
-            severity_order = {
-                "CRITICAL": 0,
-                "HIGH": 1,
-                "MEDIUM": 2,
-                "LOW": 3,
-                "UNKNOWN": 4,
-            }
-            vuln_count = sum(severity_counts.values())
-            if vuln_count > 0:
-                severity_breakdown = ", ".join(
-                    f"{count} {sev.capitalize()}"
-                    for sev, count in sorted(
-                        severity_counts.items(),
-                        key=lambda x: severity_order.get(x[0], 5),
-                    )
-                )
-                vuln_str = f"**{vuln_count}** ({severity_breakdown})"
-            else:
-                vuln_str = "✅ None found"
-            summary_table_items.append(vuln_str)
-
+            row_data.append("✅ None found")
         if is_secret_report:
-            secrets = result.get("Secrets", [])
-            secret_count = len(secrets)
-            secret_str = f"**{secret_count}**" if secret_count > 0 else "✅ None found"
-            summary_table_items.append(secret_str)
+            row_data.append("✅ None found")
+        summary_table_items.extend(row_data)
+        results_list = []
 
-    num_columns = (
-        len(summary_table_items) // (len(results) + 1)
-        if results
-        else len(summary_table_items)
-    )
-    num_rows = (len(results) + 1) if results else 1
-    if num_columns > 0:
-        md_file.new_table(
-            columns=num_columns,
-            rows=num_rows,
-            text=summary_table_items,
-            text_align="left",
+    elif isinstance(results_data, list):
+        results_list = results_data
+        for result in results_list:
+            target = f"`{result.get('Target', 'Unknown Target')}`"
+            result_type = result.get("Type", "Unknown Type")
+            row_data = [target, result_type]
+
+            if is_vuln_report:
+                severity_counts = {}
+                vulnerabilities = result.get("Vulnerabilities", [])
+                for vuln in vulnerabilities:
+                    severity = vuln.get("Severity", "UNKNOWN")
+                    severity_counts[severity] = severity_counts.get(severity, 0) + 1
+                severity_order = {
+                    "CRITICAL": 0,
+                    "HIGH": 1,
+                    "MEDIUM": 2,
+                    "LOW": 3,
+                    "UNKNOWN": 4,
+                }
+                vuln_count = sum(severity_counts.values())
+                if vuln_count > 0:
+                    severity_breakdown = ", ".join(
+                        f"{count} {sev.capitalize()}"
+                        for sev, count in sorted(
+                            severity_counts.items(),
+                            key=lambda x: severity_order.get(x[0], 5),
+                        )
+                    )
+                    vuln_str = f"**{vuln_count}** ({severity_breakdown})"
+                else:
+                    vuln_str = "✅ None found"
+                row_data.append(vuln_str)
+
+            if is_secret_report:
+                secrets = result.get("Secrets", [])
+                secret_count = len(secrets)
+                secret_str = (
+                    f"**{secret_count}**" if secret_count > 0 else "✅ None found"
+                )
+                row_data.append(secret_str)
+
+            summary_table_items.extend(row_data)
+    else:
+        summary_table_items.extend(
+            [f"`{artifact_name}`", artifact_type, "Result Error"]
         )
+        results_list = []
+
+    num_targets_processed = len(results_list) if results_list else 1
+    num_columns = (
+        len(summary_table_items) // num_targets_processed
+        if num_targets_processed > 0
+        else 0
+    )
+    num_rows = num_targets_processed
+
+    if num_columns > 0 and num_rows > 0:
+        expected_length = num_columns * num_rows
+        if len(summary_table_items) == expected_length:
+            md_file.new_table(
+                columns=num_columns,
+                rows=num_rows,
+                text=summary_table_items,
+                text_align="left",
+            )
+        else:
+            md_file.write(
+                f"Could not generate summary table (data length mismatch: {len(summary_table_items)} vs {expected_length}).\n\n"
+            )
     else:
         md_file.write("Could not generate summary table.\n\n")
 
@@ -127,117 +163,133 @@ def convert_trivy_to_markdown(
     md_file.new_line()
     md_file.write("### Scan Result Details\n\n")
 
-    if not results:
-        md_file.write("No scan results found in the input data.\n\n")
+    if results_data is None:
+        md_file.write(
+            "No scan results found in the input data (Results key missing or null).\n\n"
+        )
+    elif isinstance(results_data, list) and not results_data:
+        scan_type_name = (
+            "vulnerabilities"
+            if is_vuln_report
+            else "secrets"
+            if is_secret_report
+            else "items"
+        )
+        md_file.write(
+            f"✅ No {scan_type_name} found during the scan for `{artifact_name}`.\n\n"
+        )
+    elif isinstance(results_data, list):
+        for result in results_list:
+            target = result.get("Target", "Unknown Target")
+            md_file.write(f"<details>\n<summary>{target}</summary>\n\n")
 
-    for result in results:
-        target = result.get("Target", "Unknown Target")
+            vulnerabilities = result.get("Vulnerabilities")
+            if vulnerabilities is not None:
+                md_file.write("#### Vulnerabilities\n\n")
+                if not vulnerabilities:
+                    md_file.write("No vulnerabilities found for this target.\n\n")
+                else:
+                    vulnerabilities_table_items = [
+                        "Severity",
+                        "ID",
+                        "Package",
+                        "Version",
+                        "Fixed Version",
+                        "Title",
+                    ]
+                    for vuln in vulnerabilities:
+                        severity = vuln.get("Severity", "UNKNOWN")
+                        severity_enum = (
+                            Severity(severity)
+                            if severity in Severity.__members__
+                            else Severity.UNKNOWN
+                        )
+                        severity_emoji = {
+                            Severity.CRITICAL: "🔴",
+                            Severity.HIGH: "🟠",
+                            Severity.MEDIUM: "🟡",
+                            Severity.LOW: "🟢",
+                            Severity.UNKNOWN: "⚪",
+                        }.get(severity_enum, "⚪")
 
-        md_file.write(f"<details>\n<summary>{target}</summary>\n\n")
+                        vulnerabilities_table_items.extend(
+                            [
+                                f"{severity_emoji} {severity}",
+                                f"[{vuln.get('VulnerabilityID', 'N/A')}]({vuln.get('PrimaryURL', '#')})",
+                                vuln.get("PkgName", "N/A"),
+                                vuln.get("InstalledVersion", "N/A"),
+                                vuln.get("FixedVersion", "N/A"),
+                                vuln.get("Title", "N/A"),
+                            ]
+                        )
 
-        vulnerabilities = result.get("Vulnerabilities")
-        if vulnerabilities is not None:
-            md_file.write("#### Vulnerabilities\n\n")
-            if not vulnerabilities:
-                md_file.write("No vulnerabilities found for this target.\n\n")
-            else:
-                vulnerabilities_table_items = [
-                    "Severity",
-                    "ID",
-                    "Package",
-                    "Version",
-                    "Fixed Version",
-                    "Title",
-                ]
-                for vuln in vulnerabilities:
-                    severity = vuln.get("Severity", "UNKNOWN")
-                    severity_enum = (
-                        Severity(severity)
-                        if severity in Severity.__members__
-                        else Severity.UNKNOWN
-                    )
-                    severity_emoji = {
-                        Severity.CRITICAL: "🔴",
-                        Severity.HIGH: "🟠",
-                        Severity.MEDIUM: "🟡",
-                        Severity.LOW: "��",
-                        Severity.UNKNOWN: "⚪",
-                    }.get(severity_enum, "⚪")
+                    if len(vulnerabilities_table_items) > 6:
+                        md_file.new_table(
+                            columns=6,
+                            rows=len(vulnerabilities_table_items) // 6,
+                            text=vulnerabilities_table_items,
+                            text_align="left",
+                        )
+                        md_file.new_line()
 
-                    vulnerabilities_table_items.extend(
-                        [
-                            f"{severity_emoji} {severity}",
-                            f"[{vuln.get('VulnerabilityID', 'N/A')}]({vuln.get('PrimaryURL', '#')})",
-                            vuln.get("PkgName", "N/A"),
-                            vuln.get("InstalledVersion", "N/A"),
-                            vuln.get("FixedVersion", "N/A"),
-                            vuln.get("Title", "N/A"),
-                        ]
-                    )
+            secrets = result.get("Secrets")
+            if secrets is not None:
+                md_file.write("#### Secrets\n\n")
+                if not secrets:
+                    md_file.write("No secrets found for this target.\n\n")
+                else:
+                    secrets_table_items = [
+                        "Severity",
+                        "Rule ID",
+                        "Category",
+                        "Title",
+                        "Location",
+                    ]
+                    for secret in secrets:
+                        severity = secret.get("Severity", "UNKNOWN")
+                        severity_enum = (
+                            Severity(severity)
+                            if severity in Severity.__members__
+                            else Severity.UNKNOWN
+                        )
+                        severity_emoji = {
+                            Severity.CRITICAL: "🔴",
+                            Severity.HIGH: "🟠",
+                            Severity.MEDIUM: "🟡",
+                            Severity.LOW: "🟢",
+                            Severity.UNKNOWN: "⚪",
+                        }.get(severity_enum, "⚪")
 
-                if len(vulnerabilities_table_items) > 6:
-                    md_file.new_table(
-                        columns=6,
-                        rows=len(vulnerabilities_table_items) // 6,
-                        text=vulnerabilities_table_items,
-                        text_align="left",
-                    )
-                    md_file.new_line()
+                        location = f"Line {secret.get('StartLine', 'N/A')}"
+                        if secret.get("EndLine") and secret.get(
+                            "EndLine"
+                        ) != secret.get("StartLine"):
+                            location += f"-{secret.get('EndLine')}"
 
-        secrets = result.get("Secrets")
-        if secrets is not None:
-            md_file.write("#### Secrets\n\n")
-            if not secrets:
-                md_file.write("No secrets found for this target.\n\n")
-            else:
-                secrets_table_items = [
-                    "Severity",
-                    "Rule ID",
-                    "Category",
-                    "Title",
-                    "Location",
-                ]
-                for secret in secrets:
-                    severity = secret.get("Severity", "UNKNOWN")
-                    severity_enum = (
-                        Severity(severity)
-                        if severity in Severity.__members__
-                        else Severity.UNKNOWN
-                    )
-                    severity_emoji = {
-                        Severity.CRITICAL: "🔴",
-                        Severity.HIGH: "🟠",
-                        Severity.MEDIUM: "🟡",
-                        Severity.LOW: "🟢",
-                        Severity.UNKNOWN: "⚪",
-                    }.get(severity_enum, "⚪")
+                        secrets_table_items.extend(
+                            [
+                                f"{severity_emoji} {severity}",
+                                secret.get("RuleID", "N/A"),
+                                secret.get("Category", "N/A"),
+                                secret.get("Title", "N/A"),
+                                location,
+                            ]
+                        )
 
-                    location = f"Line {secret.get('StartLine', 'N/A')}"
-                    if secret.get("EndLine") and secret.get("EndLine") != secret.get(
-                        "StartLine"
-                    ):
-                        location += f"-{secret.get('EndLine')}"
+                    if len(secrets_table_items) > 5:
+                        md_file.new_table(
+                            columns=5,
+                            rows=len(secrets_table_items) // 5,
+                            text=secrets_table_items,
+                            text_align="left",
+                        )
+                        md_file.new_line()
 
-                    secrets_table_items.extend(
-                        [
-                            f"{severity_emoji} {severity}",
-                            secret.get("RuleID", "N/A"),
-                            secret.get("Category", "N/A"),
-                            secret.get("Title", "N/A"),
-                            location,
-                        ]
-                    )
-
-                if len(secrets_table_items) > 5:
-                    md_file.new_table(
-                        columns=5,
-                        rows=len(secrets_table_items) // 5,
-                        text=secrets_table_items,
-                        text_align="left",
-                    )
-                    md_file.new_line()
-
-        md_file.write("</details>\n\n")
+            md_file.write("</details>\n\n")
+    else:
+        md_file.write(
+            "Error processing scan results: Unexpected data format for 'Results'.\n\n"
+        )
 
     return md_file.get_md_text()
 
