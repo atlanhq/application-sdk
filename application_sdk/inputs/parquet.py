@@ -42,25 +42,29 @@ class ParquetInput(Input):
         self.input_prefix = input_prefix
         self.file_names = file_names
 
-    async def download_files(self, remote_file_path: str) -> str:
+    async def download_files(self, remote_file_path: str) -> Optional[str]:
         """Read a file from the object store.
 
         Args:
             remote_file_path (str): Path to the remote file in object store.
 
         Returns:
-            str: Path to the downloaded local file.
+            Optional[str]: Path to the downloaded local file.
         """
         if os.path.isdir(remote_file_path):
             parquet_files = glob.glob(os.path.join(remote_file_path, "*.parquet"))
-            if not parquet_files and self.input_prefix:
-                logger.info(
-                    f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
-                )
-                ObjectStoreInput.download_files_from_object_store(
-                    self.input_prefix, remote_file_path
-                )
-        return remote_file_path
+            if not parquet_files:
+                if self.input_prefix:
+                    logger.info(
+                        f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
+                    )
+                    ObjectStoreInput.download_files_from_object_store(
+                        self.input_prefix, remote_file_path
+                    )
+                else:
+                    raise ValueError(
+                        f"No parquet files found in {remote_file_path} and no input prefix provided"
+                    )
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """
@@ -125,7 +129,7 @@ class ParquetInput(Input):
             else:
                 path = self.path
             if self.input_prefix and self.path:
-                path = await self.download_files(self.path)
+                await self.download_files(self.path)
             return daft.read_parquet(f"{path}/*.parquet")
         except Exception as e:
             logger.error(
@@ -147,7 +151,7 @@ class ParquetInput(Input):
 
             path = self.path
             if self.input_prefix and self.path:
-                path = await self.download_files(self.path)
+                await self.download_files(self.path)
             # Use daft's native chunking through _chunk_size parameter
             df_iterator = daft.read_parquet(path, _chunk_size=self.chunk_size)
             for batch_df in df_iterator:
