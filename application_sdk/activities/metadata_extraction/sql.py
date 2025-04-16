@@ -23,6 +23,7 @@ activity.logger = get_logger(__name__)
 
 queries = read_sql_files(queries_prefix="app/sql")
 
+
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
     """State class for SQL metadata extraction activities.
 
@@ -200,7 +201,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_query: str,
         workflow_args: Dict[str, Any],
         output_suffix: str,
-        typename: str
+        typename: str,
     ) -> Optional[Dict[str, Any]]:
         """
         Executes a SQL query using the provided engine and saves the results to Parquet.
@@ -235,7 +236,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return None
 
         try:
-
             sql_input = SQLQueryInput(
                 engine=sql_engine,
                 query=sql_query,
@@ -251,8 +251,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_path = workflow_args.get("output_path")
 
             if not output_prefix or not output_path:
-                activity.logger.error("Output prefix or path not provided in workflow_args.")
-                raise ValueError("Output prefix and path must be specified in workflow_args.")
+                activity.logger.error(
+                    "Output prefix or path not provided in workflow_args."
+                )
+                raise ValueError(
+                    "Output prefix and path must be specified in workflow_args."
+                )
 
             parquet_output = ParquetOutput(
                 output_prefix=output_prefix,
@@ -260,12 +264,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 output_suffix=output_suffix,
             )
             await parquet_output.write_daft_dataframe(daft_dataframe)
-            activity.logger.info(f"Successfully wrote query results to {parquet_output.get_full_path()}")
+            activity.logger.info(
+                f"Successfully wrote query results to {parquet_output.get_full_path()}"
+            )
 
             statistics = await parquet_output.get_statistics(typename=typename)
             return statistics
         except Exception as e:
-            activity.logger.error(f"Error during query execution or output writing: {e}", exc_info=True)
+            activity.logger.error(
+                f"Error during query execution or output writing: {e}", exc_info=True
+            )
             raise
 
     @activity.defn
@@ -281,10 +289,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         prepared_query = prepare_query(
-            query=self.fetch_database_sql,
-            workflow_args=workflow_args
+            query=self.fetch_database_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -308,10 +317,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         prepared_query = prepare_query(
-            query=self.fetch_schema_sql,
-            workflow_args=workflow_args
+            query=self.fetch_schema_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -335,11 +345,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         prepared_query = prepare_query(
             query=self.fetch_table_sql,
             workflow_args=workflow_args,
-            temp_table_regex_sql=self.tables_extraction_temp_table_regex_sql
+            temp_table_regex_sql=self.tables_extraction_temp_table_regex_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -363,11 +375,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         prepared_query = prepare_query(
             query=self.fetch_column_sql,
             workflow_args=workflow_args,
-            temp_table_regex_sql=self.column_extraction_temp_table_regex_sql
+            temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -391,7 +405,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         prepared_query = prepare_query(
             query=self.fetch_procedure_sql,
             workflow_args=workflow_args,

@@ -14,9 +14,6 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.constants import (
-    APPLICATION_NAME,
-)
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput

@@ -340,7 +340,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If query parallelization fails
         """
-        state: BaseSQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLQueryExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))

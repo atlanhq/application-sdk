@@ -160,7 +160,9 @@ async def application_sql_with_custom_transformer(
     worker: Worker = Worker(
         workflow_client=workflow_client,
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
+            activities
+        ),
     )
 
     # wait for the worker to start

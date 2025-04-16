@@ -96,13 +96,13 @@ runs:
       if: inputs.add-report-comment-to-pr == 'true'
       shell: bash
       run: |
-        python .github/scripts/trivy-to-markdown.py trivy-vuln-results.json trivy-vuln-results.md
+        python .github/scripts/trivy-to-markdown.py trivy-vuln-results.json trivy-vuln-results.md Vulnerability
 
     - name: Convert Secret Scan Results to Markdown
       if: inputs.add-report-comment-to-pr == 'true'
       shell: bash
       run: |
-        python .github/scripts/trivy-to-markdown.py trivy-secret-results.json trivy-secret-results.md
+        python .github/scripts/trivy-to-markdown.py trivy-secret-results.json trivy-secret-results.md Secret
 
     - name: Comment on PR with Vulnerability Scan Results
       if: inputs.add-report-comment-to-pr == 'true'

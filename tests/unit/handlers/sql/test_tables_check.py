@@ -21,7 +21,7 @@ class MockBaseSQLClient(BaseSQLClient):
         self.engine.connect.return_value.__exit__ = MagicMock()
         self.engine.connect.return_value.connection = MagicMock()
 
-    async def __aenter__(self) -> "MockSQLClient":
+    async def __aenter__(self) -> "MockBaseSQLClient":
         return self
 
     async def __aexit__(
