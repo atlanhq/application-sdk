@@ -6,7 +6,7 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.test_utils.hypothesis.strategies.handlers.sql.sql_preflight import (
     metadata_list_strategy,
@@ -23,7 +23,7 @@ settings.load_profile("sql_preflight_tests")
 
 @pytest.fixture
 def mock_sql_client() -> Mock:
-    sql_client = Mock(spec=SQLClient)
+    sql_client = Mock(spec=BaseSQLClient)
     # Add mock engine with dialect to avoid None errors
     mock_engine = Mock()
     mock_dialect = Mock()
@@ -182,7 +182,7 @@ async def test_check_client_version_comparison(
     )
 
     # Set minimum version environment variable
-    monkeypatch.setenv("ATLAN_SQL_SERVER_MIN_VERSION", min_version)
+    monkeypatch.setattr("application_sdk.handlers.sql.SQL_SERVER_MIN_VERSION", min_version)
 
     result = await handler.check_client_version()
 

@@ -6,7 +6,6 @@ import pandas as pd
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.config import get_settings
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -91,8 +90,7 @@ class JsonOutput(Output):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
-        settings = get_settings()
-        self.chunk_size = chunk_size or settings.chunk_size
+        self.chunk_size = chunk_size or 100000
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
@@ -164,7 +162,7 @@ class JsonOutput(Output):
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
 
-        for row in dataframe:
+        async for row in dataframe:
             self.total_record_count += 1
             # Serialize the row and add it to the buffer
             buffer.append(

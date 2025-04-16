@@ -1,21 +1,23 @@
 import asyncio
 import json
-import os
 import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from application_sdk.common.utils import read_sql_files
 from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.constants import SQL_SERVER_MIN_VERSION
 
 logger = get_logger(__name__)
 
+queries = read_sql_files(queries_prefix="app/sql")
 
 class SQLConstants(Enum):
     """
@@ -33,23 +35,25 @@ class SQLHandler(HandlerInterface):
     Handler class for SQL workflows
     """
 
-    sql_client: SQLClient
+    sql_client: BaseSQLClient
     # Variables for testing authentication
-    test_authentication_sql: str = "SELECT 1;"
-    get_client_version_sql: str | None = None
-    # Variables for fetching metadata
-    metadata_sql: str | None = None
-    tables_check_sql: str | None = None
-    fetch_databases_sql: str | None = None
-    fetch_schemas_sql: str | None = None
+    test_authentication_sql: str = queries.get("TEST_AUTHENTICATION", "SELECT 1;")
+    client_version_sql: str | None = queries.get("CLIENT_VERSION")
+    
+
+    metadata_sql: str | None = queries.get("FILTER_METADATA")
+    tables_check_sql: str | None = queries.get("TABLES_CHECK")
+    fetch_databases_sql: str | None = queries.get("EXTRACT_DATABASE")
+    fetch_schemas_sql: str | None = queries.get("EXTRACT_SCHEMA")
+
+    temp_table_regex_sql: str | None = queries.get("TABLES_CHECK_TEMP_TABLE_REGEX")
+
     database_alias_key: str = SQLConstants.DATABASE_ALIAS_KEY.value
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
-    temp_table_regex_sql: str = ""
-
-    def __init__(self, sql_client: SQLClient | None = None):
+    def __init__(self, sql_client: BaseSQLClient | None = None):
         self.sql_client = sql_client
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -324,7 +328,7 @@ class SQLHandler(HandlerInterface):
         """
         Check if the client version meets the minimum required version.
 
-        If get_client_version_sql is not defined by the implementing app,
+        If client_version_sql is not defined by the implementing app,
         this check will be skipped and return success.
 
         Returns:
@@ -333,7 +337,7 @@ class SQLHandler(HandlerInterface):
 
         logger.info("Checking client version")
         try:
-            min_version = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
+            min_version = SQL_SERVER_MIN_VERSION
             client_version = None
 
             # Try to get the version from the sql_client dialect
@@ -346,10 +350,10 @@ class SQLHandler(HandlerInterface):
                         f"Detected client version from dialect: {client_version}"
                     )
 
-            # If dialect version not available and get_client_version_sql is defined, use SQL query
-            if not client_version and self.get_client_version_sql:
+            # If dialect version not available and client_version_sql is defined, use SQL query
+            if not client_version and self.client_version_sql:
                 sql_input = await SQLQueryInput(
-                    query=self.get_client_version_sql,
+                    query=self.client_version_sql,
                     engine=self.sql_client.engine,
                     chunk_size=None,
                 ).get_dataframe()

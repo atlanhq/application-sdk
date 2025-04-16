@@ -14,17 +14,21 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
+from application_sdk.constants import (
+    LOG_LEVEL,
+    SERVICE_NAME,
+    SERVICE_VERSION,
+    OTEL_RESOURCE_ATTRIBUTES,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    ENABLE_OTLP_LOGS,
+    OTEL_WF_NODE_NAME,
+    OTEL_BATCH_DELAY_MS,
+    OTEL_BATCH_SIZE,
+    OTEL_QUEUE_SIZE,
+)
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
 
-SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
-OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
-OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
-    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
-)
-ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
 
 # Add a Loguru handler for the Python logging system
@@ -92,7 +96,7 @@ class AtlanLoggerAdapter:
         if ENABLE_OTLP_LOGS:
             try:
                 # Get workflow node name for Argo environment
-                workflow_node_name = os.getenv("OTEL_WF_NODE_NAME", "")
+                workflow_node_name = OTEL_WF_NODE_NAME
 
                 # First try to get attributes from OTEL_RESOURCE_ATTRIBUTES
                 resource_attributes = {}
@@ -117,14 +121,14 @@ class AtlanLoggerAdapter:
 
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                    timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                 )
 
                 batch_processor = BatchLogRecordProcessor(
                     exporter,
-                    schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
-                    max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-                    max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                    schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                    max_export_batch_size=OTEL_BATCH_SIZE,
+                    max_queue_size=OTEL_QUEUE_SIZE,
                 )
 
                 self.logger_provider.add_log_record_processor(batch_processor)

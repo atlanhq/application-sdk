@@ -8,11 +8,10 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
-
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from application_sdk.common.utils import parse_credentials_extra
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -21,16 +20,12 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_user,
 )
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import parse_credentials_extra
+from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 
 activity.logger = get_logger(__name__)
 
 
-class SQLConstants(Enum):
-    USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
-
-
-class SQLClient(ClientInterface):
+class BaseSQLClient(ClientInterface):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -48,11 +43,11 @@ class SQLClient(ClientInterface):
     engine = None
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
-    use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
+    use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
 
     def __init__(
         self,
-        use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value,
+        use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
@@ -61,7 +56,7 @@ class SQLClient(ClientInterface):
 
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
-                Defaults to SQLConstants.USE_SERVER_SIDE_CURSOR.value.
+                Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
             sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
                 connection arguments. Defaults to {}.
@@ -144,8 +139,6 @@ class SQLClient(ClientInterface):
             raise ValueError("aws_role_arn is required for IAM role authentication")
         if not database:
             raise ValueError("database is required for IAM role authentication")
-        if not external_id:
-            raise ValueError("aws_external_id is required for IAM role authentication")
 
         session_name = os.getenv("AWS_SESSION_NAME", "temp-session")
         username = self.credentials["username"]
@@ -256,10 +249,10 @@ class SQLClient(ClientInterface):
         activity.logger.info("Query execution completed")
 
 
-class AsyncSQLClient(SQLClient):
+class AsyncBaseSQLClient(BaseSQLClient):
     """Asynchronous SQL client for database operations.
 
-    This class extends SQLClient to provide asynchronous database operations,
+    This class extends BaseSQLClient to provide asynchronous database operations,
     with support for batch processing and server-side cursors.
 
     Attributes:
