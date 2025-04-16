@@ -141,7 +141,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
     await workflow_client.load()
 
     activities = SampleSQLMinerActivities(
-        sql_client_class=SnowflakeSQLClient, handler_class=SampleSnowflakeHandler
+        sql_client_class=SQLClient, handler_class=SampleSnowflakeHandler
     )
 
     worker: Worker = Worker(

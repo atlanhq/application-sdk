@@ -36,7 +36,7 @@ def handler(sql_client: Any) -> SQLHandler:
 
 
 @patch("sqlalchemy.create_engine")
-def test_load(mock_create_engine: Any, sql_client: SQLClient):
+def test_load(mock_create_engine: Any, sql_client: BaseSQLClient):
     """Test basic loading functionality with fixed configuration"""
     # Mock the engine and connection
     mock_engine = MagicMock()
@@ -63,7 +63,7 @@ def test_load(mock_create_engine: Any, sql_client: SQLClient):
 )
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_load_property_based(
-    sql_client: SQLClient,
+    sql_client: BaseSQLClient,
     credentials: Dict[str, Any],
     connect_args: Dict[str, Any],
 ):
@@ -234,7 +234,7 @@ async def test_fetch_metadata_with_error(
     new_callable=MagicMock,
 )
 async def test_run_query(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """Test basic query execution with fixed data"""
     # Mock the query text
@@ -311,7 +311,7 @@ async def test_run_query(
     new_callable=MagicMock,
 )
 async def test_run_query_with_error(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: SQLClient
+    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """Test error handling in query execution"""
     # Mock the query text
@@ -350,7 +350,7 @@ async def test_run_query_with_error(
 @given(connection_string=sql_connection_string_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 def test_connection_string_property_based(
-    sql_client: SQLClient, connection_string: str
+    sql_client: BaseSQLClient, connection_string: str
 ):
     """Property-based test for various connection string formats"""
     with patch("sqlalchemy.create_engine") as mock_create_engine:
@@ -384,7 +384,7 @@ def test_connection_string_property_based(
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Failing due to KeyError: 'col1'")
 async def test_run_query_property_based(
-    sql_client: SQLClient,
+    sql_client: BaseSQLClient,
     query_result: Dict[str, Any],
 ):
     """Property-based test for query execution with various result structures"""
@@ -430,7 +430,7 @@ async def test_run_query_property_based(
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 @pytest.mark.asyncio
 async def test_run_query_error_property_based(
-    sql_client: SQLClient,
+    sql_client: BaseSQLClient,
     error_type: str,
 ):
     """Property-based test for query execution with various error scenarios"""

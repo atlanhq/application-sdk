@@ -13,7 +13,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.constants import (
     APPLICATION_NAME,
 )
@@ -35,7 +35,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         activities_cls (Type[SQLQueryExtractionActivities]): The activities class
             for SQL query extraction.
         fetch_queries_sql (str): SQL query for fetching queries.
-        sql_client (SQLClient | None): SQL client instance.
+        sql_client (BaseSQLClient | None): SQL client instance.
         application_name (str): Name of the application.
         batch_size (int): Size of each batch for processing.
     """
@@ -44,7 +44,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     fetch_queries_sql = ""
 
-    sql_client: SQLClient | None = None
+    sql_client: BaseSQLClient | None = None
 
     application_name: str = APPLICATION_NAME
     batch_size: int = 100000

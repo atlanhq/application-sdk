@@ -8,7 +8,7 @@ from application_sdk.common.utils import read_sql_files
 from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers import HandlerInterface
@@ -35,7 +35,7 @@ class SQLHandler(HandlerInterface):
     Handler class for SQL workflows
     """
 
-    sql_client: SQLClient
+    sql_client: BaseSQLClient
     # Variables for testing authentication
     test_authentication_sql: str = queries.get("TEST_AUTHENTICATION", "SELECT 1;")
     client_version_sql: str | None = queries.get("CLIENT_VERSION")
@@ -53,7 +53,7 @@ class SQLHandler(HandlerInterface):
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
-    def __init__(self, sql_client: SQLClient | None = None):
+    def __init__(self, sql_client: BaseSQLClient | None = None):
         self.sql_client = sql_client
 
     async def load(self, credentials: Dict[str, Any]) -> None:

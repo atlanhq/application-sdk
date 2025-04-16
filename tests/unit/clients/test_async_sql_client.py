@@ -24,7 +24,7 @@ def handler(async_sql_client: Any) -> SQLHandler:
 
 
 @patch("sqlalchemy.ext.asyncio.create_async_engine")
-def test_load(create_async_engine: Any, async_sql_client: AsyncSQLClient):
+def test_load(create_async_engine: Any, async_sql_client: AsyncBaseSQLClient):
     # Mock the engine and connection
     mock_engine = AsyncMock()
     mock_connection = MagicMock()

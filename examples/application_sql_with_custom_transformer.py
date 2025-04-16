@@ -152,7 +152,7 @@ async def application_sql_with_custom_transformer(
     await workflow_client.load()
 
     activities = SampleSQLActivities(
-        sql_client_class=PostgreSQLClient,
+        sql_client_class=SQLClient,
         handler_class=SampleSQLHandler,
         transformer_class=CustomTransformer,
     )

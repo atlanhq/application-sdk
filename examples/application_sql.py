@@ -126,7 +126,7 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     await workflow_client.load()
 
     activities = SampleSQLActivities(
-        sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
+        sql_client_class=SQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
     worker: Worker = Worker(

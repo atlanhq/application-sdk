@@ -7,7 +7,7 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query
 from application_sdk.handlers.sql import SQLHandler
@@ -34,12 +34,12 @@ class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
     including the SQL client, handler, and transformer instances.
 
     Attributes:
-        sql_client (SQLClient): Client for SQL database operations.
+        sql_client (BaseSQLClient): Client for SQL database operations.
         handler (SQLHandler): Handler for SQL-specific operations.
         transformer (TransformerInterface): Transformer for metadata conversion.
     """
 
-    sql_client: Optional[SQLClient] = None
+    sql_client: Optional[BaseSQLClient] = None
     handler: Optional[SQLHandler] = None
     transformer: Optional[TransformerInterface] = None
 
@@ -56,7 +56,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         fetch_schema_sql (Optional[str]): SQL query for fetching schemas.
         fetch_table_sql (Optional[str]): SQL query for fetching tables.
         fetch_column_sql (Optional[str]): SQL query for fetching columns.
-        sql_client_class (Type[SQLClient]): Class for SQL client operations.
+        sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
         tables_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during tables extraction.
@@ -76,13 +76,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     tables_extraction_temp_table_regex_sql = queries.get("TABLE_EXTRACTION_TEMP_TABLE_REGEX")
     column_extraction_temp_table_regex_sql = queries.get("COLUMN_EXTRACTION_TEMP_TABLE_REGEX")
 
-    sql_client_class: Type[SQLClient] = SQLClient
+    sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[SQLHandler] = SQLHandler
     transformer_class: Type[TransformerInterface] = AtlasTransformer
 
     def __init__(
         self,
-        sql_client_class: Optional[Type[SQLClient]] = None,
+        sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[SQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
@@ -288,7 +288,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
-            query=prepared_query,
+            sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/database",
             typename="database",
@@ -315,7 +315,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
-            query=prepared_query,
+            sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/schema",
             typename="schema",
@@ -343,7 +343,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
-            query=prepared_query,
+            sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/table",
             typename="table",
@@ -371,7 +371,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
-            query=prepared_query,
+            sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/column",
             typename="column",
@@ -398,7 +398,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
-            query=prepared_query,
+            sql_query=prepared_query,
             workflow_args=workflow_args,
             output_suffix="raw/extras-procedure",
             typename="extras-procedure",
