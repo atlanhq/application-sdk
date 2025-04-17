@@ -1,7 +1,7 @@
+import os
 import daft
 from typing import Dict, Any, List, Optional, Type
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.sql.sql import Database, Table
 from application_sdk.common.logger_adaptors import get_logger
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 from datetime import datetime
@@ -9,24 +9,91 @@ from application_sdk.transformers.common.utils import process_text
 
 logger = get_logger(__name__)
 
+import yaml
+
 class SQLTransformer(TransformerInterface):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         # self.schema_registry = schema_registry_client
         self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
         self.tenant_id = tenant_id
-        self.entity_class_definitions: Dict[str, Type[Any]] = {
-            "DATABASE": Database,
-            # "SCHEMA": Schema,
-            "TABLE": Table,
-            # "VIEW": Table,
-            # "COLUMN": Column,
-            # "MATERIALIZED VIEW": Table,
-            # "FUNCTION": Function,
-            # "TAG_REF": TagAttachment,
-            # "PROCEDURE": Procedure,
-        }
+        self.entity_class_definitions: Dict[str, str] = self._generate_detault_yaml_mappings(
+            entities=["DATABASE", "TABLE"]
+        )
     
+    def _generate_detault_yaml_mappings(
+            self,
+            entities: List[str],
+            base_path: Optional[str] = None,
+        ) -> Dict[str, str]:
+        base_path = base_path or f"{os.path.dirname(__file__)}/sql_query_templates"
+        return {
+            entity: os.path.join(base_path, f"{entity.lower()}.yaml")
+            for entity in entities
+        }
+
+    def generate_query(self, yaml_path: str, dataframe: daft.DataFrame) -> str:
+        with open(yaml_path, 'r') as f:
+            sql_template = yaml.safe_load(f)
+        columns = []
+        for column in sql_template['columns']:
+            if column['source'] in dataframe.column_names:
+                if "." in column['name']:
+                    # quote the column name
+                    column['name'] = f'"{column["name"]}"'
+                columns.append(f"{column['source']} AS {column['name']}")
+        
+        return f"""
+        SELECT 
+            {','.join(columns)}
+        FROM 
+            dataframe
+        """
+    
+    def _group_columns_by_prefix(self, dataframe: daft.DataFrame) -> daft.DataFrame:
+        """Group columns with the same prefix into structs.
+        
+        Args:
+            dataframe (daft.DataFrame): DataFrame to restructure
+            
+        Returns:
+            daft.DataFrame: DataFrame with columns grouped into structs
+        """
+        # Get all column names
+        columns = dataframe.column_names
+        
+        # Group columns by prefix
+        prefix_groups = {}
+        standalone_columns = []
+        
+        for col in columns:
+            if '.' in col:
+                prefix, suffix = col.split('.', 1)
+                if prefix not in prefix_groups:
+                    prefix_groups[prefix] = []
+                prefix_groups[prefix].append((col, suffix))
+            else:
+                standalone_columns.append(col)
+        
+        # Create new DataFrame with restructured columns
+        new_columns = []
+        
+        # Add standalone columns as is
+        for col in standalone_columns:
+            new_columns.append(daft.col(col))
+        
+        # Create structs for prefixed columns
+        for prefix, columns in prefix_groups.items():
+            # Create a dictionary of field expressions
+            struct_fields = (
+                daft.col(full_col).alias(suffix)
+                for full_col, suffix in columns
+            )
+            # Create the struct expression
+            new_columns.append(daft.struct(*struct_fields).alias(prefix))
+        
+        return dataframe.select(*new_columns)
+
     def _enrich_entity_with_metadata(
         self,
         workflow_id: str,
@@ -49,58 +116,61 @@ class SQLTransformer(TransformerInterface):
             # Add standard attributes
             enriched_df = dataframe.with_columns({
                 "status": daft.lit(EntityStatus.ACTIVE),
-                "tenant_id": daft.lit(self.tenant_id),
-                "last_sync_workflow_name": daft.lit(workflow_id),
-                "last_sync_run": daft.lit(workflow_run_id),
-                "last_sync_run_at": daft.lit(datetime.now()),
-                "connector_name": daft.col("connection_qualified_name").apply(
+                "custom_attributes.tenant_id": daft.lit(self.tenant_id),
+                "attributes.last_sync_workflow_name": daft.lit(workflow_id),
+                "attributes.last_sync_run": daft.lit(workflow_run_id),
+                "attributes.last_sync_run_at": daft.lit(datetime.now()),
+                "attributes.connector_name": daft.col("attributes.connection_qualified_name").apply(
                     lambda x: AtlanConnectorType.get_connector_name(x), return_dtype=daft.DataType.string()
                 ),
             })
 
             # Add description from remarks or comment if they exist
-            if "remarks" in dataframe.column_names or "comment" in dataframe.column_names:
+            if "attributes.remarks" in dataframe.column_names or "attributes.comment" in dataframe.column_names:
                 enriched_df = enriched_df.with_column(
-                    "description",
-                    (~daft.col("remarks").is_null()).if_else(
-                        daft.col("remarks"),
-                        (~daft.col("comment").is_null()).if_else(
-                            daft.col("comment"),
+                    "attributes.description",
+                    (~daft.col("attributes.remarks").is_null()).if_else(
+                        daft.col("attributes.remarks"),
+                        (~daft.col("attributes.comment").is_null()).if_else(
+                            daft.col("attributes.comment"),
                             daft.lit(None)
                         )
                     ).apply(process_text, return_dtype=daft.DataType.string())
                 )
 
             # Add source created by if source_owner exists
-            if "source_owner" in dataframe.column_names:
+            if "custom_attributes.source_owner" in dataframe.column_names:
                 enriched_df = enriched_df.with_columns({
-                    "source_created_by": daft.col("source_owner")
+                    "custom_attributes.source_created_by": daft.col("custom_attributes.source_owner")
                 })
 
             # Add timestamps if the columns exist
-            if "created" in dataframe.column_names:
+            if "custom_attributes.created" in dataframe.column_names:
                 enriched_df = enriched_df.with_column(
-                    "source_created_at",
-                    (~daft.col("created").is_null()).if_else(
-                        daft.col("created").apply(lambda x: datetime.fromtimestamp(x / 1000), return_dtype=daft.DataType.timestamp()),
+                    "custom_attributes.source_created_at",
+                    (~daft.col("custom_attributes.created").is_null()).if_else(
+                        daft.col("custom_attributes.created").apply(lambda x: datetime.fromtimestamp(x / 1000), return_dtype=daft.DataType.timestamp()),
                         daft.lit(None)
                     )
                 )
 
-            if "last_altered" in dataframe.column_names:
+            if "custom_attributes.last_altered" in dataframe.column_names:
                 enriched_df = enriched_df.with_column(
-                    "source_updated_at",
-                    (~daft.col("last_altered").is_null()).if_else(
-                        daft.col("last_altered").apply(lambda x: datetime.fromtimestamp(x / 1000), return_dtype=daft.DataType.timestamp()),
+                    "custom_attributes.source_updated_at",
+                    (~daft.col("custom_attributes.last_altered").is_null()).if_else(
+                        daft.col("custom_attributes.last_altered").apply(lambda x: datetime.fromtimestamp(x / 1000), return_dtype=daft.DataType.timestamp()),
                         daft.lit(None)
                     )
                 )
 
             # Add custom attributes if source_id exists
-            if "source_id" in dataframe.column_names:
+            if "custom_attributes.source_id" in dataframe.column_names:
                 enriched_df = enriched_df.with_columns({
-                    "source_id": daft.col("source_id")
+                    "custom_attributes.source_id": daft.col("custom_attributes.source_id")
                 })
+
+            # Group columns by prefix into structs
+            enriched_df = self._group_columns_by_prefix(enriched_df)
 
             return enriched_df
         except Exception as e:
@@ -123,19 +193,19 @@ class SQLTransformer(TransformerInterface):
             
             typename = typename.upper()
             self.entity_class_definitions = entity_class_definitions or self.entity_class_definitions
-            entity_class = self.entity_class_definitions.get(typename)
+            entity_sql_template_path = self.entity_class_definitions.get(typename)
+            if not entity_sql_template_path:
+                raise ValueError(f"No SQL transformation registered for {typename}")
+            
             dataframe = dataframe.with_columns(
                 {
                     "connection_qualified_name": daft.lit(kwargs.get("connection_qualified_name", None)),
                     "connection_name": daft.lit(kwargs.get("connection_name", None)),
                 }
             )
-            if not entity_class:
-                raise ValueError(f"No SQL transformation registered for {typename}")
-                
-            sql_template = entity_class.query
             
-            transformed_df = daft.sql(sql_template)
+            entity_sql_template = self.generate_query(entity_sql_template_path, dataframe)
+            transformed_df = daft.sql(entity_sql_template)
             transformed_df = self._enrich_entity_with_metadata(
                 workflow_id,
                 workflow_run_id,

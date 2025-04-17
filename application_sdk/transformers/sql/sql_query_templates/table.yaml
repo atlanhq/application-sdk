@@ -1,0 +1,95 @@
+# table.yaml
+entity: Table
+columns:
+  - name: name
+    source: table_name
+  - name: qualified_name
+    source: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+  - name: connection_qualified_name
+    source: connection_qualified_name
+  - name: status
+    source: 'ACTIVE'
+  - name: tenant_id
+    source: tenant_id
+  - name: last_sync_workflow_name
+    source: workflow_id
+  - name: last_sync_run
+    source: workflow_run_id
+  - name: connector_name
+    source: connector_name
+  - name: description
+    source: coalesce(remarks, comment)
+  - name: source_created_by
+    source: source_owner
+  - name: source_created_at
+    source: created
+  - name: source_updated_at
+    source: last_altered
+  - name: database_name
+    source: table_catalog
+  - name: database_qualified_name
+    source: concat(connection_qualified_name, '/', table_catalog)
+  - name: schema_name
+    source: table_schema
+  - name: schema_qualified_name
+    source: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
+  - name: definition
+    source: view_definition
+  - name: column_count
+    source: column_count
+  - name: row_count
+    source: row_count
+  - name: size_bytes
+    source: size_bytes
+  - name: table_type
+    source: table_type
+  - name: entity_class
+    source: CASE WHEN is_partition = 'YES' THEN 'TablePartition' WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table' WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView' WHEN table_type = 'DYNAMIC TABLE' OR is_dynamic = 'YES' THEN 'SnowflakeDynamicTable' ELSE 'View' END
+  - name: table_name
+    source: CASE WHEN is_partition = 'YES' THEN parent_table_name ELSE NULL END
+  - name: table_qualified_name
+    source: CASE WHEN is_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name) ELSE NULL END
+  - name: external_location
+    source: location
+  - name: external_location_format
+    source: file_format_type
+  - name: external_location_region
+    source: stage_region
+  - name: refresh_mode
+    source: refresh_mode
+  - name: staleness
+    source: staleness
+  - name: stale_since_date
+    source: stale_since_date
+  - name: refresh_method
+    source: refresh_method
+  - name: is_transient
+    source: is_transient
+  - name: table_catalog_id
+    source: table_catalog_id
+  - name: table_schema_id
+    source: table_schema_id
+  - name: last_ddl
+    source: last_ddl
+  - name: last_ddl_by
+    source: last_ddl_by
+  - name: is_secure
+    source: is_secure
+  - name: retention_time
+    source: retention_time
+  - name: stage_url
+    source: stage_url
+  - name: is_insertable_into
+    source: is_insertable_into
+  - name: number_columns_in_part_key
+    source: number_columns_in_part_key
+  - name: columns_participating_in_part_key
+    source: columns_participating_in_part_key
+  - name: is_typed
+    source: is_typed
+  - name: auto_clustering_on
+    source: auto_clustering_on
+  - name: engine
+    source: engine
+  - name: auto_increment
+    source: auto_increment

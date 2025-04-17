@@ -1,0 +1,44 @@
+# database.yaml
+entity: Database
+columns:
+  - name: attributes.name
+    source: database_name
+
+  - name: attributes.qualified_name
+    source: concat(connection_qualified_name, '/', database_name)
+
+  - name: attributes.connection_qualified_name
+    source: connection_qualified_name
+
+  - name: status
+    source: 'ACTIVE'
+
+  - name: attributes.tenant_id
+    source: tenant_id
+
+  - name: attributes.last_sync_workflow_name
+    source: workflow_id
+
+  - name: attributes.last_sync_run
+    source: workflow_run_id
+
+  - name: attributes.connector_name
+    source: connector_name
+
+  - name: attributes.description
+    source: coalesce(remarks, comment)
+
+  - name: custom_attributes.source_created_by
+    source: source_owner
+
+  - name: custom_attributes.source_created_at
+    source: created
+
+  - name: custom_attributes.source_updated_at
+    source: last_altered
+
+  - name: custom_attributes.source_id
+    source: source_id
+
+  - name: entity_class
+    source: 'Database'
