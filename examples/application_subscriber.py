@@ -1,13 +1,14 @@
 import asyncio
 from datetime import timedelta
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, List, cast
 
 from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.application.fastapi import Application, EventWorkflowTrigger
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.eventstore import (
     WORKFLOW_END_EVENT,
@@ -55,8 +56,6 @@ class SampleActivities(ActivitiesInterface):
 # Workflow that will be triggered by an event
 @workflow.defn
 class SampleWorkflow(WorkflowInterface):
-    activities_cls: type[SampleActivities] = SampleActivities
-
     @workflow.run
     async def run(self, workflow_config: dict[str, Any]):
         workflow_id = workflow_config["workflow_id"]
@@ -91,9 +90,11 @@ class SampleWorkflow(WorkflowInterface):
             heartbeat_timeout=timedelta(seconds=10),
         )
 
-    @classmethod
-    def get_activities(cls, activities: SampleActivities) -> List[Callable[..., Any]]:
-        return [activities.activity_1, activities.activity_2]
+    @staticmethod
+    def get_activities(activities: ActivitiesInterface) -> List[Callable[..., Any]]:
+        # Cast the activities to SampleActivities type
+        sample_activities = cast(SampleActivities, activities)
+        return [sample_activities.activity_1, sample_activities.activity_2]
 
 
 async def start_worker():

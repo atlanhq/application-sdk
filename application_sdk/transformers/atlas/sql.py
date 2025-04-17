@@ -621,6 +621,11 @@ class Function(assets.Function):
         cls,
         *,
         name: str,
+        schema_qualified_name: str,
+        schema_name: None = None,
+        database_name: None = None,
+        database_qualified_name: None = None,
+        connection_qualified_name: None = None,
     ) -> "Function": ...
 
     @overload
@@ -861,6 +866,11 @@ class TagAttachment(assets.TagAttachment):
         cls,
         *,
         name: str,
+        schema_qualified_name: str,
+        schema_name: None = None,
+        database_name: None = None,
+        database_qualified_name: None = None,
+        connection_qualified_name: None = None,
     ) -> "TagAttachment": ...
 
     @overload

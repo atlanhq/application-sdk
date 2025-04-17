@@ -1,7 +1,6 @@
 """State store for the application."""
 
 import json
-import os
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
@@ -9,6 +8,7 @@ from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import STATE_STORE_NAME
+
 activity.logger = get_logger(__name__)
 
 

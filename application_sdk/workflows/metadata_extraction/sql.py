@@ -5,21 +5,20 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
+from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type, cast
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
-from application_sdk.constants import (
-    APPLICATION_NAME,
-)
 
 workflow.logger = get_logger(__name__)
 
@@ -38,20 +37,18 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         application_name (str): Name of the application, set to "sql-connector".
     """
 
-    activities_cls: Type[BaseSQLMetadataExtractionActivities] = (
-        BaseSQLMetadataExtractionActivities
-    )
+    activities_cls: Type[ActivitiesInterface] = BaseSQLMetadataExtractionActivities
 
     application_name: str = APPLICATION_NAME
 
     @staticmethod
     def get_activities(
-        activities: BaseSQLMetadataExtractionActivities,
+        activities: ActivitiesInterface,
     ) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities to be executed by the workflow.
 
         Args:
-            activities (BaseSQLMetadataExtractionActivities): The activities instance
+            activities (ActivitiesInterface): The activities instance
                 containing the metadata extraction operations.
 
         Returns:
@@ -59,14 +56,15 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
+        sql_activities = cast(BaseSQLMetadataExtractionActivities, activities)
         return [
-            activities.preflight_check,
-            activities.fetch_databases,
-            activities.fetch_schemas,
-            activities.fetch_tables,
-            activities.fetch_columns,
-            activities.fetch_procedures,
-            activities.transform_data,
+            sql_activities.preflight_check,
+            sql_activities.fetch_databases,
+            sql_activities.fetch_schemas,
+            sql_activities.fetch_tables,
+            sql_activities.fetch_columns,
+            sql_activities.fetch_procedures,
+            sql_activities.transform_data,
         ]
 
     async def fetch_and_transform(
@@ -212,8 +210,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
         workflow.logger.info(f"Extraction workflow completed for {workflow_id}")
 
-
-    def get_fetch_functions(self) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]:
+    def get_fetch_functions(
+        self,
+    ) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]:
         """Get the fetch functions for the SQL metadata extraction workflow.
 
         Returns:

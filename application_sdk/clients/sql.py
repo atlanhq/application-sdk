@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from application_sdk.common.utils import parse_credentials_extra
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -20,6 +20,7 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_user,
 )
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 
 activity.logger = get_logger(__name__)
@@ -210,8 +211,11 @@ class BaseSQLClient(ClientInterface):
             List of dictionaries containing query results.
 
         Raises:
+            ValueError: If connection is not established.
             Exception: If the query fails.
         """
+        if not self.connection:
+            raise ValueError("Connection is not established")
         loop = asyncio.get_running_loop()
 
         if self.use_server_side_cursor:
@@ -281,6 +285,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
+            if not self.engine:
+                raise ValueError("Failed to create async engine")
             self.connection = await self.engine.connect()
         except Exception as e:
             activity.logger.error(f"Error establishing database connection: {str(e)}")

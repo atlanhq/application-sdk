@@ -1,6 +1,5 @@
 """Secret store for the application."""
 
-import os
 from typing import Any, Dict
 
 from application_sdk.inputs.statestore import StateStoreInput

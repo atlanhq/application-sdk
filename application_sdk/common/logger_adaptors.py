@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
@@ -15,20 +14,21 @@ from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
 from application_sdk.constants import (
-    LOG_LEVEL,
-    SERVICE_NAME,
-    SERVICE_VERSION,
-    OTEL_RESOURCE_ATTRIBUTES,
-    OTEL_EXPORTER_OTLP_ENDPOINT,
     ENABLE_OTLP_LOGS,
-    OTEL_WF_NODE_NAME,
+    LOG_LEVEL,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    OTEL_EXPORTER_TIMEOUT_SECONDS,
     OTEL_QUEUE_SIZE,
+    OTEL_RESOURCE_ATTRIBUTES,
+    OTEL_WF_NODE_NAME,
+    SERVICE_NAME,
+    SERVICE_VERSION,
 )
+
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
-
 
 
 # Add a Loguru handler for the Python logging system
@@ -42,7 +42,7 @@ class InterceptHandler(logging.Handler):
 
         # Find caller from where originated the logged message
         frame, depth = logging.currentframe(), 2
-        while frame.f_code.co_filename == logging.__file__:
+        while frame and frame.f_code.co_filename == logging.__file__:
             filename = frame.f_code.co_filename
             is_logging = filename == logging.__file__
             is_frozen = "importlib" in filename and "_bootstrap" in filename
@@ -256,23 +256,23 @@ class AtlanLoggerAdapter:
 
         return msg, kwargs
 
-    def debug(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def debug(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).debug(msg, *args)
 
-    def info(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def info(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).info(msg, *args)
 
-    def warning(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def warning(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).warning(msg, *args)
 
-    def error(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def error(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).error(msg, *args)
 
-    def critical(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def critical(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).critical(msg, *args)
 

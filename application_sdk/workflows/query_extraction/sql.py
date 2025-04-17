@@ -14,10 +14,8 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.constants import (
-    APPLICATION_NAME,
-)
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
@@ -40,15 +38,14 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         batch_size (int): Size of each batch for processing.
     """
 
-    activities_cls: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
-
+    activities_cls: Type[ActivitiesInterface] = SQLQueryExtractionActivities
     fetch_queries_sql = ""
 
     sql_client: BaseSQLClient | None = None
 
     application_name: str = APPLICATION_NAME
     batch_size: int = 100000
-    default_heartbeat_timeout: timedelta | None = timedelta(seconds=300)
+    default_heartbeat_timeout: timedelta = timedelta(seconds=300)
 
     # Note: the defaults are passed as temporal tries to initialize the workflow with no args
 
