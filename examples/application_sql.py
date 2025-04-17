@@ -132,7 +132,9 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     worker: Worker = Worker(
         workflow_client=workflow_client,
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
+            activities
+        ),
     )
 
     workflow_args = {

@@ -112,8 +112,9 @@ async def test_write_dataframe_error_handling(iceberg_output: IcebergOutput) -> 
     df = pd.DataFrame({"col1": [1, 2, 3]})
 
     with patch("daft.from_pandas", side_effect=Exception("Test error")):
-        await iceberg_output.write_dataframe(df)
-        # Should handle error gracefully and not modify counts
+        with pytest.raises(Exception, match="Test error"):
+            await iceberg_output.write_dataframe(df)
+        # Verify counts remain unchanged
         assert iceberg_output.total_record_count == 0
         assert iceberg_output.chunk_count == 0
 
@@ -126,7 +127,8 @@ async def test_write_daft_dataframe_error_handling(
     mock_df = Mock()
     mock_df.count_rows.side_effect = Exception("Test error")
 
-    await iceberg_output.write_daft_dataframe(mock_df)
-    # Should handle error gracefully and not modify counts
+    with pytest.raises(Exception, match="Test error"):
+        await iceberg_output.write_daft_dataframe(mock_df)
+    # Verify counts remain unchanged
     assert iceberg_output.total_record_count == 0
     assert iceberg_output.chunk_count == 0

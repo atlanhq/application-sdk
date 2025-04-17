@@ -1,7 +1,8 @@
 import asyncio
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.workflows import WorkflowInterface
 
@@ -10,14 +11,19 @@ class SampleSQLHandler(SQLHandler):
     async def prepare(self, credentials: Dict[str, Any], **kwargs) -> None:
         pass
 
-    async def test_auth(self, **kwargs) -> bool:
+    async def test_auth(self, **kwargs: Any) -> bool:
         return True
 
-    async def fetch_metadata(self, **kwargs) -> List[Dict[str, str]]:
+    async def fetch_metadata(
+        self,
+        metadata_type: Optional[MetadataType] = None,
+        database: Optional[str] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, str]]:
         return [{"database": "test", "schema": "test"}]
 
     async def preflight_check(
-        self, payload: Dict[str, Any], **kwargs
+        self, payload: Dict[str, Any], **kwargs: Any
     ) -> Dict[str, Any]:
         return {
             "success": True,

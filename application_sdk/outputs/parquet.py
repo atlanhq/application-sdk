@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import daft
 from temporalio import activity
@@ -7,6 +7,10 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 activity.logger = get_logger(__name__)
 

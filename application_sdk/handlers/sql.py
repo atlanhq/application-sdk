@@ -4,20 +4,20 @@ import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from application_sdk.common.utils import read_sql_files
 from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import prepare_query
+from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.constants import SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
-from application_sdk.constants import SQL_SERVER_MIN_VERSION
 
 logger = get_logger(__name__)
 
 queries = read_sql_files(queries_prefix="app/sql")
+
 
 class SQLConstants(Enum):
     """
@@ -39,7 +39,6 @@ class SQLHandler(HandlerInterface):
     # Variables for testing authentication
     test_authentication_sql: str = queries.get("TEST_AUTHENTICATION", "SELECT 1;")
     client_version_sql: str | None = queries.get("CLIENT_VERSION")
-    
 
     metadata_sql: str | None = queries.get("FILTER_METADATA")
     tables_check_sql: str | None = queries.get("TABLES_CHECK")
@@ -56,6 +55,24 @@ class SQLHandler(HandlerInterface):
     def __init__(self, sql_client: BaseSQLClient | None = None):
         self.sql_client = sql_client
 
+    def _validate_query(self, query_template: Optional[str], entity_type: str) -> str:
+        """Validates that a query template exists.
+
+        Args:
+            query_template: SQL query template to validate.
+            entity_type: Type of entity (database, schema, table, column).
+
+        Returns:
+            The validated query template.
+
+        Raises:
+            ValueError: If query_template is None.
+        """
+        if not query_template:
+            logger.warning(f"No {entity_type} query provided")
+            raise ValueError(f"No {entity_type} query provided")
+        return query_template
+
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
         Method to load and load the SQL client
@@ -66,14 +83,16 @@ class SQLHandler(HandlerInterface):
         """
         Method to fetch and prepare the databases and schemas metadata
         """
+        if self.metadata_sql is None:
+            raise ValueError("metadata_sql is not defined")
 
         sql_input = SQLQueryInput(
             engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
         )
-        sql_input = await sql_input.get_daft_dataframe()
+        df = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
-            for row in sql_input.to_pylist():
+            for row in df.to_pylist():
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -98,8 +117,8 @@ class SQLHandler(HandlerInterface):
                 query=self.test_authentication_sql,
                 chunk_size=None,
             )
-            sql_input = await sql_input.get_daft_dataframe()
-            sql_input.to_pylist()
+            df = await sql_input.get_daft_dataframe()
+            df.to_pylist()
             return True
         except Exception as exc:
             logger.error(
@@ -151,6 +170,9 @@ class SQLHandler(HandlerInterface):
         """Fetch only database information."""
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
+        if self.fetch_databases_sql is None:
+            raise ValueError("fetch_databases_sql is not defined")
+
         databases = []
         async for batch in self.sql_client.run_query(self.fetch_databases_sql):
             for row in batch:
@@ -164,6 +186,8 @@ class SQLHandler(HandlerInterface):
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
         schemas = []
+        if self.fetch_schemas_sql is None:
+            raise ValueError("fetch_schemas_sql is not defined")
         schema_query = self.fetch_schemas_sql.format(database_name=database)
         async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
@@ -297,11 +321,20 @@ class SQLHandler(HandlerInterface):
         Method to check the count of tables
         """
         logger.info("Starting tables check")
+        tables_check = self._validate_query(self.tables_check_sql, "table")
+        temp_table_regex = self._validate_query(
+            self.extract_temp_table_regex_table_sql, "temp table regex"
+        )
+        query = prepare_query(
+            query=tables_check,
+            workflow_args=payload,
+            temp_table_regex_sql=temp_table_regex,
+        )
+        if not query:
+            raise ValueError("tables_check_sql is not defined")
         sql_input = SQLQueryInput(
             engine=self.sql_client.engine,
-            query=prepare_query(
-                self.tables_check_sql, payload, self.extract_temp_table_regex_table_sql
-            ),
+            query=query,
             chunk_size=None,
         )
         sql_input = await sql_input.get_daft_dataframe()
@@ -341,14 +374,18 @@ class SQLHandler(HandlerInterface):
             client_version = None
 
             # Try to get the version from the sql_client dialect
-            if hasattr(self.sql_client, "engine"):
-                version_info = self.sql_client.engine.dialect.server_version_info
-                if version_info:
-                    # Handle tuple version info (like (15, 4))
-                    client_version = ".".join(str(x) for x in version_info)
-                    logger.info(
-                        f"Detected client version from dialect: {client_version}"
-                    )
+            if (
+                hasattr(self.sql_client, "engine")
+                and self.sql_client.engine is not None
+            ):
+                if hasattr(self.sql_client.engine, "dialect"):
+                    version_info = self.sql_client.engine.dialect.server_version_info
+                    if version_info:
+                        # Handle tuple version info (like (15, 4))
+                        client_version = ".".join(str(x) for x in version_info)
+                        logger.info(
+                            f"Detected client version from dialect: {client_version}"
+                        )
 
             # If dialect version not available and client_version_sql is defined, use SQL query
             if not client_version and self.client_version_sql:

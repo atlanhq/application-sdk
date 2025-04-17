@@ -2,10 +2,9 @@
 
 from unittest.mock import MagicMock, mock_open, patch
 
-from application_sdk.constants import OBJECT_STORE_NAME
-
 import pytest
 
+from application_sdk.constants import OBJECT_STORE_NAME
 from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 

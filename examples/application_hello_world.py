@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 @workflow.defn
 class HelloWorldWorkflow(WorkflowInterface):
     @workflow.run
-    async def run(self, workflow_args: Dict[str, Any]) -> None:
+    async def run(self, workflow_config: Dict[str, Any]) -> None:
         print("HELLO WORLD")
 
     @staticmethod

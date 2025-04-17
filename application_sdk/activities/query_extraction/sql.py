@@ -67,7 +67,6 @@ class BaseSQLQueryExtractionActivitiesState(ActivitiesState):
 
     sql_client: BaseSQLClient
     handler: SQLHandler
-    workflow_args: Dict[str, Any]
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
@@ -83,7 +82,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
 
-    _state: Dict[str, BaseSQLQueryExtractionActivitiesState] = {}
+    _state: Dict[str, ActivitiesState[SQLHandler]] = {}
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -118,6 +117,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Args:
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
         """
+        workflow_id = get_workflow_id()
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
             credentials = SecretStoreInput.extract_credentials(
@@ -127,7 +127,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         handler = self.handler_class(sql_client)
 
-        self._state[get_workflow_id()] = BaseSQLQueryExtractionActivitiesState(
+        self._state[workflow_id] = BaseSQLQueryExtractionActivitiesState(
             sql_client=sql_client,
             handler=handler,
             workflow_args=workflow_args,
@@ -340,7 +340,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If query parallelization fails
         """
-        state: BaseSQLQueryExtractionActivitiesState = await self._get_state(workflow_args)
+        state: BaseSQLQueryExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
