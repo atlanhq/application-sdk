@@ -1,21 +1,29 @@
 import glob
 import os
-import random
-from typing import Any, Callable, Dict, Iterator, List
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence
 
 import daft
 import orjson
 import pydantic
-import xxhash
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import get_value_for_attr
+from application_sdk.common.utils import get_value_for_attr, hash
 from application_sdk.diff.models import (
     DiffOutputFormat,
     DiffProcessorConfig,
     DiffState,
+    PublishStateRow,
     TransformedDataRow,
 )
+
+HashColumnToKeyMap = {
+    "attributes_hash": "attributes",
+    "custom_attributes_hash": "customAttributes",
+    "business_attributes_hash": "businessAttributes",
+    "relationship_attributes_hash": "relationshipAttributes",
+    "classifications_hash": "classifications",
+    "terms_hash": "terms",
+}
 
 
 class DiffProcessor:
@@ -29,27 +37,43 @@ class DiffProcessor:
             "export": 0,
         }
 
-    def process(self, transformed_data_prefix: str, config: DiffProcessorConfig):
-        transformed_data_iter = self.load_transformed_data(
-            json_prefix=transformed_data_prefix,
-            row_mapper=self.transform_row_mapper,
-            chunk_size=config.chunk_size,
+    def process(
+        self,
+        transformed_data_prefix: str,
+        publish_state_prefix: str,
+        config: DiffProcessorConfig,
+    ):
+        publish_state_df = self.load_publish_state(
+            publish_state_prefix=publish_state_prefix,
         )
 
-        hashed_data_iter = self.hash_columns(
-            df_iterator=transformed_data_iter,
-            hash_udf=self.hash,
+        publish_state_df = self.add_hash_columns(
+            df=publish_state_df,
             ignore_columns=config.ignore_columns,
         )
 
-        partitioned_data_iter = self.assign_partitions(
-            df_iterator=hashed_data_iter,
+        publish_state_df = self.assign_partitions(
+            df=publish_state_df,
             num_partitions=config.num_partitions,
-            partiton_hash_udf=self.partition_hash,
         )
 
-        diff_data_iter = self.calculate_diff(
-            df_iterator=partitioned_data_iter,
+        self.export_data(
+            df_iterator=iter([publish_state_df]),
+            format=DiffOutputFormat.PARQUET,
+            output_prefix="/Users/junaid/atlan/debug/postgres/mosaic/publish-state",
+            partition_cols=["type_name"],
+        )
+
+        transformed_data_iter = self.load_transformed_data(
+            json_prefix=transformed_data_prefix,
+            transform_fn=self.transform_row_mapper,
+            chunk_size=config.chunk_size,
+        )
+
+        diff_data_iter = self.diff_pipeline(
+            df_iterator=transformed_data_iter,
+            publish_state_df=publish_state_df,
+            config=config,
         )
 
         os.makedirs(config.output_prefix, exist_ok=True)
@@ -57,7 +81,45 @@ class DiffProcessor:
             df_iterator=diff_data_iter,
             format=DiffOutputFormat.PARQUET,
             output_prefix=config.output_prefix,
+            partition_cols=["diff_status", "type_name"],
         )
+
+    def diff_pipeline(
+        self,
+        df_iterator: Iterator[daft.DataFrame],
+        publish_state_df: daft.DataFrame,
+        config: DiffProcessorConfig,
+    ) -> Iterator[daft.DataFrame]:
+        for df in df_iterator:
+            df = self.add_hash_columns(
+                df=df,
+                ignore_columns=config.ignore_columns,
+            )
+
+            df = self.assign_partitions(
+                df=df,
+                num_partitions=config.num_partitions,
+            )
+
+            df = self.calculate_diff(
+                df=df,
+                publish_state_df=publish_state_df,
+            )
+
+            yield df
+
+    @staticmethod
+    def sanitize_entity(
+        entity: Dict[str, Any], ignore_attributes_keys: List[str]
+    ) -> Dict[str, Any]:
+        if "attributes" not in entity:
+            return entity
+
+        for key in ignore_attributes_keys:
+            if key in entity["attributes"]:
+                entity["attributes"].pop(key, None)
+
+        return entity
 
     @staticmethod
     def transform_row_mapper(row: Dict[str, Any]) -> TransformedDataRow:
@@ -70,90 +132,81 @@ class DiffProcessor:
             raise ValueError("qualifiedName is required")
 
         return TransformedDataRow(
-            type_name=type_name,  # type: ignore
-            qualified_name=qualified_name,  # type: ignore
-            record=orjson.dumps(row, option=orjson.OPT_SORT_KEYS).decode("utf-8"),
+            type_name=type_name,
+            qualified_name=qualified_name,
+            entity=orjson.dumps(row).decode("utf-8"),
         )
 
-    def load_transformed_data(
-        self,
-        json_prefix: str,
-        row_mapper: Callable[[Dict[str, Any]], pydantic.BaseModel],
-        chunk_size: int = 1000,
-    ) -> Iterator[daft.DataFrame]:
-        """
-        Load data from a prefix of JSON files into an iterator of daft dataframes.
-
-        Args:
-            json_prefix (str): The prefix path for JSON files.
-            file_loader (Callable): A function to load files, injected for testing.
-
-        Returns:
-            Iterator[daft.DataFrame]: An iterator of daft dataframes.
-        """
-        json_files = glob.glob(f"{json_prefix}/**/*.json", recursive=True)
-
-        for json_file in json_files:
-            try:
-                with open(json_file, "r") as f:
-                    records = []
-                    for line in f:
-                        if len(records) >= chunk_size:
-                            df = daft.from_pylist(records)
-                            yield df
-                            records = []
-
-                        record = orjson.loads(line)
-                        records.append(row_mapper(record).model_dump())
-
-                    # Handle any remaining records
-                    if records:
-                        df = daft.from_pylist(records)
-                        yield df
-
-            except Exception as e:
-                self.logger.error(f"Error processing file {json_file}: {str(e)}")
-                continue
-
     @staticmethod
-    @daft.udf(return_dtype=daft.DataType.string())
-    def hash(
-        col: daft.Series, sub_key_to_hash: str, ignore_keys: List[str]
-    ) -> List[str]:
+    @daft.udf(
+        return_dtype=daft.DataType.struct(
+            fields={k: daft.DataType.string() for k in HashColumnToKeyMap.keys()}
+        )
+    )
+    def granular_hash_udf(
+        entities: daft.Series, ignore_attributes_keys: List[str]
+    ) -> List[Dict[str, Optional[str]]]:
         """
-        Default hash function using xxh3_128 and orjson.
+        Daft UDF to hash a series of dictionaries using xxhash.
 
         Args:
             col (daft.Series): Column to hash.
+            ignore_keys (List[str]): The keys to ignore.
 
         Returns:
             List[str]: List of hashed values.
         """
-        hashed_values = []
-        for row in col:
-            row_dict = orjson.loads(row)
-            row_dict = get_value_for_attr(row_dict, sub_key_to_hash)
+        result: List[Dict[str, Optional[str]]] = []
 
-            if not row_dict:
-                hashed_values.append(None)
+        for entity in entities:
+            entity_hash: Dict[str, Optional[str]] = {
+                k: None for k in HashColumnToKeyMap.keys()
+            }
+
+            entity_dict = orjson.loads(entity)
+            if not entity_dict:
                 continue
 
-            if ignore_keys:
-                for key in ignore_keys:
-                    row_dict.pop(key, None)
-
-            hashed_values.append(
-                xxhash.xxh3_128(
-                    orjson.dumps(row_dict, option=orjson.OPT_SORT_KEYS)
-                ).hexdigest()
+            entity_dict = DiffProcessor.sanitize_entity(
+                entity_dict, ignore_attributes_keys
             )
 
-        return hashed_values
+            for hash_column, key in HashColumnToKeyMap.items():
+                value = get_value_for_attr(entity_dict, key)
+
+                if not value:
+                    continue
+
+                entity_hash[hash_column] = hash(value).hexdigest()
+
+            result.append(entity_hash)
+
+        return result
+
+    @staticmethod
+    @daft.udf(return_dtype=daft.DataType.string())
+    def full_hash_udf(
+        entities: daft.Series,
+        ignore_attributes_keys: List[str],
+    ) -> List[str]:
+        result = []
+
+        for entity in entities:
+            entity_dict = orjson.loads(entity)
+            entity_dict = DiffProcessor.sanitize_entity(
+                entity_dict, ignore_attributes_keys
+            )
+
+            result.append(hash(entity_dict).hexdigest())
+
+        return result
 
     @staticmethod
     @daft.udf(return_dtype=daft.DataType.int64())
-    def partition_hash(
-        qualified_names: daft.Series, type_names: daft.Series, num_partitions: int = 4
+    def assign_partitions_udf(
+        qualified_names: daft.Series,
+        type_names: daft.Series,
+        num_partitions: int = 4,
     ) -> List[int]:
         """
         Generate partition assignments using consistent hashing based on qualified name and type.
@@ -179,19 +232,90 @@ class DiffProcessor:
             # Combine qualified name and type
             key = f"{type_name}/{qualified_name}"
 
-            # Generate hash and map to partition
-            hash_val = xxhash.xxh3_128(key.encode()).intdigest()
-            partition = abs(hash_val) % num_partitions
+            partition = abs(hash(key).intdigest()) % num_partitions
             partition_assignments.append(partition)
 
         return partition_assignments
 
-    def hash_columns(
+    def load_publish_state(self, publish_state_prefix: str) -> daft.DataFrame:
+        """
+        Load publish state from a prefix of JSON files into a daft dataframe.
+
+        Args:
+            publish_state_prefix (str): The prefix path for publish state files.
+
+        Returns:
+            daft.DataFrame: A daft dataframe.
+        """
+        json_files = glob.glob(f"{publish_state_prefix}/**/*.json", recursive=True)
+
+        records = []
+
+        for json_file in json_files:
+            with open(json_file, "r") as f:
+                for line in f:
+                    entity = orjson.loads(line)
+
+                    record = PublishStateRow(
+                        type_name=entity["typeName"],
+                        qualified_name=entity["attributes"]["qualifiedName"],
+                        entity=orjson.dumps(entity).decode("utf-8"),
+                        publish_status="SUCCESS",
+                        app_error_code=None,
+                        metastore_error_code=None,
+                        runbook_url=None,
+                    )
+
+                    records.append(record.model_dump())
+
+        return daft.from_pylist(records)
+
+    def load_transformed_data(
         self,
-        df_iterator: Iterator[daft.DataFrame],
-        hash_udf: Callable,
-        ignore_columns: List[str],
+        json_prefix: str,
+        transform_fn: Callable[[Dict[str, Any]], pydantic.BaseModel],
+        chunk_size: int,
     ) -> Iterator[daft.DataFrame]:
+        """
+        Load data from a prefix of JSON files into an iterator of daft dataframes.
+
+        Args:
+            json_prefix (str): The prefix path for JSON files.
+            transform_fn (Callable): A function to transform the data.
+            chunk_size (int, optional): The number of records to load into a dataframe.
+
+        Returns:
+            Iterator[daft.DataFrame]: An iterator of daft dataframes.
+        """
+        json_files = glob.glob(f"{json_prefix}/**/*.json", recursive=True)
+
+        for json_file in json_files:
+            try:
+                with open(json_file, "r") as f:
+                    records = []
+                    for line in f:
+                        if len(records) >= chunk_size:
+                            df = daft.from_pylist(records)
+                            yield df
+                            records = []
+
+                        record = orjson.loads(line)
+                        records.append(transform_fn(record).model_dump())
+
+                    # Handle any remaining records
+                    if records:
+                        df = daft.from_pylist(records)
+                        yield df
+
+            except Exception as e:
+                self.logger.error(f"Error processing file {json_file}: {str(e)}")
+                continue
+
+    def add_hash_columns(
+        self,
+        df: daft.DataFrame,
+        ignore_columns: List[str],
+    ) -> daft.DataFrame:
         """
         Apply hashing to specific columns in the dataframe.
 
@@ -205,37 +329,20 @@ class DiffProcessor:
         self.logger.info("Hashing columns")
         self.operation_counts["hash"] += 1
 
-        for df in df_iterator:
-            # Apply the hash function to the specified columns
-            df = df.with_columns(
-                {
-                    "attributes_hash": hash_udf(
-                        df["record"], "attributes", ignore_columns
-                    ),
-                    "custom_attributes_hash": hash_udf(
-                        df["record"], "customAttributes", ignore_columns
-                    ),
-                    "business_attributes_hash": hash_udf(
-                        df["record"], "businessAttributes", ignore_columns
-                    ),
-                    "relationship_attributes_hash": hash_udf(
-                        df["record"], "relationshipAttributes", ignore_columns
-                    ),
-                    "classifications_hash": hash_udf(
-                        df["record"], "classifications", ignore_columns
-                    ),
-                    "terms_hash": hash_udf(df["record"], "terms", ignore_columns),
-                    "full_hash": hash_udf(df["record"], "", ignore_columns),
-                }
-            )
-            yield df
+        df = df.with_columns(
+            {
+                "granular_hash": self.granular_hash_udf(df["entity"], ignore_columns),
+                "full_hash": self.full_hash_udf(df["entity"], ignore_columns),
+            }
+        )
+
+        return df
 
     def assign_partitions(
         self,
-        df_iterator: Iterator[daft.DataFrame],
+        df: daft.DataFrame,
         num_partitions: int,
-        partiton_hash_udf: Callable,
-    ) -> Iterator[daft.DataFrame]:
+    ) -> daft.DataFrame:
         """
         Partition data based on consistent hashing.
 
@@ -250,23 +357,125 @@ class DiffProcessor:
         self.logger.info("Assigning partitions")
         self.operation_counts["partition"] += 1
 
-        for df in df_iterator:
-            df = df.with_columns(
-                {
-                    "partition": partiton_hash_udf(
-                        df["qualified_name"], df["type_name"], num_partitions
-                    ),
-                }
-            )
+        df = df.with_columns(
+            {
+                "partition": self.assign_partitions_udf(
+                    df["qualified_name"], df["type_name"], num_partitions
+                ),
+            }
+        )
 
-            yield df
+        return df
 
-    # Diff Calculation
+    @staticmethod
+    def diff_attributes(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {"attributes": "changed"}
+
+    @staticmethod
+    def diff_custom_attributes(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {"custom_attributes": "changed"}
+
+    @staticmethod
+    def diff_business_attributes(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {"business_attributes": "changed"}
+
+    @staticmethod
+    def diff_relationship_attributes(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {"relationship_attributes": "changed"}
+
+    @staticmethod
+    def diff_classifications(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {"classifications": "changed"}
+
+    @staticmethod
+    def diff_terms(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        return {"terms": "changed"}
+
+    @staticmethod
+    def diff(
+        old_entity: Dict[str, Any], new_entity: Dict[str, Any], key: str
+    ) -> Dict[str, Any]:
+        if key == "attributes":
+            return DiffProcessor.diff_attributes(old_entity, new_entity)
+        elif key == "customAttributes":
+            return DiffProcessor.diff_custom_attributes(old_entity, new_entity)
+        elif key == "businessAttributes":
+            return DiffProcessor.diff_business_attributes(old_entity, new_entity)
+        elif key == "relationshipAttributes":
+            return DiffProcessor.diff_relationship_attributes(old_entity, new_entity)
+        elif key == "classifications":
+            return DiffProcessor.diff_classifications(old_entity, new_entity)
+        elif key == "terms":
+            return DiffProcessor.diff_terms(old_entity, new_entity)
+
+        raise ValueError(f"Unsupported key: {key}")
+
+    @staticmethod
+    @daft.udf(return_dtype=daft.DataType.string())
+    def calculate_diff_udf(
+        granular_hashes: daft.Series,
+        old_granular_hashes: daft.Series,
+        entities: daft.Series,
+        old_entities: daft.Series,
+    ) -> List[str]:
+        """
+        Calculate detailed diff between current and old records.
+
+        Args:
+            granular_hash (daft.Series): Hash of current record's attributes
+            old_granular_hash (daft.Series): Hash of old record's attributes
+            entity (daft.Series): Current record JSON string
+            old_entity (daft.Series): Old record JSON string
+
+        Returns:
+            List[str]: List of diff records indicating which attributes changed
+
+        Example:
+            Input:
+            granular_hash: {"attributes_hash": "abc", "custom_attributes_hash": "123"}
+            old_granular_hash: {"attributes_hash": "xyz", "custom_attributes_hash": "123"}
+            entity: {"attributes": {"name": "new"}, "customAttributes": {"owner": "team1"}}
+            old_entity: {"attributes": {"name": "old"}, "customAttributes": {"owner": "team1"}}
+
+            Output:
+            "attributes: changed"
+        """
+        results = []
+
+        for old_entity, new_entity, old_granular_hash, new_granular_hash in zip(
+            old_entities, entities, old_granular_hashes, granular_hashes
+        ):
+            for key, entity_key in HashColumnToKeyMap.items():
+                if old_granular_hash[key] != new_granular_hash[key]:
+                    results.append(
+                        orjson.dumps(
+                            DiffProcessor.diff(
+                                old_entity=old_entity,
+                                new_entity=new_entity,
+                                key=entity_key,
+                            )
+                        ).decode("utf-8")
+                    )
+
+        return results
 
     def calculate_diff(
         self,
-        df_iterator: Iterator[daft.DataFrame],
-    ) -> Iterator[daft.DataFrame]:
+        df: daft.DataFrame,
+        publish_state_df: daft.DataFrame,
+    ) -> daft.DataFrame:
         """
         Calculate differences between records.
 
@@ -276,26 +485,44 @@ class DiffProcessor:
         Returns:
             Iterator[daft.DataFrame]: An iterator of daft dataframes with diff states.
         """
-        # TODO: Implement diff calculation
         self.logger.info("Calculating diff")
         self.operation_counts["diff"] += 1
 
-        for df in df_iterator:
-            df = df.with_columns(
-                {
-                    "diff_status": daft.lit(
-                        random.choice([state.value for state in DiffState])
-                    ),
-                    "diff_changes": daft.lit("TO BE IMPLEMENTED"),
-                }
-            )
-            yield df
+        df = daft.sql(f"""
+            SELECT
+                current.*,
+                old.entity as old_entity,
+                old.granular_hash as old_granular_hash,
+                CASE
+                    WHEN old.full_hash IS NULL THEN '{DiffState.NEW.value}'
+                    WHEN current.full_hash IS NULL THEN '{DiffState.DELETE.value}'
+                    WHEN current.full_hash = old.full_hash THEN '{DiffState.NO_DIFF.value}'
+                    ELSE '{DiffState.DIFF.value}'
+                END AS diff_status
+            FROM df current
+            LEFT JOIN publish_state_df old
+                ON current.type_name = old.type_name
+                AND current.qualified_name = old.qualified_name
+        """)
+
+        # df = df.with_columns(
+        #     {
+        #         "diff_record": DiffProcessor.calculate_diff_udf(
+        #             df["granular_hash"],
+        #             df["old_granular_hash"],
+        #             df["entity"],
+        #             df["old_entity"],
+        #         ),
+        #     }
+        # )
+
+        return df
 
     # Output
-
     def export_data(
         self,
         df_iterator: Iterator[daft.DataFrame],
+        partition_cols: Sequence[str],
         format: DiffOutputFormat,
         output_prefix: str,
     ) -> None:
@@ -344,8 +571,8 @@ class DiffProcessor:
             if format == DiffOutputFormat.PARQUET:
                 df.write_parquet(
                     output_prefix,
-                    partition_cols=["diff_status", "type_name"],
-                    write_mode="append",
+                    partition_cols=list(partition_cols),
+                    write_mode="overwrite",  # TODO: Change to append
                 )
             else:
                 raise ValueError(f"Unsupported output format: {format}")

@@ -39,7 +39,8 @@ def main():
 
     # Process transformed data files
     processor.process(
-        transformed_data_prefix="/Users/junaid/atlan/debug/postgres/mosaic/atlan-postgres-1688410509-cron-1742926860/atlan-postgres-1688410509-cron-1742926860/4ac936b2-bde1-4a7c-b726-799942f1d6ea/transformed",
+        transformed_data_prefix="/Users/junaid/atlan/debug/postgres/mosaic/transformed",
+        publish_state_prefix="/Users/junaid/atlan/debug/postgres/mosaic/current-state",
         config=config,
     )
 

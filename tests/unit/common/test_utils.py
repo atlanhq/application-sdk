@@ -3,8 +3,11 @@ from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import Mock, mock_open, patch
 
+import pytest
+
 from application_sdk.common.utils import (
     get_workflow_config,
+    hash,
     normalize_filters,
     prepare_filters,
     prepare_query,
@@ -305,3 +308,40 @@ def test_read_sql_files_case_sensitivity():
 
         result = read_sql_files("/mock/path")
         assert result == expected_result
+
+
+def test_hash():
+    """Test hash function handles different input types correctly and produces consistent hashes.
+
+    Tests that:
+    1. Dictionary inputs are hashed consistently regardless of key order
+    2. String inputs are hashed correctly
+    3. Invalid input types raise ValueError
+    4. Same inputs produce same hash values
+    5. Different inputs produce different hash values
+    """
+    # Test dictionary hashing is consistent regardless of key order
+    dict1 = {"a": 1, "b": 2}
+    dict2 = {"b": 2, "a": 1}
+    assert hash(dict1).hexdigest() == hash(dict2).hexdigest()
+
+    # Test string hashing
+    str1 = "test string"
+    str2 = "test string"
+    assert hash(str1).hexdigest() == hash(str2).hexdigest()
+
+    # Test invalid input type raises ValueError
+    with pytest.raises(ValueError) as exc_info:
+        hash([1, 2, 3])  # type: ignore
+    assert "Unsupported type" in str(exc_info.value)
+
+    # Test same inputs produce same hashes
+    test_dict = {"key": "value", "nested": {"a": 1}}
+    assert hash(test_dict).hexdigest() == hash(test_dict).hexdigest()
+
+    # Test different inputs produce different hashes
+    dict3 = {"a": 1, "b": 3}  # Different from dict1
+    assert hash(dict1).hexdigest() != hash(dict3).hexdigest()
+
+    str3 = "different string"
+    assert hash(str1).hexdigest() != hash(str3).hexdigest()

@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import List
+from typing import List, Optional
 
 import pydantic
 
@@ -25,4 +25,14 @@ class DiffOutputFormat(Enum):
 class TransformedDataRow(pydantic.BaseModel):
     type_name: str
     qualified_name: str
-    record: str
+    entity: str
+
+
+class PublishStateRow(pydantic.BaseModel):
+    type_name: str
+    qualified_name: str
+    entity: str
+    publish_status: str
+    app_error_code: Optional[str]
+    metastore_error_code: Optional[str]
+    runbook_url: Optional[str]
