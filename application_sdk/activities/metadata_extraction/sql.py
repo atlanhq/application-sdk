@@ -6,7 +6,7 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
@@ -24,23 +24,24 @@ activity.logger = get_logger(__name__)
 queries = read_sql_files(queries_prefix="app/sql")
 
 
-class SQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
+class BaseSQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
     """State class for SQL metadata extraction activities.
 
     This class holds the state required for SQL metadata extraction activities,
     including the SQL client, handler, and transformer instances.
 
     Attributes:
-        sql_client (SQLClient): Client for SQL database operations.
+        sql_client (BaseSQLClient): Client for SQL database operations.
         handler (SQLHandler): Handler for SQL-specific operations.
         transformer (TransformerInterface): Transformer for metadata conversion.
     """
 
-    sql_client: Optional[SQLClient] = None
+    sql_client: Optional[BaseSQLClient] = None
+    handler: Optional[SQLHandler] = None
     transformer: Optional[TransformerInterface] = None
 
 
-class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
+class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     """Activities for extracting metadata from SQL databases.
 
     This class provides activities for extracting metadata from SQL databases,
@@ -52,7 +53,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         fetch_schema_sql (Optional[str]): SQL query for fetching schemas.
         fetch_table_sql (Optional[str]): SQL query for fetching tables.
         fetch_column_sql (Optional[str]): SQL query for fetching columns.
-        sql_client_class (Type[SQLClient]): Class for SQL client operations.
+        sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
         tables_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during tables extraction.
@@ -62,10 +63,12 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
     """
 
     _state: Dict[str, ActivitiesState[SQLHandler]] = {}
-    fetch_database_sql = queries.get("DATABASE_EXTRACTION")
-    fetch_schema_sql = queries.get("SCHEMA_EXTRACTION")
-    fetch_table_sql = queries.get("TABLE_EXTRACTION")
-    fetch_column_sql = queries.get("COLUMN_EXTRACTION")
+
+    fetch_database_sql = queries.get("EXTRACT_DATABASE")
+    fetch_schema_sql = queries.get("EXTRACT_SCHEMA")
+    fetch_table_sql = queries.get("EXTRACT_TABLE")
+    fetch_column_sql = queries.get("EXTRACT_COLUMN")
+    fetch_procedure_sql = queries.get("EXTRACT_PROCEDURE")
 
     tables_extraction_temp_table_regex_sql = queries.get(
         "TABLE_EXTRACTION_TEMP_TABLE_REGEX"
@@ -74,13 +77,13 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         "COLUMN_EXTRACTION_TEMP_TABLE_REGEX"
     )
 
-    sql_client_class: Type[SQLClient] = SQLClient
+    sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[SQLHandler] = SQLHandler
     transformer_class: Type[TransformerInterface] = AtlasTransformer
 
     def __init__(
         self,
-        sql_client_class: Optional[Type[SQLClient]] = None,
+        sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[SQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
@@ -101,7 +104,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             workflow_args (Dict[str, Any]): Arguments passed to the workflow.
 
         Returns:
-            SQLMetadataExtractionActivitiesState: The current state.
+            BaseSQLMetadataExtractionActivitiesState: The current state.
         """
         return await super()._get_state(workflow_args)
 
@@ -116,7 +119,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
-            self._state[workflow_id] = SQLMetadataExtractionActivitiesState()
+            self._state[workflow_id] = BaseSQLMetadataExtractionActivitiesState()
 
         await super()._set_state(workflow_args)
 
@@ -162,7 +165,7 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         self,
         results: "daft.DataFrame",
         typename: str,
-        state: SQLMetadataExtractionActivitiesState,
+        state: BaseSQLMetadataExtractionActivitiesState,
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
@@ -197,7 +200,9 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                     f"Error processing row for {typename}: {row_error}"
                 )
 
-    def _validate_output_args(self, workflow_args: Dict[str, Any]) -> Tuple[str, str]:
+    def _validate_output_args(
+        self, workflow_args: Dict[str, Any]
+    ) -> Tuple[str, str, str, str, str]:
         """Validates output prefix and path arguments.
 
         Args:
@@ -211,10 +216,19 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         """
         output_prefix = workflow_args.get("output_prefix")
         output_path = workflow_args.get("output_path")
-        if not output_prefix or not output_path:
-            activity.logger.warning("No output prefix or path provided")
-            raise ValueError("No output prefix or path provided")
-        return output_prefix, output_path
+        typename = workflow_args.get("typename")
+        workflow_id = workflow_args.get("workflow_id")
+        workflow_run_id = workflow_args.get("workflow_run_id")
+        if (
+            not output_prefix
+            or not output_path
+            or not typename
+            or not workflow_id
+            or not workflow_run_id
+        ):
+            activity.logger.warning("Missing required workflow arguments")
+            raise ValueError("Missing required workflow arguments")
+        return output_prefix, output_path, typename, workflow_id, workflow_run_id
 
     def _validate_query(self, query_template: Optional[str], entity_type: str) -> str:
         """Validates that a query template exists.
@@ -234,6 +248,87 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
             raise ValueError(f"No {entity_type} query provided")
         return query_template
 
+    async def query_executor(
+        self,
+        sql_engine: Any,
+        sql_query: str,
+        workflow_args: Dict[str, Any],
+        output_suffix: str,
+        typename: str,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Executes a SQL query using the provided engine and saves the results to Parquet.
+
+        This method validates the input engine and query, prepares the query using
+        workflow arguments, executes it, writes the resulting Daft DataFrame to
+        a Parquet file, and returns statistics about the output.
+
+        Args:
+            sql_engine: The SQL engine instance to use for executing the query.
+            sql_query: The SQL query string to execute. Placeholders can be used which
+                   will be replaced using `workflow_args`.
+            workflow_args: Dictionary containing arguments for the workflow, used for
+                           preparing the query and defining output paths. Expected keys:
+                           - "output_prefix": Prefix for the output path.
+                           - "output_path": Base directory for the output.
+            output_suffix: Suffix to append to the output file name.
+            typename: Type name used for generating output statistics.
+
+        Returns:
+            A dictionary containing statistics about the generated Parquet file,
+            or None if the query is empty or execution fails before writing output.
+
+        Raises:
+            ValueError: If `sql_engine` is not provided.
+        """
+        if not sql_engine:
+            activity.logger.error("SQL engine is not set.")
+            raise ValueError("SQL engine must be provided.")
+        if not sql_query:
+            activity.logger.warning("Query is empty, skipping execution.")
+            return None
+
+        try:
+            sql_input = SQLQueryInput(
+                engine=sql_engine,
+                query=sql_query,
+                chunk_size=None,
+            )
+            daft_dataframe = await sql_input.get_daft_dataframe()
+
+            if daft_dataframe is None:
+                activity.logger.warning("Query execution returned no data.")
+                return None
+
+            output_prefix = workflow_args.get("output_prefix")
+            output_path = workflow_args.get("output_path")
+
+            if not output_prefix or not output_path:
+                activity.logger.error(
+                    "Output prefix or path not provided in workflow_args."
+                )
+                raise ValueError(
+                    "Output prefix and path must be specified in workflow_args."
+                )
+
+            parquet_output = ParquetOutput(
+                output_prefix=output_prefix,
+                output_path=output_path,
+                output_suffix=output_suffix,
+            )
+            await parquet_output.write_daft_dataframe(daft_dataframe)
+            activity.logger.info(
+                f"Successfully wrote query results to {parquet_output.get_full_path()}"
+            )
+
+            statistics = await parquet_output.get_statistics(typename=typename)
+            return statistics
+        except Exception as e:
+            activity.logger.error(
+                f"Error during query execution or output writing: {e}", exc_info=True
+            )
+            raise
+
     @activity.defn
     @auto_heartbeater
     async def fetch_databases(self, workflow_args: Dict[str, Any]):
@@ -247,38 +342,24 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        try:
-            fetch_database = self._validate_query(self.fetch_database_sql, "database")
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        query = self._validate_query(self.fetch_database_sql, "database")
 
-            output_prefix, output_path = self._validate_output_args(workflow_args)
+        prepared_query = self._validate_query(
+            prepare_query(query=query, workflow_args=workflow_args),
+            "database prepared query",
+        )
 
-            state = await self._get_state(workflow_args)
-
-            prepared_query = prepare_query(
-                query=fetch_database, workflow_args=workflow_args
-            )
-
-            if prepared_query is None:
-                activity.logger.warning("No database query provided")
-                return None
-
-            sql_input = SQLQueryInput(
-                engine=state.sql_client.engine,
-                query=prepared_query,
-                chunk_size=None,
-            )
-            sql_input = await sql_input.get_daft_dataframe()
-
-            raw_output = ParquetOutput(
-                output_prefix=output_prefix,
-                output_path=output_path,
-                output_suffix="raw/database",
-            )
-            await raw_output.write_daft_dataframe(sql_input)
-            return await raw_output.get_statistics(typename="database")
-        except Exception as e:
-            activity.logger.error(f"Error fetching databases: {e}")
-            return None
+        statistics = await self.query_executor(
+            sql_engine=state.sql_client.engine,
+            sql_query=prepared_query,
+            workflow_args=workflow_args,
+            output_suffix="raw/database",
+            typename="database",
+        )
+        return statistics
 
     @activity.defn
     @auto_heartbeater
@@ -293,38 +374,22 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        try:
-            fetch_schema = self._validate_query(self.fetch_schema_sql, "schema")
-
-            output_prefix, output_path = self._validate_output_args(workflow_args)
-
-            state = await self._get_state(workflow_args)
-
-            prepared_query = prepare_query(
-                query=fetch_schema, workflow_args=workflow_args
-            )
-
-            if prepared_query is None:
-                activity.logger.warning("No schema query provided")
-                return None
-
-            sql_input = SQLQueryInput(
-                engine=state.sql_client.engine,
-                query=prepared_query,
-                chunk_size=None,
-            )
-            sql_input = await sql_input.get_daft_dataframe()
-
-            raw_output = ParquetOutput(
-                output_prefix=output_prefix,
-                output_path=output_path,
-                output_suffix="raw/schema",
-            )
-            await raw_output.write_daft_dataframe(sql_input)
-            return await raw_output.get_statistics(typename="schema")
-        except Exception as e:
-            activity.logger.error(f"Error fetching schemas: {e}")
-            return None
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        query = self._validate_query(self.fetch_schema_sql, "schema")
+        prepared_query = self._validate_query(
+            prepare_query(query=query, workflow_args=workflow_args),
+            "schema prepared query",
+        )
+        statistics = await self.query_executor(
+            sql_engine=state.sql_client.engine,
+            sql_query=prepared_query,
+            workflow_args=workflow_args,
+            output_suffix="raw/schema",
+            typename="schema",
+        )
+        return statistics
 
     @activity.defn
     @auto_heartbeater
@@ -339,38 +404,30 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        try:
-            fetch_table = self._validate_query(self.fetch_table_sql, "table")
-
-            output_prefix, output_path = self._validate_output_args(workflow_args)
-
-            state = await self._get_state(workflow_args)
-
-            prepared_query = prepare_query(
-                query=fetch_table, workflow_args=workflow_args
-            )
-
-            if prepared_query is None:
-                activity.logger.warning("No table query provided")
-                return None
-
-            sql_input = SQLQueryInput(
-                engine=state.sql_client.engine,
-                query=prepared_query,
-                chunk_size=None,
-            )
-            sql_input = await sql_input.get_daft_dataframe()
-
-            raw_output = ParquetOutput(
-                output_prefix=output_prefix,
-                output_path=output_path,
-                output_suffix="raw/table",
-            )
-            await raw_output.write_daft_dataframe(sql_input)
-            return await raw_output.get_statistics(typename="table")
-        except Exception as e:
-            activity.logger.error(f"Error fetching tables: {e}")
-            return None
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        query = self._validate_query(self.fetch_table_sql, "table")
+        temp_table_regex_sql = self._validate_query(
+            self.tables_extraction_temp_table_regex_sql,
+            "tables extraction temp table regex",
+        )
+        prepared_query = self._validate_query(
+            prepare_query(
+                query=query,
+                workflow_args=workflow_args,
+                temp_table_regex_sql=temp_table_regex_sql,
+            ),
+            "table prepared query",
+        )
+        statistics = await self.query_executor(
+            sql_engine=state.sql_client.engine,
+            sql_query=prepared_query,
+            workflow_args=workflow_args,
+            output_suffix="raw/table",
+            typename="table",
+        )
+        return statistics
 
     @activity.defn
     @auto_heartbeater
@@ -385,43 +442,63 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        try:
-            fetch_column = self._validate_query(self.fetch_column_sql, "column")
-            column_extraction_temp_table_regex = self._validate_query(
-                self.column_extraction_temp_table_regex_sql, "column"
-            )
-
-            output_prefix, output_path = self._validate_output_args(workflow_args)
-
-            state = await self._get_state(workflow_args)
-
-            prepared_query = prepare_query(
-                query=fetch_column,
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        query = self._validate_query(self.fetch_column_sql, "column")
+        temp_table_regex_sql = self._validate_query(
+            self.column_extraction_temp_table_regex_sql,
+            "column extraction temp table regex",
+        )
+        prepared_query = self._validate_query(
+            prepare_query(
+                query=query,
                 workflow_args=workflow_args,
-                temp_table_regex_sql=column_extraction_temp_table_regex,
-            )
+                temp_table_regex_sql=temp_table_regex_sql,
+            ),
+            "column prepared query",
+        )
+        statistics = await self.query_executor(
+            sql_engine=state.sql_client.engine,
+            sql_query=prepared_query,
+            workflow_args=workflow_args,
+            output_suffix="raw/column",
+            typename="column",
+        )
+        return statistics
 
-            if prepared_query is None:
-                activity.logger.warning("No column query provided")
-                return None
+    @activity.defn
+    @auto_heartbeater
+    async def fetch_procedures(self, workflow_args: Dict[str, Any]):
+        """Fetch procedures from the source database.
 
-            sql_input = SQLQueryInput(
-                engine=state.sql_client.engine,
-                query=prepared_query,
-                chunk_size=None,
-            )
-            sql_input = await sql_input.get_daft_dataframe()
+        Args:
+            batch_input: DataFrame containing the raw column data.
+            raw_output: JsonOutput instance for writing raw data.
+            **kwargs: Additional keyword arguments.
 
-            raw_output = ParquetOutput(
-                output_prefix=output_prefix,
-                output_path=output_path,
-                output_suffix="raw/column",
-            )
-            await raw_output.write_daft_dataframe(sql_input)
-            return await raw_output.get_statistics(typename="column")
-        except Exception as e:
-            activity.logger.error(f"Error fetching columns: {e}")
-            return None
+        Returns:
+            Dict containing chunk count, typename, and total record count.
+        """
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        query = self._validate_query(self.fetch_procedure_sql, "extras-procedure")
+        prepared_query = self._validate_query(
+            prepare_query(
+                query=query,
+                workflow_args=workflow_args,
+            ),
+            "extras-procedure prepared query",
+        )
+        statistics = await self.query_executor(
+            sql_engine=state.sql_client.engine,
+            sql_query=prepared_query,
+            workflow_args=workflow_args,
+            output_suffix="raw/extras-procedure",
+            typename="extras-procedure",
+        )
+        return statistics
 
     @activity.defn
     @auto_heartbeater
@@ -441,18 +518,11 @@ class SQLMetadataExtractionActivities(ActivitiesInterface[SQLHandler]):
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
         """
-
-        output_prefix, output_path = self._validate_output_args(workflow_args)
-
-        typename = workflow_args.get("typename")
-        workflow_id = workflow_args.get("workflow_id")
-        workflow_run_id = workflow_args.get("workflow_run_id")
-        if not typename or not workflow_id or not workflow_run_id:
-            activity.logger.warning("Missing required workflow arguments")
-            raise ValueError("Missing required workflow arguments")
-
-        state: SQLMetadataExtractionActivitiesState = await self._get_state(
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
+        )
+        output_prefix, output_path, typename, workflow_id, workflow_run_id = (
+            self._validate_output_args(workflow_args)
         )
 
         raw_input = ParquetInput(

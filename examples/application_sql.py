@@ -32,15 +32,15 @@ from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from application_sdk.activities.metadata_extraction.sql import (
-    SQLMetadataExtractionActivities,
+    BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
-    SQLMetadataExtractionWorkflow,
+    BaseSQLMetadataExtractionWorkflow,
 )
 
 APPLICATION_NAME = "postgres"
@@ -48,13 +48,13 @@ APPLICATION_NAME = "postgres"
 logger = get_logger(__name__)
 
 
-class PostgreSQLClient(SQLClient):
+class SQLClient(BaseSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
         return f"postgresql+psycopg://{self.credentials['username']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
-class SampleSQLActivities(SQLMetadataExtractionActivities):
+class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
@@ -126,13 +126,15 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     await workflow_client.load()
 
     activities = SampleSQLActivities(
-        sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
+        sql_client_class=SQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
     worker: Worker = Worker(
         workflow_client=workflow_client,
-        workflow_classes=[SQLMetadataExtractionWorkflow],
-        workflow_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
+            activities
+        ),
     )
 
     workflow_args = {
@@ -162,7 +164,7 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     }
 
     workflow_response = await workflow_client.start_workflow(
-        workflow_args, SQLMetadataExtractionWorkflow
+        workflow_args, BaseSQLMetadataExtractionWorkflow
     )
 
     # Start the worker in a separate thread

@@ -5,7 +5,7 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, cast
+from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type, cast
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -13,7 +13,7 @@ from temporalio.common import RetryPolicy
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
-    SQLMetadataExtractionActivities,
+    BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import APPLICATION_NAME
@@ -24,7 +24,7 @@ workflow.logger = get_logger(__name__)
 
 
 @workflow.defn
-class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
+class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     """Workflow for extracting metadata from SQL databases.
 
     This workflow orchestrates the extraction of metadata from SQL databases, including
@@ -32,12 +32,12 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     of metadata in batches for efficient processing.
 
     Attributes:
-        activities_cls (Type[SQLMetadataExtractionActivities]): The activities class
+        activities_cls (Type[BaseSQLMetadataExtractionActivities]): The activities class
             containing the implementation of metadata extraction operations.
         application_name (str): Name of the application, set to "sql-connector".
     """
 
-    activities_cls = SQLMetadataExtractionActivities
+    activities_cls: Type[ActivitiesInterface] = BaseSQLMetadataExtractionActivities
 
     application_name: str = APPLICATION_NAME
 
@@ -56,14 +56,14 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
-        # Cast the activities parameter to the correct type
-        sql_activities = cast(SQLMetadataExtractionActivities, activities)
+        sql_activities = cast(BaseSQLMetadataExtractionActivities, activities)
         return [
             sql_activities.preflight_check,
             sql_activities.fetch_databases,
             sql_activities.fetch_schemas,
             sql_activities.fetch_tables,
             sql_activities.fetch_columns,
+            sql_activities.fetch_procedures,
             sql_activities.transform_data,
         ]
 
@@ -86,25 +86,28 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Raises:
             ValueError: If chunk_count, raw_total_record_count, or typename is invalid.
         """
-        raw_stat = await workflow.execute_activity_method(
+        raw_statistics = await workflow.execute_activity_method(
             fetch_fn,
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
         )
-        raw_stat = ActivityStatistics.model_validate(raw_stat)
+        if raw_statistics is None:
+            return
+
+        activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
 
-        if raw_stat is None or raw_stat.chunk_count == 0:
+        if activity_statistics is None or activity_statistics.chunk_count == 0:
             # to handle the case where the fetch_fn returns None or no chunks
             return
 
-        if raw_stat.typename is None:
+        if activity_statistics.typename is None:
             raise ValueError("Invalid typename")
 
         batches, chunk_starts = self.get_transform_batches(
-            raw_stat.chunk_count, raw_stat.typename
+            activity_statistics.chunk_count, activity_statistics.typename
         )
 
         for i in range(len(batches)):
@@ -112,7 +115,7 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 workflow.execute_activity_method(
                     self.activities_cls.transform_data,
                     {
-                        "typename": raw_stat.typename,
+                        "typename": activity_statistics.typename,
                         "file_names": batches[i],
                         "chunk_start": chunk_starts[i],
                         **workflow_args,
@@ -215,13 +218,10 @@ class SQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         Returns:
             List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]]: A list of fetch operations.
         """
-        # Cast the functions to the expected return type
-        return cast(
-            List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any]]]],
-            [
-                self.activities_cls.fetch_databases,
-                self.activities_cls.fetch_schemas,
-                self.activities_cls.fetch_tables,
-                self.activities_cls.fetch_columns,
-            ],
-        )
+        return [
+            self.activities_cls.fetch_databases,
+            self.activities_cls.fetch_schemas,
+            self.activities_cls.fetch_tables,
+            self.activities_cls.fetch_columns,
+            self.activities_cls.fetch_procedures,
+        ]

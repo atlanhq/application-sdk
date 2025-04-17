@@ -139,3 +139,11 @@ class ParquetOutput(Output):
         await ObjectStoreOutput.push_files_to_object_store(
             self.output_prefix, local_file_path
         )
+
+    def get_full_path(self) -> str:
+        """Get the full path of the output file.
+
+        Returns:
+            str: The full path of the output file.
+        """
+        return self.output_path
