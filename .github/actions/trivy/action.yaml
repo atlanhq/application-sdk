@@ -142,3 +142,33 @@ runs:
       env:
         TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Send Slack Notification for Vulnerabilities
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        author_name: Github-Actions
+        fields: repo,workflow
+        text: "🚨 *Security Alert: High/Critical Vulnerabilities Detected* \n
+               Repository: ${{ github.repository }} \n
+               Branch: ${{ github.ref_name }} \n
+               PR: ${{ github.event.pull_request.html_url }} \n
+               <@U04FB2V399P>, please review and address these vulnerabilities."
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.TRIVY_SLACK_WEBHOOK_URL }}
+
+    - name: Send Slack Notification for Secrets
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        author_name: Github-Actions
+        fields: repo,workflow
+        text: "🔒 *Security Alert: Secrets Detected* \n
+               Repository: ${{ github.repository }} \n
+               Branch: ${{ github.ref_name }} \n
+               PR: ${{ github.event.pull_request.html_url }} \n
+               <@U04FB2V399P>, please review and remove any exposed secrets."
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.TRIVY_SLACK_WEBHOOK_URL }}
