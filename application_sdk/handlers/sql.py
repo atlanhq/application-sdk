@@ -45,7 +45,9 @@ class SQLHandler(HandlerInterface):
     fetch_databases_sql: str | None = queries.get("EXTRACT_DATABASE")
     fetch_schemas_sql: str | None = queries.get("EXTRACT_SCHEMA")
 
-    extract_temp_table_regex_table_sql: str | None = queries.get("EXTRACT_TEMP_TABLE_REGEX_TABLE")
+    extract_temp_table_regex_table_sql: str | None = queries.get(
+        "EXTRACT_TEMP_TABLE_REGEX_TABLE"
+    )
 
     database_alias_key: str = SQLConstants.DATABASE_ALIAS_KEY.value
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
