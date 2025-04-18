@@ -3,14 +3,14 @@ from unittest.mock import AsyncMock, Mock, patch
 import daft
 import pytest
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
 class TestPrepareMetadata:
     @pytest.fixture
     def mock_sql_client(self) -> Mock:
-        client = Mock(spec=SQLClient)
+        client = Mock(spec=BaseSQLClient)
         client.engine = Mock()
         return client
 
@@ -21,6 +21,7 @@ class TestPrepareMetadata:
         handler.schema_alias_key = "TABLE_SCHEMA"
         handler.database_result_key = "TABLE_CATALOG"
         handler.schema_result_key = "TABLE_SCHEMA"
+        handler.metadata_sql = "FILTER_METADATA"
         return handler
 
     @pytest.mark.asyncio

@@ -1,13 +1,16 @@
 import os
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.config import get_settings
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 activity.logger = get_logger(__name__)
 
@@ -90,13 +93,15 @@ class JsonOutput(Output):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
-        settings = get_settings()
-        self.chunk_size = chunk_size or settings.chunk_size
+        self.chunk_size = chunk_size or 100000
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
 
-        self.output_path = os.path.join(output_path, output_suffix)
+        if not self.output_path:
+            raise ValueError("output_path is required")
+
+        self.output_path = os.path.join(self.output_path, output_suffix)
         if typename:
             self.output_path = os.path.join(self.output_path, typename)
         os.makedirs(self.output_path, exist_ok=True)

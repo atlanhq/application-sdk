@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.constants import STATE_STORE_NAME
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.secretstore import SecretStoreOutput
@@ -41,13 +42,13 @@ def mock_dapr_output_client() -> Generator[MagicMock, None, None]:
 
 
 def test_state_store_name() -> None:
-    assert StateStoreInput.STATE_STORE_NAME == "statestore"
+    assert STATE_STORE_NAME == "statestore"
 
 
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=213 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=configuration_strategy(), uuid=uuid_strategy)
+@given(config=configuration_strategy(), uuid=uuid_strategy)  # type: ignore
 def test_store_configuration_success(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
@@ -63,7 +64,7 @@ def test_store_configuration_success(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=666 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=credentials_strategy())
+@given(config=credentials_strategy(), uuid=uuid_strategy)  # type: ignore
 def test_extract_credentials_success(
     mock_dapr_input_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
@@ -83,7 +84,7 @@ def test_extract_credentials_success(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=11383 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=credentials_strategy())
+@given(config=credentials_strategy())  # type: ignore
 def test_store_credentials_success(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any]
 ) -> None:
@@ -100,7 +101,7 @@ def test_store_credentials_success(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=34 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=configuration_strategy(), uuid=uuid_strategy)
+@given(config=configuration_strategy(), uuid=uuid_strategy)  # type: ignore
 def test_extract_configuration_success(
     mock_dapr_input_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
@@ -144,7 +145,7 @@ def test_extract_configuration_failure(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=1019 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=credentials_strategy())
+@given(config=credentials_strategy())  # type: ignore
 def test_store_credentials_failure(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any]
 ) -> None:

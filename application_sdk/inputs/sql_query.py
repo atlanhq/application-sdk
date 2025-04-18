@@ -1,11 +1,17 @@
 import asyncio
 import concurrent
-from typing import Iterator, Optional, Union
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
+    from sqlalchemy.engine import Engine
+    from sqlalchemy.orm import Session
 
 
 class SQLQueryInput(Input):
@@ -76,8 +82,12 @@ class SQLQueryInput(Input):
         import daft
 
         if isinstance(self.engine, str):
-            return daft.read_sql(self.query, self.engine)
-        return daft.read_sql(self.query, self.engine.connect)
+            return daft.read_sql(
+                self.query, self.engine, infer_schema_length=self.chunk_size
+            )
+        return daft.read_sql(
+            self.query, self.engine.connect, infer_schema_length=self.chunk_size
+        )
 
     def _execute_query(self) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided engine and pandas.
@@ -92,11 +102,11 @@ class SQLQueryInput(Input):
 
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    async def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+    async def get_batched_dataframe(self) -> AsyncIterator["pd.DataFrame"]:  # noqa: F821
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
-            Iterator["pd.DataFrame"]: Iterator yielding batches of query results.
+            AsyncIterator["pd.DataFrame"]: Async iterator yielding batches of query results.
 
         Raises:
             ValueError: If engine is a string instead of SQLAlchemy engine.
@@ -118,13 +128,25 @@ class SQLQueryInput(Input):
 
             if async_session:
                 async with async_session() as session:
-                    return await session.run_sync(self._read_sql_query)
+                    result = await session.run_sync(self._read_sql_query)
+                    # Convert regular iterator to async iterator
+                    if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
+                        for item in result:
+                            yield item
+                    else:
+                        yield result  # Single dataframe case
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return await asyncio.get_event_loop().run_in_executor(
+                    result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
+                    # Convert regular iterator to async iterator
+                    if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
+                        for item in result:
+                            yield item
+                    else:
+                        yield result  # Single dataframe case
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
@@ -190,14 +212,14 @@ class SQLQueryInput(Input):
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
 
-    async def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
+    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """Get query results as batched daft DataFrames.
 
         This method reads data using pandas in batches since daft does not support
         batch reading. Each pandas DataFrame is then converted to a daft DataFrame.
 
         Returns:
-            Iterator[daft.DataFrame]: Iterator yielding batches of query results
+            AsyncIterator[daft.DataFrame]: Async iterator yielding batches of query results
                 as daft DataFrames.
 
         Raises:
@@ -214,8 +236,8 @@ class SQLQueryInput(Input):
             if isinstance(self.engine, str):
                 raise ValueError("Engine should be an SQLAlchemy engine object")
 
-            batched_dataframe = await self.get_batched_dataframe()
-            for dataframe in batched_dataframe:
+            # Use async for to consume the AsyncIterator properly
+            async for dataframe in self.get_batched_dataframe():
                 daft_dataframe = daft.from_pandas(dataframe)
                 yield daft_dataframe
         except Exception as e:

@@ -23,7 +23,7 @@ from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
@@ -104,7 +104,7 @@ class SampleSQLMinerActivities(SQLQueryExtractionActivities):
     fetch_queries_sql = FETCH_QUERIES_SQL
 
 
-class SnowflakeSQLClient(SQLClient):
+class SQLClient(BaseSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.credentials["password"])
         base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"
@@ -129,7 +129,9 @@ class SampleSnowflakeHandler(SQLHandler):
         {temp_table_regex_sql};
     """
 
-    temp_table_regex_sql = "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
+    extract_temp_table_regex_table_sql = (
+        "AND NOT TABLE_NAME RLIKE '{exclude_table_regex}'"
+    )
 
     metadata_sql = "SELECT * FROM SNOWFLAKE.ACCOUNT_USAGE.SCHEMATA;"
 
@@ -141,7 +143,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
     await workflow_client.load()
 
     activities = SampleSQLMinerActivities(
-        sql_client_class=SnowflakeSQLClient, handler_class=SampleSnowflakeHandler
+        sql_client_class=SQLClient, handler_class=SampleSnowflakeHandler
     )
 
     worker: Worker = Worker(

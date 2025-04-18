@@ -5,11 +5,11 @@ import daft
 import pytest
 from sqlalchemy.engine import Engine
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 
 
-class MockSQLClient(SQLClient):
+class MockBaseSQLClient(BaseSQLClient):
     def __init__(self):
         super().__init__()
         self.run_query = AsyncMock()
@@ -21,7 +21,7 @@ class MockSQLClient(SQLClient):
         self.engine.connect.return_value.__exit__ = MagicMock()
         self.engine.connect.return_value.connection = MagicMock()
 
-    async def __aenter__(self) -> "MockSQLClient":
+    async def __aenter__(self) -> "MockBaseSQLClient":
         return self
 
     async def __aexit__(
@@ -35,15 +35,18 @@ class MockSQLClient(SQLClient):
 
 @pytest.fixture
 def sql_handler() -> SQLHandler:
-    sql_client = MockSQLClient()
+    sql_client = MockBaseSQLClient()
     handler = SQLHandler(sql_client)
     handler.tables_check_sql = "SELECT COUNT(*) as count FROM tables"
+    handler.extract_temp_table_regex_table_sql = "WHERE table_name NOT LIKE 'temp%'"
     return handler
 
 
 async def test_tables_check_success(sql_handler: SQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
+    if not sql_handler.sql_client.engine:
+        raise ValueError("Engine is not initialized")
     mock_df = daft.from_pylist([{"count": 5}])
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
@@ -57,6 +60,8 @@ async def test_tables_check_success(sql_handler: SQLHandler) -> None:
 async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
     """Test tables check with empty response."""
     # Create a mock DataFrame with zero count
+    if not sql_handler.sql_client.engine:
+        raise ValueError("Engine is not initialized")
     mock_df = daft.from_pylist([{"count": 0}])
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
@@ -70,6 +75,8 @@ async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
 async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
     """Test tables check with failure response."""
     # Create a DataFrame with invalid data that will cause an error
+    if not sql_handler.sql_client.engine:
+        raise ValueError("Engine is not initialized")
     mock_df = daft.from_pylist([{"wrong_column": "invalid"}])  # Missing 'count' column
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()

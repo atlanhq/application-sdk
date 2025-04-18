@@ -13,6 +13,7 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT
 from application_sdk.inputs.statestore import StateStoreInput
 
 logger = get_logger(__name__)
@@ -34,8 +35,8 @@ class WorkflowInterface(ABC):
 
     activities_cls: Type[ActivitiesInterface]
 
-    default_heartbeat_timeout: timedelta | None = timedelta(seconds=10)
-    default_start_to_close_timeout: timedelta | None = timedelta(hours=2)
+    default_heartbeat_timeout: timedelta = HEARTBEAT_TIMEOUT
+    default_start_to_close_timeout: timedelta = START_TO_CLOSE_TIMEOUT
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
@@ -92,7 +93,6 @@ class WorkflowInterface(ABC):
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
-            logger.info("Workflow completed successfully")
             return result
 
         except Exception as e:

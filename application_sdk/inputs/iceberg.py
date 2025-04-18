@@ -1,4 +1,4 @@
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional
 
 from pyiceberg.table import Table
 
@@ -6,6 +6,10 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 
 class IcebergInput(Input):

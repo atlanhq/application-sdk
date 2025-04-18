@@ -6,7 +6,7 @@ import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.test_utils.hypothesis.strategies.handlers.sql.sql_preflight import (
     metadata_list_strategy,
@@ -23,7 +23,7 @@ settings.load_profile("sql_preflight_tests")
 
 @pytest.fixture
 def mock_sql_client() -> Mock:
-    sql_client = Mock(spec=SQLClient)
+    sql_client = Mock(spec=BaseSQLClient)
     # Add mock engine with dialect to avoid None errors
     mock_engine = Mock()
     mock_dialect = Mock()
@@ -177,12 +177,15 @@ async def test_check_client_version_comparison(
     client_version, min_version, expected_success = version_data
 
     # Setup dialect version info
-    handler.sql_client.engine.dialect.server_version_info = tuple(
-        int(x) for x in client_version.split(".")
-    )
+    if handler.sql_client.engine is not None:
+        handler.sql_client.engine.dialect.server_version_info = tuple(
+            int(x) for x in client_version.split(".")
+        )
 
     # Set minimum version environment variable
-    monkeypatch.setenv("ATLAN_SQL_SERVER_MIN_VERSION", min_version)
+    monkeypatch.setattr(
+        "application_sdk.handlers.sql.SQL_SERVER_MIN_VERSION", min_version
+    )
 
     result = await handler.check_client_version()
 
@@ -199,7 +202,8 @@ async def test_check_client_version_no_minimum_version(
     handler: SQLHandler, monkeypatch: MonkeyPatch
 ):
     # Setup dialect version info
-    handler.sql_client.engine.dialect.server_version_info = (15, 4)
+    if handler.sql_client.engine is not None:
+        handler.sql_client.engine.dialect.server_version_info = (15, 4)
 
     # Ensure environment variable is not set
     monkeypatch.delenv("ATLAN_SQL_SERVER_MIN_VERSION", raising=False)
@@ -213,7 +217,8 @@ async def test_check_client_version_no_minimum_version(
 
 async def test_check_client_version_no_client_version(handler: SQLHandler):
     # Remove server_version_info attribute
-    delattr(handler.sql_client.engine.dialect, "server_version_info")
+    if handler.sql_client.engine is not None:
+        delattr(handler.sql_client.engine.dialect, "server_version_info")
 
     # Ensure get_client_version_sql is not defined
     handler.get_client_version_sql = None
@@ -229,7 +234,8 @@ async def test_check_client_version_sql_query(
     handler: SQLHandler, monkeypatch: MonkeyPatch
 ):
     # Remove server_version_info attribute
-    delattr(handler.sql_client.engine.dialect, "server_version_info")
+    if handler.sql_client.engine is not None:
+        delattr(handler.sql_client.engine.dialect, "server_version_info")
 
     # Set up SQL query for version
     handler.get_client_version_sql = "SELECT version();"
@@ -258,12 +264,13 @@ async def test_check_client_version_sql_query(
 
 async def test_check_client_version_exception(handler: SQLHandler):
     # Force an exception during version check
-    with patch.object(
-        handler.sql_client.engine.dialect,
-        "server_version_info",
-        side_effect=Exception("Test exception"),
-    ):
-        result = await handler.check_client_version()
+    if handler.sql_client.engine is not None:
+        with patch.object(
+            handler.sql_client.engine.dialect,
+            "server_version_info",
+            side_effect=Exception("Test exception"),
+        ):
+            result = await handler.check_client_version()
 
         assert result["success"] is True
         assert "version could not be determined" in result["successMessage"]

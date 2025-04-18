@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
+from application_sdk.constants import OBJECT_STORE_NAME
 from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -28,7 +29,7 @@ class TestObjectStoreOutput:
 
         # Assertions
         mock_client.invoke_binding.assert_called_once_with(
-            binding_name=ObjectStoreOutput.OBJECT_STORE_NAME,
+            binding_name=OBJECT_STORE_NAME,
             operation=ObjectStoreOutput.OBJECT_CREATE_OPERATION,
             data=test_file_content,
             binding_metadata={
@@ -116,7 +117,7 @@ class TestObjectStoreInput:
 
         # Assertions
         mock_client.invoke_binding.assert_called_once_with(
-            binding_name=ObjectStoreInput.OBJECT_STORE_NAME,
+            binding_name=OBJECT_STORE_NAME,
             operation=ObjectStoreInput.OBJECT_GET_OPERATION,
             binding_metadata={"key": "test.txt", "fileName": "test.txt"},
         )

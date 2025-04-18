@@ -6,12 +6,12 @@ from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import OBJECT_STORE_NAME
 
 activity.logger = get_logger(__name__)
 
 
 class ObjectStoreOutput:
-    OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
     OBJECT_CREATE_OPERATION = "create"
 
     @classmethod
@@ -45,7 +45,7 @@ class ObjectStoreOutput:
 
             try:
                 client.invoke_binding(
-                    binding_name=cls.OBJECT_STORE_NAME,
+                    binding_name=OBJECT_STORE_NAME,
                     operation=cls.OBJECT_CREATE_OPERATION,
                     data=file_content,
                     binding_metadata=metadata,

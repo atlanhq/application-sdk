@@ -18,9 +18,16 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients.workflow import WorkflowClient, WorkflowConstants
-from application_sdk.common.constants import ApplicationConstants
+from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    MAX_CONCURRENT_ACTIVITIES,
+    WORKFLOW_HOST,
+    WORKFLOW_MAX_TIMEOUT_HOURS,
+    WORKFLOW_NAMESPACE,
+    WORKFLOW_PORT,
+)
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -159,14 +166,12 @@ class TemporalWorkflowClient(WorkflowClient):
         self.client = None
         self.worker = None
         self.application_name = (
-            application_name
-            if application_name
-            else ApplicationConstants.APPLICATION_NAME.value
+            application_name if application_name else APPLICATION_NAME
         )
         self.worker_task_queue = self.get_worker_task_queue()
-        self.host = host if host else WorkflowConstants.HOST.value
-        self.port = port if port else WorkflowConstants.PORT.value
-        self.namespace = namespace if namespace else WorkflowConstants.NAMESPACE.value
+        self.host = host if host else WORKFLOW_HOST
+        self.port = port if port else WORKFLOW_PORT
+        self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
         workflow.logger = get_logger(__name__)
         activity.logger = get_logger(__name__)
@@ -222,6 +227,7 @@ class TemporalWorkflowClient(WorkflowClient):
 
         Raises:
             WorkflowFailureError: If the workflow fails to start.
+            ValueError: If the client is not loaded.
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
@@ -249,6 +255,8 @@ class TemporalWorkflowClient(WorkflowClient):
 
         try:
             # Pass the full workflow_args to the workflow
+            if not self.client:
+                raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
                 workflow_class,
                 {
@@ -257,7 +265,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
-                execution_timeout=WorkflowConstants.WORKFLOW_MAX_TIMEOUT_HOURS.value,
+                execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
@@ -276,7 +284,12 @@ class TemporalWorkflowClient(WorkflowClient):
         Args:
             workflow_id (str): The ID of the workflow.
             run_id (str): The run ID of the workflow.
+
+        Raises:
+            ValueError: If the client is not loaded.
         """
+        if not self.client:
+            raise ValueError("Client is not loaded")
         try:
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
@@ -291,9 +304,7 @@ class TemporalWorkflowClient(WorkflowClient):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[
-            int
-        ] = WorkflowConstants.MAX_CONCURRENT_ACTIVITIES.value,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
     ) -> Worker:
         """Create a Temporal worker.
 

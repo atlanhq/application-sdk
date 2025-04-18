@@ -7,47 +7,48 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
-    SQLMetadataExtractionActivities,
+    BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.common.utils import prepare_query
 from application_sdk.workflows.metadata_extraction.sql import (
-    SQLMetadataExtractionWorkflow,
+    BaseSQLMetadataExtractionWorkflow,
 )
 
 
 @pytest.fixture
 def workflow():
-    workflow = SQLMetadataExtractionWorkflow()
+    workflow = BaseSQLMetadataExtractionWorkflow()
     return workflow
 
 
 def test_workflow_initialization():
-    workflow = SQLMetadataExtractionWorkflow()
+    workflow = BaseSQLMetadataExtractionWorkflow()
     assert workflow.application_name == "default"
-    assert workflow.activities_cls == SQLMetadataExtractionActivities
+    assert workflow.activities_cls == BaseSQLMetadataExtractionActivities
 
 
 def test_get_activities():
     """Test get_activities returns correct sequence of activities"""
-    workflow = SQLMetadataExtractionWorkflow()
-    activities = Mock(spec=SQLMetadataExtractionActivities)
+    workflow = BaseSQLMetadataExtractionWorkflow()
+    activities = Mock(spec=BaseSQLMetadataExtractionActivities)
 
     activity_sequence = workflow.get_activities(activities)
 
-    assert len(activity_sequence) == 6
+    assert len(activity_sequence) == 7
     assert activity_sequence == [
         activities.preflight_check,
         activities.fetch_databases,
         activities.fetch_schemas,
         activities.fetch_tables,
         activities.fetch_columns,
+        activities.fetch_procedures,
         activities.transform_data,
     ]
 
 
 def test_get_transform_batches():
     """Test get_transform_batches with different scenarios"""
-    workflow = SQLMetadataExtractionWorkflow()
+    workflow = BaseSQLMetadataExtractionWorkflow()
     test_cases = [
         {
             "chunk_count": 10,
@@ -104,7 +105,7 @@ def test_get_transform_batches():
 @pytest.mark.asyncio
 async def test_fetch_and_transform():
     """Test fetch_and_transform method"""
-    workflow = SQLMetadataExtractionWorkflow()
+    workflow = BaseSQLMetadataExtractionWorkflow()
 
     # Mock fetch function
     mock_fetch = AsyncMock()
@@ -136,7 +137,7 @@ async def test_fetch_and_transform():
 @pytest.mark.asyncio
 async def test_fetch_and_transform_error_handling():
     """Test fetch_and_transform error handling"""
-    workflow = SQLMetadataExtractionWorkflow()
+    workflow = BaseSQLMetadataExtractionWorkflow()
 
     # Test with None result
     mock_fetch_none = AsyncMock(return_value=None)
@@ -163,11 +164,13 @@ async def test_fetch_and_transform_error_handling():
             )
 
 
-def normalize_sql(query: str) -> str:
+def normalize_sql(query: str | None) -> str:
     """
     Normalize SQL queries by removing extra whitespace, line breaks, and indentation.
     Also normalizes spacing around semicolons and parentheses.
     """
+    if query is None:
+        return ""
     # First remove all whitespace around semicolons and parentheses
     query = re.sub(r"\s*([;()])\s*", r"\1", query)
     # Then normalize all other whitespace
