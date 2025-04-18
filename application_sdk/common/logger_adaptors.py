@@ -1,5 +1,4 @@
 import logging
-import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
@@ -14,22 +13,55 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
+from application_sdk.constants import (
+    ENABLE_OTLP_LOGS,
+    LOG_LEVEL,
+    OTEL_BATCH_DELAY_MS,
+    OTEL_BATCH_SIZE,
+    OTEL_EXPORTER_OTLP_ENDPOINT,
+    OTEL_EXPORTER_TIMEOUT_SECONDS,
+    OTEL_QUEUE_SIZE,
+    OTEL_RESOURCE_ATTRIBUTES,
+    OTEL_WF_NODE_NAME,
+    SERVICE_NAME,
+    SERVICE_VERSION,
+)
+
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
 
-SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
-SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
-OTEL_RESOURCE_ATTRIBUTES: str = os.getenv("OTEL_RESOURCE_ATTRIBUTES", "")
-OTEL_EXPORTER_OTLP_ENDPOINT: str = os.getenv(
-    "OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317"
-)
-ENABLE_OTLP_LOGS: bool = os.getenv("ENABLE_OTLP_LOGS", "false").lower() == "true"
-LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO").upper()
 
-# Configure temporal logging
-log_level = logging.getLevelNamesMapping()[LOG_LEVEL]
-logging.basicConfig(level=log_level, format="%(asctime)s - %(levelname)s - %(message)s")
-logging.getLogger("temporalio").setLevel(log_level)
+# Add a Loguru handler for the Python logging system
+class InterceptHandler(logging.Handler):
+    def emit(self, record):
+        # Get corresponding Loguru level if it exists
+        try:
+            level = logger.level(record.levelname).name
+        except ValueError:
+            level = record.levelno
+
+        # Find caller from where originated the logged message
+        frame, depth = logging.currentframe(), 2
+        while frame and frame.f_code.co_filename == logging.__file__:
+            filename = frame.f_code.co_filename
+            is_logging = filename == logging.__file__
+            is_frozen = "importlib" in filename and "_bootstrap" in filename
+            if depth > 0 and not (is_logging or is_frozen):
+                break
+            frame = frame.f_back
+            depth += 1
+
+        # Add logger_name to extra to prevent KeyError
+        logger_extras = {"logger_name": record.name}
+
+        logger.opt(depth=depth, exception=record.exc_info).bind(**logger_extras).log(
+            level, record.getMessage()
+        )
+
+
+logging.basicConfig(
+    level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
+)
 
 # Add these constants
 SEVERITY_MAPPING = {
@@ -59,7 +91,7 @@ class AtlanLoggerAdapter:
         if ENABLE_OTLP_LOGS:
             try:
                 # Get workflow node name for Argo environment
-                workflow_node_name = os.getenv("OTEL_WF_NODE_NAME", "")
+                workflow_node_name = OTEL_WF_NODE_NAME
 
                 # First try to get attributes from OTEL_RESOURCE_ATTRIBUTES
                 resource_attributes = {}
@@ -84,14 +116,14 @@ class AtlanLoggerAdapter:
 
                 exporter = OTLPLogExporter(
                     endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                    timeout=int(os.getenv("OTEL_EXPORTER_TIMEOUT_SECONDS", "30")),
+                    timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
                 )
 
                 batch_processor = BatchLogRecordProcessor(
                     exporter,
-                    schedule_delay_millis=int(os.getenv("OTEL_BATCH_DELAY_MS", "5000")),
-                    max_export_batch_size=int(os.getenv("OTEL_BATCH_SIZE", "512")),
-                    max_queue_size=int(os.getenv("OTEL_QUEUE_SIZE", "2048")),
+                    schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                    max_export_batch_size=OTEL_BATCH_SIZE,
+                    max_queue_size=OTEL_QUEUE_SIZE,
                 )
 
                 self.logger_provider.add_log_record_processor(batch_processor)
@@ -224,23 +256,23 @@ class AtlanLoggerAdapter:
 
         return msg, kwargs
 
-    def debug(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def debug(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).debug(msg, *args)
 
-    def info(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def info(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).info(msg, *args)
 
-    def warning(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def warning(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).warning(msg, *args)
 
-    def error(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def error(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).error(msg, *args)
 
-    def critical(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def critical(self, msg: str, *args: Any, **kwargs: Any):
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).critical(msg, *args)
 

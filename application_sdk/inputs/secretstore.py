@@ -1,14 +1,11 @@
 """Secret store for the application."""
 
-import os
 from typing import Any, Dict
 
 from application_sdk.inputs.statestore import StateStoreInput
 
 
 class SecretStoreInput:
-    SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
-
     @classmethod
     def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
         """Extract credentials from the state store using the credential GUID.

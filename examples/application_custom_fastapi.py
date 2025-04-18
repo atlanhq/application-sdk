@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from application_sdk.application.fastapi import FastAPIApplication, HttpWorkflowTrigger
+from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
 from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows import WorkflowInterface
 
@@ -24,7 +24,9 @@ class CustomHandler(HandlerInterface):
 
 
 class SampleWorkflow(WorkflowInterface):
-    async def start(self, workflow_args: Dict[str, Any], workflow_class: Any) -> None:
+    async def start(
+        self, workflow_args: Dict[str, Any], workflow_class: Any
+    ) -> Dict[str, str]:
         return {
             "workflow_id": str(uuid.uuid4()),
             "run_id": str(uuid.uuid4()),
@@ -34,7 +36,7 @@ class SampleWorkflow(WorkflowInterface):
         pass
 
 
-class MyCustomFastAPIApplication(FastAPIApplication):
+class MyCustomApplication(Application):
     custom_router: APIRouter = APIRouter()
 
     def register_routers(self):
@@ -55,7 +57,7 @@ class MyCustomFastAPIApplication(FastAPIApplication):
 
 
 async def application_custom_fastapi():
-    fast_api_app = MyCustomFastAPIApplication(handler=CustomHandler())
+    fast_api_app = MyCustomApplication(handler=CustomHandler())
     fast_api_app.register_workflow(
         SampleWorkflow,
         [

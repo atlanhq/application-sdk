@@ -6,23 +6,37 @@ in the application, including file outputs and object store interactions.
 
 import inspect
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    Generator,
+    Optional,
+    Union,
+    cast,
+)
 
-import pandas as pd
+import orjson
 from temporalio import activity
 
-from application_sdk.activities import ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
+
 activity.logger = get_logger(__name__)
 
 
-def is_empty_dataframe(dataframe: Union[pd.DataFrame, "daft.DataFrame"]) -> bool:  # noqa: F821
+def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
     """
     Helper method to check if the dataframe has any rows
     """
+    import pandas as pd
+
     if isinstance(dataframe, pd.DataFrame):
         return dataframe.empty
 
@@ -53,21 +67,11 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
-    state: Optional[ActivitiesState] = None
-
-    @classmethod
-    def re_init(cls, **kwargs: Dict[str, Any]):
-        """Re-initialize the output class with given keyword arguments.
-
-        Args:
-            **kwargs (Dict[str, Any]): Keyword arguments for re-initialization.
-        """
-        return cls(**kwargs)
 
     async def write_batched_dataframe(
         self,
         batched_dataframe: Union[
-            AsyncGenerator[pd.DataFrame, None], Generator[pd.DataFrame, None, None]
+            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
         ],
     ):
         """Write a batched pandas DataFrame to Output.
@@ -87,14 +91,18 @@ class Output(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
             else:
-                for dataframe in batched_dataframe:
+                # Cast to Generator since we've confirmed it's not an AsyncGenerator
+                sync_generator = cast(
+                    Generator["pd.DataFrame", None, None], batched_dataframe
+                )
+                for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
         except Exception as e:
             activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     @abstractmethod
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to the output destination.
 
         Args:
@@ -126,7 +134,11 @@ class Output(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
             else:
-                for dataframe in batched_dataframe:
+                # Cast to Generator since we've confirmed it's not an AsyncGenerator
+                sync_generator = cast(
+                    Generator["daft.DataFrame", None, None], batched_dataframe
+                )  # noqa: F821
+                for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
         except Exception as e:
@@ -187,8 +199,8 @@ class Output(ABC):
 
             # Write the statistics to a json file
             output_file_name = f"{self.output_path}/statistics.json.ignore"
-            dataframe = pd.DataFrame(statistics, index=[0])
-            dataframe.to_json(output_file_name, orient="records", lines=True)
+            with open(output_file_name, "w") as f:
+                f.write(orjson.dumps(statistics).decode("utf-8"))
 
             # Push the file to the object store
             await ObjectStoreOutput.push_file_to_object_store(

@@ -8,24 +8,25 @@ database operations, supporting batch processing and server-side cursors.
 import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
-from enum import Enum
 from typing import Any, Dict, List
+from urllib.parse import quote_plus
 
-from sqlalchemy import create_engine, text
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
+from application_sdk.common.aws_utils import (
+    generate_aws_rds_token_with_iam_role,
+    generate_aws_rds_token_with_iam_user,
+)
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import parse_credentials_extra
+from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 
 activity.logger = get_logger(__name__)
 
 
-class SQLConstants(Enum):
-    USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "true"))
-
-
-class SQLClient(ClientInterface):
+class BaseSQLClient(ClientInterface):
     """SQL client for database operations.
 
     This class provides functionality for connecting to and querying SQL databases,
@@ -43,11 +44,11 @@ class SQLClient(ClientInterface):
     engine = None
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
-    use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value
+    use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
 
     def __init__(
         self,
-        use_server_side_cursor: bool = SQLConstants.USE_SERVER_SIDE_CURSOR.value,
+        use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
         credentials: Dict[str, Any] = {},
         sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
@@ -56,7 +57,7 @@ class SQLClient(ClientInterface):
 
         Args:
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
-                Defaults to SQLConstants.USE_SERVER_SIDE_CURSOR.value.
+                Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
             sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
                 connection arguments. Defaults to {}.
@@ -76,6 +77,8 @@ class SQLClient(ClientInterface):
         """
         self.credentials = credentials
         try:
+            from sqlalchemy import create_engine
+
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.sql_alchemy_connect_args,
@@ -87,12 +90,107 @@ class SQLClient(ClientInterface):
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise
+            raise ValueError(str(e))
 
     async def close(self) -> None:
         """Close the database connection."""
         if self.connection:
             self.connection.close()
+
+    def get_iam_user_token(self):
+        """
+        Get the IAM user token for the database.
+        This is a temporary token that is used to authenticate the IAM user to the database.
+        """
+        extra = parse_credentials_extra(self.credentials)
+        aws_access_key_id = self.credentials["username"]
+        aws_secret_access_key = self.credentials["password"]
+        host = self.credentials["host"]
+        user = extra.get("username")
+        database = extra.get("database")
+        if not user:
+            raise ValueError("username is required for IAM user authentication")
+        if not database:
+            raise ValueError("database is required for IAM user authentication")
+
+        port = self.credentials["port"]
+        region = self.credentials.get("region", None)
+        token = generate_aws_rds_token_with_iam_user(
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            host=host,
+            user=user,
+            port=port,
+            region=region,
+        )
+
+        return token
+
+    def get_iam_role_token(self):
+        """
+        Get the IAM role token for the database.
+        This is a temporary token that is used to authenticate the IAM role to the database.
+        """
+        extra = parse_credentials_extra(self.credentials)
+        aws_role_arn = extra.get("aws_role_arn")
+        database = extra.get("database")
+        external_id = extra.get("aws_external_id")
+
+        if not aws_role_arn:
+            raise ValueError("aws_role_arn is required for IAM role authentication")
+        if not database:
+            raise ValueError("database is required for IAM role authentication")
+
+        session_name = os.getenv("AWS_SESSION_NAME", "temp-session")
+        username = self.credentials["username"]
+        host = self.credentials["host"]
+        port = self.credentials.get("port", 5432)
+        region = self.credentials.get("region", None)
+        token = generate_aws_rds_token_with_iam_role(
+            role_arn=aws_role_arn,
+            host=host,
+            user=username,
+            external_id=external_id,
+            session_name=session_name,
+            port=port,
+            region=region,
+        )
+        return token
+
+    def get_auth_token(self) -> str:
+        """
+        Get the auth token for the SQL source.
+        """
+        authType = self.credentials.get("authType", "basic")  # Default to basic auth
+        token = None
+
+        match authType:
+            case "iam_user":
+                token = self.get_iam_user_token()
+            case "iam_role":
+                token = self.get_iam_role_token()
+            case "basic":
+                token = self.credentials["password"]
+            case _:
+                raise ValueError(f"Invalid auth type: {authType}")
+
+        encoded_token = quote_plus(token)
+        return encoded_token
+
+    def add_source_connection_params(
+        self, connection_string: str, source_connection_params: Dict[str, Any]
+    ) -> str:
+        """
+        Add the source connection params to the connection string.
+        """
+        for key, value in source_connection_params.items():
+            if "?" not in connection_string:
+                connection_string += "?"
+            else:
+                connection_string += "&"
+            connection_string += f"{key}={value}"
+
+        return connection_string
 
     def get_sqlalchemy_connection_string(self) -> str:
         raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
@@ -113,8 +211,11 @@ class SQLClient(ClientInterface):
             List of dictionaries containing query results.
 
         Raises:
+            ValueError: If connection is not established.
             Exception: If the query fails.
         """
+        if not self.connection:
+            raise ValueError("Connection is not established")
         loop = asyncio.get_running_loop()
 
         if self.use_server_side_cursor:
@@ -124,6 +225,8 @@ class SQLClient(ClientInterface):
 
         with ThreadPoolExecutor() as pool:
             try:
+                from sqlalchemy import text
+
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
@@ -150,10 +253,10 @@ class SQLClient(ClientInterface):
         activity.logger.info("Query execution completed")
 
 
-class AsyncSQLClient(SQLClient):
+class AsyncBaseSQLClient(BaseSQLClient):
     """Asynchronous SQL client for database operations.
 
-    This class extends SQLClient to provide asynchronous database operations,
+    This class extends BaseSQLClient to provide asynchronous database operations,
     with support for batch processing and server-side cursors.
 
     Attributes:
@@ -161,8 +264,8 @@ class AsyncSQLClient(SQLClient):
         engine (AsyncEngine | None): Async SQLAlchemy engine instance.
     """
 
-    connection: AsyncConnection | None = None
-    engine: AsyncEngine | None = None
+    connection: "AsyncConnection"
+    engine: "AsyncEngine"
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish an asynchronous database connection.
@@ -175,11 +278,15 @@ class AsyncSQLClient(SQLClient):
         """
         self.credentials = credentials
         try:
+            from sqlalchemy.ext.asyncio import create_async_engine
+
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
                 connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
+            if not self.engine:
+                raise ValueError("Failed to create async engine")
             self.connection = await self.engine.connect()
         except Exception as e:
             activity.logger.error(f"Error establishing database connection: {str(e)}")
@@ -213,6 +320,8 @@ class AsyncSQLClient(SQLClient):
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
+            from sqlalchemy import text
+
             if use_server_side_cursor:
                 await self.connection.execution_options(yield_per=batch_size)
 

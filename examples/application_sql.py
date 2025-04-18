@@ -32,15 +32,15 @@ from typing import Any, Dict
 from urllib.parse import quote_plus
 
 from application_sdk.activities.metadata_extraction.sql import (
-    SQLMetadataExtractionActivities,
+    BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.clients.sql import AsyncSQLClient
-from application_sdk.clients.temporal import TemporalClient
+from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
-    SQLMetadataExtractionWorkflow,
+    BaseSQLMetadataExtractionWorkflow,
 )
 
 APPLICATION_NAME = "postgres"
@@ -48,13 +48,13 @@ APPLICATION_NAME = "postgres"
 logger = get_logger(__name__)
 
 
-class PostgreSQLClient(AsyncSQLClient):
+class SQLClient(BaseSQLClient):
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password: str = quote_plus(self.credentials["password"])
         return f"postgresql+psycopg://{self.credentials['username']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
 
 
-class SampleSQLActivities(SQLMetadataExtractionActivities):
+class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
     fetch_database_sql = """
     SELECT datname as database_name FROM pg_database WHERE datname = current_database();
     """
@@ -81,12 +81,8 @@ class SampleSQLActivities(SQLMetadataExtractionActivities):
         {temp_table_regex_sql};
     """
 
-    tables_extraction_temp_table_regex_sql = (
-        "AND t.table_name !~ '{exclude_table_regex}'"
-    )
-    column_extraction_temp_table_regex_sql = (
-        "AND c.table_name !~ '{exclude_table_regex}'"
-    )
+    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
 
     fetch_column_sql = """
     SELECT
@@ -120,21 +116,21 @@ class SampleSQLWorkflowHandler(SQLHandler):
 
 
 async def application_sql(daemon: bool = True) -> Dict[str, Any]:
-    print("Starting application_sql")
+    logger.info("Starting application_sql")
 
-    temporal_client = TemporalClient(
-        application_name=APPLICATION_NAME,
-    )
-    await temporal_client.load()
+    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
+    await workflow_client.load()
 
     activities = SampleSQLActivities(
-        sql_client_class=PostgreSQLClient, handler_class=SampleSQLWorkflowHandler
+        sql_client_class=SQLClient, handler_class=SampleSQLWorkflowHandler
     )
 
     worker: Worker = Worker(
-        temporal_client=temporal_client,
-        workflow_classes=[SQLMetadataExtractionWorkflow],
-        temporal_activities=SQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_client=workflow_client,
+        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
+            activities
+        ),
     )
 
     workflow_args = {
@@ -163,8 +159,8 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    workflow_response = await temporal_client.start_workflow(
-        workflow_args, SQLMetadataExtractionWorkflow
+    workflow_response = await workflow_client.start_workflow(
+        workflow_args, BaseSQLMetadataExtractionWorkflow
     )
 
     # Start the worker in a separate thread

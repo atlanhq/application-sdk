@@ -1,18 +1,22 @@
 import asyncio
 import json
+import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import pandas as pd
+from packaging import version
 
 from application_sdk.application.fastapi.models import MetadataType
-from application_sdk.clients.sql import SQLClient
+from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.decorators import transform
+from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.constants import SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 
 logger = get_logger(__name__)
+
+queries = read_sql_files(queries_prefix="app/sql")
 
 
 class SQLConstants(Enum):
@@ -31,22 +35,26 @@ class SQLHandler(HandlerInterface):
     Handler class for SQL workflows
     """
 
-    sql_client: SQLClient
+    sql_client: BaseSQLClient
     # Variables for testing authentication
-    test_authentication_sql: str = "SELECT 1;"
-    # Variables for fetching metadata
-    metadata_sql: str | None = None
-    tables_check_sql: str | None = None
-    fetch_databases_sql: str | None = None
-    fetch_schemas_sql: str | None = None
+    test_authentication_sql: str = queries.get("TEST_AUTHENTICATION", "SELECT 1;")
+    client_version_sql: str | None = queries.get("CLIENT_VERSION")
+
+    metadata_sql: str | None = queries.get("FILTER_METADATA")
+    tables_check_sql: str | None = queries.get("TABLES_CHECK")
+    fetch_databases_sql: str | None = queries.get("EXTRACT_DATABASE")
+    fetch_schemas_sql: str | None = queries.get("EXTRACT_SCHEMA")
+
+    extract_temp_table_regex_table_sql: str | None = queries.get(
+        "EXTRACT_TEMP_TABLE_REGEX_TABLE"
+    )
+
     database_alias_key: str = SQLConstants.DATABASE_ALIAS_KEY.value
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
-    temp_table_regex_sql: str = ""
-
-    def __init__(self, sql_client: SQLClient | None = None):
+    def __init__(self, sql_client: BaseSQLClient | None = None):
         self.sql_client = sql_client
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -55,18 +63,20 @@ class SQLHandler(HandlerInterface):
         """
         await self.sql_client.load(credentials)
 
-    @transform(sql_input=SQLQueryInput(query="metadata_sql", chunk_size=None))
-    async def prepare_metadata(
-        self,
-        sql_input: pd.DataFrame,
-        **kwargs: Dict[str, Any],
-    ) -> List[Dict[Any, Any]]:
+    async def prepare_metadata(self) -> List[Dict[Any, Any]]:
         """
         Method to fetch and prepare the databases and schemas metadata
         """
+        if self.metadata_sql is None:
+            raise ValueError("metadata_sql is not defined")
+
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine, query=self.metadata_sql
+        )
+        df = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
-            for row in sql_input.to_dict(orient="records"):
+            for row in df.to_pylist():
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -78,14 +88,7 @@ class SQLHandler(HandlerInterface):
             raise exc
         return result
 
-    @transform(
-        sql_input=SQLQueryInput(query="test_authentication_sql", chunk_size=None)
-    )
-    async def test_auth(
-        self,
-        sql_input: pd.DataFrame,
-        **kwargs: Dict[str, Any],
-    ) -> bool:
+    async def test_auth(self) -> bool:
         """
         Test the authentication credentials.
 
@@ -93,7 +96,11 @@ class SQLHandler(HandlerInterface):
         :raises Exception: If the credentials are invalid.
         """
         try:
-            sql_input.to_dict(orient="records")
+            sql_input = SQLQueryInput(
+                engine=self.sql_client.engine, query=self.test_authentication_sql
+            )
+            df = await sql_input.get_daft_dataframe()
+            df.to_pylist()
             return True
         except Exception as exc:
             logger.error(
@@ -145,6 +152,9 @@ class SQLHandler(HandlerInterface):
         """Fetch only database information."""
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
+        if self.fetch_databases_sql is None:
+            raise ValueError("fetch_databases_sql is not defined")
+
         databases = []
         async for batch in self.sql_client.run_query(self.fetch_databases_sql):
             for row in batch:
@@ -158,6 +168,8 @@ class SQLHandler(HandlerInterface):
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
         schemas = []
+        if self.fetch_schemas_sql is None:
+            raise ValueError("fetch_schemas_sql is not defined")
         schema_query = self.fetch_schemas_sql.format(database_name=database)
         async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
@@ -179,22 +191,27 @@ class SQLHandler(HandlerInterface):
             (
                 results["databaseSchemaCheck"],
                 results["tablesCheck"],
+                results["versionCheck"],
             ) = await asyncio.gather(
                 self.check_schemas_and_databases(payload),
                 self.tables_check(payload),
+                self.check_client_version(),
             )
 
             if (
                 not results["databaseSchemaCheck"]["success"]
                 or not results["tablesCheck"]["success"]
+                or not results["versionCheck"]["success"]
             ):
                 raise ValueError(
-                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, tablesCheck: {results['tablesCheck']}"
+                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, "
+                    f"tablesCheck: {results['tablesCheck']}, "
+                    f"versionCheck: {results['versionCheck']}"
                 )
 
             logger.info("Preflight check completed successfully")
         except Exception as exc:
-            logger.error("Error during preflight check", exc_info=True)
+            logger.error(f"Error during preflight check {exc}", exc_info=True)
             results["error"] = f"Preflight check failed: {str(exc)}"
         return results
 
@@ -278,25 +295,26 @@ class SQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    @transform(
-        sql_input=SQLQueryInput(
-            query="tables_check_sql",
-            chunk_size=None,
-            temp_table_sql_query="temp_table_regex_sql",
-        )
-    )
     async def tables_check(
         self,
-        sql_input: pd.DataFrame,
-        **kwargs: Dict[str, Any],
+        payload: Dict[str, Any],
     ) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
         logger.info("Starting tables check")
+        query = prepare_query(
+            query=self.tables_check_sql,
+            workflow_args=payload,
+            temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
+        )
+        if not query:
+            raise ValueError("tables_check_sql is not defined")
+        sql_input = SQLQueryInput(engine=self.sql_client.engine, query=query)
+        sql_input = await sql_input.get_daft_dataframe()
         try:
             result = 0
-            for row in sql_input.to_dict(orient="records"):
+            for row in sql_input.to_pylist():
                 result += row["count"]
 
             return {
@@ -310,5 +328,97 @@ class SQLHandler(HandlerInterface):
                 "success": False,
                 "successMessage": "",
                 "failureMessage": "Tables check failed",
+                "error": str(exc),
+            }
+
+    async def check_client_version(self) -> Dict[str, Any]:
+        """
+        Check if the client version meets the minimum required version.
+
+        If client_version_sql is not defined by the implementing app,
+        this check will be skipped and return success.
+
+        Returns:
+            Dict[str, Any]: Result of the version check with success status and messages
+        """
+
+        logger.info("Checking client version")
+        try:
+            min_version = SQL_SERVER_MIN_VERSION
+            client_version = None
+
+            # Try to get the version from the sql_client dialect
+            if (
+                hasattr(self.sql_client, "engine")
+                and self.sql_client.engine is not None
+            ):
+                if hasattr(self.sql_client.engine, "dialect"):
+                    version_info = self.sql_client.engine.dialect.server_version_info
+                    if version_info:
+                        # Handle tuple version info (like (15, 4))
+                        client_version = ".".join(str(x) for x in version_info)
+                        logger.info(
+                            f"Detected client version from dialect: {client_version}"
+                        )
+
+            # If dialect version not available and client_version_sql is defined, use SQL query
+            if not client_version and self.client_version_sql:
+                sql_input = await SQLQueryInput(
+                    query=self.client_version_sql,
+                    engine=self.sql_client.engine,
+                ).get_dataframe()
+
+                version_string = next(
+                    iter(sql_input.to_dict(orient="records")[0].values())
+                )
+                version_match = re.search(r"(\d+\.\d+(?:\.\d+)?)", version_string)
+                if version_match:
+                    client_version = version_match.group(1)
+                    logger.info(
+                        f"Detected client version from SQL query: {client_version}"
+                    )
+                else:
+                    logger.warning(
+                        f"Could not extract version number from: {version_string}"
+                    )
+
+            # If no client version could be determined
+            if not client_version:
+                logger.info("Client version could not be determined")
+                return {
+                    "success": True,
+                    "successMessage": "Client version check skipped - version could not be determined",
+                    "failureMessage": "",
+                }
+
+            # If no minimum version requirement is set, just report the client version
+            if not min_version:
+                logger.info(
+                    f"No minimum version requirement set. Client version: {client_version}"
+                )
+                return {
+                    "success": True,
+                    "successMessage": f"Client version: {client_version} (no minimum version requirement)",
+                    "failureMessage": "",
+                }
+
+            # Compare versions when both client version and minimum version are available
+            is_valid = version.parse(client_version) >= version.parse(min_version)
+
+            return {
+                "success": is_valid,
+                "successMessage": f"Client version {client_version} meets minimum required version {min_version}"
+                if is_valid
+                else "",
+                "failureMessage": f"Client version {client_version} does not meet minimum required version {min_version}"
+                if not is_valid
+                else "",
+            }
+        except Exception as exc:
+            logger.error(f"Error during client version check: {exc}", exc_info=True)
+            return {
+                "success": False,
+                "successMessage": "",
+                "failureMessage": "Client version check failed",
                 "error": str(exc),
             }

@@ -1,7 +1,4 @@
-import os
 import uuid
-from datetime import timedelta
-from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -21,9 +18,16 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients import ClientInterface
-from application_sdk.common.constants import ApplicationConstants
+from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    MAX_CONCURRENT_ACTIVITIES,
+    WORKFLOW_HOST,
+    WORKFLOW_MAX_TIMEOUT_HOURS,
+    WORKFLOW_NAMESPACE,
+    WORKFLOW_PORT,
+)
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
@@ -41,13 +45,6 @@ TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
 
-class TemporalConstants(Enum):
-    HOST = os.getenv("ATLAN_TEMPORAL_HOST", "localhost")
-    PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
-    NAMESPACE = os.getenv("ATLAN_TEMPORAL_NAMESPACE", "default")
-    APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
-
-    WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(hours=int(os.getenv("ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS", "1")))
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -156,21 +153,8 @@ class EventInterceptor(Interceptor):
         return EventWorkflowInboundInterceptor
 
 
-class TemporalClient(ClientInterface):
-    """Client for interacting with Temporal workflow service.
-
-    This class provides functionality for managing workflow executions,
-    including starting workflows, creating workers, and checking workflow status.
-
-    Attributes:
-        client: Temporal client instance.
-        worker: Temporal worker instance.
-        application_name (str): Name of the application.
-        worker_task_queue (str): Task queue for the worker.
-        host (str): Temporal server host.
-        port (str): Temporal server port.
-        namespace (str): Temporal namespace.
-    """
+class TemporalWorkflowClient(WorkflowClient):
+    """Temporal-specific implementation of WorkflowClient."""
 
     def __init__(
         self,
@@ -179,25 +163,15 @@ class TemporalClient(ClientInterface):
         application_name: str | None = None,
         namespace: str | None = "default",
     ):
-        """Initialize the Temporal client.
-
-        Args:
-            host (str | None, optional): Temporal server host. Defaults to None.
-            port (str | None, optional): Temporal server port. Defaults to None.
-            application_name (str | None, optional): Application name. Defaults to None.
-            namespace (str | None, optional): Temporal namespace. Defaults to "default".
-        """
         self.client = None
         self.worker = None
         self.application_name = (
-            application_name
-            if application_name
-            else ApplicationConstants.APPLICATION_NAME.value
+            application_name if application_name else APPLICATION_NAME
         )
         self.worker_task_queue = self.get_worker_task_queue()
-        self.host = host if host else TemporalConstants.HOST.value
-        self.port = port if port else TemporalConstants.PORT.value
-        self.namespace = namespace if namespace else TemporalConstants.NAMESPACE.value
+        self.host = host if host else WORKFLOW_HOST
+        self.port = port if port else WORKFLOW_PORT
+        self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
         workflow.logger = get_logger(__name__)
         activity.logger = get_logger(__name__)
@@ -253,6 +227,7 @@ class TemporalClient(ClientInterface):
 
         Raises:
             WorkflowFailureError: If the workflow fails to start.
+            ValueError: If the client is not loaded.
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
@@ -280,6 +255,8 @@ class TemporalClient(ClientInterface):
 
         try:
             # Pass the full workflow_args to the workflow
+            if not self.client:
+                raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
                 workflow_class,
                 {
@@ -288,7 +265,7 @@ class TemporalClient(ClientInterface):
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
-                execution_timeout=TemporalConstants.WORKFLOW_MAX_TIMEOUT_HOURS.value,
+                execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
             logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
@@ -307,7 +284,12 @@ class TemporalClient(ClientInterface):
         Args:
             workflow_id (str): The ID of the workflow.
             run_id (str): The run ID of the workflow.
+
+        Raises:
+            ValueError: If the client is not loaded.
         """
+        if not self.client:
+            raise ValueError("Client is not loaded")
         try:
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
@@ -315,14 +297,14 @@ class TemporalClient(ClientInterface):
             await workflow_handle.terminate()
         except Exception as e:
             logger.error(f"Error terminating workflow {workflow_id} {run_id}: {e}")
-            raise e
+            raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
 
     def create_worker(
         self,
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[int] = None,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
     ) -> Worker:
         """Create a Temporal worker.
 
@@ -382,13 +364,30 @@ class TemporalClient(ClientInterface):
         if not self.client:
             raise ValueError("Client is not loaded")
 
-        workflow_handle = self.client.get_workflow_handle(workflow_id, run_id=run_id)
         try:
+            workflow_handle = self.client.get_workflow_handle(
+                workflow_id, run_id=run_id
+            )
             workflow_execution = await workflow_handle.describe()
             execution_info = workflow_execution.raw_description.workflow_execution_info
+
+            workflow_info = {
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "status": WorkflowExecutionStatus(execution_info.status).name,
+                "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
+            }
+            if include_last_executed_run_id:
+                workflow_info["last_executed_run_id"] = (
+                    execution_info.root_execution.run_id
+                )
+            return workflow_info
         except Exception as e:
-            # if the workflow is not found, return the status as not found
-            if e.grpc_status.details[0].type_url == TEMPORAL_NOT_FOUND_FAILURE:
+            if (
+                hasattr(e, "grpc_status")
+                and hasattr(e.grpc_status, "details")
+                and e.grpc_status.details[0].type_url == TEMPORAL_NOT_FOUND_FAILURE
+            ):
                 return {
                     "workflow_id": workflow_id,
                     "run_id": run_id,
@@ -399,13 +398,3 @@ class TemporalClient(ClientInterface):
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"
             )
-
-        workflow_info = {
-            "workflow_id": workflow_id,
-            "run_id": run_id,
-            "status": WorkflowExecutionStatus(execution_info.status).name,
-            "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
-        }
-        if include_last_executed_run_id:
-            workflow_info["last_executed_run_id"] = execution_info.root_execution.run_id
-        return workflow_info

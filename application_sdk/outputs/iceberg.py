@@ -1,12 +1,15 @@
-from typing import Any, Dict, Union
+from typing import TYPE_CHECKING, Union
 
-import pandas as pd
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 activity.logger = get_logger(__name__)
 
@@ -24,7 +27,6 @@ class IcebergOutput(Output):
         mode: str = "append",
         total_record_count: int = 0,
         chunk_count: int = 0,
-        **kwargs: Dict[str, Any],
     ):
         """Initialize the Iceberg output class.
 
@@ -35,7 +37,6 @@ class IcebergOutput(Output):
             mode (str, optional): Write mode for the iceberg table. Defaults to "append".
             total_record_count (int, optional): Total record count written to the iceberg table. Defaults to 0.
             chunk_count (int, optional): Number of chunks written to the iceberg table. Defaults to 0.
-            kwargs (Dict[str, Any]): Keyword arguments for initialization.
         """
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
@@ -44,7 +45,7 @@ class IcebergOutput(Output):
         self.iceberg_table = iceberg_table
         self.mode = mode
 
-    async def write_dataframe(self, dataframe: pd.DataFrame):
+    async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """
         Method to write the pandas dataframe to an iceberg table
         """
@@ -55,11 +56,12 @@ class IcebergOutput(Output):
                 return
             # convert the pandas dataframe to a daft dataframe
             daft_dataframe = daft.from_pandas(dataframe)
-            self.write_daft_dataframe(daft_dataframe)
+            await self.write_daft_dataframe(daft_dataframe)
         except Exception as e:
             activity.logger.error(
                 f"Error writing pandas dataframe to iceberg table: {str(e)}"
             )
+            raise e
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """
@@ -88,3 +90,4 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing daft dataframe to iceberg table: {str(e)}"
             )
+            raise e

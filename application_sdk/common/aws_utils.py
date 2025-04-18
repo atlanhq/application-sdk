@@ -1,8 +1,5 @@
 import os
 
-from boto3 import client
-from botocore.exceptions import ClientError
-
 
 def get_region_name_from_hostname(hostname: str) -> str:
     """
@@ -45,7 +42,11 @@ def generate_aws_rds_token_with_iam_role(
     Returns:
         str: RDS authentication token
     """
+    from botocore.exceptions import ClientError
+
     try:
+        from boto3 import client
+
         sts_client = client(
             "sts", region_name=region or get_region_name_from_hostname(host)
         )
@@ -92,6 +93,8 @@ def generate_aws_rds_token_with_iam_user(
         str: RDS authentication token
     """
     try:
+        from boto3 import client
+
         aws_client = client(
             "rds",
             aws_access_key_id=aws_access_key_id,
