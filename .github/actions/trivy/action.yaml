@@ -12,7 +12,7 @@ inputs:
     default: 'true'
   slack-webhook-url:
     description: Slack webhook URL for notifications
-    required: true
+    required: false
 
 runs:
   using: 'composite'
@@ -147,7 +147,7 @@ runs:
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
 
     - name: Send Slack Notification for Vulnerabilities
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && inputs.slack-webhook-url != ''
       uses: 8398a7/action-slack@v3
       with:
         status: ${{ job.status }}
@@ -162,7 +162,7 @@ runs:
         SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
 
     - name: Send Slack Notification for Secrets
-      if: inputs.add-report-comment-to-pr == 'true'
+      if: inputs.add-report-comment-to-pr == 'true' && inputs.slack-webhook-url != ''
       uses: 8398a7/action-slack@v3
       with:
         status: ${{ job.status }}
