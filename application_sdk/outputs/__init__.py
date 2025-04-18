@@ -6,10 +6,18 @@ in the application, including file outputs and object store interactions.
 
 import inspect
 from abc import ABC, abstractmethod
-from typing import Any, AsyncGenerator, Dict, Generator, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Dict,
+    Generator,
+    Optional,
+    Union,
+    cast,
+)
 
 import orjson
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
@@ -18,6 +26,11 @@ from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 logger = get_logger(__name__)
 activity.logger = logger
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
+
 
 
 def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
@@ -80,7 +93,11 @@ class Output(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
             else:
-                for dataframe in batched_dataframe:
+                # Cast to Generator since we've confirmed it's not an AsyncGenerator
+                sync_generator = cast(
+                    Generator["pd.DataFrame", None, None], batched_dataframe
+                )
+                for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
         except Exception as e:
@@ -119,7 +136,11 @@ class Output(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
             else:
-                for dataframe in batched_dataframe:
+                # Cast to Generator since we've confirmed it's not an AsyncGenerator
+                sync_generator = cast(
+                    Generator["daft.DataFrame", None, None], batched_dataframe
+                )  # noqa: F821
+                for dataframe in sync_generator:
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
         except Exception as e:

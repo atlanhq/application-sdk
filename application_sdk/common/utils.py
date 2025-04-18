@@ -15,7 +15,9 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
 def prepare_query(
-    query: str, workflow_args: Dict[str, Any], temp_table_regex_sql: str = ""
+    query: Optional[str],
+    workflow_args: Dict[str, Any],
+    temp_table_regex_sql: Optional[str] = "",
 ) -> Optional[str]:
     """
     Prepares a SQL query by applying include and exclude filters, and optional
@@ -46,12 +48,16 @@ def prepare_query(
         Exception: If query preparation fails. Error is logged and None is returned.
     """
     try:
+        if not query:
+            logger.warning("SQL query is not set.")
+            return None
+
         metadata = workflow_args.get("metadata", {})
 
         # using "or" instead of default correct defaults are set in case of empty string
         include_filter = metadata.get("include-filter") or "{}"
         exclude_filter = metadata.get("exclude-filter") or "{}"
-        if metadata.get("temp-table-regex"):
+        if metadata.get("temp-table-regex") and temp_table_regex_sql is not None:
             temp_table_regex_sql = temp_table_regex_sql.format(
                 exclude_table_regex=metadata.get("temp-table-regex")
             )

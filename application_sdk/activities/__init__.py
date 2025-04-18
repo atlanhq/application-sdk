@@ -1,5 +1,5 @@
 from abc import ABC
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
 from temporalio import activity
@@ -12,25 +12,28 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 
-class ActivitiesState(BaseModel):
+H = TypeVar("H", bound=HandlerInterface)
+
+
+class ActivitiesState(BaseModel, Generic[H]):
     """Base state model for workflow activities.
 
     This class provides the base state structure for workflow activities,
     including handler configuration and workflow arguments.
 
     Attributes:
-        handler (Optional[HandlerInterface]): Handler instance for activity-specific
+        handler (Optional[H]): Handler instance for activity-specific
             operations. Defaults to None.
         workflow_args (Optional[Dict[str, Any]]): Arguments passed to the workflow.
             Defaults to None.
     """
 
     model_config = {"arbitrary_types_allowed": True}
-    handler: Optional[HandlerInterface] = None
+    handler: Optional[H] = None
     workflow_args: Optional[Dict[str, Any]] = None
 
 
-class ActivitiesInterface(ABC):
+class ActivitiesInterface(ABC, Generic[H]):
     """Abstract base class defining the interface for workflow activities.
 
     This class provides state management functionality and defines the basic structure
@@ -39,7 +42,7 @@ class ActivitiesInterface(ABC):
 
     def __init__(self):
         """Initialize the activities interface with an empty state dictionary."""
-        self._state: Dict[str, ActivitiesState] = {}
+        self._state: Dict[str, ActivitiesState[H]] = {}
 
     # State methods
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
@@ -61,11 +64,11 @@ class ActivitiesInterface(ABC):
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
-            self._state[workflow_id] = ActivitiesState()
+            self._state[workflow_id] = ActivitiesState[H]()
 
         self._state[workflow_id].workflow_args = workflow_args
 
-    async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesState:
+    async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesState[H]:
         """Retrieve the state for the current workflow.
 
         If state doesn't exist, it will be initialized using _set_state.
@@ -109,7 +112,7 @@ class ActivitiesInterface(ABC):
         logger.info("Starting preflight check")
 
         try:
-            state: ActivitiesState = await self._get_state(workflow_args)
+            state: ActivitiesState[H] = await self._get_state(workflow_args)
             handler = state.handler
 
             if not handler:

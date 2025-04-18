@@ -228,6 +228,7 @@ class TemporalWorkflowClient(WorkflowClient):
 
         Raises:
             WorkflowFailureError: If the workflow fails to start.
+            ValueError: If the client is not loaded.
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
@@ -255,6 +256,8 @@ class TemporalWorkflowClient(WorkflowClient):
 
         try:
             # Pass the full workflow_args to the workflow
+            if not self.client:
+                raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
                 workflow_class,
                 {
@@ -282,7 +285,12 @@ class TemporalWorkflowClient(WorkflowClient):
         Args:
             workflow_id (str): The ID of the workflow.
             run_id (str): The run ID of the workflow.
+
+        Raises:
+            ValueError: If the client is not loaded.
         """
+        if not self.client:
+            raise ValueError("Client is not loaded")
         try:
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id

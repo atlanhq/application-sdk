@@ -28,7 +28,7 @@ MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"
 
 # Workflow Constants
 HEARTBEAT_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT", 120))  # 2 minutes
+    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT", 300))  # 5 minutes
 )
 START_TO_CLOSE_TIMEOUT = timedelta(
     seconds=int(os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT", 2 * 60 * 60))  # 2 hours

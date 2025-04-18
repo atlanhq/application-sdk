@@ -16,13 +16,15 @@ import time
 import uuid
 
 import psutil
-from fastapi import APIRouter, status
+from fastapi import status
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRouter
 
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
 
+# Create a router instance using the alias
 router = APIRouter(
     prefix="/server",
     tags=["server"],

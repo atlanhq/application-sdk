@@ -48,7 +48,7 @@ def test_state_store_name() -> None:
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=213 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=configuration_strategy(), uuid=uuid_strategy)
+@given(config=configuration_strategy(), uuid=uuid_strategy)  # type: ignore
 def test_store_configuration_success(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
@@ -64,7 +64,7 @@ def test_store_configuration_success(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=666 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=credentials_strategy())
+@given(config=credentials_strategy(), uuid=uuid_strategy)  # type: ignore
 def test_extract_credentials_success(
     mock_dapr_input_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
@@ -84,7 +84,7 @@ def test_extract_credentials_success(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=11383 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=credentials_strategy())
+@given(config=credentials_strategy())  # type: ignore
 def test_store_credentials_success(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any]
 ) -> None:
@@ -101,7 +101,7 @@ def test_store_credentials_success(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=34 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=configuration_strategy(), uuid=uuid_strategy)
+@given(config=configuration_strategy(), uuid=uuid_strategy)  # type: ignore
 def test_extract_configuration_success(
     mock_dapr_input_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
@@ -145,7 +145,7 @@ def test_extract_configuration_failure(
 @pytest.mark.skip(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=1019 unique elements with values drawn from only 17 distinct elements"
 )
-@given(config=credentials_strategy())
+@given(config=credentials_strategy())  # type: ignore
 def test_store_credentials_failure(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any]
 ) -> None:

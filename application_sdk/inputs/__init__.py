@@ -1,11 +1,15 @@
 from abc import ABC, abstractmethod
-from typing import Iterator
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Union
 
 import pandas as pd
 
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 
 class Input(ABC):
@@ -14,7 +18,9 @@ class Input(ABC):
     """
 
     @abstractmethod
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+    def get_batched_dataframe(
+        self,
+    ) -> Union[Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]]:
         """
         Get an iterator of batched pandas DataFrames.
 
@@ -40,7 +46,9 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
+    def get_batched_daft_dataframe(
+        self,
+    ) -> Union[Iterator["daft.DataFrame"], AsyncIterator["daft.DataFrame"]]:  # noqa: F821
         """
         Get an iterator of batched daft DataFrames.
 

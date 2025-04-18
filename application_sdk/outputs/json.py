@@ -1,8 +1,7 @@
 import os
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -11,6 +10,10 @@ from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 logger = get_logger(__name__)
 activity.logger = logger
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
@@ -96,7 +99,10 @@ class JsonOutput(Output):
         self.current_buffer_size = 0
         self.path_gen = path_gen
 
-        self.output_path = os.path.join(output_path, output_suffix)
+        if not self.output_path:
+            raise ValueError("output_path is required")
+
+        self.output_path = os.path.join(self.output_path, output_suffix)
         if typename:
             self.output_path = os.path.join(self.output_path, typename)
         os.makedirs(self.output_path, exist_ok=True)

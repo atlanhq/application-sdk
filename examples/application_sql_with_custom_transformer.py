@@ -86,12 +86,8 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
         {temp_table_regex_sql};
     """
 
-    tables_extraction_temp_table_regex_sql = (
-        "AND t.table_name !~ '{exclude_table_regex}'"
-    )
-    column_extraction_temp_table_regex_sql = (
-        "AND c.table_name !~ '{exclude_table_regex}'"
-    )
+    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
 
     fetch_column_sql = """
     SELECT
@@ -134,7 +130,7 @@ class SampleSQLHandler(SQLHandler):
             {temp_table_regex_sql};
     """
 
-    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
 
     metadata_sql = """
     SELECT schema_name, catalog_name
@@ -160,7 +156,9 @@ async def application_sql_with_custom_transformer(
     worker: Worker = Worker(
         workflow_client=workflow_client,
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
+            activities
+        ),
     )
 
     # wait for the worker to start

@@ -1,5 +1,5 @@
 import os
-from typing import Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 import daft
 import pandas as pd
@@ -11,6 +11,10 @@ from application_sdk.outputs.objectstore import ObjectStoreOutput
 
 logger = get_logger(__name__)
 activity.logger = logger
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 
 class ParquetOutput(Output):

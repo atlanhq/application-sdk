@@ -81,12 +81,8 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
         {temp_table_regex_sql};
     """
 
-    tables_extraction_temp_table_regex_sql = (
-        "AND t.table_name !~ '{exclude_table_regex}'"
-    )
-    column_extraction_temp_table_regex_sql = (
-        "AND c.table_name !~ '{exclude_table_regex}'"
-    )
+    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
 
     fetch_column_sql = """
     SELECT
@@ -132,7 +128,9 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     worker: Worker = Worker(
         workflow_client=workflow_client,
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(activities),
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
+            activities
+        ),
     )
 
     workflow_args = {
