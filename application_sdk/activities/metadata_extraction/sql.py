@@ -386,14 +386,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         prepared_query = prepare_query(
             query=self.fetch_table_sql, workflow_args=workflow_args
         )
-        temp_table_regex_sql = self._validate_query(
-            self.tables_extraction_temp_table_regex_sql,
-            "tables extraction temp table regex",
-        )
         prepared_query = prepare_query(
             query=prepared_query,
             workflow_args=workflow_args,
-            temp_table_regex_sql=temp_table_regex_sql,
+            temp_table_regex_sql=self.tables_extraction_temp_table_regex_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -423,14 +419,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         prepared_query = prepare_query(
             query=self.fetch_column_sql, workflow_args=workflow_args
         )
-        temp_table_regex_sql = self._validate_query(
-            self.column_extraction_temp_table_regex_sql,
-            "column extraction temp table regex",
-        )
         prepared_query = prepare_query(
             query=prepared_query,
             workflow_args=workflow_args,
-            temp_table_regex_sql=temp_table_regex_sql,
+            temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,

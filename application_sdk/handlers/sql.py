@@ -55,24 +55,6 @@ class SQLHandler(HandlerInterface):
     def __init__(self, sql_client: BaseSQLClient | None = None):
         self.sql_client = sql_client
 
-    def _validate_query(self, query_template: Optional[str], entity_type: str) -> str:
-        """Validates that a query template exists.
-
-        Args:
-            query_template: SQL query template to validate.
-            entity_type: Type of entity (database, schema, table, column).
-
-        Returns:
-            The validated query template.
-
-        Raises:
-            ValueError: If query_template is None.
-        """
-        if not query_template:
-            logger.warning(f"No {entity_type} query provided")
-            raise ValueError(f"No {entity_type} query provided")
-        return query_template
-
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
         Method to load and load the SQL client
@@ -229,7 +211,7 @@ class SQLHandler(HandlerInterface):
 
             logger.info("Preflight check completed successfully")
         except Exception as exc:
-            logger.error("Error during preflight check", exc_info=True)
+            logger.error(f"Error during preflight check {exc}", exc_info=True)
             results["error"] = f"Preflight check failed: {str(exc)}"
         return results
 
@@ -321,14 +303,10 @@ class SQLHandler(HandlerInterface):
         Method to check the count of tables
         """
         logger.info("Starting tables check")
-        tables_check = self._validate_query(self.tables_check_sql, "table")
-        temp_table_regex = self._validate_query(
-            self.temp_table_regex_sql, "temp table regex"
-        )
         query = prepare_query(
-            query=tables_check,
+            query=self.tables_check_sql,
             workflow_args=payload,
-            temp_table_regex_sql=temp_table_regex,
+            temp_table_regex_sql=self.temp_table_regex_sql,
         )
         if not query:
             raise ValueError("tables_check_sql is not defined")
