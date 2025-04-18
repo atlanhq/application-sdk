@@ -89,7 +89,7 @@ class SQLHandler(HandlerInterface):
             raise ValueError("metadata_sql is not defined")
 
         sql_input = SQLQueryInput(
-            engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
+            engine=self.sql_client.engine, query=self.metadata_sql
         )
         df = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
@@ -115,9 +115,7 @@ class SQLHandler(HandlerInterface):
         """
         try:
             sql_input = SQLQueryInput(
-                engine=self.sql_client.engine,
-                query=self.test_authentication_sql,
-                chunk_size=None,
+                engine=self.sql_client.engine, query=self.test_authentication_sql
             )
             df = await sql_input.get_daft_dataframe()
             df.to_pylist()
@@ -334,11 +332,7 @@ class SQLHandler(HandlerInterface):
         )
         if not query:
             raise ValueError("tables_check_sql is not defined")
-        sql_input = SQLQueryInput(
-            engine=self.sql_client.engine,
-            query=query,
-            chunk_size=None,
-        )
+        sql_input = SQLQueryInput(engine=self.sql_client.engine, query=query)
         sql_input = await sql_input.get_daft_dataframe()
         try:
             result = 0
@@ -394,7 +388,6 @@ class SQLHandler(HandlerInterface):
                 sql_input = await SQLQueryInput(
                     query=self.client_version_sql,
                     engine=self.sql_client.engine,
-                    chunk_size=None,
                 ).get_dataframe()
 
                 version_string = next(
