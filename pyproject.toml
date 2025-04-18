@@ -79,7 +79,7 @@ isort = "^5.13.2"
 pylint = "^3.3.3"
 boto3-stubs = {version = "^1.31.3", optional = true} # For boto related type checking
 mkdocs = "^1.6.1"
-mkdocs-material = "^9.6.4"
+mkdocs-material = "^9.6.12"
 pydoctor = "^24.11.2"
 mike = "^2.1.3"
 
