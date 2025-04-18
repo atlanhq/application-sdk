@@ -306,7 +306,7 @@ class SQLHandler(HandlerInterface):
         query = prepare_query(
             query=self.tables_check_sql,
             workflow_args=payload,
-            temp_table_regex_sql=self.temp_table_regex_sql,
+            temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
         )
         if not query:
             raise ValueError("tables_check_sql is not defined")
