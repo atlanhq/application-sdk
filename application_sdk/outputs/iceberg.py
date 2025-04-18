@@ -1,4 +1,4 @@
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 import pandas as pd
 from pyiceberg.catalog import Catalog
@@ -7,6 +7,10 @@ from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
+
+if TYPE_CHECKING:
+    import daft
+    import pandas as pd
 
 activity.logger = get_logger(__name__)
 
@@ -53,11 +57,12 @@ class IcebergOutput(Output):
                 return
             # convert the pandas dataframe to a daft dataframe
             daft_dataframe = daft.from_pandas(dataframe)
-            self.write_daft_dataframe(daft_dataframe)
+            await self.write_daft_dataframe(daft_dataframe)
         except Exception as e:
             activity.logger.error(
                 f"Error writing pandas dataframe to iceberg table: {str(e)}"
             )
+            raise e
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """
@@ -86,3 +91,4 @@ class IcebergOutput(Output):
             activity.logger.error(
                 f"Error writing daft dataframe to iceberg table: {str(e)}"
             )
+            raise e

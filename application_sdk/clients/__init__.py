@@ -6,6 +6,7 @@ to external services and data sources.
 """
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class ClientInterface(ABC):
@@ -16,7 +17,7 @@ class ClientInterface(ABC):
     """
 
     @abstractmethod
-    async def load(self) -> None:
+    async def load(self, *args: Any, **kwargs: Any) -> None:
         """Establish the client connection.
 
         This method should handle the initialization and connection setup
@@ -27,7 +28,7 @@ class ClientInterface(ABC):
         """
         raise NotImplementedError("load method is not implemented")
 
-    async def close(self) -> None:
+    async def close(self, *args: Any, **kwargs: Any) -> None:
         """Close the client connection.
 
         This method should properly terminate the connection and clean up
