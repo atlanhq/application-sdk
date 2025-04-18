@@ -24,7 +24,6 @@ activity.logger = get_logger(__name__)
 queries = read_sql_files(queries_prefix="app/sql")
 
 
-
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
     """State class for SQL metadata extraction activities.
 
@@ -70,10 +69,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     fetch_table_sql = queries.get("EXTRACT_TABLE")
     fetch_column_sql = queries.get("EXTRACT_COLUMN")
     fetch_procedure_sql = queries.get("EXTRACT_PROCEDURE")
-    
+
     extract_temp_table_regex_table_sql = queries.get("EXTRACT_TEMP_TABLE_REGEX_TABLE")
     extract_temp_table_regex_column_sql = queries.get("EXTRACT_TEMP_TABLE_REGEX_COLUMN")
-
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[SQLHandler] = SQLHandler

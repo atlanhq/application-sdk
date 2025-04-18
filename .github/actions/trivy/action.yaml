@@ -10,6 +10,9 @@ inputs:
     description: Whether to add a comment to the PR with the Trivy scan results
     required: false
     default: 'true'
+  slack-webhook-url:
+    description: Slack webhook URL for notifications
+    required: true
 
 runs:
   using: 'composite'
@@ -154,9 +157,9 @@ runs:
                Repository: ${{ github.repository }} \n
                Branch: ${{ github.ref_name }} \n
                PR: ${{ github.event.pull_request.html_url }} \n
-               <@U04FB2V399P>, please review and address these vulnerabilities."
+               , please review and address these vulnerabilities."
       env:
-        SLACK_WEBHOOK_URL: ${{ secrets.TRIVY_SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
 
     - name: Send Slack Notification for Secrets
       if: inputs.add-report-comment-to-pr == 'true'
@@ -169,6 +172,6 @@ runs:
                Repository: ${{ github.repository }} \n
                Branch: ${{ github.ref_name }} \n
                PR: ${{ github.event.pull_request.html_url }} \n
-               <@U04FB2V399P>, please review and remove any exposed secrets."
+               , please review and remove any exposed secrets."
       env:
-        SLACK_WEBHOOK_URL: ${{ secrets.TRIVY_SLACK_WEBHOOK_URL }}
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
