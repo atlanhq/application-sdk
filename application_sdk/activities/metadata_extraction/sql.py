@@ -380,10 +380,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args
         )
         prepared_query = prepare_query(
-            query=self.fetch_table_sql, workflow_args=workflow_args
-        )
-        prepared_query = prepare_query(
-            query=prepared_query,
+            query=self.fetch_table_sql,
             workflow_args=workflow_args,
             temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
         )
@@ -413,10 +410,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args
         )
         prepared_query = prepare_query(
-            query=self.fetch_column_sql, workflow_args=workflow_args
-        )
-        prepared_query = prepare_query(
-            query=prepared_query,
+            query=self.fetch_column_sql,
             workflow_args=workflow_args,
             temp_table_regex_sql=self.extract_temp_table_regex_column_sql,
         )
