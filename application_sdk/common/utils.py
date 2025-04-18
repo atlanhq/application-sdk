@@ -57,7 +57,7 @@ def prepare_query(
         # using "or" instead of default correct defaults are set in case of empty string
         include_filter = metadata.get("include-filter") or "{}"
         exclude_filter = metadata.get("exclude-filter") or "{}"
-        if metadata.get("temp-table-regex"):
+        if metadata.get("temp-table-regex") and temp_table_regex_sql is not None:
             temp_table_regex_sql = temp_table_regex_sql.format(
                 exclude_table_regex=metadata.get("temp-table-regex")
             )
