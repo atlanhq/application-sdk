@@ -15,16 +15,19 @@ To begin developing with the Application SDK:
 
 1. Install the `patlan` CLI tool to scaffold a sample app using the application-sdk
 2. Follow the getting started guide at [k.atlan.dev/patlan](https://k.atlan.dev/patlan)
+   1. Or clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
 
 ## Documentation
 
-Detailed documentation for the Application SDK is available at [k.atlan.dev/application-sdk/main](https://k.atlan.dev/application-sdk/main).
+- Detailed documentation for the application-sdk is available at [k.atlan.dev/application-sdk/main](https://k.atlan.dev/application-sdk/main).
+- If you are not able to access the URL, you can check the docs in the [docs](./docs) folder.
 
 ## Usage
 
 ### Example Applications
 
 - View a production-grade SQL application built using application-sdk [here](https://github.com/atlanhq/atlan-postgres-app)
+- View a hello-world application built using application-sdk [here](https://github.com/atlanhq/atlan-hello-world-app)
 
 ### Installation
 
@@ -45,3 +48,4 @@ Get support through any of these channels:
 - Email: **apps@atlan.com**
 - Slack: **#pod-app-framework**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
+
