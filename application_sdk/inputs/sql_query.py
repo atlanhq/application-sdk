@@ -82,8 +82,12 @@ class SQLQueryInput(Input):
         import daft
 
         if isinstance(self.engine, str):
-            return daft.read_sql(self.query, self.engine)
-        return daft.read_sql(self.query, self.engine.connect)
+            return daft.read_sql(
+                self.query, self.engine, infer_schema_length=self.chunk_size
+            )
+        return daft.read_sql(
+            self.query, self.engine.connect, infer_schema_length=self.chunk_size
+        )
 
     def _execute_query(self) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided engine and pandas.

@@ -289,11 +289,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             return None
 
         try:
-            sql_input = SQLQueryInput(
-                engine=sql_engine,
-                query=sql_query,
-                chunk_size=None,
-            )
+            sql_input = SQLQueryInput(engine=sql_engine, query=sql_query)
             daft_dataframe = await sql_input.get_daft_dataframe()
 
             if daft_dataframe is None:
