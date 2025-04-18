@@ -324,24 +324,20 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        try:
-            state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-                workflow_args
-            )
-            prepared_query = prepare_query(
-                query=self.fetch_database_sql, workflow_args=workflow_args
-            )
-            statistics = await self.query_executor(
-                sql_engine=state.sql_client.engine,
-                sql_query=prepared_query,
-                workflow_args=workflow_args,
-                output_suffix="raw/database",
-                typename="database",
-            )
-            return statistics
-        except Exception as e:
-            activity.logger.error(f"Error during fetch_databases: {e}", exc_info=True)
-            return None
+        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
+            workflow_args
+        )
+        prepared_query = prepare_query(
+            query=self.fetch_database_sql, workflow_args=workflow_args
+        )
+        statistics = await self.query_executor(
+            sql_engine=state.sql_client.engine,
+            sql_query=prepared_query,
+            workflow_args=workflow_args,
+            output_suffix="raw/database",
+            typename="database",
+        )
+        return statistics
 
     @activity.defn
     @auto_heartbeater
