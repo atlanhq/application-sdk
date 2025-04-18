@@ -34,13 +34,14 @@ def test_get_activities():
 
     activity_sequence = workflow.get_activities(activities)
 
-    assert len(activity_sequence) == 6
+    assert len(activity_sequence) == 7
     assert activity_sequence == [
         activities.preflight_check,
         activities.fetch_databases,
         activities.fetch_schemas,
         activities.fetch_tables,
         activities.fetch_columns,
+        activities.fetch_procedures,
         activities.transform_data,
     ]
 
@@ -163,11 +164,13 @@ async def test_fetch_and_transform_error_handling():
             )
 
 
-def normalize_sql(query: str) -> str:
+def normalize_sql(query: str | None) -> str:
     """
     Normalize SQL queries by removing extra whitespace, line breaks, and indentation.
     Also normalizes spacing around semicolons and parentheses.
     """
+    if query is None:
+        return ""
     # First remove all whitespace around semicolons and parentheses
     query = re.sub(r"\s*([;()])\s*", r"\1", query)
     # Then normalize all other whitespace

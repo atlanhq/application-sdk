@@ -8,14 +8,14 @@ class HandlerInterface(ABC):
     """
 
     @abstractmethod
-    async def load(self, **kwargs: Any) -> None:
+    async def load(self, *args: Any, **kwargs: Any) -> None:
         """
         Method to load the handler
         """
         pass
 
     @abstractmethod
-    async def test_auth(self, **kwargs: Any) -> bool:
+    async def test_auth(self, *args: Any, **kwargs: Any) -> bool:
         """
         Abstract method to test the authentication credentials
         To be implemented by the subclass
@@ -23,7 +23,7 @@ class HandlerInterface(ABC):
         raise NotImplementedError("test_auth method not implemented")
 
     @abstractmethod
-    async def preflight_check(self, *args, **kwargs: Any) -> Any:
+    async def preflight_check(self, *args: Any, **kwargs: Any) -> Any:
         """
         Abstract method to perform preflight checks
         To be implemented by the subclass
@@ -31,7 +31,7 @@ class HandlerInterface(ABC):
         raise NotImplementedError("preflight_check method not implemented")
 
     @abstractmethod
-    async def fetch_metadata(self, **kwargs: Any) -> Any:
+    async def fetch_metadata(self, *args: Any, **kwargs: Any) -> Any:
         """
         Abstract method to fetch metadata
         To be implemented by the subclass

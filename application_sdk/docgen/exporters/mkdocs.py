@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -7,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, HttpUrl
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.models.manifest import DocsManifest
 
@@ -52,7 +51,7 @@ class MkDocsExporter:
     """
 
     def __init__(self, manifest: DocsManifest, export_path: str):
-        self.logger = AtlanLoggerAdapter(logging.getLogger(__name__))
+        self.logger = get_logger(__name__)
 
         self.manifest = manifest
         self.export_path = export_path

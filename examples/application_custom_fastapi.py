@@ -24,7 +24,9 @@ class CustomHandler(HandlerInterface):
 
 
 class SampleWorkflow(WorkflowInterface):
-    async def start(self, workflow_args: Dict[str, Any], workflow_class: Any) -> None:
+    async def start(
+        self, workflow_args: Dict[str, Any], workflow_class: Any
+    ) -> Dict[str, str]:
         return {
             "workflow_id": str(uuid.uuid4()),
             "run_id": str(uuid.uuid4()),
