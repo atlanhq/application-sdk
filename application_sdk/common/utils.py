@@ -17,7 +17,7 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 def prepare_query(
     query: Optional[str],
     workflow_args: Dict[str, Any],
-    temp_table_regex_sql: Optional[str] = None,
+    temp_table_regex_sql: Optional[str] = "",
 ) -> Optional[str]:
     """
     Prepares a SQL query by applying include and exclude filters, and optional

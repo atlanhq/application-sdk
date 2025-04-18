@@ -418,7 +418,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         prepared_query = prepare_query(
             query=prepared_query,
             workflow_args=workflow_args,
-            temp_table_regex_sql=self.column_extraction_temp_table_regex_sql,
+            temp_table_regex_sql=self.extract_temp_table_regex_column_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
