@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, mock_open, patch
 
 import pandas as pd
 import pytest
-from temporalio import activity
 
 from application_sdk.outputs import Output, is_empty_dataframe
 
