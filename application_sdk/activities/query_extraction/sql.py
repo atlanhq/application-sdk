@@ -150,9 +150,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         try:
             state = await self._get_state(workflow_args)
             sql_input = SQLQueryInput(
-                engine=state.sql_client.engine,
-                query=self.fetch_queries_sql,
-                chunk_size=None,
+                engine=state.sql_client.engine, query=self.fetch_queries_sql
             )
             sql_input = await sql_input.get_daft_dataframe()
 
