@@ -45,7 +45,9 @@ class SQLHandler(HandlerInterface):
     fetch_databases_sql: str | None = queries.get("EXTRACT_DATABASE")
     fetch_schemas_sql: str | None = queries.get("EXTRACT_SCHEMA")
 
-    temp_table_regex_sql: str | None = queries.get("TABLES_CHECK_TEMP_TABLE_REGEX")
+    extract_temp_table_regex_table_sql: str | None = queries.get(
+        "EXTRACT_TEMP_TABLE_REGEX_TABLE"
+    )
 
     database_alias_key: str = SQLConstants.DATABASE_ALIAS_KEY.value
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
@@ -323,7 +325,7 @@ class SQLHandler(HandlerInterface):
         logger.info("Starting tables check")
         tables_check = self._validate_query(self.tables_check_sql, "table")
         temp_table_regex = self._validate_query(
-            self.temp_table_regex_sql, "temp table regex"
+            self.extract_temp_table_regex_table_sql, "temp table regex"
         )
         query = prepare_query(
             query=tables_check,

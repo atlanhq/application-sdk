@@ -56,9 +56,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
         handler_class (Type[SQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
-        tables_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during tables extraction.
+        extract_temp_table_regex_table_sql (str): SQL snippet for excluding temporary tables during tables extraction.
             Defaults to an empty string.
-        column_extraction_temp_table_regex_sql (str): SQL snippet for excluding temporary tables during column extraction.
+        extract_temp_table_regex_column_sql (str): SQL snippet for excluding temporary tables during column extraction.
             Defaults to an empty string.
     """
 
@@ -70,12 +70,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     fetch_column_sql = queries.get("EXTRACT_COLUMN")
     fetch_procedure_sql = queries.get("EXTRACT_PROCEDURE")
 
-    tables_extraction_temp_table_regex_sql = queries.get(
-        "TABLE_EXTRACTION_TEMP_TABLE_REGEX"
-    )
-    column_extraction_temp_table_regex_sql = queries.get(
-        "COLUMN_EXTRACTION_TEMP_TABLE_REGEX"
-    )
+    extract_temp_table_regex_table_sql = queries.get("EXTRACT_TEMP_TABLE_REGEX_TABLE")
+    extract_temp_table_regex_column_sql = queries.get("EXTRACT_TEMP_TABLE_REGEX_COLUMN")
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[SQLHandler] = SQLHandler
@@ -409,7 +405,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         query = self._validate_query(self.fetch_table_sql, "table")
         temp_table_regex_sql = self._validate_query(
-            self.tables_extraction_temp_table_regex_sql,
+            self.extract_temp_table_regex_table_sql,
             "tables extraction temp table regex",
         )
         prepared_query = self._validate_query(
@@ -447,7 +443,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         query = self._validate_query(self.fetch_column_sql, "column")
         temp_table_regex_sql = self._validate_query(
-            self.column_extraction_temp_table_regex_sql,
+            self.extract_temp_table_regex_column_sql,
             "column extraction temp table regex",
         )
         prepared_query = self._validate_query(
