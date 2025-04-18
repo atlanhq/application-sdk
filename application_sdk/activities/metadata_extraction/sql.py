@@ -25,7 +25,6 @@ activity.logger = logger
 queries = read_sql_files(queries_prefix="app/sql")
 
 
-
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
     """State class for SQL metadata extraction activities.
 

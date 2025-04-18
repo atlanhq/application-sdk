@@ -32,7 +32,6 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-
 def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
     """
     Helper method to check if the dataframe has any rows
