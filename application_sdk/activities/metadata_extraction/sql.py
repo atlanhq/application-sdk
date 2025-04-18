@@ -226,28 +226,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             raise ValueError("Missing required workflow arguments")
         return output_prefix, output_path, typename, workflow_id, workflow_run_id
 
-    def _validate_query(self, query_template: Optional[str], entity_type: str) -> str:
-        """Validates that a query template exists.
-
-        Args:
-            query_template: SQL query template to validate.
-            entity_type: Type of entity (database, schema, table, column).
-
-        Returns:
-            The validated query template.
-
-        Raises:
-            ValueError: If query_template is None.
-        """
-        if not query_template:
-            activity.logger.warning(f"No {entity_type} query provided")
-            raise ValueError(f"No {entity_type} query provided")
-        return query_template
-
     async def query_executor(
         self,
         sql_engine: Any,
-        sql_query: str,
+        sql_query: Optional[str],
         workflow_args: Dict[str, Any],
         output_suffix: str,
         typename: str,
@@ -337,13 +319,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
-        query = self._validate_query(self.fetch_database_sql, "database")
-
-        prepared_query = self._validate_query(
-            prepare_query(query=query, workflow_args=workflow_args),
-            "database prepared query",
+        prepared_query = prepare_query(
+            query=self.fetch_database_sql, workflow_args=workflow_args
         )
-
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
             sql_query=prepared_query,
@@ -369,10 +347,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
-        query = self._validate_query(self.fetch_schema_sql, "schema")
-        prepared_query = self._validate_query(
-            prepare_query(query=query, workflow_args=workflow_args),
-            "schema prepared query",
+        prepared_query = prepare_query(
+            query=self.fetch_schema_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -399,18 +375,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
-        query = self._validate_query(self.fetch_table_sql, "table")
-        temp_table_regex_sql = self._validate_query(
-            self.extract_temp_table_regex_table_sql,
-            "tables extraction temp table regex",
-        )
-        prepared_query = self._validate_query(
-            prepare_query(
-                query=query,
-                workflow_args=workflow_args,
-                temp_table_regex_sql=temp_table_regex_sql,
-            ),
-            "table prepared query",
+        prepared_query = prepare_query(
+            query=self.fetch_table_sql,
+            workflow_args=workflow_args,
+            temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -437,18 +405,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
-        query = self._validate_query(self.fetch_column_sql, "column")
-        temp_table_regex_sql = self._validate_query(
-            self.extract_temp_table_regex_column_sql,
-            "column extraction temp table regex",
-        )
-        prepared_query = self._validate_query(
-            prepare_query(
-                query=query,
-                workflow_args=workflow_args,
-                temp_table_regex_sql=temp_table_regex_sql,
-            ),
-            "column prepared query",
+        prepared_query = prepare_query(
+            query=self.fetch_column_sql,
+            workflow_args=workflow_args,
+            temp_table_regex_sql=self.extract_temp_table_regex_column_sql,
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
@@ -475,13 +435,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
             workflow_args
         )
-        query = self._validate_query(self.fetch_procedure_sql, "extras-procedure")
-        prepared_query = self._validate_query(
-            prepare_query(
-                query=query,
-                workflow_args=workflow_args,
-            ),
-            "extras-procedure prepared query",
+        prepared_query = prepare_query(
+            query=self.fetch_procedure_sql, workflow_args=workflow_args
         )
         statistics = await self.query_executor(
             sql_engine=state.sql_client.engine,
