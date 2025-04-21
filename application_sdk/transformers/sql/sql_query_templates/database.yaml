@@ -2,27 +2,27 @@
 entity: Database
 columns:
   - name: attributes.name
-    source: database_name
+    source_query: database_name
   - name: attributes.qualified_name
-    source: concat(connection_qualified_name, '/', database_name)
+    source_query: concat(connection_qualified_name, '/', database_name)
     source_columns: [connection_qualified_name, database_name]
   - name: attributes.connectionQualifiedName
-    source: connection_qualified_name
+    source_query: connection_qualified_name
   - name: attributes.connectionName
-    source: connection_name
+    source_query: connection_name
   - name: attributes.description
-    source: comment
+    source_query: comment
   - name: attributes.description
-    source: remarks
+    source_query: remarks
   - name: attributes.schemaCount
-    source: schema_count
+    source_query: schema_count
   - name: attributes.source_created_by
-    source: source_owner
+    source_query: source_owner
   - name: attributes.source_created_at
-    source: created
+    source_query: created
   - name: attributes.source_updated_at
-    source: last_altered
+    source_query: last_altered
   - name: attributes.source_id
-    source: source_id
+    source_query: source_id
   - name: typeName
-    source: "'Database'"
+    source_query: "'Database'"

@@ -1,96 +1,96 @@
 # table.yaml
-entity: Table
+table: Table
 columns:
   - name: attributes.name
-    source: table_name
+    source_query: table_name
   - name: attributes.qualified_name
-    source: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+    source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
     source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
   - name: attributes.connectionQualifiedName
-    source: connection_qualified_name
+    source_query: connection_qualified_name
   - name: attributes.connectionName
-    source: connection_name
+    source_query: connection_name
   - name: attributes.description
-    source: coalesce(remarks, comment)
+    source_query: coalesce(remarks, comment)
     source_columns: [remarks, comment]
   - name: attributes.sourceCreatedBy
-    source: source_owner
+    source_query: source_owner
   - name: attributes.sourceCreatedAt
-    source: created
+    source_query: created
   - name: attributes.sourceUpdatedAt
-    source: last_altered
+    source_query: last_altered
   - name: attributes.databaseName
-    source: table_catalog
+    source_query: table_catalog
   - name: attributes.databaseQualifiedName
-    source: concat(connection_qualified_name, '/', table_catalog)
+    source_query: concat(connection_qualified_name, '/', table_catalog)
     source_columns: [connection_qualified_name, table_catalog]
   - name: attributes.schemaName
-    source: table_schema
+    source_query: table_schema
   - name: attributes.schemaQualifiedName
-    source: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
+    source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
     source_columns: [connection_qualified_name, table_catalog, table_schema]
   - name: attributes.definition
-    source: view_definition
+    source_query: view_definition
   - name: attributes.columnCount
-    source: column_count
+    source_query: column_count
   - name: attributes.rowCount
-    source: row_count
+    source_query: row_count
   - name: attributes.sizeBytes
-    source: size_bytes
+    source_query: size_bytes
   - name: attributes.tableType
-    source: table_type
+    source_query: table_type
   - name: attributes.entityClass
-    source: CASE WHEN is_partition = 'YES' THEN 'TablePartition' WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table' WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView' WHEN table_type = 'DYNAMIC TABLE' OR is_dynamic = 'YES' THEN 'SnowflakeDynamicTable' ELSE 'View' END
+    source_query: CASE WHEN is_partition = 'YES' THEN 'TablePartition' WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table' WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView' WHEN table_type = 'DYNAMIC TABLE' OR is_dynamic = 'YES' THEN 'SnowflakeDynamicTable' ELSE 'View' END
     source_columns: [is_partition, table_type, is_dynamic]
   - name: attributes.tableName
-    source: CASE WHEN is_partition = 'YES' THEN parent_table_name ELSE NULL END
+    source_query: CASE WHEN is_partition = 'YES' THEN parent_table_name ELSE NULL END
     source_columns: [is_partition, parent_table_name]
   - name: attributes.tableQualifiedName
-    source: CASE WHEN is_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name) ELSE NULL END
+    source_query: CASE WHEN is_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name) ELSE NULL END
     source_columns: [is_partition, connection_qualified_name, table_catalog, table_schema, parent_table_name]
   - name: attributes.externalLocation
-    source: location
+    source_query: location
   - name: attributes.externalLocationFormat
-    source: file_format_type
+    source_query: file_format_type
   - name: attributes.externalLocationRegion
-    source: stage_region
+    source_query: stage_region
   - name: attributes.refreshMode
-    source: refresh_mode
+    source_query: refresh_mode
   - name: attributes.staleness
-    source: staleness
+    source_query: staleness
   - name: attributes.staleSinceDate
-    source: stale_since_date
+    source_query: stale_since_date
   - name: attributes.refreshMethod
-    source: refresh_method
+    source_query: refresh_method
   - name: attributes.isTransient
-    source: is_transient
+    source_query: is_transient
   - name: attributes.tableCatalogId
-    source: table_catalog_id
+    source_query: table_catalog_id
   - name: attributes.tableSchemaId
-    source: table_schema_id
+    source_query: table_schema_id
   - name: attributes.lastDdl
-    source: last_ddl
+    source_query: last_ddl
   - name: attributes.lastDdlBy
-    source: last_ddl_by
+    source_query: last_ddl_by
   - name: attributes.isSecure
-    source: is_secure
+    source_query: is_secure
   - name: attributes.retentionTime
-    source: retention_time
+    source_query: retention_time
   - name: attributes.stageUrl
-    source: stage_url
+    source_query: stage_url
   - name: attributes.isInsertableInto
-    source: is_insertable_into
+    source_query: is_insertable_into
   - name: attributes.numberColumnsInPartKey
-    source: number_columns_in_part_key
+    source_query: number_columns_in_part_key
   - name: attributes.columnsParticipatingInPartKey
-    source: columns_participating_in_part_key
+    source_query: columns_participating_in_part_key
   - name: attributes.isTyped
-    source: is_typed
+    source_query: is_typed
   - name: attributes.autoClusteringOn
-    source: auto_clustering_on
+    source_query: auto_clustering_on
   - name: attributes.engine
-    source: engine
+    source_query: engine
   - name: attributes.autoIncrement
-    source: auto_increment
+    source_query: auto_increment
   - name: typeName
-    source: "'Table'"
+    source_query: "'Table'"

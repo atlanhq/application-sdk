@@ -182,6 +182,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_run_id=workflow_run_id,
             connection_name=connection_name,
             connection_qualified_name=connection_qualified_name,
+            application_name=workflow_args.get("application_name"),
         )
         for row in transformed_df.iter_rows():
             try:

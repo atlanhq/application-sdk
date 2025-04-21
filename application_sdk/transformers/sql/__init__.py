@@ -3,7 +3,6 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Type
 
 import daft
-from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -57,7 +56,7 @@ class SQLTransformer(TransformerInterface):
             A SQL column expression string
         """
         column["name"] = self._handle_column_name(column["name"])
-        return f"{column['source']} AS {column['name']}"
+        return f"{column['source_query']} AS {column['name']}"
 
     def _get_columns(
         self, sql_template: Dict[str, Any], dataframe: daft.DataFrame
@@ -76,12 +75,12 @@ class SQLTransformer(TransformerInterface):
                 col in dataframe.column_names for col in column["source_columns"]
             ):
                 columns.append(self._process_column(column))
-            elif column["source"] in dataframe.column_names:
+            elif column["source_query"] in dataframe.column_names:
                 columns.append(self._process_column(column))
             elif (
-                column["source"].startswith("'")
-                and column["source"].endswith("'")
-                and len(column["source"]) > 1
+                column["source_query"].startswith("'")
+                and column["source_query"].endswith("'")
+                and len(column["source_query"]) > 1
             ):
                 # This is a string literal and should be added as is
                 columns.append(self._process_column(column))
@@ -147,6 +146,7 @@ class SQLTransformer(TransformerInterface):
         self,
         workflow_id: str,
         workflow_run_id: str,
+        connector_name: str,
         dataframe: daft.DataFrame,
     ) -> daft.DataFrame:
         """Enrich a DataFrame with additional metadata.
@@ -165,77 +165,14 @@ class SQLTransformer(TransformerInterface):
             # Add standard attributes
             enriched_df = dataframe.with_columns(
                 {
-                    "status": daft.lit(EntityStatus.ACTIVE),
+                    "status": daft.lit("ACTIVE"),
                     "attributes.tenantId": daft.lit(self.tenant_id),
                     "attributes.lastSyncWorkflowName": daft.lit(workflow_id),
                     "attributes.lastSyncRun": daft.lit(workflow_run_id),
-                    "attributes.lastSyncRunAt": daft.lit(datetime.now()),
-                    "attributes.connectorName": daft.col(
-                        "attributes.connectionQualifiedName"
-                    ).apply(
-                        lambda x: AtlanConnectorType.get_connector_name(x),
-                        return_dtype=daft.DataType.string(),
-                    ),
+                    "attributes.lastSyncRunAt": daft.lit(datetime.utcnow()),
+                    "attributes.connectorName": daft.lit(connector_name),
                 }
             )
-            daft.DataType
-            # Add description from remarks or comment if they exist
-            if (
-                "attributes.remarks" in dataframe.column_names
-                or "attributes.comment" in dataframe.column_names
-            ):
-                enriched_df = enriched_df.with_column(
-                    "attributes.description",
-                    (~daft.col("attributes.remarks").is_null())
-                    .if_else(
-                        daft.col("attributes.remarks"),
-                        (~daft.col("attributes.comment").is_null()).if_else(
-                            daft.col("attributes.comment"), daft.lit(None)
-                        ),
-                    )
-                    .apply(process_text, return_dtype=daft.DataType.string()),
-                )
-
-            # Add source created by if source_owner exists
-            if "custom_attributes.source_owner" in dataframe.column_names:
-                enriched_df = enriched_df.with_columns(
-                    {
-                        "attributes.sourceCreatedBy": daft.col(
-                            "custom_attributes.source_owner"
-                        )
-                    }
-                )
-
-            # Add timestamps if the columns exist
-            if "custom_attributes.created" in dataframe.column_names:
-                enriched_df = enriched_df.with_column(
-                    "attributes.sourceCreatedAt",
-                    (~daft.col("custom_attributes.created").is_null()).if_else(
-                        daft.col("custom_attributes.created").apply(
-                            lambda x: datetime.fromtimestamp(x / 1000),
-                            return_dtype=daft.DataType.timestamp(),
-                        ),
-                        daft.lit(None),
-                    ),
-                )
-
-            if "custom_attributes.last_altered" in dataframe.column_names:
-                enriched_df = enriched_df.with_column(
-                    "attributes.sourceUpdatedAt",
-                    (~daft.col("custom_attributes.last_altered").is_null()).if_else(
-                        daft.col("custom_attributes.last_altered").apply(
-                            lambda x: datetime.fromtimestamp(x / 1000),
-                            return_dtype=daft.DataType.timestamp(),
-                        ),
-                        daft.lit(None),
-                    ),
-                )
-
-            # Add custom attributes if source_id exists
-            if "custom_attributes.source_id" in dataframe.column_names:
-                enriched_df = enriched_df.with_columns(
-                    {"attributes.sourceId": daft.col("custom_attributes.source_id")}
-                )
 
             # Group columns by prefix into structs
             enriched_df = self._group_columns_by_prefix(enriched_df)
@@ -270,9 +207,9 @@ class SQLTransformer(TransformerInterface):
             dataframe = dataframe.with_columns(
                 {
                     "connection_qualified_name": daft.lit(
-                        kwargs.get("connection_qualified_name", None)
+                        kwargs.get("connection_qualified_name")
                     ),
-                    "connection_name": daft.lit(kwargs.get("connection_name", None)),
+                    "connection_name": daft.lit(kwargs.get("connection_name")),
                 }
             )
 
@@ -281,7 +218,10 @@ class SQLTransformer(TransformerInterface):
             )
             transformed_df = daft.sql(entity_sql_template)
             transformed_df = self._enrich_entity_with_metadata(
-                workflow_id, workflow_run_id, transformed_df
+                workflow_id,
+                workflow_run_id,
+                kwargs.get("application_name"),
+                transformed_df,
             )
             return transformed_df
         except Exception as e:
