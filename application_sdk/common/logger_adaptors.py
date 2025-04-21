@@ -204,6 +204,8 @@ class AtlanLoggerAdapter:
         kwargs["logger_name"] = self.logger_name
 
         # Set default persona to "internal" if not specified
+        if persona not in {None, "internal", "external"}:
+            raise ValueError(f"Invalid persona value: {persona}. Must be 'internal' or 'external'.")
         kwargs["persona"] = persona or "internal"
 
         # Get request context
