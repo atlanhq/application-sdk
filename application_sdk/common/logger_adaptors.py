@@ -2,7 +2,7 @@ import logging
 import sys
 from contextvars import ContextVar
 from time import time_ns
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Literal, Optional, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
@@ -29,6 +29,9 @@ from application_sdk.constants import (
 
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+
+# Define persona types
+PersonaType = Literal["external", "internal"]
 
 
 # Add a Loguru handler for the Python logging system
@@ -81,8 +84,8 @@ class AtlanLoggerAdapter:
         self.logger = logger
         logger.remove()
 
-        # Update format string to use the bound logger_name
-        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+        # Update format string to use the bound logger_name and include persona
+        atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> <yellow>[{extra[persona]}]</yellow> - <level>{message}</level>"
         self.logger.add(
             sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
         )
@@ -194,9 +197,14 @@ class AtlanLoggerAdapter:
         except Exception as e:
             self.logger.error(f"Error processing log record: {e}")
 
-    def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
-        """Process the log message with temporal context."""
+    def process(
+        self, msg: Any, kwargs: Dict[str, Any], persona: Optional[PersonaType] = None
+    ) -> Tuple[Any, Dict[str, Any]]:
+        """Process the log message with temporal context and persona."""
         kwargs["logger_name"] = self.logger_name
+
+        # Set default persona to "internal" if not specified
+        kwargs["persona"] = persona or "internal"
 
         # Get request context
         try:
@@ -256,24 +264,39 @@ class AtlanLoggerAdapter:
 
         return msg, kwargs
 
-    def debug(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
+    def debug(
+        self, msg: str, *args: Any, persona: Optional[PersonaType] = None, **kwargs: Any
+    ):
+        """Log a debug message with optional persona."""
+        msg, kwargs = self.process(msg, kwargs, persona)
         self.logger.bind(**kwargs).debug(msg, *args)
 
-    def info(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
+    def info(
+        self, msg: str, *args: Any, persona: Optional[PersonaType] = None, **kwargs: Any
+    ):
+        """Log an info message with optional persona."""
+        msg, kwargs = self.process(msg, kwargs, persona)
         self.logger.bind(**kwargs).info(msg, *args)
 
-    def warning(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
+    def warning(
+        self, msg: str, *args: Any, persona: Optional[PersonaType] = None, **kwargs: Any
+    ):
+        """Log a warning message with optional persona."""
+        msg, kwargs = self.process(msg, kwargs, persona)
         self.logger.bind(**kwargs).warning(msg, *args)
 
-    def error(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
+    def error(
+        self, msg: str, *args: Any, persona: Optional[PersonaType] = None, **kwargs: Any
+    ):
+        """Log an error message with optional persona."""
+        msg, kwargs = self.process(msg, kwargs, persona)
         self.logger.bind(**kwargs).error(msg, *args)
 
-    def critical(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
+    def critical(
+        self, msg: str, *args: Any, persona: Optional[PersonaType] = None, **kwargs: Any
+    ):
+        """Log a critical message with optional persona."""
+        msg, kwargs = self.process(msg, kwargs, persona)
         self.logger.bind(**kwargs).critical(msg, *args)
 
 
