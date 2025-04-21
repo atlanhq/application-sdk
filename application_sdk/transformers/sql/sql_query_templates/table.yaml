@@ -1,95 +1,96 @@
 # table.yaml
 entity: Table
 columns:
-  - name: name
+  - name: attributes.name
     source: table_name
-  - name: qualified_name
+  - name: attributes.qualified_name
     source: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
-  - name: connection_qualified_name
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
+  - name: attributes.connectionQualifiedName
     source: connection_qualified_name
-  - name: status
-    source: 'ACTIVE'
-  - name: tenant_id
-    source: tenant_id
-  - name: last_sync_workflow_name
-    source: workflow_id
-  - name: last_sync_run
-    source: workflow_run_id
-  - name: connector_name
-    source: connector_name
-  - name: description
+  - name: attributes.connectionName
+    source: connection_name
+  - name: attributes.description
     source: coalesce(remarks, comment)
-  - name: source_created_by
+    source_columns: [remarks, comment]
+  - name: attributes.sourceCreatedBy
     source: source_owner
-  - name: source_created_at
+  - name: attributes.sourceCreatedAt
     source: created
-  - name: source_updated_at
+  - name: attributes.sourceUpdatedAt
     source: last_altered
-  - name: database_name
+  - name: attributes.databaseName
     source: table_catalog
-  - name: database_qualified_name
+  - name: attributes.databaseQualifiedName
     source: concat(connection_qualified_name, '/', table_catalog)
-  - name: schema_name
+    source_columns: [connection_qualified_name, table_catalog]
+  - name: attributes.schemaName
     source: table_schema
-  - name: schema_qualified_name
+  - name: attributes.schemaQualifiedName
     source: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
-  - name: definition
+    source_columns: [connection_qualified_name, table_catalog, table_schema]
+  - name: attributes.definition
     source: view_definition
-  - name: column_count
+  - name: attributes.columnCount
     source: column_count
-  - name: row_count
+  - name: attributes.rowCount
     source: row_count
-  - name: size_bytes
+  - name: attributes.sizeBytes
     source: size_bytes
-  - name: table_type
+  - name: attributes.tableType
     source: table_type
-  - name: entity_class
+  - name: attributes.entityClass
     source: CASE WHEN is_partition = 'YES' THEN 'TablePartition' WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table' WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView' WHEN table_type = 'DYNAMIC TABLE' OR is_dynamic = 'YES' THEN 'SnowflakeDynamicTable' ELSE 'View' END
-  - name: table_name
+    source_columns: [is_partition, table_type, is_dynamic]
+  - name: attributes.tableName
     source: CASE WHEN is_partition = 'YES' THEN parent_table_name ELSE NULL END
-  - name: table_qualified_name
+    source_columns: [is_partition, parent_table_name]
+  - name: attributes.tableQualifiedName
     source: CASE WHEN is_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name) ELSE NULL END
-  - name: external_location
+    source_columns: [is_partition, connection_qualified_name, table_catalog, table_schema, parent_table_name]
+  - name: attributes.externalLocation
     source: location
-  - name: external_location_format
+  - name: attributes.externalLocationFormat
     source: file_format_type
-  - name: external_location_region
+  - name: attributes.externalLocationRegion
     source: stage_region
-  - name: refresh_mode
+  - name: attributes.refreshMode
     source: refresh_mode
-  - name: staleness
+  - name: attributes.staleness
     source: staleness
-  - name: stale_since_date
+  - name: attributes.staleSinceDate
     source: stale_since_date
-  - name: refresh_method
+  - name: attributes.refreshMethod
     source: refresh_method
-  - name: is_transient
+  - name: attributes.isTransient
     source: is_transient
-  - name: table_catalog_id
+  - name: attributes.tableCatalogId
     source: table_catalog_id
-  - name: table_schema_id
+  - name: attributes.tableSchemaId
     source: table_schema_id
-  - name: last_ddl
+  - name: attributes.lastDdl
     source: last_ddl
-  - name: last_ddl_by
+  - name: attributes.lastDdlBy
     source: last_ddl_by
-  - name: is_secure
+  - name: attributes.isSecure
     source: is_secure
-  - name: retention_time
+  - name: attributes.retentionTime
     source: retention_time
-  - name: stage_url
+  - name: attributes.stageUrl
     source: stage_url
-  - name: is_insertable_into
+  - name: attributes.isInsertableInto
     source: is_insertable_into
-  - name: number_columns_in_part_key
+  - name: attributes.numberColumnsInPartKey
     source: number_columns_in_part_key
-  - name: columns_participating_in_part_key
+  - name: attributes.columnsParticipatingInPartKey
     source: columns_participating_in_part_key
-  - name: is_typed
+  - name: attributes.isTyped
     source: is_typed
-  - name: auto_clustering_on
+  - name: attributes.autoClusteringOn
     source: auto_clustering_on
-  - name: engine
+  - name: attributes.engine
     source: engine
-  - name: auto_increment
+  - name: attributes.autoIncrement
     source: auto_increment
+  - name: typeName
+    source: "'Table'"
