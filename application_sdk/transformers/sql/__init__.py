@@ -1,12 +1,11 @@
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type
 
 import daft
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.common.utils import process_text
 
 logger = get_logger(__name__)
 
@@ -15,8 +14,6 @@ import yaml
 
 class SQLTransformer(TransformerInterface):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
-        # self.schema_registry = schema_registry_client
-        self.current_epoch = kwargs.get("current_epoch", "0")
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: Dict[str, str] = (
@@ -33,7 +30,7 @@ class SQLTransformer(TransformerInterface):
             for entity in entities
         }
 
-    def _handle_column_name(self, column_name: str) -> str:
+    def _process_column_name(self, column_name: str) -> str:
         """Handle column names that contain dots by quoting them.
 
         Args:
@@ -55,7 +52,7 @@ class SQLTransformer(TransformerInterface):
         Returns:
             A SQL column expression string
         """
-        column["name"] = self._handle_column_name(column["name"])
+        column["name"] = self._process_column_name(column["name"])
         return f"{column['source_query']} AS {column['name']}"
 
     def _get_columns(
@@ -64,7 +61,8 @@ class SQLTransformer(TransformerInterface):
         """Get the columns for the SQL query.
 
         Args:
-            dataframe: The DataFrame to get columns from
+            sql_template (Dict[str, Any]): The SQL template
+            dataframe (daft.DataFrame): The DataFrame to get columns from
 
         Returns:
             A list of column expressions for the SQL query
@@ -87,17 +85,30 @@ class SQLTransformer(TransformerInterface):
 
         return columns
 
-    def generate_query(self, yaml_path: str, dataframe: daft.DataFrame) -> str:
-        with open(yaml_path, "r") as f:
-            sql_template = yaml.safe_load(f)
-        columns = self._get_columns(sql_template, dataframe)
-
-        return f"""
-        SELECT
-            {','.join(columns)}
-        FROM
-            dataframe
+    def generate_sql_query(self, yaml_path: str, dataframe: daft.DataFrame) -> str:
         """
+        Generate a SQL query from a YAML template and a DataFrame.
+
+        Args:
+            yaml_path (str): The path to the YAML template
+            dataframe (daft.DataFrame): The DataFrame to reference for column names
+
+        Returns:
+            str: The generated SQL query
+        """
+        try:
+            with open(yaml_path, "r") as f:
+                sql_template = yaml.safe_load(f)
+            columns = self._get_columns(sql_template, dataframe)
+
+            return f"""
+            SELECT
+                {','.join(columns)}
+            FROM dataframe
+            """
+        except Exception as e:
+            logger.error(f"Error generating query: {e}")
+            raise e
 
     def _group_columns_by_prefix(self, dataframe: daft.DataFrame) -> daft.DataFrame:
         """Group columns with the same prefix into structs.
@@ -108,79 +119,77 @@ class SQLTransformer(TransformerInterface):
         Returns:
             daft.DataFrame: DataFrame with columns grouped into structs
         """
-        # Get all column names
-        columns = dataframe.column_names
+        try:
+            # Get all column names
+            columns = dataframe.column_names
 
-        # Group columns by prefix
-        prefix_groups = {}
-        standalone_columns = []
+            # Group columns by prefix
+            prefix_groups = {}
+            standalone_columns = []
+            for col in columns:
+                if "." in col:
+                    prefix, suffix = col.split(".", 1)
+                    if prefix not in prefix_groups:
+                        prefix_groups[prefix] = []
+                    prefix_groups[prefix].append((col, suffix))
+                else:
+                    standalone_columns.append(col)
 
-        for col in columns:
-            if "." in col:
-                prefix, suffix = col.split(".", 1)
-                if prefix not in prefix_groups:
-                    prefix_groups[prefix] = []
-                prefix_groups[prefix].append((col, suffix))
-            else:
-                standalone_columns.append(col)
+            # Create new DataFrame with restructured columns
+            new_columns = []
 
-        # Create new DataFrame with restructured columns
-        new_columns = []
+            # Add standalone columns as is
+            for col in standalone_columns:
+                new_columns.append(daft.col(col))
 
-        # Add standalone columns as is
-        for col in standalone_columns:
-            new_columns.append(daft.col(col))
+            # Create structs for prefixed columns
+            for prefix, columns in prefix_groups.items():
+                # Create a dictionary of field expressions
+                struct_fields = []
+                for full_col, suffix in columns:
+                    struct_fields.append(daft.col(full_col).alias(suffix))
+                
+                # Create the struct expression
+                new_columns.append(daft.struct(*struct_fields).alias(prefix))
 
-        # Create structs for prefixed columns
-        for prefix, columns in prefix_groups.items():
-            # Create a dictionary of field expressions
-            struct_fields = (
-                daft.col(full_col).alias(suffix) for full_col, suffix in columns
-            )
-            # Create the struct expression
-            new_columns.append(daft.struct(*struct_fields).alias(prefix))
-
-        return dataframe.select(*new_columns)
-
-    def _enrich_entity_with_metadata(
+            return dataframe.select(*new_columns)
+        except Exception as e:
+            logger.error(f"Error grouping columns by prefix: {e}")
+            raise e
+    
+    def _prepare_default_attributes(
         self,
+        dataframe: daft.DataFrame,
         workflow_id: str,
         workflow_run_id: str,
-        connector_name: str,
-        dataframe: daft.DataFrame,
+        connection_qualified_name: Optional[str] = None,
+        connection_name: Optional[str] = None,
     ) -> daft.DataFrame:
-        """Enrich a DataFrame with additional metadata.
-
-        This method adds workflow metadata and other attributes to the DataFrame.
+        """
+        Prepare default attributes for the DataFrame.
 
         Args:
-            workflow_id (str): ID of the workflow.
-            workflow_run_id (str): ID of the workflow run.
-            dataframe (daft.DataFrame): DataFrame to enrich.
+            dataframe (daft.DataFrame): Input DataFrame
+            workflow_id (str): ID of the workflow
+            workflow_run_id (str): ID of the workflow run
+            connection_qualified_name (str): Qualified name of the connection
+            connection_name (str): Name of the connection
 
         Returns:
-            daft.DataFrame: The enriched DataFrame.
+            daft.DataFrame: DataFrame with default attributes added
         """
-        try:
-            # Add standard attributes
-            enriched_df = dataframe.with_columns(
-                {
-                    "status": daft.lit("ACTIVE"),
-                    "attributes.tenantId": daft.lit(self.tenant_id),
-                    "attributes.lastSyncWorkflowName": daft.lit(workflow_id),
-                    "attributes.lastSyncRun": daft.lit(workflow_run_id),
-                    "attributes.lastSyncRunAt": daft.lit(datetime.utcnow()),
-                    "attributes.connectorName": daft.lit(connector_name),
-                }
-            )
-
-            # Group columns by prefix into structs
-            enriched_df = self._group_columns_by_prefix(enriched_df)
-
-            return enriched_df
-        except Exception as e:
-            logger.error(f"Error enriching DataFrame with metadata: {e}")
-            raise e
+        current_utc_time = datetime.now(timezone.utc)
+        return dataframe.with_columns(
+            {
+                "connection_qualified_name": daft.lit(connection_qualified_name),
+                "connection_name": daft.lit(connection_name),
+                "tenant_id": daft.lit(self.tenant_id),
+                "last_sync_workflow_name": daft.lit(workflow_id),
+                "last_sync_run": daft.lit(workflow_run_id),
+                "last_sync_run_at": daft.lit(current_utc_time),
+                "connector_name": daft.lit(self.connector_name),
+            }
+        )
 
     def transform_metadata(
         self,
@@ -203,26 +212,18 @@ class SQLTransformer(TransformerInterface):
             entity_sql_template_path = self.entity_class_definitions.get(typename)
             if not entity_sql_template_path:
                 raise ValueError(f"No SQL transformation registered for {typename}")
-
-            dataframe = dataframe.with_columns(
-                {
-                    "connection_qualified_name": daft.lit(
-                        kwargs.get("connection_qualified_name")
-                    ),
-                    "connection_name": daft.lit(kwargs.get("connection_name")),
-                }
+            
+            dataframe = self._prepare_default_attributes(
+                dataframe, workflow_id, workflow_run_id, 
+                connection_qualified_name=kwargs.get("connection_qualified_name"),
+                connection_name=kwargs.get("connection_name"),
             )
 
-            entity_sql_template = self.generate_query(
+            entity_sql_template = self.generate_sql_query(
                 entity_sql_template_path, dataframe
             )
             transformed_df = daft.sql(entity_sql_template)
-            transformed_df = self._enrich_entity_with_metadata(
-                workflow_id,
-                workflow_run_id,
-                kwargs.get("application_name"),
-                transformed_df,
-            )
+            transformed_df = self._group_columns_by_prefix(transformed_df)
             return transformed_df
         except Exception as e:
             logger.error(f"Error transforming {typename}: {e}")

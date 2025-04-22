@@ -92,5 +92,19 @@ columns:
     source_query: engine
   - name: attributes.autoIncrement
     source_query: auto_increment
+  - name: attributes.isInsertableIntoTWO
+    source_query: is_insertable_into
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
   - name: typeName
     source_query: "'Table'"
+  - name: status
+    source_query: "'ACTIVE'"
