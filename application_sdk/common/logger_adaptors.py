@@ -282,7 +282,7 @@ class AtlanLoggerAdapter:
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).critical(msg, *args)
 
-    def activity(self, msg: str, *args: Any, **kwargs: Dict[str, Any]):
+    def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context.
 
         This method is specifically designed for logging activity-related information.
@@ -294,14 +294,16 @@ class AtlanLoggerAdapter:
             *args: Additional positional arguments
             **kwargs: Additional keyword arguments
         """
-        # Add activity-specific tag to kwargs
-        kwargs["log_type"] = "activity"
+        # Create a copy to avoid modifying the original dict directly
+        # and potentially help type checker inference.
+        local_kwargs = kwargs.copy()
+        local_kwargs["log_type"] = "activity"
 
-        # Process the message with context
-        msg, kwargs = self.process(msg, kwargs)
+        # Process the message with context using the copied dict
+        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
 
-        # Log with the custom ACTIVITY level
-        self.logger.bind(**kwargs).log("ACTIVITY", msg, *args)
+        # Log with the custom ACTIVITY level using the processed dict
+        self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
 
 
 # Create a singleton instance of the logger
