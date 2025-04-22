@@ -3,8 +3,6 @@ import logging
 import os
 from typing import TYPE_CHECKING, AsyncIterator, List, Optional
 
-import daft
-
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
 
