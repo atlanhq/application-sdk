@@ -109,9 +109,29 @@ class SQLTransformer(TransformerInterface):
         except Exception as e:
             logger.error(f"Error generating query: {e}")
             raise e
+    
+    def _build_struct(self, level: dict, prefix: str = "") -> daft.Expression:
+        """Recursively build nested struct expressions."""
+        struct_fields = []
+        
+        # Handle columns at this level
+        if "columns" in level:
+            for full_col, suffix in level["columns"]:
+                struct_fields.append(daft.col(full_col).alias(suffix))
+        
+        # Handle nested levels
+        for component, sub_level in level.items():
+            if component != "columns":  # Skip the columns key
+                nested_struct = self._build_struct(sub_level, component)
+                struct_fields.append(nested_struct)
+        
+        # Only create a struct if we have fields
+        if struct_fields:
+            return daft.struct(*struct_fields).alias(prefix)
+        return None
 
     def _group_columns_by_prefix(self, dataframe: daft.DataFrame) -> daft.DataFrame:
-        """Group columns with the same prefix into structs.
+        """Group columns with the same prefix into structs, supporting any level of nesting.
 
         Args:
             dataframe (daft.DataFrame): DataFrame to restructure
@@ -123,15 +143,26 @@ class SQLTransformer(TransformerInterface):
             # Get all column names
             columns = dataframe.column_names
 
-            # Group columns by prefix
-            prefix_groups = {}
+            # Group columns by their path components
+            path_groups = {}
             standalone_columns = []
+            
             for col in columns:
                 if "." in col:
-                    prefix, suffix = col.split(".", 1)
-                    if prefix not in prefix_groups:
-                        prefix_groups[prefix] = []
-                    prefix_groups[prefix].append((col, suffix))
+                    # Split the full path into components
+                    path_components = col.split(".")
+                    current_level = path_groups
+                    
+                    # Traverse the path, creating nested dictionaries as needed
+                    for component in path_components[:-1]:
+                        if component not in current_level:
+                            current_level[component] = {}
+                        current_level = current_level[component]
+                    
+                    # Store the column name and its final component at the leaf level
+                    if "columns" not in current_level:
+                        current_level["columns"] = []
+                    current_level["columns"].append((col, path_components[-1]))
                 else:
                     standalone_columns.append(col)
 
@@ -142,15 +173,11 @@ class SQLTransformer(TransformerInterface):
             for col in standalone_columns:
                 new_columns.append(daft.col(col))
 
-            # Create structs for prefixed columns
-            for prefix, columns in prefix_groups.items():
-                # Create a dictionary of field expressions
-                struct_fields = []
-                for full_col, suffix in columns:
-                    struct_fields.append(daft.col(full_col).alias(suffix))
-                
-                # Create the struct expression
-                new_columns.append(daft.struct(*struct_fields).alias(prefix))
+            # Build nested structs starting from the root level
+            for prefix, level in path_groups.items():
+                struct_expr = self._build_struct(level, prefix)
+                if struct_expr is not None:
+                    new_columns.append(struct_expr)
 
             return dataframe.select(*new_columns)
         except Exception as e:
