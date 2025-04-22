@@ -19,6 +19,7 @@ runs:
   steps:
     - uses: actions/checkout@v4
 
+
     - name: Trivy Vulnerability Scan (SARIF)
       uses: aquasecurity/trivy-action@0.28.0
       with:

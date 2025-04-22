@@ -300,6 +300,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("input_file", help="Input Trivy JSON file")
     parser.add_argument("output_file", help="Output Markdown file")
+
     parser.add_argument(
         "report_type", help="Type of report (e.g., Vulnerability, Secret)"
     )
@@ -307,5 +308,6 @@ if __name__ == "__main__":
 
     trivy_data = json.load(open(args.input_file))
     md_text = convert_trivy_to_markdown(trivy_data, args.report_type)
+
     with open(args.output_file, "w") as f:
         f.write(md_text)
