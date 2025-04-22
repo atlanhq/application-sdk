@@ -56,6 +56,10 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
+        # We still need the cast but can include better type checking
+        if not isinstance(activities, BaseSQLMetadataExtractionActivities):
+            raise TypeError("activities must be BaseSQLMetadataExtractionActivities")
+
         sql_activities = cast(BaseSQLMetadataExtractionActivities, activities)
         return [
             sql_activities.preflight_check,
