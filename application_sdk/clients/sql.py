@@ -198,29 +198,16 @@ class BaseSQLClient(ClientInterface):
         Get the SQLAlchemy connection string for database connection.
 
         This method constructs the connection string using the configured database parameters
-        and authentication token. It handles both basic authentication and IAM-based auth.
-
-        The connection string is built using:
-        1. Required parameters from DB_CONFIG["required"] list
-        2. Authentication token from get_auth_token() as the password
-        3. Default connection parameters from DB_CONFIG["defaults"] dict
-
-        The DB_CONFIG structure should be defined as:
-        {
-            "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
-            "required": ["username", "password", "host", "port", "database"],
-            "defaults": {"connect_timeout": 5}
-        }
+        and authentication method. It supports various authentication types including:
+        - Basic authentication (username/password)
+        - IAM user authentication
+        - IAM role authentication
 
         Returns:
-            str: The complete SQLAlchemy connection string with all required parameters
-                and authentication details. For example:
-                "postgresql+psycopg://user:pass@localhost:5432/mydb?connect_timeout=5"
+            str: The SQLAlchemy connection string.
 
-        Note:
-            The password parameter in the connection string will be replaced with the
-            authentication token obtained from get_auth_token(), which supports both
-            basic auth and IAM-based authentication methods.
+        Raises:
+            ValueError: If required credentials are missing or invalid.
         """
         extra = parse_credentials_extra(self.credentials)
         auth_token = self.get_auth_token()
