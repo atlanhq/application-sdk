@@ -18,7 +18,6 @@ from typing import (
 )
 
 import orjson
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics

@@ -2,7 +2,6 @@ import os
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
