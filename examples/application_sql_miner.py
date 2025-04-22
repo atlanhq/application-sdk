@@ -108,23 +108,8 @@ class SQLClient(BaseSQLClient):
     DB_CONFIG = {
         "template": "snowflake://{username}:{password}@{account_id}",
         "required": ["username", "password", "account_id"],
-        "defaults": {"warehouse": "PHOENIX_TEST", "role": "PHEONIX_APP_TEST"},
+        "parameters": ["warehouse", "role"],
     }
-
-    def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password = quote_plus(self.credentials["password"])
-        base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"
-
-        if self.credentials.get("warehouse"):
-            base_url = f"{base_url}?warehouse={self.credentials['warehouse']}"
-        if self.credentials.get("role"):
-            if "?" in base_url:
-                base_url = f"{base_url}&role={self.credentials['role']}"
-            else:
-                base_url = f"{base_url}?role={self.credentials['role']}"
-
-        return base_url
-
 
 class SampleSnowflakeHandler(SQLHandler):
     tables_check_sql = """

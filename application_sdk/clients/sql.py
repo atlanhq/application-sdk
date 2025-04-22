@@ -239,7 +239,7 @@ class BaseSQLClient(ClientInterface):
         # Append defaults if not already in the template
         if self.DB_CONFIG.get("defaults"):
             conn_str = self.add_connection_params(conn_str, self.DB_CONFIG["defaults"])
-        
+
         if self.DB_CONFIG.get("parameters"):
             parameter_keys = self.DB_CONFIG["parameters"]
             self.DB_CONFIG["parameters"] = {
