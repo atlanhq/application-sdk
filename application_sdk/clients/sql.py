@@ -9,7 +9,7 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
@@ -45,6 +45,7 @@ class BaseSQLClient(ClientInterface):
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
+    DB_CONFIG: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -176,8 +177,8 @@ class BaseSQLClient(ClientInterface):
 
         encoded_token = quote_plus(token)
         return encoded_token
-
-    def add_source_connection_params(
+    
+    def add_connection_params(
         self, connection_string: str, source_connection_params: Dict[str, Any]
     ) -> str:
         """
@@ -191,10 +192,62 @@ class BaseSQLClient(ClientInterface):
             connection_string += f"{key}={value}"
 
         return connection_string
-
+    
     def get_sqlalchemy_connection_string(self) -> str:
-        raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
-        """Get the SQLAlchemy connection string."""
+        """
+        Get the SQLAlchemy connection string for database connection.
+
+        This method constructs the connection string using the configured database parameters
+        and authentication token. It handles both basic authentication and IAM-based auth.
+
+        The connection string is built using:
+        1. Required parameters from DB_CONFIG["required"] list
+        2. Authentication token from get_auth_token() as the password
+        3. Default connection parameters from DB_CONFIG["defaults"] dict
+
+        The DB_CONFIG structure should be defined as:
+        {
+            "template": "postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}",
+            "required": ["username", "password", "host", "port", "database"],
+            "defaults": {"connect_timeout": 5}
+        }
+
+        Returns:
+            str: The complete SQLAlchemy connection string with all required parameters
+                and authentication details. For example:
+                "postgresql+psycopg2://user:pass@localhost:5432/mydb?connect_timeout=5"
+
+        Note:
+            The password parameter in the connection string will be replaced with the
+            authentication token obtained from get_auth_token(), which supports both
+            basic auth and IAM-based authentication methods.
+        """
+        extra = parse_credentials_extra(self.credentials)
+        auth_token = self.get_auth_token()
+
+        # Prepare parameters
+        param_values = {}
+        for param in self.DB_CONFIG["required"]:
+            if param == "password":
+                param_values[param] = auth_token
+            else:
+                param_values[param] = self.credentials.get(param) or extra.get(param)
+
+        # Fill in base template
+        conn_str = self.DB_CONFIG["template"].format(**param_values)
+
+        # Append defaults if not already in the template
+        if self.DB_CONFIG.get("defaults"):
+            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG["defaults"])
+        
+        if self.DB_CONFIG.get("parameters"):
+            parameter_keys = self.DB_CONFIG["parameters"]
+            self.DB_CONFIG["parameters"] = {
+                key: self.credentials.get(key) or extra.get(key) for key in parameter_keys
+            }
+            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG["parameters"])
+
+        return conn_str
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """

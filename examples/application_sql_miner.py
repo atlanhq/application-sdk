@@ -105,6 +105,12 @@ class SampleSQLMinerActivities(SQLQueryExtractionActivities):
 
 
 class SQLClient(BaseSQLClient):
+    DB_CONFIG = {
+        "template": "snowflake://{username}:{password}@{account_id}",
+        "required": ["username", "password", "account_id"],
+        "defaults": {"warehouse": "PHOENIX_TEST", "role": "PHEONIX_APP_TEST"},
+    }
+
     def get_sqlalchemy_connection_string(self) -> str:
         encoded_password = quote_plus(self.credentials["password"])
         base_url = f"snowflake://{self.credentials['username']}:{encoded_password}@{self.credentials['account_id']}"
