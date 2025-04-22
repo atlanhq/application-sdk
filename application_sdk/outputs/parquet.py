@@ -1,7 +1,6 @@
 import os
 from typing import TYPE_CHECKING, Literal, Optional
 
-import daft
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
