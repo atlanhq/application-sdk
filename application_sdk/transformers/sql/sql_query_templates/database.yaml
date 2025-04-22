@@ -35,6 +35,6 @@ columns:
   - name: attributes.connectorName
     source_query: connector_name
   - name: typeName
-    source_query: "'Table'"
+    source_query: "'Database'"
   - name: status
     source_query: "'ACTIVE'"
