@@ -1,5 +1,5 @@
 # database.yaml
-entity: Database
+table: Database
 columns:
   - name: attributes.name
     source_query: database_name
