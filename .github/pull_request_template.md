@@ -16,7 +16,7 @@
 <!-- Mark [x] the appropriate option, helps the reviewer to verify the changes -->
 - [ ] Additional tests added
 - [ ] All CI checks passed
-
+- [ ] Relevant documentation updated
 
 <!-- for any cautionary notes, use https://github.com/orgs/community/discussions/16925 -->
 
