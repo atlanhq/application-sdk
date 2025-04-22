@@ -9,7 +9,7 @@ import asyncio
 import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
@@ -177,7 +177,7 @@ class BaseSQLClient(ClientInterface):
 
         encoded_token = quote_plus(token)
         return encoded_token
-    
+
     def add_connection_params(
         self, connection_string: str, source_connection_params: Dict[str, Any]
     ) -> str:
@@ -192,7 +192,7 @@ class BaseSQLClient(ClientInterface):
             connection_string += f"{key}={value}"
 
         return connection_string
-    
+
     def get_sqlalchemy_connection_string(self) -> str:
         """
         Get the SQLAlchemy connection string for database connection.
@@ -207,7 +207,7 @@ class BaseSQLClient(ClientInterface):
 
         The DB_CONFIG structure should be defined as:
         {
-            "template": "postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}",
+            "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
             "required": ["username", "password", "host", "port", "database"],
             "defaults": {"connect_timeout": 5}
         }
@@ -215,7 +215,7 @@ class BaseSQLClient(ClientInterface):
         Returns:
             str: The complete SQLAlchemy connection string with all required parameters
                 and authentication details. For example:
-                "postgresql+psycopg2://user:pass@localhost:5432/mydb?connect_timeout=5"
+                "postgresql+psycopg://user:pass@localhost:5432/mydb?connect_timeout=5"
 
         Note:
             The password parameter in the connection string will be replaced with the
@@ -231,7 +231,10 @@ class BaseSQLClient(ClientInterface):
             if param == "password":
                 param_values[param] = auth_token
             else:
-                param_values[param] = self.credentials.get(param) or extra.get(param)
+                value = self.credentials.get(param) or extra.get(param)
+                if value is None:
+                    raise ValueError(f"{param} is required")
+                param_values[param] = value
 
         # Fill in base template
         conn_str = self.DB_CONFIG["template"].format(**param_values)
@@ -243,9 +246,12 @@ class BaseSQLClient(ClientInterface):
         if self.DB_CONFIG.get("parameters"):
             parameter_keys = self.DB_CONFIG["parameters"]
             self.DB_CONFIG["parameters"] = {
-                key: self.credentials.get(key) or extra.get(key) for key in parameter_keys
+                key: self.credentials.get(key) or extra.get(key)
+                for key in parameter_keys
             }
-            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG["parameters"])
+            conn_str = self.add_connection_params(
+                conn_str, self.DB_CONFIG["parameters"]
+            )
 
         return conn_str
 

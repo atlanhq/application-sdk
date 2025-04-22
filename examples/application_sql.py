@@ -29,7 +29,6 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 import asyncio
 import os
 from typing import Any, Dict
-from urllib.parse import quote_plus
 
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,

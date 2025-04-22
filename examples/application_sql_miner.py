@@ -20,7 +20,6 @@ import os
 import time
 from datetime import datetime, timedelta
 from typing import Any, Dict
-from urllib.parse import quote_plus
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
@@ -110,6 +109,7 @@ class SQLClient(BaseSQLClient):
         "required": ["username", "password", "account_id"],
         "parameters": ["warehouse", "role"],
     }
+
 
 class SampleSnowflakeHandler(SQLHandler):
     tables_check_sql = """
