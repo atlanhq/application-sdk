@@ -184,16 +184,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             connection_qualified_name=connection_qualified_name,
             application_name=workflow_args.get("application_name"),
         )
-        for row in transformed_df.iter_rows():
-            try:
-                if row:
-                    yield row
-                else:
-                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                activity.logger.error(
-                    f"Error processing row for {typename}: {row_error}"
-                )
+        return transformed_df
 
     def _validate_output_args(
         self, workflow_args: Dict[str, Any]
@@ -479,7 +470,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         raw_input = await raw_input.get_daft_dataframe()
 
-        transformed_chunk = self._transform_batch(
+        transformed_chunk = await self._transform_batch(
             raw_input,
             typename,
             state,

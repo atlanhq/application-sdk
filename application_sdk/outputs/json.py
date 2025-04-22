@@ -168,7 +168,7 @@ class JsonOutput(Output):
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
 
-        async for row in dataframe:
+        for row in dataframe.iter_rows():
             self.total_record_count += 1
             # Serialize the row and add it to the buffer
             buffer.append(
