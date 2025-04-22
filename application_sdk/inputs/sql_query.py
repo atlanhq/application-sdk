@@ -2,6 +2,8 @@ import asyncio
 import concurrent
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
+from sqlalchemy.engine import Engine
+
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 
