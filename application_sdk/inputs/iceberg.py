@@ -1,6 +1,5 @@
 from typing import TYPE_CHECKING, Iterator, Optional
 
-import pandas as pd
 from pyiceberg.table import Table
 
 from application_sdk.common.logger_adaptors import get_logger
