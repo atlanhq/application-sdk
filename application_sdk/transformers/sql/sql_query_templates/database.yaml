@@ -3,15 +3,13 @@ table: Database
 columns:
   - name: attributes.name
     source_query: database_name
-  - name: attributes.qualified_name
+  - name: attributes.qualifiedName
     source_query: concat(connection_qualified_name, '/', database_name)
     source_columns: [connection_qualified_name, database_name]
   - name: attributes.connectionQualifiedName
     source_query: connection_qualified_name
   - name: attributes.connectionName
     source_query: connection_name
-  - name: attributes.description
-    source_query: comment
   - name: attributes.description
     source_query: remarks
   - name: attributes.schemaCount

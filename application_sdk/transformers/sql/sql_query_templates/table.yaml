@@ -3,22 +3,29 @@ table: Table
 columns:
   - name: attributes.name
     source_query: table_name
-  - name: attributes.qualified_name
+  - name: attributes.qualifiedName
     source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
     source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
+  - name: attributes.tableName
+    source_query: |
+      CASE 
+        WHEN is_partition = TRUE THEN parent_table_name
+        ELSE NULL
+      END
+    source_columns: [parent_table_name, is_partition]
+  - name: attributes.tableQualifiedName
+    source_query: |
+      CASE 
+        WHEN is_partition = TRUE THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, parent_table_name, is_partition]
   - name: attributes.connectionQualifiedName
     source_query: connection_qualified_name
   - name: attributes.connectionName
     source_query: connection_name
   - name: attributes.description
-    source_query: coalesce(remarks, comment)
-    source_columns: [remarks, comment]
-  - name: attributes.sourceCreatedBy
-    source_query: source_owner
-  - name: attributes.sourceCreatedAt
-    source_query: created
-  - name: attributes.sourceUpdatedAt
-    source_query: last_altered
+    source_query: remarks
   - name: attributes.databaseName
     source_query: table_catalog
   - name: attributes.databaseQualifiedName
@@ -30,70 +37,55 @@ columns:
     source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
     source_columns: [connection_qualified_name, table_catalog, table_schema]
   - name: attributes.definition
-    source_query: view_definition
+    source_query: |
+      CASE 
+        WHEN table_type = 'VIEW' THEN CONCAT('CREATE OR REPLACE VIEW ', table_name, ' AS ', view_definition)
+        WHEN table_type = 'MATERIALIZED VIEW' THEN CONCAT('CREATE MATERIALIZED VIEW ', table_name, ' AS ', view_definition)
+        ELSE view_definition
+      END
+    source_columns: [table_type, table_name, view_definition]
   - name: attributes.columnCount
     source_query: column_count
   - name: attributes.rowCount
     source_query: row_count
   - name: attributes.sizeBytes
     source_query: size_bytes
-  - name: attributes.tableType
+  - name: custom_attributes.tableType
     source_query: table_type
-  - name: attributes.entityClass
-    source_query: CASE WHEN is_partition = 'YES' THEN 'TablePartition' WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table' WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView' WHEN table_type = 'DYNAMIC TABLE' OR is_dynamic = 'YES' THEN 'SnowflakeDynamicTable' ELSE 'View' END
-    source_columns: [is_partition, table_type, is_dynamic]
-  - name: attributes.tableName
-    source_query: CASE WHEN is_partition = 'YES' THEN parent_table_name ELSE NULL END
-    source_columns: [is_partition, parent_table_name]
-  - name: attributes.tableQualifiedName
-    source_query: CASE WHEN is_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name) ELSE NULL END
-    source_columns: [is_partition, connection_qualified_name, table_catalog, table_schema, parent_table_name]
-  - name: attributes.externalLocation
-    source_query: location
-  - name: attributes.externalLocationFormat
-    source_query: file_format_type
-  - name: attributes.externalLocationRegion
-    source_query: stage_region
-  - name: attributes.refreshMode
-    source_query: refresh_mode
-  - name: attributes.staleness
-    source_query: staleness
-  - name: attributes.staleSinceDate
-    source_query: stale_since_date
-  - name: attributes.refreshMethod
-    source_query: refresh_method
-  - name: attributes.isTransient
-    source_query: is_transient
-  - name: attributes.tableCatalogId
-    source_query: table_catalog_id
-  - name: attributes.tableSchemaId
-    source_query: table_schema_id
-  - name: attributes.lastDdl
-    source_query: last_ddl
-  - name: attributes.lastDdlBy
-    source_query: last_ddl_by
-  - name: attributes.isSecure
-    source_query: is_secure
-  - name: attributes.retentionTime
-    source_query: retention_time
-  - name: attributes.stageUrl
-    source_query: stage_url
-  - name: attributes.isInsertableInto
-    source_query: is_insertable_into
-  - name: attributes.numberColumnsInPartKey
+  - name: attributes.isPartitioned
+    source_query: |
+      CASE 
+        WHEN table_kind = 'p' OR table_type = 'PARTITIONED TABLE' THEN TRUE
+        ELSE FALSE
+      END
+    source_columns: [table_kind]
+  - name: attributes.partitionStrategy
+    source_query: COALESCE(partition_strategy, '')
+    source_columns: [partition_strategy]
+  - name: attributes.partitionCount
+    source_query: COALESCE(partition_count, 0)
+    source_columns: [partition_count]
+  - name: attributes.constraint
+    source_query: COALESCE(partition_constraint, '')
+    source_columns: [partition_constraint]
+  - name: custom_attributes.is_insertable_into
+    source_query: COALESCE(is_insertable_into, False)
+    source_columns: [is_insertable_into]
+  - name: custom_attributes.number_columns_in_part_key
     source_query: number_columns_in_part_key
-  - name: attributes.columnsParticipatingInPartKey
+  - name: custom_attributes.columns_participating_in_part_key
     source_query: columns_participating_in_part_key
-  - name: attributes.isTyped
-    source_query: is_typed
-  - name: attributes.autoClusteringOn
-    source_query: auto_clustering_on
-  - name: attributes.engine
+  - name: custom_attributes.is_typed
+    source_query: COALESCE(is_typed, False)
+    source_columns: [is_typed]
+  - name: custom_attributes.self_referencing_col_name
+    source_query: COALESCE(self_referencing_col_name, '')
+    source_columns: [self_referencing_col_name]
+  - name: custom_attributes.ref_generation
+    source_query: COALESCE(ref_generation, '')
+    source_columns: [ref_generation]
+  - name: custom_attributes.engine
     source_query: engine
-  - name: attributes.autoIncrement
-    source_query: auto_increment
-  - name: attributes.isInsertableIntoTWO
-    source_query: is_insertable_into
   - name: attributes.tenantId
     source_query: tenant_id
   - name: attributes.lastSyncWorkflowName
@@ -105,6 +97,13 @@ columns:
   - name: attributes.connectorName
     source_query: connector_name
   - name: typeName
-    source_query: "'Table'"
+    source_query: |
+      CASE 
+        WHEN is_partition = TRUE THEN 'TablePartition'
+        WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table'
+        WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView'
+        ELSE 'View'
+      END
+    source_columns: [is_partition, table_type]
   - name: status
     source_query: "'ACTIVE'"
