@@ -17,7 +17,7 @@ class SQLTransformer(TransformerInterface):
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: Dict[str, str] = (
-            self._generate_detault_yaml_mappings(entities=["DATABASE", "TABLE"])
+            self._generate_detault_yaml_mappings(entities=["DATABASE", "SCHEMA", "TABLE", "COLUMN"])
         )
 
     def _generate_detault_yaml_mappings(
