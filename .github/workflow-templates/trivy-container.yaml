@@ -47,7 +47,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./install/Dockerfile
           push: false
           secrets: |
             "PRIVATE_REPO_ACCESS_TOKEN=${{ secrets.PRIVATE_REPO_ACCESS_TOKEN }}"
