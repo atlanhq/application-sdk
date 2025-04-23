@@ -45,6 +45,7 @@ class BaseSQLClient(ClientInterface):
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
+    DB_CONFIG: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -177,7 +178,7 @@ class BaseSQLClient(ClientInterface):
         encoded_token = quote_plus(token)
         return encoded_token
 
-    def add_source_connection_params(
+    def add_connection_params(
         self, connection_string: str, source_connection_params: Dict[str, Any]
     ) -> str:
         """
@@ -193,8 +194,53 @@ class BaseSQLClient(ClientInterface):
         return connection_string
 
     def get_sqlalchemy_connection_string(self) -> str:
-        raise NotImplementedError("get_sqlalchemy_connection_string is not implemented")
-        """Get the SQLAlchemy connection string."""
+        """
+        Get the SQLAlchemy connection string for database connection.
+
+        This method constructs the connection string using the configured database parameters
+        and authentication method. It supports various authentication types including:
+        - Basic authentication (username/password)
+        - IAM user authentication
+        - IAM role authentication
+
+        Returns:
+            str: The SQLAlchemy connection string.
+
+        Raises:
+            ValueError: If required credentials are missing or invalid.
+        """
+        extra = parse_credentials_extra(self.credentials)
+        auth_token = self.get_auth_token()
+
+        # Prepare parameters
+        param_values = {}
+        for param in self.DB_CONFIG["required"]:
+            if param == "password":
+                param_values[param] = auth_token
+            else:
+                value = self.credentials.get(param) or extra.get(param)
+                if value is None:
+                    raise ValueError(f"{param} is required")
+                param_values[param] = value
+
+        # Fill in base template
+        conn_str = self.DB_CONFIG["template"].format(**param_values)
+
+        # Append defaults if not already in the template
+        if self.DB_CONFIG.get("defaults"):
+            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG["defaults"])
+
+        if self.DB_CONFIG.get("parameters"):
+            parameter_keys = self.DB_CONFIG["parameters"]
+            self.DB_CONFIG["parameters"] = {
+                key: self.credentials.get(key) or extra.get(key)
+                for key in parameter_keys
+            }
+            conn_str = self.add_connection_params(
+                conn_str, self.DB_CONFIG["parameters"]
+            )
+
+        return conn_str
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """

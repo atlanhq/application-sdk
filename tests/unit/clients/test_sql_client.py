@@ -459,3 +459,173 @@ async def test_run_query_error_property_based(
         with pytest.raises(Exception, match=f"Simulated {error_type}"):
             async for _ in sql_client.run_query(query):
                 pass
+
+
+@pytest.fixture
+def sql_client_with_db_config():
+    client = BaseSQLClient()
+    client.DB_CONFIG = {
+        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        "required": ["username", "password", "host", "port", "database"],
+        "defaults": {"connect_timeout": 5},
+        "parameters": ["ssl_mode"],
+    }
+    return client
+
+
+def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
+    """Test connection string generation with basic authentication"""
+    credentials = {
+        "username": "test_user",
+        "password": "test_pass",
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "authType": "basic",
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=None"
+    assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
+    """Test connection string generation with IAM user authentication"""
+    credentials = {
+        "username": "aws_access_key",
+        "password": "aws_secret_key",
+        "host": "rds-instance.region.rds.amazonaws.com",
+        "port": 5432,
+        "authType": "iam_user",
+        "extra": {"username": "db_user", "database": "test_db"},
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    with patch.object(
+        sql_client_with_db_config, "get_iam_user_token", return_value="iam_token"
+    ):
+        conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+        expected = "postgresql+psycopg://aws_access_key:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5&ssl_mode=None"
+        assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_iam_role(sql_client_with_db_config):
+    """Test connection string generation with IAM role authentication"""
+    credentials = {
+        "username": "db_user",
+        "host": "rds-instance.region.rds.amazonaws.com",
+        "port": 5432,
+        "authType": "iam_role",
+        "extra": {
+            "aws_role_arn": "arn:aws:iam::123456789012:role/test-role",
+            "database": "test_db",
+            "aws_external_id": "external-id",
+        },
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    with patch.object(
+        sql_client_with_db_config, "get_iam_role_token", return_value="iam_token"
+    ):
+        conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+        expected = "postgresql+psycopg://db_user:iam_token@rds-instance.region.rds.amazonaws.com:5432/test_db?connect_timeout=5&ssl_mode=None"
+        assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_with_parameters(sql_client_with_db_config):
+    """Test connection string generation with additional parameters"""
+    credentials = {
+        "username": "test_user",
+        "password": "test_pass",
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "authType": "basic",
+        "ssl_mode": "require",
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+    assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_missing_required_param(
+    sql_client_with_db_config,
+):
+    """Test connection string generation with missing required parameters"""
+    credentials = {
+        "username": "test_user",
+        "password": "test_pass",
+        "host": "localhost",
+        "port": 5432,
+        # Missing database
+        "authType": "basic",
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    with pytest.raises(ValueError, match="database is required"):
+        sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+
+def test_get_sqlalchemy_connection_string_invalid_auth_type(sql_client_with_db_config):
+    """Test connection string generation with invalid authentication type"""
+    credentials = {
+        "username": "test_user",
+        "password": "test_pass",
+        "host": "localhost",
+        "port": 5432,
+        "database": "test_db",
+        "authType": "invalid_auth",
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    with pytest.raises(ValueError, match="Invalid auth type: invalid_auth"):
+        sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+
+def test_get_sqlalchemy_connection_string_iam_user_missing_username(
+    sql_client_with_db_config,
+):
+    """Test connection string generation with IAM user auth missing username"""
+    credentials = {
+        "username": "aws_access_key",
+        "password": "aws_secret_key",
+        "host": "rds-instance.region.rds.amazonaws.com",
+        "port": 5432,
+        "authType": "iam_user",
+        "extra": {
+            # Missing username
+            "database": "test_db"
+        },
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    with pytest.raises(
+        ValueError, match="username is required for IAM user authentication"
+    ):
+        sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+
+def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
+    sql_client_with_db_config,
+):
+    """Test connection string generation with IAM role auth missing role ARN"""
+    credentials = {
+        "username": "db_user",
+        "host": "rds-instance.region.rds.amazonaws.com",
+        "port": 5432,
+        "authType": "iam_role",
+        "extra": {
+            # Missing aws_role_arn
+            "database": "test_db",
+            "aws_external_id": "external-id",
+        },
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    with pytest.raises(
+        ValueError, match="aws_role_arn is required for IAM role authentication"
+    ):
+        sql_client_with_db_config.get_sqlalchemy_connection_string()
