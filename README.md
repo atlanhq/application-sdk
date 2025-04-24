@@ -15,9 +15,9 @@ To begin developing with the Application SDK:
 
 1. Clone the repository
 2. Follow the setup instructions for your platform:
-   - [Windows](./docs/setup/WINDOWS.md)
-   - [Mac](./docs/setup/MAC.md)
-   - [Linux](./docs/setup/LINUX.md)
+   - [Windows](./docs/docs/setup/WINDOWS.md)
+   - [Mac](./docs/docs/setup/MAC.md)
+   - [Linux](./docs/docs/setup/LINUX.md)
 3. Run the example application:
    - [Hello World](./examples/application_hello_world.py)
    - [SQL](./examples/application_sql.py)

@@ -1,4 +1,4 @@
-# Application SDK - Activities
+# Activities
 
 This module contains the building blocks for defining the individual steps (activities) within your Temporal workflows. Activities represent distinct units of work, such as querying a database, calling an API, or transforming data.
 

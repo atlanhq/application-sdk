@@ -1,4 +1,4 @@
-# Application SDK - Application
+# Application
 
 This module provides the core framework for building Atlan applications, particularly focusing on integrating with FastAPI to expose web endpoints for interacting with workflows and handlers.
 

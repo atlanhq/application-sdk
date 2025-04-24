@@ -17,9 +17,9 @@ The Atlan Python Application SDK requires the following components regardless of
 
 Please follow the appropriate guide for your operating system:
 
-- [macOS Setup Guide](mdc:docs/setup/macos.md)
-- [Linux Setup Guide](mdc:docs/setup/linux.md)
-- [Windows Setup Guide](mdc:docs/setup/windows.md)
+- [MAC.md](mdc:docs/docs/setup/MAC.md)
+- [LINUX.md](mdc:docs/docs/setup/LINUX.md)
+- [WINDOWS.md](mdc:docs/docs/setup/WINDOWS.md)
 
 ## Need Help?
 
