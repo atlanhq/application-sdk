@@ -14,9 +14,9 @@ This guide will help you set up the Application SDK on macOS.
 ## Prerequisites
 
 Before starting, ensure you have:
-- Terminal access
-- Admin privileges (for installing software)
-- Internet connection
+    - Terminal access
+    - Admin privileges (for installing software)
+    - Internet connection
 
 ## Setup Steps
 

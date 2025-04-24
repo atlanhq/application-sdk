@@ -14,9 +14,9 @@ This guide will help you set up the Application SDK on Windows.
 ## Prerequisites
 
 Before starting, ensure you have:
-- PowerShell access (run as Administrator)
-- Internet connection
-- Windows 10 or higher
+      - PowerShell access (run as Administrator)
+      - Internet connection
+      - Windows 10 or higher
 
 ## Setup Steps
 
@@ -27,11 +27,11 @@ Download and install Python from the official website:
 1. Go to [Python Downloads](https://www.python.org/downloads/release/python-31110/)
 2. Download the Windows installer (64-bit)
 3. Run the installer with these options:
-   - ✅ Add Python to PATH
-   - ✅ Install for all users
-   - ✅ Customize installation
-   - ✅ All optional features
-   - ✅ Install to a directory without spaces (e.g., `C:\Python311`)
+      - Add Python to PATH
+      - Install for all users
+      - Customize installation
+      - All optional features
+      - Install to a directory without spaces (e.g., `C:\Python311`)
 4. Verify installation by opening PowerShell and running:
    ```powershell
    python --version  # Should show Python 3.11.10

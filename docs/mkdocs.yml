@@ -69,8 +69,8 @@ nav:
   - Home: index.md
   - Setup:
       - Mac: setup/MAC.md
-      - Windows: setup/WINDOWS.md
       - Linux: setup/LINUX.md
+      - Windows: setup/WINDOWS.md
   - Guides:
       # Core concepts
       - Architecture: guides/architecture.md

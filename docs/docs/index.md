@@ -15,13 +15,13 @@ To begin developing with the Application SDK:
 
 1. Clone the repository
 2. Follow the setup instructions for your platform:
-   - [Windows](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/WINDOWS.md)
-   - [Mac](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/MAC.md)
-   - [Linux](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/LINUX.md)
+      - [Windows](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/WINDOWS.md)
+      - [Mac](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/MAC.md)
+      - [Linux](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/LINUX.md)
 3. Run the example application:
-   - [Hello World](https://github.com/atlanhq/application-sdk/blob/main/examples/application_hello_world.py)
-   - [SQL](https://github.com/atlanhq/application-sdk/blob/main/examples/application_sql.py)
-4. (Optionally) clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
+      - [Hello World](https://github.com/atlanhq/application-sdk/blob/main/examples/application_hello_world.py)
+      - [SQL](https://github.com/atlanhq/application-sdk/blob/main/examples/application_sql.py)
+4. (Optionally) clone an existing sample application -- [sql](https://github.com/atlanhq/atlan-postgres-app), [hello-world](https://github.com/atlanhq/atlan-hello-world-app).
 
 ## Documentation
 

@@ -17,7 +17,7 @@ This module contains the building blocks for defining the individual steps (acti
 
 4.  **Temporal Integration**:
     *   Activities are typically defined as methods within a class inheriting from `ActivitiesInterface`.
-    *   Methods intended to be Temporal activities must be decorated with `@temporalio.activity.defn`.
+    *   Methods intended to be Temporal activities must be decorated with `@activity.defn`.
     *   The `@auto_heartbeater` decorator (from `application_sdk.activities.common.utils`) can be used to automatically manage Temporal heartbeating for long-running activities.
 
 ## Base Activity Classes

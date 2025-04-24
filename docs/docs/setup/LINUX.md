@@ -14,9 +14,9 @@ This guide will help you set up the Application SDK on Linux (Ubuntu/Debian base
 ## Prerequisites
 
 Before starting, ensure you have:
-- Terminal access
-- Sudo privileges (for installing software)
-- Internet connection
+    - Terminal access
+    - Sudo privileges (for installing software)
+    - Internet connection
 
 ## Setup Steps
 
