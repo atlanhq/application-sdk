@@ -317,3 +317,44 @@ def run_sync(func):
             return await loop.run_in_executor(pool, func, *args, **kwargs)
 
     return wrapper
+
+def get_yaml_query_template_path_mappings(
+    query_templates_base_path: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Get the yaml files from the query_templates_base_path
+    and return a dictionary of the file name and the file path.
+
+    Args:
+        query_templates_base_path: The base path to the query templates.
+
+    Returns:
+        A dictionary of the file name and the file path.
+    """
+    # Get the default yaml files from sdk
+    default_yaml_dir = (
+        f"{os.path.dirname(os.path.dirname(os.path.dirname(__file__)))}/"
+        f"application_sdk/transformers/sql/sql_query_templates"
+    )
+    default_yaml_files: List[str] = glob.glob(
+        os.path.join(
+            default_yaml_dir,
+            "**/*.yaml",
+        ),
+        recursive=True,
+    )
+
+    # Get the yaml files from the query_templates_base_path
+    yaml_files: List[str] = glob.glob(
+        os.path.join(
+            query_templates_base_path,
+            "**/*.yaml",
+        ),
+        recursive=True,
+    ) if query_templates_base_path else []
+
+    result: Dict[str, str] = {}
+    for file in default_yaml_files + yaml_files:
+        result[os.path.basename(file).upper().replace(".YAML", "")] = file
+
+    return result

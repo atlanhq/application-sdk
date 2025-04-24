@@ -6,6 +6,7 @@ import daft
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
+from application_sdk.common.utils import get_yaml_query_template_path_mappings
 
 logger = get_logger(__name__)
 
@@ -16,19 +17,7 @@ class SQLTransformer(TransformerInterface):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         self.connector_name = connector_name
         self.tenant_id = tenant_id
-        self.entity_class_definitions: Dict[str, str] = (
-            self._generate_detault_yaml_mappings(entities=["DATABASE", "SCHEMA", "TABLE", "COLUMN"])
-        )
-
-    def _generate_detault_yaml_mappings(
-        self,
-        entities: List[str],
-        base_path: str = f"{os.path.dirname(__file__)}/sql_query_templates",
-    ) -> Dict[str, str]:
-        return {
-            entity: os.path.join(base_path, f"{entity.lower()}.yaml")
-            for entity in entities
-        }
+        self.entity_class_definitions: Dict[str, str] = get_yaml_query_template_path_mappings()
 
     def _process_column_name(self, column_name: str) -> str:
         """Handle column names that contain dots by quoting them.
