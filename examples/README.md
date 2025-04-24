@@ -21,7 +21,7 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 4. Run `make start-all` to start the Dapr runtime and Temporal server
 5. Run the example using `python application_sql.py` or using the VSCode launch configuration provided in the next section.
 
-### Run and Debug examples via VSCode or Cursomr
+### Run and Debug examples via VSCode or Cursor
 
 1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables and run the configuration
 
@@ -65,3 +65,4 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 ## Examples
 
 1. [SQL Application](./application_sql.py) - Demonstrates how to build a SQL application using the Atlan SDK
+2. [Hello World Application](./application_hello_world.py) - Demonstrates how to build a simple application using the Atlan SDK
