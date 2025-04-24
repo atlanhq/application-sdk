@@ -1,50 +1,51 @@
 ---
 description:
-globs:
-alwaysApply: true
+globs: application_sdk/**/*.py
+alwaysApply: false
 ---
-### Logger Configuration
-- Use `AtlanLoggerAdapter` for all logging
-- Configure loggers using `get_logger(__name__)`
-- Use structured logging with context
-- Include request IDs in logs
-- Use appropriate log levels:
-  - DEBUG: Detailed information for debugging
-  - INFO: General operational information
-  - WARNING: Warning messages for potential issues
-  - ERROR: Error messages for recoverable errors
-  - CRITICAL: Critical errors that may cause system failure
-  - ACTIVITY: Activity-specific logging
+- **Logger Configuration**
+    - Use `AtlanLoggerAdapter` for all logging
+    - Configure loggers using `get_logger(__name__)`
+    - Use structured logging with context
+    - Include request IDs in logs
+    - Use appropriate log levels:
+        - DEBUG: Detailed information for debugging
+        - INFO: General operational information
+        - WARNING: Warning messages for potential issues
+        - ERROR: Error messages for recoverable errors
+        - CRITICAL: Critical errors that may cause system failure
+        - ACTIVITY: Activity-specific logging
 
-### Log Format
-```python
-"<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
-```
-### Logging Best Practices
-- Include relevant context in log messages
-- Use structured logging for machine processing
-- Log exceptions with stack traces
-- Include request IDs in distributed systems
-- Use appropriate log levels
-- Avoid logging sensitive information
-- Include workflow and activity context in Temporal workflows
+- **Log Format**
+    ```python
+    "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
+    ```
 
-### Example Usage
-```python
-from application_sdk.common.logger_adaptors import get_logger
+- **Logging Best Practices**
+    - Include relevant context in log messages
+    - Use structured logging for machine processing
+    - Log exceptions with stack traces
+    - Include request IDs in distributed systems
+    - Use appropriate log levels
+    - Avoid logging sensitive information
+    - Include workflow and activity context in Temporal workflows
 
-logger = get_logger(__name__)
+- **Example Usage**
+    ```python
+    from application_sdk.common.logger_adaptors import get_logger
 
-# Basic logging
-logger.info("Operation completed successfully")
+    logger = get_logger(__name__)
 
-# Logging with context
-logger.info("Processing request", extra={"request_id": "123", "user": "john"})
+    # Basic logging
+    logger.info("Operation completed successfully")
 
-# Error logging
-try:
-    # Some operation
-    pass
-except Exception as e:
-    logger.error("Operation failed", exc_info=True)
-```
+    # Logging with context
+    logger.info("Processing request", extra={"request_id": "123", "user": "john"})
+
+    # Error logging
+    try:
+        # Some operation
+        pass
+    except Exception as e:
+        logger.error("Operation failed", exc_info=True)
+    ```

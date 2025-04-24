@@ -43,6 +43,7 @@ alwaysApply: true
   - Add examples from actual codebase
   - Remove outdated patterns
   - Cross-reference related rules
+
 - **Best Practices:**
   - Use bullet points for clarity
   - Keep descriptions concise

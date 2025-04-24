@@ -9,31 +9,28 @@ This document outlines the development standards for the Application SDK, includ
 
 ## Code Formatting
 
-### Python Style Guide
-- Follow PEP 8 style guide
-- Use type hints for all function parameters and return values
-- Maximum line length: 120 characters
-- Use double quotes for strings
-- Use 4 spaces for indentation
-- Use snake_case for variable and function names
-- Use PascalCase for class names
-- Use UPPER_CASE for constants
+- **Python Style Guide**
+    - Follow PEP 8 style guide
+    - Use type hints for all function parameters and return values
+    - Maximum line length: 120 characters
+    - Use double quotes for strings
+    - Use 4 spaces for indentation
+    - Use snake_case for variable and function names
+    - Use PascalCase for class names
+    - Use UPPER_CASE for constants
 
-### Documentation
-- All functions, classes, and modules must have docstrings
-- Use Google-style docstrings
-- Include type information in docstrings
-- Document all public APIs
-- Minimum docstring coverage: 80%
+- **Documentation**
+    - All functions, classes, and modules must have docstrings
+    - Use Google-style docstrings
+    - Include type information in docstrings
+    - Document all public APIs
 
-## Testing Standards
+- **Testing Standards**
+    - testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
 
-- testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
-
-## Logging Standards
-
-- logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
+- **Logging Standards**
+    - logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
 
 ## Code Review Process
-
+<!-- will be removed once we fix the pre-commit/lint related issues in the repository -->
 - IMPORTANT!! - Do not focus on fixing pre-commits/linting errors
