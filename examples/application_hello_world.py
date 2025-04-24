@@ -1,9 +1,10 @@
 import asyncio
 from typing import Any, Callable, Dict, Sequence
 
-from temporalio import workflow
+from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.worker import Worker
@@ -29,8 +30,10 @@ class HelloWorldActivities(ActivitiesInterface):
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
         return
 
-    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
-        return
+    @activity.defn
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+        return {"message": "Preflight check completed successfully"}
 
 
 async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
