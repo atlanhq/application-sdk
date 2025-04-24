@@ -68,9 +68,9 @@ extra_javascript:
 nav:
   - Home: index.md
   - Setup:
-      - Mac: setup/mac.md
-      - Windows: setup/windows.md
-      - Linux: setup/linux.md
+      - Mac: setup/MAC.md
+      - Windows: setup/WINDOWS.md
+      - Linux: setup/LINUX.md
   - Guides:
       # Core concepts
       - Architecture: guides/architecture.md
