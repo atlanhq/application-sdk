@@ -22,11 +22,35 @@ T = TypeVar("T")
 class Procedure(assets.Procedure):
     """Procedure entity transformer for Atlas.
 
-    This class handles the transformation of procedure metadata into Atlas Procedure entities.
+    This class handles the transformation of database stored procedure metadata
+    into Atlas-compatible entity format. It validates required fields and
+    constructs qualified names and attributes according to Atlas specifications.
+
+    Attributes:
+        Inherits all attributes from assets.Procedure.
     """
 
     @classmethod
     def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse a dictionary into a Procedure entity's attributes.
+
+        This method validates required fields and constructs the procedure's
+        attributes including qualified names, schema references, and metadata.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing procedure metadata with fields:
+                - procedure_name: Name of the procedure
+                - procedure_definition: SQL definition of the procedure
+                - procedure_catalog: Database/catalog containing the procedure
+                - procedure_schema: Schema containing the procedure
+                - connection_qualified_name: Qualified name of the connection
+
+        Returns:
+            Dict[str, Any]: Dictionary of procedure attributes formatted for Atlas.
+
+        Raises:
+            AssertionError: If any required fields are missing or None.
+        """
         try:
             assert (
                 obj.get("procedure_name") is not None
@@ -612,7 +636,12 @@ class Column(assets.Column):
 class Function(assets.Function):
     """Function entity transformer for Atlas.
 
-    This class handles the transformation of function metadata into Atlas Function entities.
+    This class handles the transformation of database function metadata into
+    Atlas-compatible entity format. It validates required fields and constructs
+    qualified names and attributes according to Atlas specifications.
+
+    Attributes:
+        Inherits all attributes from assets.Function.
     """
 
     @overload

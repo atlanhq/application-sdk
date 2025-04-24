@@ -32,14 +32,8 @@ This document outlines the development standards for the Application SDK, includ
 
 ## Logging Standards
 
-
+- logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
 
 ## Code Review Process
 
-### Pre-commit Checks
-- Run pre-commit hooks before committing
-- Ensure all tests pass
-- Verify code coverage requirements
-- Check for docstring coverage
-- Run linting tools
-
+- IMPORTANT!! - Do not focus on fixing pre-commits/linting errors
