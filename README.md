@@ -13,14 +13,15 @@ The SDK empowers developers to build applications that are:
 
 To begin developing with the Application SDK:
 
-1. Clone the repository and follow the setup instructions for your platform:
+1. Clone the repository
+2. Follow the setup instructions for your platform:
    - [Windows](./docs/setup/WINDOWS.md)
    - [Mac](./docs/setup/MAC.md)
    - [Linux](./docs/setup/LINUX.md)
-2. Run the example application:
+3. Run the example application:
    - [Hello World](./examples/application_hello_world.py)
    - [SQL](./examples/application_sql.py)
-3. (Optionally) clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
+4. (Optionally) clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
 
 ## Documentation
 
