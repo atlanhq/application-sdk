@@ -213,6 +213,8 @@ class SQLQueryInput(Input):
             https://sfu-db.github.io/connector-x/intro.html#sources
         """
         try:
+            import daft
+
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 result = await asyncio.get_event_loop().run_in_executor(
