@@ -24,12 +24,58 @@ This document outlines the development standards for the Application SDK, includ
     - Use Google-style docstrings
     - Include type information in docstrings
     - Document all public APIs
+    - Docs must go under ./docs/docs
+
+- **Single Responsibility**
+    - Each function should do exactly one thing
+    - Functions should be small and focused
+    - If a function needs a comment to explain what it does, it should be split
+
+- **DRY (Don't Repeat Yourself)**
+    - Extract repeated code into reusable functions
+    - Share common logic through proper abstraction
+    - Maintain single sources of truth
+
+- **Clean Structure**
+    - Keep related code together
+    - Organize code in a logical hierarchy
+    - Use consistent file and folder naming conventions
+
+- **Encapsulation**
+    - Hide implementation details
+    - Expose clear interfaces
+    - Move nested conditionals into well-named functions
+
+- **Code Quality Maintenance**
+    - Refactor continuously
+    - Fix technical debt early
+    - Leave code cleaner than you found it
 
 - **Testing Standards**
     - testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
 
 - **Logging Standards**
     - logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
+
+## Security, Performance, and Resource Management
+
+- **Security Considerations**
+    - Test for common vulnerabilities (e.g., injection flaws, insecure configurations).
+    - Verify input validation and sanitization logic rigorously.
+    - Ensure proper authentication and authorization are enforced.
+    - Incorporate automated dependency vulnerability scanning into the CI/CD pipeline.
+    - Avoid logging sensitive information; refer to [logging.mdc](mdc:.cursor/rules/logging.mdc).
+
+- **Performance Optimization**
+    - Establish baseline performance metrics for critical components.
+    - Include load tests for expected production scenarios.
+    - Benchmark and optimize resource-intensive operations.
+    - Identify and address performance regressions proactively.
+
+- **Resource Management & Leak Prevention**
+    - Ensure resources (files, network connections, database sessions) are properly closed/released.
+    - Design tests to verify resource cleanup, especially for long-running processes or components managing external resources.
+    - Be mindful of potential memory leaks in complex data structures or long-lived objects.
 
 ## Code Review Process
 <!-- will be removed once we fix the pre-commit/lint related issues in the repository -->

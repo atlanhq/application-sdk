@@ -1,7 +1,7 @@
 ---
 description:
-globs:
-alwaysApply: true
+globs: .cursor/rules/*.mdc
+alwaysApply: false
 ---
 - **Required Rule Structure:**
   ```markdown

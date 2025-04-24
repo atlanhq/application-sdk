@@ -4,18 +4,20 @@ globs: tests/**/*.py
 alwaysApply: false
 ---
 - **Test Framework**
-  - Use pytest as the primary testing framework
-  - Use hypothesis for property-based testing
-  - Minimum test coverage: 60%
-  - All tests must be deterministic
-  - Use fixtures for common test setup
+    - Write tests before fixing bugs
+    - Keep tests readable and maintainable
+    - Test edge cases and error conditions
+    - Use pytest as the primary testing framework
+    - Use hypothesis for property-based testing
+    - All tests must be deterministic
+    - Use fixtures for common setup/teardown
 
 - **Test Organization**
-  - Unit tests: `tests/unit/`
-  - Integration tests: `tests/integration/`
-  - End-to-end tests: `tests/e2e/`
-  - Test files should mirror the source structure
-  - Test file names should start with `test_`
+    - Unit tests: `tests/unit/`
+    - Integration tests: `tests/integration/`
+    - End-to-end tests: `tests/e2e/`
+    - Test files should mirror the source structure
+    - Test file names should start with `test_`
 
 - **Test Configuration**
   ```toml
@@ -82,9 +84,7 @@ alwaysApply: false
   - Each test should focus on a single aspect
   - Use descriptive test names
   - Include docstrings for test functions
-  - Use fixtures for common setup/teardown
   - Mock external dependencies
-  - Use hypothesis strategies for generating test data
 
 - **Test Categories**
   - Unit Tests: Test individual components in isolation
@@ -101,8 +101,6 @@ alwaysApply: false
   - Mock random number generation
 
 - **Test Data Management**
-  - Use fixtures for test data
   - Keep test data minimal and focused
   - Use factories for complex objects
   - Clean up test data after tests
-  - Use hypothesis for generating test data
