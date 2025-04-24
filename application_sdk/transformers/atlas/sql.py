@@ -5,7 +5,7 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-from typing import Any, Dict, List, Optional, TypeVar, overload
+from typing import Any, Dict, Optional, Set, TypeVar, cast, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -687,10 +687,11 @@ class Function(assets.Function):
         This class defines the attributes specific to Function entities.
 
         Attributes:
-            function_arguments (List[str] | None): List of function arguments.
+            function_arguments (Set[str] | None): Set of function arguments.
         """
 
-        function_arguments: List[str] | None = []
+        # overriding function_arguments same as in super class
+        function_arguments: Optional[Set[str]] = None
 
         @classmethod
         @init_guid
@@ -727,9 +728,21 @@ class Function(assets.Function):
                     connection_qualified_name
                 )
             else:
-                connection_qn, connector_name = AtlanConnectorType.get_connector_name(
+                result = AtlanConnectorType.get_connector_name(
                     schema_qualified_name, "schema_qualified_name", 5
                 )
+                if isinstance(result, tuple) and len(result) == 2:
+                    connection_qn, connector_name_result = result
+                    # Ensure connector_name is a string
+                    connector_name = (
+                        str(connector_name_result)
+                        if connector_name_result
+                        else "unknown"
+                    )
+                else:
+                    raise ValueError(
+                        f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
+                    )
 
             fields = schema_qualified_name.split("/")
             qualified_name = f"{schema_qualified_name}/{name}"
@@ -749,7 +762,7 @@ class Function(assets.Function):
                 database_qualified_name=database_qualified_name,
                 schema_name=schema_name,
                 schema_qualified_name=schema_qualified_name,
-                connector_name=connector_name,
+                connector_name=cast(Optional[str], connector_name),
                 connection_qualified_name=connection_qualified_name,
                 function_schema=function_schema,
             )
@@ -817,7 +830,8 @@ class Function(assets.Function):
             function_attributes["schema_name"] = obj["function_schema"]
             function_attributes["database_name"] = obj["function_catalog"]
 
-            if "TABLE" in obj.get("data_type", None):
+            data_type = obj.get("data_type", "")
+            if data_type and "TABLE" in data_type:
                 function_attributes["function_type"] = "Tabular"
             else:
                 function_attributes["function_type"] = "Scalar"
@@ -967,9 +981,22 @@ class TagAttachment(assets.TagAttachment):
                     connection_qualified_name
                 )
             else:
-                connection_qn, connector_name = AtlanConnectorType.get_connector_name(
+                result = AtlanConnectorType.get_connector_name(
                     schema_qualified_name, "schema_qualified_name", 5
                 )
+                if isinstance(result, tuple) and len(result) == 2:
+                    connection_qn, connector_name_result = result
+                    # Ensure connector_name is a string
+                    connector_name = (
+                        str(connector_name_result)
+                        if connector_name_result
+                        else "unknown"
+                    )
+                else:
+                    # Handle the case where result is not a tuple
+                    raise ValueError(
+                        f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
+                    )
 
             fields = schema_qualified_name.split("/")
             qualified_name = f"{schema_qualified_name}/{name}"
@@ -984,11 +1011,11 @@ class TagAttachment(assets.TagAttachment):
             return TagAttachment.Attributes(
                 name=name,
                 qualified_name=qualified_name,
-                database_name=database_name,
-                database_qualified_name=database_qualified_name,
-                schema_name=schema_name,
-                schema_qualified_name=schema_qualified_name,
-                connector_name=connector_name,
+                # database_name=database_name,
+                # database_qualified_name=database_qualified_name,
+                # schema_name=schema_name,
+                # schema_qualified_name=schema_qualified_name,
+                connector_name=cast(Optional[str], connector_name),
                 connection_qualified_name=connection_qualified_name,
             )
 

@@ -102,7 +102,9 @@ class SQLQueryInput(Input):
 
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
 
-    async def get_batched_dataframe(self) -> AsyncIterator["pd.DataFrame"]:  # noqa: F821
+    async def get_batched_dataframe(
+        self,
+    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
@@ -144,9 +146,11 @@ class SQLQueryInput(Input):
                     # Convert regular iterator to async iterator
                     if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
                         for item in result:
-                            yield item
+                            if isinstance(item, pd.DataFrame):
+                                yield item
                     else:
-                        yield result  # Single dataframe case
+                        if isinstance(result, pd.DataFrame):
+                            yield result
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
@@ -180,11 +184,16 @@ class SQLQueryInput(Input):
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return await asyncio.get_event_loop().run_in_executor(
+                    result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
+                    if isinstance(result, pd.DataFrame):
+                        return result
+                    raise
+
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
+            raise
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.
@@ -206,13 +215,19 @@ class SQLQueryInput(Input):
         try:
             # Run the blocking operation in a thread pool
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_event_loop().run_in_executor(
+                result = await asyncio.get_event_loop().run_in_executor(
                     executor, self._execute_query_daft
                 )
+                if isinstance(result, daft.DataFrame):
+                    return result
+                raise
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
+            raise
 
-    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
+    async def get_batched_daft_dataframe(
+        self,
+    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:  # noqa: F821
         """Get query results as batched daft DataFrames.
 
         This method reads data using pandas in batches since daft does not support

@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Iterator, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
 from pyiceberg.table import Table
 
@@ -31,25 +31,28 @@ class IcebergInput(Input):
         self.table = table
         self.chunk_size = chunk_size
 
-    def get_dataframe(self) -> "pd.DataFrame":
+    async def get_dataframe(self) -> "pd.DataFrame":
         """
         Method to read the data from the iceberg table
         and return as a single combined pandas dataframe
         """
         try:
-            daft_dataframe = self.get_daft_dataframe()
+            daft_dataframe = await self.get_daft_dataframe()
             return daft_dataframe.to_pandas()
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table: {str(e)}")
+            raise
 
-    def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
+    async def get_batched_dataframe(
+        self,
+    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
         # We are not implementing this method as we have to parition the daft dataframe
         # using dataframe.into_partitions() method. This method does all the paritions in memory
         # and using that can cause out of memory issues.
         # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
         raise NotImplementedError
 
-    def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+    async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
         Method to read the data from the iceberg table
         and return as a single combined daft dataframe
@@ -60,8 +63,11 @@ class IcebergInput(Input):
             return daft.read_iceberg(self.table)
         except Exception as e:
             logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
+            raise
 
-    def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
+    async def get_batched_daft_dataframe(
+        self,
+    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:  # noqa: F821
         # We are not implementing this method as we have to parition the daft dataframe
         # using dataframe.into_partitions() method. This method does all the paritions in memory
         # and using that can cause out of memory issues.

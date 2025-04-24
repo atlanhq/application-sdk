@@ -76,6 +76,8 @@ class SQLHandler(HandlerInterface):
         df = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
+            if df is None:
+                raise ValueError("metadata_sql is not defined")
             for row in df.to_pylist():
                 result.append(
                     {
@@ -100,6 +102,8 @@ class SQLHandler(HandlerInterface):
                 engine=self.sql_client.engine, query=self.test_authentication_sql
             )
             df = await sql_input.get_daft_dataframe()
+            if df is None:
+                raise ValueError("test_authentication_sql is not defined")
             df.to_pylist()
             return True
         except Exception as exc:
@@ -314,6 +318,8 @@ class SQLHandler(HandlerInterface):
         sql_input = await sql_input.get_daft_dataframe()
         try:
             result = 0
+            if sql_input is None:
+                raise ValueError("tables_check_sql is not defined")
             for row in sql_input.to_pylist():
                 result += row["count"]
 
@@ -367,7 +373,8 @@ class SQLHandler(HandlerInterface):
                     query=self.client_version_sql,
                     engine=self.sql_client.engine,
                 ).get_dataframe()
-
+                if sql_input is None:
+                    raise ValueError("client_version_sql is not defined")
                 version_string = next(
                     iter(sql_input.to_dict(orient="records")[0].values())
                 )

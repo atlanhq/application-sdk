@@ -1,5 +1,14 @@
 import os
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+)
 
 import orjson
 from temporalio import activity
@@ -153,7 +162,9 @@ class JsonOutput(Output):
         except Exception as e:
             activity.logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(
+        self, dataframe: Union["daft.DataFrame", AsyncIterator[Dict[str, Any]]]
+    ):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
@@ -168,9 +179,10 @@ class JsonOutput(Output):
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
 
-        async for row in dataframe:
-            self.total_record_count += 1
-            # Serialize the row and add it to the buffer
+        if isinstance(dataframe, AsyncIterator):
+            async for row in dataframe:
+                self.total_record_count += 1
+                # Serialize the row and add it to the buffer
             buffer.append(
                 orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
             )
@@ -209,7 +221,15 @@ class JsonOutput(Output):
 
         if not self.buffer or not self.current_buffer_size:
             return
-        combined_dataframe = pd.concat(self.buffer)
+
+        if not isinstance(self.buffer, List["pd.DataFrame"]):
+            raise TypeError(
+                "_flush_buffer encountered non-list buffer. This should not happen."
+            )
+
+        # Now it's safe to cast for pd.concat
+        pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
+        combined_dataframe = pd.concat(pd_buffer)
 
         # Write DataFrame to JSON file
         if not combined_dataframe.empty:

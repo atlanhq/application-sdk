@@ -1,15 +1,17 @@
 import os
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type
+from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, cast
 
 import daft
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
+from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
+from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -37,7 +39,7 @@ class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
     """
 
     sql_client: Optional[BaseSQLClient] = None
-    handler: Optional[SQLHandler] = None
+    handler: Optional[HandlerInterface] = None
     transformer: Optional[TransformerInterface] = None
 
 
@@ -62,7 +64,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             Defaults to an empty string.
     """
 
-    _state: Dict[str, ActivitiesState[SQLHandler]] = {}
+    _state: Dict[str, BaseSQLMetadataExtractionActivitiesState] = {}
 
     fetch_database_sql = queries.get("EXTRACT_DATABASE")
     fetch_schema_sql = queries.get("EXTRACT_SCHEMA")
@@ -150,8 +152,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         """
         try:
             workflow_id = get_workflow_id()
-            if workflow_id in self._state:
-                await self._state[workflow_id].sql_client.close()
+            state = self._state.get(workflow_id)
+            if state and state.sql_client is not None:
+                await state.sql_client.close()
         except Exception as e:
             activity.logger.warning("Failed to close SQL client", exc_info=e)
 
@@ -177,15 +180,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         for row in results.iter_rows():
             try:
-                transformed_metadata: Optional[Dict[str, Any]] = (
-                    state.transformer.transform_metadata(
-                        typename,
-                        row,
-                        workflow_id=workflow_id,
-                        workflow_run_id=workflow_run_id,
-                        connection_name=connection_name,
-                        connection_qualified_name=connection_qualified_name,
-                    )
+                transformed_metadata = state.transformer.transform_metadata(
+                    typename,
+                    row,
+                    workflow_id=workflow_id,
+                    workflow_run_id=workflow_run_id,
+                    connection_name=connection_name,
+                    connection_qualified_name=connection_qualified_name,
                 )
                 if transformed_metadata:
                     yield transformed_metadata
@@ -233,7 +234,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args: Dict[str, Any],
         output_suffix: str,
         typename: str,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[ActivityStatistics]:
         """
         Executes a SQL query using the provided engine and saves the results to Parquet.
 
@@ -253,7 +254,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             typename: Type name used for generating output statistics.
 
         Returns:
-            A dictionary containing statistics about the generated Parquet file,
+            Optional[ActivityStatistics]: Statistics about the generated Parquet file,
             or None if the query is empty or execution fails before writing output.
 
         Raises:
@@ -305,7 +306,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_databases(self, workflow_args: Dict[str, Any]):
+    async def fetch_databases(
+        self, workflow_args: Dict[str, Any]
+    ) -> Optional[ActivityStatistics]:
         """Fetch databases from the source database.
 
         Args:
@@ -316,9 +319,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
+        state = cast(
+            BaseSQLMetadataExtractionActivitiesState,
+            await self._get_state(workflow_args),
         )
+        if not state.sql_client or not state.sql_client.engine:
+            activity.logger.error("SQL client or engine not initialized")
+            raise ValueError("SQL client or engine not initialized")
+
         prepared_query = prepare_query(
             query=self.fetch_database_sql, workflow_args=workflow_args
         )
@@ -333,7 +341,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_schemas(self, workflow_args: Dict[str, Any]):
+    async def fetch_schemas(
+        self, workflow_args: Dict[str, Any]
+    ) -> Optional[ActivityStatistics]:
         """Fetch schemas from the source database.
 
         Args:
@@ -344,9 +354,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Returns:
             Dict containing chunk count, typename, and total record count.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
+        state = cast(
+            BaseSQLMetadataExtractionActivitiesState,
+            await self._get_state(workflow_args),
         )
+        if not state.sql_client or not state.sql_client.engine:
+            activity.logger.error("SQL client or engine not initialized")
+            raise ValueError("SQL client or engine not initialized")
+
         prepared_query = prepare_query(
             query=self.fetch_schema_sql, workflow_args=workflow_args
         )
@@ -361,7 +376,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_tables(self, workflow_args: Dict[str, Any]):
+    async def fetch_tables(
+        self, workflow_args: Dict[str, Any]
+    ) -> Optional[ActivityStatistics]:
         """Fetch tables from the source database.
 
         Args:
@@ -370,11 +387,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict containing chunk count, typename, and total record count.
+            Optional[ActivityStatistics]: Statistics about the extracted tables, or None if extraction failed.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
+        state = cast(
+            BaseSQLMetadataExtractionActivitiesState,
+            await self._get_state(workflow_args),
         )
+        if not state.sql_client or not state.sql_client.engine:
+            activity.logger.error("SQL client or engine not initialized")
+            raise ValueError("SQL client or engine not initialized")
+
         prepared_query = prepare_query(
             query=self.fetch_table_sql,
             workflow_args=workflow_args,
@@ -391,7 +413,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_columns(self, workflow_args: Dict[str, Any]):
+    async def fetch_columns(
+        self, workflow_args: Dict[str, Any]
+    ) -> Optional[ActivityStatistics]:
         """Fetch columns from the source database.
 
         Args:
@@ -400,11 +424,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict containing chunk count, typename, and total record count.
+            Optional[ActivityStatistics]: Statistics about the extracted columns, or None if extraction failed.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
+        state = cast(
+            BaseSQLMetadataExtractionActivitiesState,
+            await self._get_state(workflow_args),
         )
+        if not state.sql_client or not state.sql_client.engine:
+            activity.logger.error("SQL client or engine not initialized")
+            raise ValueError("SQL client or engine not initialized")
+
         prepared_query = prepare_query(
             query=self.fetch_column_sql,
             workflow_args=workflow_args,
@@ -421,7 +450,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     @activity.defn
     @auto_heartbeater
-    async def fetch_procedures(self, workflow_args: Dict[str, Any]):
+    async def fetch_procedures(
+        self, workflow_args: Dict[str, Any]
+    ) -> Optional[ActivityStatistics]:
         """Fetch procedures from the source database.
 
         Args:
@@ -430,11 +461,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict containing chunk count, typename, and total record count.
+            Optional[ActivityStatistics]: Statistics about the extracted procedures, or None if extraction failed.
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
+        state = cast(
+            BaseSQLMetadataExtractionActivitiesState,
+            await self._get_state(workflow_args),
         )
+        if not state.sql_client or not state.sql_client.engine:
+            activity.logger.error("SQL client or engine not initialized")
+            raise ValueError("SQL client or engine not initialized")
+
         prepared_query = prepare_query(
             query=self.fetch_procedure_sql, workflow_args=workflow_args
         )
@@ -452,7 +488,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     async def transform_data(
         self,
         workflow_args: Dict[str, Any],
-    ):
+    ) -> ActivityStatistics:
         """Transforms raw data into the required format.
 
         Args:
@@ -461,12 +497,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             **kwargs: Additional keyword arguments.
 
         Returns:
-            Dict[str, Any]: A dictionary containing:
+            ActivityStatistics: Statistics about the transformed data, including:
                 - total_record_count: Total number of records processed
                 - chunk_count: Number of chunks processed
+                - typename: Type of data processed
         """
-        state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(
-            workflow_args
+        state = cast(
+            BaseSQLMetadataExtractionActivitiesState,
+            await self._get_state(workflow_args),
         )
         output_prefix, output_path, typename, workflow_id, workflow_run_id = (
             self._validate_output_args(workflow_args)

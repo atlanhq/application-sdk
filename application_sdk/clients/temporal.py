@@ -62,19 +62,22 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
+        event = ActivityStartEvent()
+        event.activity_id = activity.info().activity_id
+        event.activity_type = activity.info().activity_type
+
         EventStore.create_event(
-            ActivityStartEvent(
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
-            ),
+            event,
             topic_name=EventStore.TOPIC_NAME,
         )
         output = await super().execute_activity(input)
+
+        end_event = ActivityEndEvent()
+        end_event.activity_id = activity.info().activity_id
+        end_event.activity_type = activity.info().activity_type
+
         EventStore.create_event(
-            ActivityEndEvent(
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
-            ),
+            end_event,
             topic_name=EventStore.TOPIC_NAME,
         )
         return output
@@ -258,10 +261,8 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
-                workflow_class,
-                {
-                    "workflow_id": workflow_id,
-                },
+                workflow_class.run,
+                args=[{"workflow_id": workflow_id}],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),

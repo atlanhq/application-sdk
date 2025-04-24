@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncResult
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -276,6 +276,8 @@ class BaseSQLClient(ClientInterface):
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
+                if not cursor or not cursor.cursor:
+                    raise ValueError("Cursor is not supported")
                 column_names: List[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
@@ -382,8 +384,10 @@ class AsyncBaseSQLClient(BaseSQLClient):
             while True:
                 rows = (
                     await result.fetchmany(batch_size)
-                    if use_server_side_cursor
+                    if use_server_side_cursor and isinstance(result, AsyncResult)
                     else result.cursor.fetchmany(batch_size)
+                    if result.cursor
+                    else None
                 )
                 if not rows:
                     break
