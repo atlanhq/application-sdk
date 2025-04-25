@@ -4,7 +4,7 @@ import subprocess
 import sys
 from typing import List, Tuple
 
-import semver
+import semver  # type: ignore
 
 
 def get_commits_since_last_tag() -> List[str]:

@@ -76,8 +76,6 @@ class SQLHandler(HandlerInterface):
         df = await sql_input.get_daft_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
-            if df is None:
-                raise ValueError("metadata_sql is not defined")
             for row in df.to_pylist():
                 result.append(
                     {
@@ -316,11 +314,8 @@ class SQLHandler(HandlerInterface):
         sql_input = await sql_input.get_daft_dataframe()
         try:
             result = 0
-            if sql_input is None:
-                raise ValueError("tables_check_sql is not defined")
             for row in sql_input.to_pylist():
                 result += row["count"]
-
             return {
                 "success": True,
                 "successMessage": f"Tables check successful. Table count: {result}",
