@@ -27,7 +27,6 @@ The application_sdk package is organized into the following modules and submodul
 2. **Infrastructure and Clients**:
     - `clients/`: Contains client implementations for various services
     - `common/`: Shared utilities and common functionality
-    - `decorators/`: Decorator patterns for the SDK
 
 3. **Workflow and Activity Management**:
     - `workflows/`: Workflow definitions and implementations

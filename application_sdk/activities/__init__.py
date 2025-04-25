@@ -1,3 +1,18 @@
+"""Activities module for workflow task implementations.
+
+This module provides base classes and interfaces for implementing workflow activities.
+It includes state management functionality and defines the basic structure for
+activity implementations.
+
+Example:
+    >>> from application_sdk.activities import ActivitiesInterface
+    >>>
+    >>> class MyActivities(ActivitiesInterface[MyHandler]):
+    ...     async def my_activity(self, workflow_args: Dict[str, Any]) -> None:
+    ...         state = await self._get_state(workflow_args)
+    ...         await state.handler.do_something()
+"""
+
 from abc import ABC
 from typing import Any, Dict, Generic, Optional, TypeVar
 
@@ -21,10 +36,16 @@ class ActivitiesState(BaseModel, Generic[H]):
     including handler configuration and workflow arguments.
 
     Attributes:
-        handler (Optional[H]): Handler instance for activity-specific
-            operations. Defaults to None.
-        workflow_args (Optional[Dict[str, Any]]): Arguments passed to the workflow.
-            Defaults to None.
+        handler: Handler instance for activity-specific operations.
+            Must be a subclass of HandlerInterface.
+        workflow_args: Arguments passed to the workflow.
+            Contains configuration and runtime parameters.
+
+    Example:
+        >>> state = ActivitiesState[MyHandler](
+        ...     handler=MyHandler(),
+        ...     workflow_args={"param": "value"}
+        ... )
     """
 
     model_config = {"arbitrary_types_allowed": True}
@@ -36,11 +57,25 @@ class ActivitiesInterface(ABC, Generic[H]):
     """Abstract base class defining the interface for workflow activities.
 
     This class provides state management functionality and defines the basic structure
-    for activity implementations.
+    for activity implementations. Activities can access shared state and handler
+    instances through this interface.
+
+    Attributes:
+        _state: Dictionary mapping workflow IDs to their respective states.
+
+    Example:
+        >>> class MyActivities(ActivitiesInterface[MyHandler]):
+        ...     async def setup(self, handler: MyHandler) -> None:
+        ...         state = await self._get_state({})
+        ...         state.handler = handler
     """
 
     def __init__(self):
-        """Initialize the activities interface with an empty state dictionary."""
+        """Initialize the activities interface with an empty state dictionary.
+
+        The state dictionary maps workflow IDs to their respective ActivitiesState
+        instances, allowing for isolation between different workflow executions.
+        """
         self._state: Dict[str, ActivitiesState[H]] = {}
 
     # State methods
@@ -52,7 +87,7 @@ class ActivitiesInterface(ABC, Generic[H]):
         keyed by workflow ID.
 
         Args:
-            workflow_args (Dict[str, Any]): Arguments for the workflow, containing
+            workflow_args: Arguments for the workflow, containing
                 configuration and runtime parameters.
 
         Example:
@@ -60,6 +95,10 @@ class ActivitiesInterface(ABC, Generic[H]):
             ...     "workflow_id": "123",
             ...     "metadata": {"key": "value"}
             ... })
+
+        Note:
+            The workflow ID is automatically retrieved from the current activity context.
+            If no state exists for the current workflow, a new one will be created.
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
@@ -73,10 +112,17 @@ class ActivitiesInterface(ABC, Generic[H]):
         If state doesn't exist, it will be initialized using _set_state.
 
         Args:
-            workflow_args: Dictionary containing workflow arguments.
+            workflow_args: Dictionary containing workflow arguments and configuration.
 
         Returns:
             The state data for the current workflow.
+
+        Raises:
+            Exception: If there is an error retrieving or initializing the state.
+                The state will be cleaned up in case of an error.
+
+        Note:
+            This method will automatically initialize state if it doesn't exist.
         """
         try:
             workflow_id = get_workflow_id()
@@ -89,7 +135,15 @@ class ActivitiesInterface(ABC, Generic[H]):
             raise
 
     async def _clean_state(self):
-        """Remove the state data for the current workflow."""
+        """Remove the state data for the current workflow.
+
+        This method is typically called when cleaning up after workflow completion
+        or when handling errors that require state reset.
+
+        Note:
+            Failures during cleanup are logged but do not raise exceptions to avoid
+            masking the original error that triggered the cleanup.
+        """
         try:
             workflow_id = get_workflow_id()
             if workflow_id in self._state:
@@ -99,14 +153,26 @@ class ActivitiesInterface(ABC, Generic[H]):
 
     @activity.defn
     @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]):
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
         """Perform preflight checks before workflow execution.
 
+        This method validates the workflow configuration and ensures all required
+        resources are available before starting the main workflow execution.
+
         Args:
-            workflow_args: Dictionary containing workflow arguments.
+            workflow_args: Dictionary containing workflow arguments and configuration.
+                Must include a 'metadata' key with workflow-specific settings.
+
+        Returns:
+            Dictionary containing the results of the preflight check.
 
         Raises:
-            NotImplementedError: When not implemented by subclass.
+            ValueError: If the handler is not found or if the preflight check fails.
+            Exception: For any other errors during the preflight check.
+
+        Note:
+            This method is decorated with @activity.defn to mark it as a Temporal activity
+            and with @auto_heartbeater to automatically send heartbeats during execution.
         """
         activity.logger.info("Starting preflight check")
 
