@@ -183,9 +183,9 @@ class JsonOutput(Output):
             async for row in dataframe:
                 self.total_record_count += 1
                 # Serialize the row and add it to the buffer
-            buffer.append(
-                orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
-            )
+                buffer.append(
+                    orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+                )
 
             # If the buffer reaches the specified size, write it to the file
             if self.chunk_size and len(buffer) >= self.chunk_size:
