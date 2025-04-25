@@ -75,36 +75,70 @@ class TestInterface:
 
     @abstractmethod
     def test_health_check(self):
-        """
-        Method to test the health check of the server.
+        """Test the health check endpoint of the server.
+
+        This method should verify that the server's health check endpoint
+        is responding correctly and the service is operational.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            AssertionError: If the health check fails.
         """
         raise NotImplementedError
 
     @abstractmethod
     def test_auth(self):
-        """
-        Method to test the test authentication.
+        """Test the authentication functionality.
+
+        This method should verify that the authentication process works correctly,
+        including token generation, validation, and error handling for invalid
+        credentials.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            AssertionError: If authentication tests fail.
         """
         raise NotImplementedError
 
     @abstractmethod
     def test_metadata(self):
-        """
-        Method to test the metadata
+        """Test metadata validation and processing.
+
+        This method should verify that metadata is correctly validated, processed,
+        and stored according to the application's requirements. It should test
+        both valid and invalid metadata scenarios.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            AssertionError: If metadata validation tests fail.
         """
         raise NotImplementedError
 
     @abstractmethod
     def test_preflight_check(self):
-        """
-        Method to test the preflight check
+        """Test the preflight check functionality.
+
+        This method should verify that the preflight check process correctly
+        validates all prerequisites before workflow execution, including
+        permissions, resource availability, and configuration.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            AssertionError: If preflight check tests fail.
         """
         raise NotImplementedError
 
     @abstractmethod
     def test_run_workflow(self):
-        """
-        Method to run the workflow
+        """Test the workflow execution process.
+
+        This method should verify the complete workflow execution process,
+        including initialization, task execution, error handling, and result
+        validation. It should test both successful and error scenarios.
+
+        Raises:
+            NotImplementedError: If the subclass does not implement this method.
+            AssertionError: If workflow execution tests fail.
         """
         raise NotImplementedError
 

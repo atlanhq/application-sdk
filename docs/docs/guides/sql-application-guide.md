@@ -1,224 +1,333 @@
-# Step-by-Step Guide to Create an SQL Application
+# Building SQL Applications with Application SDK
 
-This guide will walk you through the process of creating an SQL application using the Atlan Platform SDK. We will cover each component and explain how you can extend them for your specific needs.
+The Application SDK provides a robust framework for building SQL applications that interact with databases to extract, process, and store metadata. This guide demonstrates how to leverage the SDK's default implementations while maintaining the flexibility to customize behavior for your specific needs.
 
-When we say "SQL application," we mean an application that interacts with an SQL database, extracts metadata from the database, (optionally) processes the metadata to provide capabilities (like lineage, popularity metrics, etc.) and stores the metadata in a specified format in the configured object store. The use case can be extended by adding more steps to the workflow, such as data validation, transformation, and more.
+## Overview
 
+An SQL application built with the SDK typically performs the following operations:
 
-!!! tip
-    In simple terms, a workflow is a series of steps or tasks that are executed in a specific order to achieve a goal. In the context of an SQL application, these steps could include connecting to the database, extracting metadata, running validation checks, and processing data.
+1.  **Connect**: Securely connects to SQL databases using various authentication methods.
+2.  **Extract**: Fetches metadata (schemas, tables, columns, procedures, etc.) using configurable SQL queries.
+3.  **Validate**: Performs preflight checks and validates extracted metadata.
+4.  **Transform**: Converts the extracted metadata into a standardized format (e.g., Atlas entities).
+5.  **Store**: Saves the processed metadata to a configured object store.
+6.  **Orchestrate**: Manages the entire process using Temporal workflows for reliability and scalability.
 
-Activities are the individual tasks that make up the workflow. Each activity performs a specific job, such as querying a database for schema details or validating table data. These activities are linked together to form the complete workflow.
+The SDK follows a "batteries included but swappable" philosophy - it provides sensible defaults for common tasks while allowing customization at every level.
 
-At a high level, creating an SQL application involves the following steps:
+## Core Components
 
-1. Configuring all components needed to interact with the database.
-2. Setting up the Workflow Worker, which executes the workflow logic and handles authentication, metadata extraction, preflight checks, and any other custom logic.
-3. Building the Workflow and activities, which define how and when various tasks are executed and customize the behavior for your specific use case.
+The SDK's SQL metadata extraction workflow (`application_sdk.workflows.metadata_extraction.sql.BaseSQLMetadataExtractionWorkflow`) relies on three main customizable components defined in `application_sdk`:
 
-## Prerequisites
+1.  **SQL Client** (`application_sdk.clients.sql.BaseSQLClient`)
+    *   **Responsibility**: Handles database connectivity and query execution.
+    *   **Extensibility**: Extend this class to support different SQL dialects, connection string formats, or custom authentication logic (like IAM roles).
 
-Before you begin, make sure you have:
+2.  **Activities** (`application_sdk.activities.metadata_extraction.sql.BaseSQLMetadataExtractionActivities`)
+    *   **Responsibility**: Defines the SQL queries used to extract metadata (databases, schemas, tables, columns, etc.) and manages the extraction process.
+    *   **Extensibility**: Override specific SQL query attributes (`fetch_database_sql`, `fetch_schema_sql`, etc.) to tailor metadata extraction for your database schema or specific needs.
 
-- Installed the Atlan Platform SDK
-- Set up your development environment with Python 3.11 or above. You can check your Python version by running the following command in your terminal:
-    - `python --version`
-    - Ensure that the output shows Python 3.11 or above.
-- Familiarity with the basics of SQL and database concepts
+3.  **Handler** (`application_sdk.handlers.sql.SQLHandler`)
+    *   **Responsibility**: Manages database-specific validation logic (e.g., checking table counts, validating filters) and provides helper methods for SQL operations.
+    *   **Extensibility**: Extend this class to implement custom validation checks (`tables_check_sql`, `metadata_sql`) or database-specific logic required during the workflow.
 
-## Overview of SQL Workflows
+These components work together within the `BaseSQLMetadataExtractionWorkflow`, orchestrated by a `application_sdk.worker.Worker`.
 
-An SQL workflow defines a series of steps that interact with a database. Let's explore the main steps:
+## Quick Start: Using Defaults
 
-- **Authentication**: Verifying database credentials to ensure proper access.
-- **Metadata extraction**: Retrieving schema, table, and column information to understand the database structure.
-- **Preflight checks**: Verifying database accessibility and structure before running the workflow.
-- **Execution logic**: Defining the tasks that the workflow will carry out once started, such as processing data or running custom queries.
+You can quickly get started by using the default implementations provided by the SDK. The main steps involve:
 
-## Understanding the Application SDK Structure
+1.  Getting a workflow client.
+2.  Instantiating the default activities (`BaseSQLMetadataExtractionActivities`) and optionally providing a custom SQL client class or handler class if needed (though defaults exist).
+3.  Creating a `Worker` instance, passing the workflow client, the base workflow class (`BaseSQLMetadataExtractionWorkflow`), and the activities.
+4.  Defining `workflow_args` with credentials and configuration.
+5.  Starting the workflow and the worker.
 
-The Atlan Platform SDK offers a set of base interfaces and abstract classes that provide default behavior for common tasks such as authentication, metadata extraction, and preflight checks. You can either use these default implementations or extend them to create custom workflows tailored to your specific use case.
+*(See the full example in the "Putting It All Together" section below, which demonstrates both default usage and customization).*
 
-Here’s an overview of the core components:
+## Customization Examples
 
-- `SQLWorkflowAuthInterface`: This interface handles authentication for the workflow. The default implementation establishes a connection to the database using the provided credentials and checks their validity.
+While the defaults are powerful, you'll often need to customize components for specific databases or requirements. Here's how you can extend the core components, using examples inspired by `examples/application_sql.py`:
 
-- `SQLWorkflowMetadataInterface`: This interface manages metadata extraction from the database.
+### 1. Custom SQL Client
 
-- `SQLWorkflowPreflightCheckInterface`: This interface runs preflight checks before the workflow is executed.
-
-- `SQLWorkflowWorkerInterface`: This interface handles the execution logic of the workflow. The default implementation is responsible for running the tasks defined by the workflow, such as extracting data, running preflight checks, and processing results. You can override this interface to implement custom workflow logic, such as data transformations or running multiple queries in sequence.
-
-These components are flexible, enabling you to build workflows with custom logic or simply use the out-of-the-box implementations. Now, let’s start with setting up the necessary configurations for interacting with the database.
-
-## Configuration
-
-To interact with the database, we need to configure
-- Authentication
-- Metadata extraction
-- Preflight checks
-
-### Defining the `SQLWorkflowAuthInterface` class
-
-The `SQLWorkflowAuthInterface` class is used to authenticate the SQL workflow. The default implementation of `SQLWorkflowAuthInterface` runs a simple SQL query(defined by `TEST_AUTHENTICATION_SQL`) on the source database.
-
-!!! tip
-    You can choose to not override this class and use the default implementation of this class, or you can choose to override this class to use your custom implementation of testing authentication.
-
-    If you wish to use the default implementation of this class, feel free to skip this section and move to the next section.
-
-When overriding this class, you can either provide your own implementation of `TEST_AUTHENTICATION_SQL` SQL query and use the default implementation of testing authentication, where it creates a connection to the source database, and checks if the query completes successfully.
-
-For example -
+Extend `BaseSQLClient` to define connection parameters specific to your database (e.g., PostgreSQL).
 
 ```python
-class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
-    TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
+# examples/application_sql.py
+from application_sdk.clients.sql import BaseSQLClient
+
+class SQLClient(BaseSQLClient):
+    # Define connection string template and required parameters for PostgreSQL
+    DB_CONFIG = {
+        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        "required": ["username", "password", "host", "port", "database"],
+    }
 ```
 
-Or you can also choose to override the `test_auth` method and provide your own implementation -
+### 2. Custom Activities
+
+Extend `BaseSQLMetadataExtractionActivities` to provide custom SQL queries for metadata extraction.
 
 ```python
-class MySQLWorkflowAuthInterface(SQLWorkflowAuthInterface):
-    TEST_AUTHENTICATION_SQL: str = "SELECT 1;"
+# examples/application_sql.py
+from application_sdk.activities.metadata_extraction.sql import (
+    BaseSQLMetadataExtractionActivities,
+)
 
+class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
+    # Customize database metadata query for PostgreSQL
+    fetch_database_sql = """
+    SELECT datname as database_name FROM pg_database WHERE datname = current_database();
+    """
 
-    def test_auth(self, credential: Dict[str, Any]) -> bool:
-        # Your authentication logic here
-        return True
+    # Customize schema metadata query for PostgreSQL
+    fetch_schema_sql = """
+    SELECT
+        s.*
+    FROM
+        information_schema.schemata s
+    WHERE
+        s.schema_name NOT LIKE 'pg_%'
+        AND s.schema_name != 'information_schema'
+        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}'
+        AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';
+    """
 
+    # Customize table metadata query
+    fetch_table_sql = """
+    SELECT
+        t.*
+    FROM
+        information_schema.tables t
+    WHERE concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}'
+        AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}'
+        {temp_table_regex_sql};
+    """
+
+    # Provide SQL snippet for excluding temporary tables (used in other queries)
+    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
+
+    # Customize column metadata query
+    fetch_column_sql = """
+    SELECT
+        c.*
+    FROM
+        information_schema.columns c
+    WHERE
+        concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}'
+        AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
+        {temp_table_regex_sql};
+    """
 ```
 
-### Defining the `SQLWorkflowMetadataInterface` class
+### 3. Custom Handler
 
-The `SQLWorkflowMetadataInterface` class is responsible for fetching metadata from the database. This includes extracting schema, table, and column information, which can be useful for understanding the structure of the database.
-
-If you want to customize the metadata extraction SQL, you can override the default `METADATA_SQL`. `METADATA_SQL` defines the SQL query to fetch the metadata.
+Extend `SQLHandler` to implement custom validation logic specific to your database.
 
 ```python
-from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
-    METADATA_SQL = """
+# examples/application_sql.py
+from application_sdk.handlers.sql import SQLHandler
+
+class SampleSQLWorkflowHandler(SQLHandler):
+    # Customize query to check table count (used in preflight checks)
+    tables_check_sql = """
+    SELECT count(*)
+        FROM INFORMATION_SCHEMA.TABLES t -- Added alias 't'
+        WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}'
+            AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}'
+            AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal')
+            {temp_table_regex_sql};
+    """
+
+    # Define SQL snippet for excluding temporary tables (used in tables_check_sql)
+    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'" # Uses alias 't'
+
+    # Customize query to fetch basic schema/catalog info (used in preflight checks)
+    metadata_sql = """
     SELECT schema_name, catalog_name
-    FROM INFORMATION_SCHEMA.SCHEMATA;
+        FROM INFORMATION_SCHEMA.SCHEMATA
+        WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'
     """
 ```
 
-You can also optionally override the default implementation of `fetch_metadata` function,
+## Putting It All Together
+
+This example, adapted from `examples/application_sql.py`, shows how to integrate custom components into a complete application:
 
 ```python
-from application_sdk.workflows.sql.metadata import SQLWorkflowMetadataInterface
-class MySQLWorkflowMetadata(SQLWorkflowMetadataInterface):
-    METADATA_SQL = """
-    SELECT schema_name, catalog_name
-    FROM INFORMATION_SCHEMA.SCHEMATA;
-    """
-    DATABASE_KEY: str = "TABLE_CATALOG"
-    SCHEMA_KEY: str = "TABLE_SCHEMA"
+import asyncio
+import os
+from typing import Any, Dict
 
-    def fetch_metadata(self, credential: Dict[str, Any]) -> List[Dict[str, str]]:
-        # Your custom logic here
-        return []
+# Import SDK components
+from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
+from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.utils import get_workflow_client
+from application_sdk.handlers.sql import SQLHandler
+from application_sdk.worker import Worker
+from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
+from application_sdk.common.logger_adaptors import get_logger
+
+APPLICATION_NAME = "postgres-app-example" # Define application name
+logger = get_logger(__name__)
+
+# --- Custom Component Definitions (as shown in previous sections) ---
+class SQLClient(BaseSQLClient):
+    DB_CONFIG = {
+        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        "required": ["username", "password", "host", "port", "database"],
+    }
+
+class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
+    fetch_database_sql = "SELECT datname as database_name FROM pg_database WHERE datname = current_database();"
+    fetch_schema_sql = "SELECT s.* FROM information_schema.schemata s WHERE s.schema_name NOT LIKE 'pg_%' AND s.schema_name != 'information_schema' AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) !~ '{normalized_exclude_regex}' AND concat(s.CATALOG_NAME, concat('.', s.SCHEMA_NAME)) ~ '{normalized_include_regex}';"
+    fetch_table_sql = "SELECT t.* FROM information_schema.tables t WHERE concat(current_database(), concat('.', t.table_schema)) !~ '{normalized_exclude_regex}' AND concat(current_database(), concat('.', t.table_schema)) ~ '{normalized_include_regex}' {temp_table_regex_sql};"
+    extract_temp_table_regex_table_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
+    fetch_column_sql = "SELECT c.* FROM information_schema.columns c WHERE concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}' AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}' {temp_table_regex_sql};"
+
+class SampleSQLWorkflowHandler(SQLHandler):
+    tables_check_sql = "SELECT count(*) FROM INFORMATION_SCHEMA.TABLES t WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}' AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}' AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal') {temp_table_regex_sql};"
+    temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
+    metadata_sql = "SELECT schema_name, catalog_name FROM INFORMATION_SCHEMA.SCHEMATA WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"
+# --- End Custom Component Definitions ---
+
+async def run_sql_application(daemon: bool = True) -> Dict[str, Any]:
+    """Sets up and runs the SQL metadata extraction workflow."""
+    logger.info(f"Starting SQL application: {APPLICATION_NAME}")
+
+    # 1. Initialize workflow client (uses Temporal client configured via constants)
+    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
+    await workflow_client.load()
+
+    # 2. Instantiate activities with custom SQL client and handler
+    activities = SampleSQLActivities(
+        sql_client_class=SQLClient, # Use our custom PostgreSQL client
+        handler_class=SampleSQLWorkflowHandler # Use our custom handler
+    )
+
+    # 3. Set up the Temporal worker
+    #    - Uses the base workflow class (handles orchestration)
+    #    - Registers the activities instance (provides extraction logic)
+    worker = Worker(
+        workflow_client=workflow_client,
+        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
+        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(activities),
+    )
+
+    # 4. Configure workflow arguments
+    #    These arguments control credentials, connection details, filtering, etc.
+    #    They are typically loaded from a secure source or environment variables.
+    workflow_args = {
+        "credentials": {
+            "authType": "basic",
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": os.getenv("POSTGRES_PORT", "5432"),
+            "username": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", "password"),
+            "database": os.getenv("POSTGRES_DATABASE", "postgres"),
+        },
+        "connection": {
+            "connection_name": "test-postgres-connection", # Example connection name
+            "connection_qualified_name": f"default/postgres/{int(time.time())}", # Example qualified name
+        },
+        "metadata": {
+            # Define include/exclude filters (regex patterns)
+            "exclude-filter": "{}",
+            "include-filter": "{}",
+            # Define regex for temporary tables to exclude
+            "temp-table-regex": "^temp_",
+            # Extraction method (direct connection)
+            "extraction-method": "direct",
+            # Options to exclude views or empty tables
+            "exclude_views": "false",
+            "exclude_empty_tables": "false",
+        },
+        "tenant_id": os.getenv("ATLAN_TENANT_ID", "default"), # Tenant ID from constants
+        # --- Optional arguments ---
+        # "workflow_id": "existing-workflow-run_id", # Uncomment to rerun a specific workflow
+        # "cron_schedule": "0 */1 * * *", # Uncomment to run hourly
+    }
+
+    # 5. Start the workflow execution via the Temporal client
+    logger.info(f"Starting workflow with args: {workflow_args}")
+    workflow_response = await workflow_client.start_workflow(
+        workflow_args, BaseSQLMetadataExtractionWorkflow
+    )
+    logger.info(f"Workflow started: {workflow_response}")
+
+    # 6. Start the Temporal worker to process tasks
+    #    Set daemon=True to run in background, False to run in foreground (for scripts)
+    logger.info(f"Starting worker (daemon={daemon})...")
+    await worker.start(daemon=daemon)
+
+    return workflow_response # Returns info like workflow_id, run_id
+
+# --- Script Execution ---
+if __name__ == "__main__":
+    import time # Needed for connection_qualified_name example
+    # Run the application in the foreground when script is executed directly
+    asyncio.run(run_sql_application(daemon=False))
+
 ```
 
-### Defining the `SQLWorkflowPreflightCheckInterface` class
+## Configuration Details
 
-The `preflight_checks` method in `SQLWorkflowPreflightCheckInterface` class is used to perform preflight checks on the data.
+The `workflow_args` dictionary is crucial for controlling the workflow's behavior. Key sections include:
 
-You can override this class and set the values of `METADATA_SQL`, `TABLES_CHECK_SQL` to define the SQL query to fetch metadata, and the SQL query to fetch the tables.
+*   **`credentials`**: Contains database connection details (`host`, `port`, `username`, `password`, `database`) and the `authType` (e.g., `basic`, `iam_user`, `iam_role`). Sensitive values should be loaded securely (e.g., from environment variables or a secret store).
+*   **`connection`**: Defines how the connection is identified in Atlan (`connection_name`, `connection_qualified_name`).
+*   **`metadata`**: Controls extraction behavior:
+    *   `include-filter`/`exclude-filter`: JSON strings containing regex patterns to filter schemas/tables.
+    *   `temp-table-regex`: Regex to identify temporary tables for exclusion.
+    *   `extraction-method`: Typically "direct".
+    *   `exclude_views`: Boolean string ("true"/"false") to skip views.
+    *   `exclude_empty_tables`: Boolean string to skip tables with zero rows (requires count checks).
+*   **`tenant_id`**: Specifies the tenant context.
+*   **Optional**: `workflow_id` for reruns, `cron_schedule` for scheduled execution.
 
-For example,
+Refer to the [Configuration Guide](./configuration.md) for details on setting these via environment variables.
+
+## Advanced Features
+
+### Scheduled Execution
+
+Run workflows automatically by adding `cron_schedule` to `workflow_args`:
 
 ```python
-from application_sdk.workflows.sql.preflight import SQLWorkflowPreflightCheckInterface
-class MySQLWorkflowPreflight(SQLWorkflowPreflightCheckInterface):
-    PREFLIGHT_SQL = """
-    SELECT COUNT(*)
-    FROM your_table;
-    """
-    TABLES_CHECK_SQL = """
-    SELECT COUNT(*)
-    FROM INFORMATION_SCHEMA.TABLES;
-    """
-
-    def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        # Your preflight check logic here
-        return {"status": "success", "message": "Preflight check completed successfully"}
+workflow_args["cron_schedule"] = "0 1 * * *" # Run daily at 1 AM
 ```
 
-## Setting up the Workflow Worker
+### Workflow Rerun
 
-### Defining the `SQLWorkflowWorkerInterface` class
-
-The `SQLWorkflowWorkerInterface` class handles the execution of the workflow. It provides the core logic to interact with the database, fetch data (such as schemas, tables, columns), and process that data according to the workflow’s configuration. The `execute_workflow` method is used to execute the workflow.
-
-The default implementation of SQLWorkflowWorkerInterface supports:
-
-- Database connection management: Using SQLAlchemy, the worker connects to the database using the credentials provided at runtime.
-- Query execution: It runs SQL queries in batches using either client-side or server-side cursors, depending on your database configuration.
-- Data fetching: It retrieves database metadata, including databases, schemas, tables, and columns.
-- Data transformation: The fetched data can be transformed through a provided `TransformerInterface` before being stored.
-- Activity management: It defines default activities such as fetching databases, schemas, tables, and columns, which can be run in parallel as part of the workflow.
-
-You should override `SQLWorkflowWorkerInterface` if you need to customize how the workflow interacts with your database or how the fetched data is processed. For example, you may want to:
-
-- Customize SQL Queries: Override the default SQL queries (e.g., `DATABASE_SQL`, `SCHEMA_SQL`, `TABLE_SQL`, and `COLUMN_SQL`) to tailor the queries to your database structure.
-- Transform Data: Customize the transformation logic by providing a custom implementation of `TransformerInterface`.
-- Custom Workflow Logic: If you need to perform additional tasks beyond the default activities (e.g., post-processing the data or handling specific edge cases), you can override the run method to define a custom sequence of activities.
-
-Create a class that inherits from `SQLWorkflowWorkerInterface` to define the workflow worker:
-```python
-from application_sdk.workflows.sql.worker import SQLWorkflowWorkerInterface
-class MySQLWorkflowWorker(SQLWorkflowWorkerInterface):
-    DATABASE_SQL = "Your custom database extraction SQL"
-    SCHEMA_SQL = "Your custom schema extraction SQL"
-    TABLE_SQL = "Your custom table extraction SQL"
-    COLUMN_SQL = "Your custom colum extraction SQL"
-
-    def __init__(self, metadata: SQLWorkflowMetadataInterface, preflight: SQLWorkflowPreflightInterface):
-        super().__init__(metadata, preflight)
-```
-
-## Building the Workflow
-
-### Defining the `SQLWorkflowBuilder` class
-
-The `SQLWorkflowBuilder` class is responsible for constructing the entire workflow by integrating the core components like authentication, metadata extraction, preflight checks, and the worker logic that we've built above.
-
-It defines abstract methods to get the SQLAlchemy connection string and connection arguments, which are used to create a database engine for workflow execution. By default, the class provides an engine using SQLAlchemy and allows for the use of pre-built or custom interfaces for authentication, metadata, preflight checks, and worker logic.
-
-Let's create a class that inherits from `SQLWorkflowBuilder` to define our custom builder:
+Resume or rerun a specific workflow execution by providing its `workflow_id`:
 
 ```python
-class MyWorkflowBuilder(SQLWorkflowBuilder):
-    def get_sqlalchemy_connection_string(self, credentials: Dict[str, Any]) -> str:
-        encoded_password = quote_plus(credentials["password"])
-        username = credentials['username']
-        host = credentials['host']
-        port = credentials['port']
-        database = credentials['database']
-
-        return "My custom credentials string"
-
-    def __init__(self, *args: Any, **kwargs: Any):
-        self.auth_interface = MySQLWorkflowAuthInterface()
-        self.metadata_interface = MySQLWorkflowMetadata(self.get_sql_engine)
-        self.preflight_interface = MySQLWorkflowPreflight(self.get_sql_engine)
-        self.worker_interface = MySQLWorkflowWorker(
-            "My Application Name", get_sql_engine=self.get_sql_engine
-        )
-        super().__init__(
-            auth_interface=self.auth_interface,
-            metadata_interface=self.metadata_interface,
-            preflight_check_interface=self.preflight_interface,
-            worker_interface=self.worker_interface,
-            *args,
-            **kwargs,
-        )
+workflow_args["workflow_id"] = "your-previous-workflow_id"
 ```
 
-Once you've created your WorkflowBuilder class, you can start using it in your project,
+### Custom Authentication
 
-```python
-my_workflow_builder = MyWorkflowBuilder()
-```
+The `BaseSQLClient` supports different `authType` values in the `credentials`:
+
+*   `basic`: Uses `username` and `password`.
+*   `iam_user`: Uses AWS IAM user credentials (requires specific keys in `credentials`).
+*   `iam_role`: Uses an AWS IAM role (requires specific keys in `credentials`).
+
+You can extend `BaseSQLClient` to add support for other authentication mechanisms.
+
+## Best Practices
+
+1.  **Configuration**: Load sensitive credentials and configuration from environment variables or secure stores, not directly in code. Use the constants defined in `application_sdk.constants`.
+2.  **Error Handling**: Implement `try...except` blocks in custom code (especially within Activities or Handlers) to handle potential database errors or unexpected data.
+3.  **Logging**: Use the SDK's logger (`application_sdk.common.logger_adaptors.get_logger`) for consistent and structured logging integrated with Temporal.
+4.  **Idempotency**: Design activities to be idempotent where possible, meaning they can be run multiple times with the same result. Temporal handles retries, but idempotent activities simplify recovery.
+5.  **Testing**: Write unit tests for your custom Client, Activities, and Handler classes to ensure they function correctly. The SDK provides testing utilities (`application_sdk.test_utils`).
+6.  **Resource Management**: Ensure database connections are properly closed. The SDK's client and workflow management generally handle this, but be mindful in custom extensions.
+
+## Next Steps
+
+*   Explore the complete [PostgreSQL example application](https://github.com/atlanhq/atlan-postgres-app) for a more production-ready implementation.
+*   Consult the [Configuration Guide](./configuration.md) for managing environment variables.

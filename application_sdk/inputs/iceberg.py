@@ -43,8 +43,8 @@ class IcebergInput(Input):
             logger.error(f"Error reading data from Iceberg table: {str(e)}")
 
     def get_batched_dataframe(self) -> Iterator["pd.DataFrame"]:
-        # We are not implementing this method as we have to parition the daft dataframe
-        # using dataframe.into_partitions() method. This method does all the paritions in memory
+        # We are not implementing this method as we have to partition the daft dataframe
+        # using dataframe.into_partitions() method. This method does all the partitions in memory
         # and using that can cause out of memory issues.
         # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
         raise NotImplementedError
@@ -62,8 +62,8 @@ class IcebergInput(Input):
             logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
 
     def get_batched_daft_dataframe(self) -> Iterator["daft.DataFrame"]:  # noqa: F821
-        # We are not implementing this method as we have to parition the daft dataframe
-        # using dataframe.into_partitions() method. This method does all the paritions in memory
+        # We are not implementing this method as we have to partition the daft dataframe
+        # using dataframe.into_partitions() method. This method does all the partitions in memory
         # and using that can cause out of memory issues.
         # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
         raise NotImplementedError
