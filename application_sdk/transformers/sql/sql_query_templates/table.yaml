@@ -8,14 +8,14 @@ columns:
     source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
   - name: attributes.tableName
     source_query: |
-      CASE 
+      CASE
         WHEN is_partition = TRUE THEN parent_table_name
         ELSE NULL
       END
     source_columns: [parent_table_name, is_partition]
   - name: attributes.tableQualifiedName
     source_query: |
-      CASE 
+      CASE
         WHEN is_partition = TRUE THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name)
         ELSE NULL
       END
@@ -38,7 +38,7 @@ columns:
     source_columns: [connection_qualified_name, table_catalog, table_schema]
   - name: attributes.definition
     source_query: |
-      CASE 
+      CASE
         WHEN table_type = 'VIEW' THEN CONCAT('CREATE OR REPLACE VIEW ', table_name, ' AS ', view_definition)
         WHEN table_type = 'MATERIALIZED VIEW' THEN CONCAT('CREATE MATERIALIZED VIEW ', table_name, ' AS ', view_definition)
         ELSE view_definition
@@ -54,7 +54,7 @@ columns:
     source_query: table_type
   - name: attributes.isPartitioned
     source_query: |
-      CASE 
+      CASE
         WHEN table_kind = 'p' OR table_type = 'PARTITIONED TABLE' THEN TRUE
         ELSE FALSE
       END
@@ -96,9 +96,14 @@ columns:
     source_query: last_sync_run_at
   - name: attributes.connectorName
     source_query: connector_name
+  - name: attributes.database.typeName
+    source_query: "'Database'"
+  - name: attributes.database.uniqueAttributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog)
+    source_columns: [connection_qualified_name, table_catalog]
   - name: typeName
     source_query: |
-      CASE 
+      CASE
         WHEN is_partition = TRUE THEN 'TablePartition'
         WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table'
         WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView'

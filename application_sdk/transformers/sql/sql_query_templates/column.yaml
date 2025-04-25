@@ -118,4 +118,4 @@ columns:
   - name: typeName
     source_query: "'Column'"
   - name: status
-    source_query: "'ACTIVE'" 
+    source_query: "'ACTIVE'"

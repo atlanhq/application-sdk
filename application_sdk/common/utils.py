@@ -318,6 +318,7 @@ def run_sync(func):
 
     return wrapper
 
+
 def get_yaml_query_template_path_mappings(
     query_templates_base_path: Optional[str] = None,
 ) -> Dict[str, str]:
@@ -345,13 +346,17 @@ def get_yaml_query_template_path_mappings(
     )
 
     # Get the yaml files from the query_templates_base_path
-    yaml_files: List[str] = glob.glob(
-        os.path.join(
-            query_templates_base_path,
-            "**/*.yaml",
-        ),
-        recursive=True,
-    ) if query_templates_base_path else []
+    yaml_files: List[str] = (
+        glob.glob(
+            os.path.join(
+                query_templates_base_path,
+                "**/*.yaml",
+            ),
+            recursive=True,
+        )
+        if query_templates_base_path
+        else []
+    )
 
     result: Dict[str, str] = {}
     for file in default_yaml_files + yaml_files:

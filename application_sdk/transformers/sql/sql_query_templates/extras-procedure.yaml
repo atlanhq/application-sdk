@@ -43,4 +43,4 @@ columns:
   - name: typeName
     source_query: "'Procedure'"
   - name: status
-    source_query: "'ACTIVE'" 
+    source_query: "'ACTIVE'"

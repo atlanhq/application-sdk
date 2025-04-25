@@ -83,4 +83,4 @@ columns:
   - name: typeName
     source_query: "'Function'"
   - name: status
-    source_query: "'ACTIVE'" 
+    source_query: "'ACTIVE'"
