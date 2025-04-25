@@ -99,9 +99,17 @@ class BaseSQLClient(ClientInterface):
             self.connection.close()
 
     def get_iam_user_token(self):
-        """
-        Get the IAM user token for the database.
-        This is a temporary token that is used to authenticate the IAM user to the database.
+        """Get an IAM user token for AWS RDS database authentication.
+
+        This method generates a temporary authentication token for IAM user-based
+        authentication with AWS RDS databases. It requires AWS access credentials
+        and database connection details.
+
+        Returns:
+            str: A temporary authentication token for database access.
+
+        Raises:
+            ValueError: If required credentials (username or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials["username"]
@@ -128,9 +136,17 @@ class BaseSQLClient(ClientInterface):
         return token
 
     def get_iam_role_token(self):
-        """
-        Get the IAM role token for the database.
-        This is a temporary token that is used to authenticate the IAM role to the database.
+        """Get an IAM role token for AWS RDS database authentication.
+
+        This method generates a temporary authentication token for IAM role-based
+        authentication with AWS RDS databases. It requires an AWS role ARN and
+        database connection details.
+
+        Returns:
+            str: A temporary authentication token for database access.
+
+        Raises:
+            ValueError: If required credentials (aws_role_arn or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -159,8 +175,17 @@ class BaseSQLClient(ClientInterface):
         return token
 
     def get_auth_token(self) -> str:
-        """
-        Get the auth token for the SQL source.
+        """Get the appropriate authentication token based on auth type.
+
+        This method determines the authentication type from credentials and returns
+        the corresponding token. Supports basic auth, IAM user, and IAM role
+        authentication methods.
+
+        Returns:
+            str: URL-encoded authentication token.
+
+        Raises:
+            ValueError: If an invalid authentication type is specified.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -181,8 +206,15 @@ class BaseSQLClient(ClientInterface):
     def add_connection_params(
         self, connection_string: str, source_connection_params: Dict[str, Any]
     ) -> str:
-        """
-        Add the source connection params to the connection string.
+        """Add additional connection parameters to a SQLAlchemy connection string.
+
+        Args:
+            connection_string (str): Base SQLAlchemy connection string.
+            source_connection_params (Dict[str, Any]): Additional connection parameters
+                to append to the connection string.
+
+        Returns:
+            str: Connection string with additional parameters appended.
         """
         for key, value in source_connection_params.items():
             if "?" not in connection_string:
@@ -194,20 +226,17 @@ class BaseSQLClient(ClientInterface):
         return connection_string
 
     def get_sqlalchemy_connection_string(self) -> str:
-        """
-        Get the SQLAlchemy connection string for database connection.
+        """Generate a SQLAlchemy connection string for database connection.
 
-        This method constructs the connection string using the configured database parameters
-        and authentication method. It supports various authentication types including:
-        - Basic authentication (username/password)
-        - IAM user authentication
-        - IAM role authentication
+        This method constructs a connection string using the configured database
+        parameters and credentials. It handles different authentication methods
+        and includes necessary connection parameters.
 
         Returns:
-            str: The SQLAlchemy connection string.
+            str: Complete SQLAlchemy connection string.
 
         Raises:
-            ValueError: If required credentials are missing or invalid.
+            ValueError: If required connection parameters are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         auth_token = self.get_auth_token()
@@ -243,22 +272,24 @@ class BaseSQLClient(ClientInterface):
         return conn_str
 
     async def run_query(self, query: str, batch_size: int = 100000):
-        """
-        Run a query in batch mode with client-side cursor.
+        """Execute a SQL query and return results in batches.
 
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
-        If yield_per is not supported by the database, the method will fall back to client-side cursor.
+        This method executes the provided SQL query and yields results in batches
+        to efficiently manage memory usage for large result sets. It supports both
+        server-side and client-side cursors based on configuration.
 
         Args:
-            query: The query to run.
-            batch_size: The batch size.
+            query (str): SQL query to execute.
+            batch_size (int, optional): Number of records to fetch in each batch.
+                Defaults to 100000.
 
         Yields:
-            List of dictionaries containing query results.
+            List[Dict[str, Any]]: Batches of query results, where each result is
+                a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If connection is not established.
-            Exception: If the query fails.
+            ValueError: If database connection is not established.
+            Exception: If query execution fails.
         """
         if not self.connection:
             raise ValueError("Connection is not established")
@@ -305,11 +336,15 @@ class AsyncBaseSQLClient(BaseSQLClient):
     """Asynchronous SQL client for database operations.
 
     This class extends BaseSQLClient to provide asynchronous database operations,
-    with support for batch processing and server-side cursors.
+    with support for batch processing and server-side cursors. It uses SQLAlchemy's
+    async engine and connection interfaces for non-blocking database operations.
 
     Attributes:
-        connection (AsyncConnection | None): Async database connection instance.
-        engine (AsyncEngine | None): Async SQLAlchemy engine instance.
+        connection (AsyncConnection): Async database connection instance.
+        engine (AsyncEngine): Async SQLAlchemy engine instance.
+        sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
+        credentials (Dict[str, Any]): Database credentials.
+        use_server_side_cursor (bool): Whether to use server-side cursors.
     """
 
     connection: "AsyncConnection"
@@ -318,11 +353,15 @@ class AsyncBaseSQLClient(BaseSQLClient):
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish an asynchronous database connection.
 
+        This method creates an async SQLAlchemy engine and establishes a connection
+        to the database using the provided credentials.
+
         Args:
-            credentials (Dict[str, Any]): Database connection credentials.
+            credentials (Dict[str, Any]): Database connection credentials including
+                host, port, username, password, and other connection parameters.
 
         Raises:
-            ValueError: If connection fails due to authentication or connection issues
+            ValueError: If connection fails due to invalid credentials or connection issues.
         """
         self.credentials = credentials
         try:
@@ -344,22 +383,22 @@ class AsyncBaseSQLClient(BaseSQLClient):
             raise ValueError(str(e))
 
     async def run_query(self, query: str, batch_size: int = 100000):
-        """
-        Run a query in batch mode with client-side cursor.
+        """Execute a SQL query asynchronously and return results in batches.
 
-        This method also supports server-side cursor via sqlalchemy execution options(yield_per=batch_size).
-        If yield_per is not supported by the database, the method will fall back to client-side cursor.
+        This method executes the provided SQL query using an async connection and
+        yields results in batches to manage memory usage for large result sets.
 
         Args:
-            query: The query to run.
-            batch_size: The batch size.
+            query (str): SQL query to execute.
+            batch_size (int, optional): Number of records to fetch in each batch.
+                Defaults to 100000.
 
         Yields:
-            List of dictionaries containing query results.
+            List[Dict[str, Any]]: Batches of query results, where each result is
+                a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If connection is not established.
-            Exception: If the query fails.
+            Exception: If query execution fails.
         """
         if not self.connection:
             raise ValueError("Connection is not established")

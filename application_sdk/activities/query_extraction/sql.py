@@ -141,11 +141,21 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_args: Dict[str, Any],
     ):
         """Fetch and process queries from the database.
+
+        This activity fetches SQL queries from the database using the configured SQL client
+        and processes them into a JSON output format.
+
         Args:
-            workflow_args: Dictionary containing workflow configuration
+            workflow_args (Dict[str, Any]): Dictionary containing workflow configuration including:
+                - credential_guid (str, optional): GUID for accessing credentials
+                - output_prefix (str): Prefix for output files
+                - output_path (str): Path where output files will be stored
 
         Returns:
             None
+
+        Raises:
+            Exception: If query fetching or processing fails
         """
 
         try:
@@ -281,18 +291,21 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         ranged_sql_start_key: str,
         ranged_sql_end_key: str,
     ) -> None:
-        """Creates a chunked query with the specified time range and adds it to parallel_markers.
+        """Create a chunked SQL query for parallel processing.
+
+        This method modifies the original SQL query to process a specific chunk of data
+        based on the provided markers and SQL replacement patterns.
 
         Args:
-            query: The base SQL query
-            start_marker: Start timestamp for the chunk
-            end_marker: End timestamp for the chunk
-            parallel_markers: List to store the chunked queries
-            record_count: Number of records in this chunk
-            sql_ranged_replace_from: Original SQL fragment to replace
-            sql_ranged_replace_to: SQL fragment with range placeholders
-            ranged_sql_start_key: Placeholder for range start timestamp
-            ranged_sql_end_key: Placeholder for range end timestamp
+            query (str): The original SQL query to be chunked
+            start_marker (str | None): Starting marker for the query range
+            end_marker (str | None): Ending marker for the query range
+            parallel_markers (List[Dict[str, Any]]): List of marker dictionaries for parallel processing
+            record_count (int): Total number of records to process
+            sql_ranged_replace_from (str): Original SQL fragment to be replaced
+            sql_ranged_replace_to (str): Replacement SQL fragment with placeholders
+            ranged_sql_start_key (str): Placeholder key for range start
+            ranged_sql_end_key (str): Placeholder key for range end
 
         Returns:
             None

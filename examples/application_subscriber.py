@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, cast
 from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.application.fastapi import Application, EventWorkflowTrigger
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
@@ -27,8 +28,10 @@ class SampleActivities(ActivitiesInterface):
     async def _set_state(self, workflow_args: Dict[str, Any]):
         pass
 
-    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
-        pass
+    @activity.defn
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+        return {"message": "Preflight check completed successfully"}
 
     @activity.defn
     async def activity_1(self):

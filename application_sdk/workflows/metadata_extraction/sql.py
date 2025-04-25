@@ -221,10 +221,24 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             Coroutine[Any, Any, ActivityStatistics | None],
         ]
     ]:
-        """Get the fetch functions for the SQL metadata extraction workflow.
+        """Get the list of functions for fetching SQL metadata.
+
+        This method returns a sequence of coroutine functions that fetch different
+        types of SQL metadata. The functions are executed in order to extract
+        metadata about databases, schemas, tables, columns, and procedures.
+
+        Each fetch function takes a dictionary of arguments and returns a coroutine
+        that resolves to either a dictionary of metadata or None if no metadata
+        is available.
 
         Returns:
-            List[Callable]: A list of fetch operations.
+            List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any] | None]]]:
+                A list of fetch functions in the order they should be executed:
+                1. fetch_databases: Fetch database metadata
+                2. fetch_schemas: Fetch schema metadata
+                3. fetch_tables: Fetch table metadata
+                4. fetch_columns: Fetch column metadata
+                5. fetch_procedures: Fetch stored procedure metadata
         """
         return [
             self.activities_cls.fetch_databases,

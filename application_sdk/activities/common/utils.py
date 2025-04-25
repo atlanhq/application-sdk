@@ -1,3 +1,9 @@
+"""Utility functions for Temporal activities.
+
+This module provides utility functions for working with Temporal activities,
+including workflow ID retrieval, automatic heartbeating, and periodic heartbeat sending.
+"""
+
 import asyncio
 from datetime import timedelta
 from functools import wraps
@@ -16,15 +22,19 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 def get_workflow_id() -> str:
     """Get the workflow ID from the current activity.
 
+    Retrieves the workflow ID from the current activity's context. This function
+    must be called from within an activity execution context.
+
     Returns:
-        str: The workflow ID of the current activity.
-    Example:
-        >>> workflow_id = get_workflow_id()
-        >>> print(workflow_id)  # e.g. "my-workflow-123"
+        The workflow ID of the current activity.
 
     Raises:
         RuntimeError: If called outside of an activity context.
+        Exception: If there is an error retrieving the workflow ID.
 
+    Example:
+        >>> workflow_id = get_workflow_id()
+        >>> print(workflow_id)  # e.g. "my-workflow-123"
     """
     try:
         return activity.info().workflow_id
@@ -34,30 +44,28 @@ def get_workflow_id() -> str:
 
 
 def auto_heartbeater(fn: F) -> F:
-    """Auto-heartbeater for activities.
+    """Decorator that automatically sends heartbeats during activity execution.
 
-    Heartbeats are periodic signals sent from an activity to the Temporal server to indicate
-    that the activity is still making progress. They help detect activity failures earlier
-    by allowing the server to determine if an activity is stuck or has crashed, rather than
-    waiting for the entire activity timeout. The auto_heartbeater decorator automatically
-    sends these heartbeats at regular intervals.
+    Heartbeats are periodic signals sent from an activity to the Temporal server
+    to indicate that the activity is still making progress. This decorator
+    automatically sends these heartbeats at regular intervals.
 
-    This timeout is set to 120 seconds by default.
+    The heartbeat interval is calculated as 1/3 of the activity's configured
+    heartbeat timeout. If no timeout is configured, it defaults to 120 seconds
+    (resulting in a 40-second heartbeat interval).
 
     Args:
-        fn (F): The activity function to be decorated.
+        fn: The activity function to be decorated. Must be an async function.
 
     Returns:
-        F: The decorated activity function.
+        The decorated activity function that includes automatic heartbeating.
 
     Note:
-        We have activities that can run for a long time, in case of a failure (say: worker crash).
+        This decorator is particularly useful for long-running activities where
+        early failure detection is important. Without heartbeats, Temporal would
+        have to wait for the entire activity timeout before detecting a failure.
 
-        Temporal will not retry the activity until the configured timeout is reached.
-
-        We add auto_heartbeater to activities to ensure an failure is detected earlier
-        and the activity is retried.
-
+        For more information, see:
         - https://temporal.io/blog/activity-timeouts
         - https://github.com/temporalio/samples-python/blob/main/custom_decorator/activity_utils.py
 
@@ -65,7 +73,8 @@ def auto_heartbeater(fn: F) -> F:
         >>> @activity.defn
         >>> @auto_heartbeater
         >>> async def my_activity():
-        ...     pass
+        ...     # This activity will automatically send heartbeats
+        ...     await long_running_operation()
     """
 
     @wraps(fn)
@@ -103,23 +112,32 @@ def auto_heartbeater(fn: F) -> F:
 
 
 async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
-    """Sends heartbeat signals at regular intervals until the task is cancelled.
+    """Sends heartbeat signals at regular intervals until cancelled.
 
     This function runs in an infinite loop, sleeping for the specified delay between
-    heartbeats. The heartbeat signals help Temporal track the activity's progress and
-    detect failures.
+    heartbeats. The heartbeat signals help Temporal track the activity's progress
+    and detect failures.
+
+    Args:
+        delay: The delay between heartbeats in seconds.
+        *details: Optional details to include in the heartbeat signal. These can be
+            used to provide progress information or state that should be available
+            if the activity needs to be retried.
+
+    Note:
+        This function is typically used internally by the @auto_heartbeater decorator
+        and should not need to be called directly in most cases.
 
     Example:
-        >>> # Heartbeat every 30 seconds with a status message
+        >>> # Send heartbeats every 30 seconds with a status message
         >>> heartbeat_task = asyncio.create_task(
         ...     send_periodic_heartbeat(30, "Processing items...")
         ... )
-        >>> # Cancel when done
-        >>> heartbeat_task.cancel()
-
-    Args:
-        delay (float): The delay between heartbeats in seconds.
-        *details (Any): Variable length argument list of details to include in the heartbeat.
+        >>> try:
+        ...     await main_task
+        ... finally:
+        ...     heartbeat_task.cancel()
+        ...     await asyncio.wait([heartbeat_task])
     """
     # Heartbeat every so often while not cancelled
     while True:

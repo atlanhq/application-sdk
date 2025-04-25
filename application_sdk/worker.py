@@ -9,7 +9,8 @@ import threading
 from typing import Any, List, Optional, Sequence
 
 import uvloop
-from temporalio.types import CallableType
+from temporalio.types import CallableType, ClassType
+from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
@@ -25,36 +26,60 @@ class Worker:
     including their activities, workflows, and module configurations.
 
     Attributes:
-        workflow_client (WorkflowClient | None): Client for interacting with Temporal.
+        workflow_client: Client for interacting with Temporal.
         workflow_worker: The Temporal worker instance.
-        workflow_activities (Sequence[CallableType]): List of activity functions.
-        workflow_classes (List[Any]): List of workflow classes.
-        passthrough_modules (List[str]): List of module names to pass through.
-        max_concurrent_activities (int | None): Maximum number of concurrent activities.
+        workflow_activities: List of activity functions.
+        workflow_classes: List of workflow classes.
+        passthrough_modules: List of module names to pass through.
+        max_concurrent_activities: Maximum number of concurrent activities.
+
+    Note:
+        This class is designed to be thread-safe when running workers in daemon mode.
+        However, care should be taken when modifying worker attributes after initialization.
+
+    Example:
+        >>> from application_sdk.worker import Worker
+        >>> from my_workflow import MyWorkflow, my_activity
+        >>>
+        >>> worker = Worker(
+        ...     workflow_client=client,
+        ...     workflow_activities=[my_activity],
+        ...     workflow_classes=[MyWorkflow]
+        ... )
+        >>> await worker.start(daemon=True)
     """
 
     def __init__(
         self,
-        workflow_client: WorkflowClient | None = None,
+        workflow_client: Optional[WorkflowClient] = None,
         workflow_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = ["application_sdk", "pandas", "os", "app"],
-        workflow_classes: List[Any] = [],
+        workflow_classes: Sequence[ClassType] = [],
         max_concurrent_activities: Optional[int] = None,
     ):
         """Initialize the Worker.
 
         Args:
-            workflow_client (WorkflowClient | None, optional): Client for interacting
-                with Temporal. Defaults to None.
-            workflow_activities (Sequence[CallableType], optional): List of activity
-                functions. Defaults to empty list.
-            passthrough_modules (List[str], optional): List of module names to pass
-                through. Defaults to ["application_sdk", "os"].
-            workflow_classes (List[Any], optional): List of workflow classes.
+            workflow_client: Client for interacting with Temporal.
+                Defaults to None.
+            workflow_activities: List of activity functions.
                 Defaults to empty list.
+            passthrough_modules: List of module names to pass through.
+                Defaults to ["application_sdk", "pandas", "os", "app"].
+            workflow_classes: List of workflow classes.
+                Defaults to empty list.
+            max_concurrent_activities: Maximum number of activities that can run
+                concurrently. Defaults to None (no limit).
+
+        Returns:
+            None
+
+        Raises:
+            TypeError: If workflow_activities contains non-callable items.
+            ValueError: If passthrough_modules contains invalid module names.
         """
         self.workflow_client = workflow_client
-        self.workflow_worker = None
+        self.workflow_worker: Optional[TemporalWorker] = None
         self.workflow_activities = workflow_activities
         self.workflow_classes = workflow_classes
         self.passthrough_modules = passthrough_modules
@@ -67,13 +92,18 @@ class Worker:
         thread based on the daemon parameter.
 
         Args:
-            daemon (bool, optional): Whether to run the worker in a daemon thread.
-                Defaults to False.
-            *args: Additional positional arguments.
-            **kwargs: Additional keyword arguments.
+            daemon: Whether to run the worker in a daemon thread.
+                Defaults to True.
+            *args: Additional positional arguments passed to the worker.
+            **kwargs: Additional keyword arguments passed to the worker.
+
+        Returns:
+            None
 
         Raises:
             ValueError: If workflow_client is not set.
+            RuntimeError: If worker creation fails.
+            ConnectionError: If connection to Temporal server fails.
 
         Note:
             When running as a daemon, the worker runs in a separate thread and
