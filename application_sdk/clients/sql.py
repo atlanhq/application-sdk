@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncResult
+from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
@@ -298,7 +298,7 @@ class BaseSQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info("Running query: {query}", query=query)
+        activity.logger.info(f"Running query: {query}")
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -403,7 +403,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info("Running query: {query}", query=query)
+        activity.logger.info(f"Running query: {query}")
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -423,7 +423,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             while True:
                 rows = (
                     await result.fetchmany(batch_size)
-                    if use_server_side_cursor and isinstance(result, AsyncResult)
+                    if use_server_side_cursor
                     else result.cursor.fetchmany(batch_size)
                     if result.cursor
                     else None
@@ -433,7 +433,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error("Error executing query: {error}", error=str(e))
+            activity.logger.error(f"Error executing query: {str(e)}")
             raise
 
         activity.logger.info("Query execution completed")
