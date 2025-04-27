@@ -5,7 +5,7 @@ including databases, schemas, tables, columns, functions, and tag attachments.
 """
 
 import json
-from typing import Any, Dict, Optional, Set, TypeVar, cast, overload
+from typing import Any, Dict, Optional, Set, TypeVar, overload
 
 from pyatlan.model import assets
 from pyatlan.model.enums import AtlanConnectorType
@@ -821,7 +821,7 @@ class Function(assets.Function):
                 database_qualified_name=database_qualified_name,
                 schema_name=schema_name,
                 schema_qualified_name=schema_qualified_name,
-                connector_name=cast(Optional[str], connector_name),
+                connector_name=connector_name,
                 connection_qualified_name=connection_qualified_name,
                 function_schema=function_schema,
             )
@@ -1074,7 +1074,7 @@ class TagAttachment(assets.TagAttachment):
                 # database_qualified_name=database_qualified_name,
                 # schema_name=schema_name,
                 # schema_qualified_name=schema_qualified_name,
-                connector_name=cast(Optional[str], connector_name),
+                connector_name=connector_name,
                 connection_qualified_name=connection_qualified_name,
             )
 
