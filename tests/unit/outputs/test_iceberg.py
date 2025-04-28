@@ -63,7 +63,9 @@ async def test_write_dataframe_with_data(iceberg_output: IcebergOutput) -> None:
     mock_daft_df = Mock()
     mock_daft_df.count_rows.return_value = 3
 
-    with patch("daft.from_pandas", return_value=mock_daft_df) as mock_from_pandas:
+    with patch("daft.from_pandas") as mock_from_pandas:
+        mock_from_pandas.return_value = mock_daft_df
+
         await iceberg_output.write_dataframe(test_data)
         mock_from_pandas.assert_called_once_with(test_data)
 
@@ -111,7 +113,9 @@ async def test_write_dataframe_error_handling(iceberg_output: IcebergOutput) -> 
     """Test error handling in write_dataframe"""
     df = pd.DataFrame({"col1": [1, 2, 3]})
 
-    with patch("daft.from_pandas", side_effect=Exception("Test error")):
+    with patch("daft.from_pandas") as mock_from_pandas:
+        mock_from_pandas.side_effect = Exception("Test error")
+
         with pytest.raises(Exception, match="Test error"):
             await iceberg_output.write_dataframe(df)
         # Verify counts remain unchanged

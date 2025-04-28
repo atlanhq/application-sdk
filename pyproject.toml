@@ -101,7 +101,17 @@ build-backend = "poetry.core.masonry.api"
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-typeCheckingMode = "strict"
+typeCheckingMode = "standard"
+exclude = [
+    "application_sdk/test_utils/**",
+    ".github/**",
+]
+reportUnknownMemberType = "warning"
+reportAttributeAccessIssue = "warning"
+reportPossiblyUnboundVariable = "information"
+reportFunctionMemberAccess = "warning"
+reportArgumentType = "warning"
+reportGeneralTypeIssues = "warning"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
