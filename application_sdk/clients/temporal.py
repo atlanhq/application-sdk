@@ -308,7 +308,7 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
-                workflow_class.run,
+                workflow_class,  # type: ignore
                 args=[{"workflow_id": workflow_id}],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
