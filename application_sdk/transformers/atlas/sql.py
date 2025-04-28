@@ -992,9 +992,6 @@ class TagAttachment(assets.TagAttachment):
         attributes = TagAttachment.Attributes.create(
             name=name,
             schema_qualified_name=schema_qualified_name,
-            schema_name=schema_name,
-            database_name=database_name,
-            database_qualified_name=database_qualified_name,
             connection_qualified_name=connection_qualified_name,
         )
         return cls(attributes=attributes)
@@ -1012,9 +1009,6 @@ class TagAttachment(assets.TagAttachment):
             *,
             name: str,
             schema_qualified_name: str,
-            schema_name: Optional[str] = None,
-            database_name: Optional[str] = None,
-            database_qualified_name: Optional[str] = None,
             connection_qualified_name: Optional[str] = None,
         ) -> "TagAttachment.Attributes":
             """Create a new TagAttachment.Attributes instance.
@@ -1022,10 +1016,6 @@ class TagAttachment(assets.TagAttachment):
             Args:
                 name (str): Name of the tag attachment.
                 schema_qualified_name (str): Qualified name of the schema.
-                schema_name (Optional[str], optional): Name of the schema. Defaults to None.
-                database_name (Optional[str], optional): Name of the database. Defaults to None.
-                database_qualified_name (Optional[str], optional): Qualified name of the database.
-                    Defaults to None.
                 connection_qualified_name (Optional[str], optional): Qualified name of the connection.
                     Defaults to None.
 
@@ -1057,23 +1047,12 @@ class TagAttachment(assets.TagAttachment):
                         f"Invalid result from AtlanConnectorType.get_connector_name: {result}"
                     )
 
-            fields = schema_qualified_name.split("/")
             qualified_name = f"{schema_qualified_name}/{name}"
             connection_qualified_name = connection_qualified_name or connection_qn
-            database_name = database_name or fields[3]
-            schema_name = schema_name or fields[4]
-            database_qualified_name = (
-                database_qualified_name
-                or f"{connection_qualified_name}/{database_name}"
-            )
 
             return TagAttachment.Attributes(
                 name=name,
                 qualified_name=qualified_name,
-                # database_name=database_name,
-                # database_qualified_name=database_qualified_name,
-                # schema_name=schema_name,
-                # schema_qualified_name=schema_qualified_name,
                 connector_name=connector_name,
                 connection_qualified_name=connection_qualified_name,
             )
