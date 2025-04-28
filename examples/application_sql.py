@@ -41,6 +41,7 @@ from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
+from application_sdk.app import WorkflowApp
 
 APPLICATION_NAME = "postgres"
 
@@ -118,19 +119,8 @@ class SampleSQLWorkflowHandler(SQLHandler):
 async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     logger.info("Starting application_sql")
 
-    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
-    await workflow_client.load()
-
     activities = SampleSQLActivities(
         sql_client_class=SQLClient, handler_class=SampleSQLWorkflowHandler
-    )
-
-    worker: Worker = Worker(
-        workflow_client=workflow_client,
-        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
-            activities
-        ),
     )
 
     workflow_args = {
@@ -159,14 +149,13 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    workflow_response = await workflow_client.start_workflow(
-        workflow_args, BaseSQLMetadataExtractionWorkflow
+    app = WorkflowApp(
+        application_name=APPLICATION_NAME,
+        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
+        activities=activities,
+        workflow_args=workflow_args,
     )
-
-    # Start the worker in a separate thread
-    await worker.start(daemon=daemon)
-
-    return workflow_response
+    return await app.run(BaseSQLMetadataExtractionWorkflow, daemon=daemon)
 
 
 if __name__ == "__main__":
