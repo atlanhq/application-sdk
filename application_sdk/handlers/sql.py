@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from packaging import version
 
-from application_sdk.application.fastapi.models import MetadataType
+from application_sdk.server.fastapi.models import MetadataType
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
@@ -30,7 +30,7 @@ class SQLConstants(Enum):
     SCHEMA_RESULT_KEY = "TABLE_SCHEMA"
 
 
-class SQLHandler(HandlerInterface):
+class BaseSQLHandler(HandlerInterface):
     """
     Handler class for SQL workflows
     """

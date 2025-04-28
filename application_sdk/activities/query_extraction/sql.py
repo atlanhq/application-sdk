@@ -10,7 +10,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
@@ -61,12 +61,12 @@ class BaseSQLQueryExtractionActivitiesState(ActivitiesState):
 
     Attributes:
         sql_client (BaseSQLClient): Client for SQL database operations.
-        handler (SQLHandler): Handler for SQL-specific operations.
+        handler (BaseSQLHandler): Handler for SQL-specific operations.
         workflow_args (Dict[str, Any]): Arguments passed to the workflow.
     """
 
     sql_client: BaseSQLClient
-    handler: SQLHandler
+    handler: BaseSQLHandler
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
@@ -78,29 +78,29 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     Attributes:
         _state (Dict[str, StateModel]): Internal state storage.
         sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
-        handler_class (Type[SQLHandler]): Class for SQL handling operations.
+        handler_class (Type[BaseSQLHandler]): Class for SQL handling operations.
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
 
-    _state: Dict[str, ActivitiesState[SQLHandler]] = {}
+    _state: Dict[str, ActivitiesState[BaseSQLHandler]] = {}
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
-    handler_class: Type[SQLHandler] = SQLHandler
+    handler_class: Type[BaseSQLHandler] = BaseSQLHandler
 
     fetch_queries_sql: str
 
     def __init__(
         self,
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
-        handler_class: Optional[Type[SQLHandler]] = None,
+        handler_class: Optional[Type[BaseSQLHandler]] = None,
     ):
         """Initialize the SQL query extraction activities.
 
         Args:
             sql_client_class (Type[BaseSQLClient], optional): Class for SQL client operations.
                 Defaults to BaseSQLClient.
-            handler_class (Type[SQLHandler], optional): Class for SQL handling operations.
-                Defaults to SQLHandler.
+            handler_class (Type[BaseSQLHandler], optional): Class for SQL handling operations.
+                Defaults to BaseSQLHandler.
         """
         if sql_client_class:
             self.sql_client_class = sql_client_class

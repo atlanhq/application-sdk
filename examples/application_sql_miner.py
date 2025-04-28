@@ -25,7 +25,7 @@ from application_sdk.activities.query_extraction.sql import SQLQueryExtractionAc
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
@@ -111,7 +111,7 @@ class SQLClient(BaseSQLClient):
     }
 
 
-class SampleSnowflakeHandler(SQLHandler):
+class SampleSnowflakeHandler(BaseSQLHandler):
     tables_check_sql = """
     SELECT count(*) as "count"
     FROM SNOWFLAKE.ACCOUNT_USAGE.TABLES

@@ -125,7 +125,7 @@ The common pattern is to use the `get_workflow_client` utility function.
 import asyncio
 # Absolute imports
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
 # Assuming your custom classes are defined
 from my_connector.handlers import MyConnectorHandler
 from my_connector.workflows import MyConnectorWorkflow

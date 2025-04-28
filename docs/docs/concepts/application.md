@@ -4,11 +4,11 @@ This module provides the core framework for building Atlan applications, particu
 
 ## Core Concepts
 
-1.  **`AtlanApplicationInterface` (`application_sdk.application.__init__.py`)**:
+1.  **`AtlanApplicationInterface` (`application_sdk.server.__init__.py`)**:
     *   **Purpose:** The abstract base class for all application types within the SDK. It defines a minimal interface, primarily requiring a `start()` method and optionally accepting a `HandlerInterface` instance.
     *   **Extensibility:** Subclasses must implement the `start()` method to define how the application initializes and begins running (e.g., starting a web server).
 
-2.  **`Application` (`application_sdk.application.fastapi.__init__.py`)**:
+2.  **`Application` (`application_sdk.server.fastapi.__init__.py`)**:
     *   **Purpose:** A concrete implementation of `AtlanApplicationInterface` built on top of the FastAPI web framework. It provides a ready-to-use web server setup with pre-configured endpoints for common operations like health checks, authentication testing, metadata fetching, workflow management, and documentation serving.
     *   **Components:**
         *   Integrates with `HandlerInterface` subclasses to perform backend operations.
@@ -17,16 +17,16 @@ This module provides the core framework for building Atlan applications, particu
         *   Includes default middleware (`LogMiddleware`).
         *   Sets up documentation generation and serving using `AtlanDocsGenerator`.
 
-3.  **Routers (`application_sdk.application.fastapi.routers/`)**:
+3.  **Routers (`application_sdk.server.fastapi.routers/`)**:
     *   **Purpose:** Organize related API endpoints. The SDK provides a default `server` router (`server.py`) with endpoints like `/health`, `/ready`, and `/shutdown`.
     *   **Extensibility:** Developers can add custom routers to group their application-specific endpoints.
 
-4.  **Workflow Triggers (`application_sdk.application.fastapi.__init__.py`)**:
+4.  **Workflow Triggers (`application_sdk.server.fastapi.__init__.py`)**:
     *   **Purpose:** Define how workflows are initiated.
         *   `HttpWorkflowTrigger`: Triggers a workflow via an HTTP request to a specific endpoint registered via `register_workflow`. Requires `WorkflowClient` to be configured.
         *   `EventWorkflowTrigger`: (Less common example shown) Triggers a workflow based on incoming events (e.g., from a message queue), evaluated by a `should_trigger_workflow` function.
 
-5.  **Models (`application_sdk.application.fastapi.models.py`)**:
+5.  **Models (`application_sdk.server.fastapi.models.py`)**:
     *   **Purpose:** Defines Pydantic models used for request/response validation and serialization for the default API endpoints (e.g., `TestAuthRequest`, `WorkflowResponse`).
 
 ## Usage Patterns
@@ -39,7 +39,7 @@ For standard use cases where you only need the built-in endpoints to interact wi
 # In your main application file (e.g., main.py)
 import asyncio
 # Absolute imports
-from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
 from application_sdk.clients.utils import get_workflow_client # Example utility
 # Assuming your custom classes are defined in a package 'my_connector'
 from my_connector.handlers import MyConnectorHandler # Your handler implementation
@@ -73,7 +73,7 @@ if __name__ == "__main__":
 ```
 
 This setup provides:
-*   Endpoints defined in `application_sdk.application.fastapi.routers.server.py` (e.g., `/server/health`).
+*   Endpoints defined in `application_sdk.server.fastapi.routers.server.py` (e.g., `/server/health`).
 *   Endpoints for interacting with the `handler` (e.g., `/workflows/v1/test_auth`, `/workflows/v1/metadata`, `/workflows/v1/preflight_check`).
 *   The endpoint(s) you defined via `HttpWorkflowTrigger` (e.g., `/workflows/v1/start-extraction`).
 *   Documentation served at `/atlandocs`.
@@ -90,7 +90,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 # Absolute imports
-from application_sdk.application.fastapi import Application
+from application_sdk.server.fastapi import Application
 from application_sdk.clients.utils import get_workflow_client # Example utility
 from application_sdk.common.logger_adaptors import get_logger
 # Assuming your custom classes are defined elsewhere
@@ -200,20 +200,20 @@ This adds your custom endpoint (e.g., `/custom-api/trigger`) alongside the defau
 
 The `Application` class provides default endpoints like `/workflows/v1/test_auth`, `/workflows/v1/metadata`, and `/workflows/v1/preflight_check`. The *logic* executed by these endpoints is determined by the corresponding methods (`test_auth`, `fetch_metadata`, `preflight_check`) defined on the **handler instance** passed to the `Application` constructor.
 
-Therefore, to change what happens when these endpoints are called, you do **not** override methods in your `Application` subclass. Instead, you create a custom handler class inheriting from the appropriate base handler (e.g., `HandlerInterface`, `SQLHandler`) and override the specific methods there.
+Therefore, to change what happens when these endpoints are called, you do **not** override methods in your `Application` subclass. Instead, you create a custom handler class inheriting from the appropriate base handler (e.g., `HandlerInterface`, `BaseSQLHandler`) and override the specific methods there.
 
 ```python
 # In your handler file (e.g., my_connector/handlers.py)
 from typing import Any, Dict, List, Optional
 # Absolute imports
-from application_sdk.handlers import HandlerInterface # Or SQLHandler etc.
+from application_sdk.handlers import HandlerInterface # Or BaseSQLHandler etc.
 from application_sdk.common.logger_adaptors import get_logger
 # Import specific request/response models if needed for type hinting or logic
-from application_sdk.application.fastapi.models import MetadataType
+from application_sdk.server.fastapi.models import MetadataType
 
 logger = get_logger(__name__)
 
-class MyConnectorHandler(HandlerInterface): # Or inherit from SQLHandler, etc.
+class MyConnectorHandler(HandlerInterface): # Or inherit from BaseSQLHandler, etc.
 
     async def load(self, **kwargs: Any) -> None:
         # Custom initialization logic for your handler

@@ -39,7 +39,7 @@ from application_sdk.activities.metadata_extraction.sql import (
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.transformers.atlas import AtlasTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -120,7 +120,7 @@ class CustomTransformer(AtlasTransformer):
         self.entity_class_definitions["DATABASE"] = PostgresDatabase
 
 
-class SampleSQLHandler(SQLHandler):
+class SampleSQLHandler(BaseSQLHandler):
     tables_check_sql = """
     SELECT count(*)
         FROM INFORMATION_SCHEMA.TABLES

@@ -38,7 +38,7 @@ class HelloWorldActivities(ActivitiesInterface):
 
 
 async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
-    print("Starting application_hello_world")
+    logger.info("Starting application_hello_world")
 
     activities = HelloWorldActivities()
 

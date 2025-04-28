@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.application.fastapi import (
+from application_sdk.server.fastapi import (
     Application,
     EventWorkflowTrigger,
     PreflightCheckRequest,

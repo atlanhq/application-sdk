@@ -4,7 +4,7 @@ from typing import Any, Dict
 
 from fastapi import APIRouter
 
-from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
 from application_sdk.handlers import HandlerInterface
 from application_sdk.workflows import WorkflowInterface
 

@@ -4,7 +4,7 @@ import daft
 import pytest
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 
 
 class TestPrepareMetadata:
@@ -15,8 +15,8 @@ class TestPrepareMetadata:
         return client
 
     @pytest.fixture
-    def handler(self, mock_sql_client: Mock) -> SQLHandler:
-        handler = SQLHandler(sql_client=mock_sql_client)
+    def handler(self, mock_sql_client: Mock) -> BaseSQLHandler:
+        handler = BaseSQLHandler(sql_client=mock_sql_client)
         handler.database_alias_key = "TABLE_CATALOG"
         handler.schema_alias_key = "TABLE_SCHEMA"
         handler.database_result_key = "TABLE_CATALOG"
@@ -25,7 +25,7 @@ class TestPrepareMetadata:
         return handler
 
     @pytest.mark.asyncio
-    async def test_successful_metadata_preparation(self, handler: SQLHandler) -> None:
+    async def test_successful_metadata_preparation(self, handler: BaseSQLHandler) -> None:
         """Test successful metadata preparation with valid input"""
         # Create test DataFrame
         df = daft.from_pydict(
@@ -49,7 +49,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_dataframe(self, handler: SQLHandler) -> None:
+    async def test_empty_dataframe(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with empty DataFrame"""
         df = daft.from_pydict(
             {
@@ -70,7 +70,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_custom_alias_keys(self, handler: SQLHandler) -> None:
+    async def test_custom_alias_keys(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with custom alias keys"""
         handler.database_alias_key = "DB_NAME"
         handler.schema_alias_key = "SCHEMA_NAME"
@@ -89,7 +89,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_custom_result_keys(self, handler: SQLHandler) -> None:
+    async def test_custom_result_keys(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with custom result keys"""
         handler.database_result_key = "DATABASE"
         handler.schema_result_key = "SCHEMA"
@@ -108,7 +108,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_missing_columns(self, handler: SQLHandler) -> None:
+    async def test_missing_columns(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with missing required columns"""
         df = daft.from_pydict(
             {
@@ -127,7 +127,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_null_values(self, handler: SQLHandler) -> None:
+    async def test_null_values(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with null values"""
         df = daft.from_pydict(
             {
@@ -150,7 +150,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_special_characters(self, handler: SQLHandler) -> None:
+    async def test_special_characters(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with special characters in names"""
         df = daft.from_pydict(
             {
@@ -173,7 +173,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_duplicate_entries(self, handler: SQLHandler) -> None:
+    async def test_duplicate_entries(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with duplicate entries"""
         df = daft.from_pydict(
             {
@@ -199,7 +199,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_invalid_dataframe(self, handler: SQLHandler) -> None:
+    async def test_invalid_dataframe(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with invalid DataFrame input"""
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",
@@ -211,7 +211,7 @@ class TestPrepareMetadata:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_extra_columns(self, handler: SQLHandler) -> None:
+    async def test_extra_columns(self, handler: BaseSQLHandler) -> None:
         """Test metadata preparation with extra columns (should be ignored)"""
         df = daft.from_pydict(
             {

@@ -10,7 +10,7 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -24,7 +24,7 @@ activity.logger = get_logger(__name__)
 queries = read_sql_files(queries_prefix="app/sql")
 
 
-class BaseSQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
+class BaseSQLMetadataExtractionActivitiesState(ActivitiesState[BaseSQLHandler]):
     """State class for SQL metadata extraction activities.
 
     This class holds the state required for SQL metadata extraction activities,
@@ -32,12 +32,12 @@ class BaseSQLMetadataExtractionActivitiesState(ActivitiesState[SQLHandler]):
 
     Attributes:
         sql_client (BaseSQLClient): Client for SQL database operations.
-        handler (SQLHandler): Handler for SQL-specific operations.
+        handler (BaseSQLHandler): Handler for SQL-specific operations.
         transformer (TransformerInterface): Transformer for metadata conversion.
     """
 
     sql_client: Optional[BaseSQLClient] = None
-    handler: Optional[SQLHandler] = None
+    handler: Optional[BaseSQLHandler] = None
     transformer: Optional[TransformerInterface] = None
 
 
@@ -54,7 +54,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         fetch_table_sql (Optional[str]): SQL query for fetching tables.
         fetch_column_sql (Optional[str]): SQL query for fetching columns.
         sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
-        handler_class (Type[SQLHandler]): Class for SQL handling operations.
+        handler_class (Type[BaseSQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
         extract_temp_table_regex_table_sql (str): SQL snippet for excluding temporary tables during tables extraction.
             Defaults to an empty string.
@@ -62,7 +62,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             Defaults to an empty string.
     """
 
-    _state: Dict[str, ActivitiesState[SQLHandler]] = {}
+    _state: Dict[str, ActivitiesState[BaseSQLHandler]] = {}
 
     fetch_database_sql = queries.get("EXTRACT_DATABASE")
     fetch_schema_sql = queries.get("EXTRACT_SCHEMA")
@@ -74,13 +74,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     extract_temp_table_regex_column_sql = queries.get("EXTRACT_TEMP_TABLE_REGEX_COLUMN")
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
-    handler_class: Type[SQLHandler] = SQLHandler
+    handler_class: Type[BaseSQLHandler] = BaseSQLHandler
     transformer_class: Type[TransformerInterface] = AtlasTransformer
 
     def __init__(
         self,
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
-        handler_class: Optional[Type[SQLHandler]] = None,
+        handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
         if sql_client_class:

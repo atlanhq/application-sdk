@@ -27,7 +27,7 @@ The SDK's SQL metadata extraction workflow (`application_sdk.workflows.metadata_
     *   **Responsibility**: Defines the SQL queries used to extract metadata (databases, schemas, tables, columns, etc.) and manages the extraction process.
     *   **Extensibility**: Override specific SQL query attributes (`fetch_database_sql`, `fetch_schema_sql`, etc.) to tailor metadata extraction for your database schema or specific needs.
 
-3.  **Handler** (`application_sdk.handlers.sql.SQLHandler`)
+3.  **Handler** (`application_sdk.handlers.sql.BaseSQLHandler`)
     *   **Responsibility**: Manages database-specific validation logic (e.g., checking table counts, validating filters) and provides helper methods for SQL operations.
     *   **Extensibility**: Extend this class to implement custom validation checks (`tables_check_sql`, `metadata_sql`) or database-specific logic required during the workflow.
 
@@ -124,13 +124,13 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
 
 ### 3. Custom Handler
 
-Extend `SQLHandler` to implement custom validation logic specific to your database.
+Extend `BaseSQLHandler` to implement custom validation logic specific to your database.
 
 ```python
 # examples/application_sql.py
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 
-class SampleSQLWorkflowHandler(SQLHandler):
+class SampleSQLWorkflowHandler(BaseSQLHandler):
     # Customize query to check table count (used in preflight checks)
     tables_check_sql = """
     SELECT count(*)
@@ -165,7 +165,7 @@ from typing import Any, Dict
 from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
 from application_sdk.common.logger_adaptors import get_logger
@@ -188,7 +188,7 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
     extract_temp_table_regex_column_sql = "AND c.table_name !~ '{exclude_table_regex}'"
     fetch_column_sql = "SELECT c.* FROM information_schema.columns c WHERE concat(current_database(), concat('.', c.table_schema)) !~ '{normalized_exclude_regex}' AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}' {temp_table_regex_sql};"
 
-class SampleSQLWorkflowHandler(SQLHandler):
+class SampleSQLWorkflowHandler(BaseSQLHandler):
     tables_check_sql = "SELECT count(*) FROM INFORMATION_SCHEMA.TABLES t WHERE concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) !~ '{normalized_exclude_regex}' AND concat(TABLE_CATALOG, concat('.', TABLE_SCHEMA)) ~ '{normalized_include_regex}' AND TABLE_SCHEMA NOT IN ('performance_schema', 'information_schema', 'pg_catalog', 'pg_internal') {temp_table_regex_sql};"
     temp_table_regex_sql = "AND t.table_name !~ '{exclude_table_regex}'"
     metadata_sql = "SELECT schema_name, catalog_name FROM INFORMATION_SCHEMA.SCHEMATA WHERE schema_name NOT LIKE 'pg_%' AND schema_name != 'information_schema'"

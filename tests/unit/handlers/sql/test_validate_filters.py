@@ -2,7 +2,7 @@ from typing import Dict, List, Set
 
 import pytest
 
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 
 
 class TestValidateFilters:
@@ -27,7 +27,7 @@ class TestValidateFilters:
         include_filter: Dict[str, List[str] | str] = {
             "^db1$": ["^schema1$", "^schema2$"]
         }
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is True
@@ -40,7 +40,7 @@ class TestValidateFilters:
         include_filter: Dict[str, List[str] | str] = {
             "^invalid_db$": ["^schema1$"]
         }  # invlid because invalid_db is not in allowed_databases
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is False
@@ -53,7 +53,7 @@ class TestValidateFilters:
         include_filter: Dict[str, List[str] | str] = {
             "^db1$": ["^invalid_schema$"]
         }  # invalid because invalid_schema is not in allowed_schemas
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is False
@@ -64,7 +64,7 @@ class TestValidateFilters:
     ) -> None:
         """Test validation with wildcard schema"""
         include_filter: Dict[str, List[str] | str] = {"^db1$": "*"}
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is True
@@ -78,7 +78,7 @@ class TestValidateFilters:
             "^db1$": ["^schema1$"],
             "^db2$": ["^schema1$"],
         }
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is True
@@ -92,7 +92,7 @@ class TestValidateFilters:
             "^db1$": ["^schema1$"],
             "^invalid_db$": ["^schema1$"],
         }
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is False
@@ -103,7 +103,7 @@ class TestValidateFilters:
     ) -> None:
         """Test validation with empty filter"""
         include_filter: Dict[str, List[str] | str] = {}
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is True
@@ -117,7 +117,7 @@ class TestValidateFilters:
             "^db1$": "*",
             "^db2$": ["^schema1$"],
         }
-        success, message = SQLHandler.validate_filters(
+        success, message = BaseSQLHandler.validate_filters(
             include_filter, allowed_databases, allowed_schemas
         )
         assert success is True
