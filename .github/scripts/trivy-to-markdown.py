@@ -3,7 +3,7 @@ import json
 from enum import Enum
 from typing import Any, Dict
 
-from mdutils.mdutils import MdUtils  # type: ignore
+from mdutils.mdutils import MdUtils
 
 
 class Severity(str, Enum):

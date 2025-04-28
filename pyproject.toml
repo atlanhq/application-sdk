@@ -103,7 +103,8 @@ venvPath = "."
 venv = ".venv"
 typeCheckingMode = "standard"
 exclude = [
-    "application_sdk/test_utils/**"
+    "application_sdk/test_utils/**",
+    ".github/**",
 ]
 reportUnknownMemberType = "warning"
 reportAttributeAccessIssue = "warning"
