@@ -21,6 +21,15 @@ columns:
     source_query: table_count
   - name: attributes.viewsCount
     source_query: views_count
+  - name: attributes.catalogId
+    source_query: catalog_id
+  - name: attributes.isManagedAccess
+    source_query: is_managed_access
+  - name: attributes.database.typeName
+    source_query: "'Database'"
+  - name: attributes.database.uniqueAttributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', catalog_name)
+    source_columns: [connection_qualified_name, catalog_name]
   - name: attributes.tenantId
     source_query: tenant_id
   - name: attributes.lastSyncWorkflowName

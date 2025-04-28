@@ -76,6 +76,65 @@ columns:
         ELSE NULL
       END
     source_columns: [table_type]
+  # For table
+  - name: attributes.table.typeName
+    source_query: |
+      CASE
+        WHEN table_type = 'TABLE' OR table_type = 'BASE TABLE' OR table_type = 'FOREIGN TABLE' OR table_type = 'PARTITIONED TABLE' THEN 'Table'
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  - name: attributes.table.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN table_type = 'TABLE' OR table_type = 'BASE TABLE' OR table_type = 'FOREIGN TABLE' OR table_type = 'PARTITIONED TABLE' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type]
+  # For views
+  - name: attributes.view.typeName
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' THEN 'View'
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  - name: attributes.view.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type]
+  # For materialisedView
+  - name: attributes.materialisedView.typeName
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView'
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  - name: attributes.materialisedView.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type]
+  - name: attributes.tablePartition.typeName
+    source_query: |
+      CASE
+        WHEN belongs_to_partition = 'YES' THEN 'TablePartition'
+        ELSE NULL
+      END
+    source_columns: [belongs_to_partition]
+  - name: attributes.tablePartition.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN belongs_to_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [belongs_to_partition, connection_qualified_name, table_catalog, table_schema, table_name]
   - name: attributes.order
     source_query: ordinal_position
   - name: custom_attributes.ordinal_position
