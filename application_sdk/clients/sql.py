@@ -6,7 +6,6 @@ database operations, supporting batch processing and server-side cursors.
 """
 
 import asyncio
-import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 from urllib.parse import quote_plus
@@ -21,7 +20,7 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
-from application_sdk.constants import USE_SERVER_SIDE_CURSOR, AWS_SESSION_NAME
+from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 
 activity.logger = get_logger(__name__)
 
