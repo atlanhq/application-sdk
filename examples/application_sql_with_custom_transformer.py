@@ -39,8 +39,9 @@ from application_sdk.activities.metadata_extraction.sql import (
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.utils import get_yaml_query_template_path_mappings
 from application_sdk.handlers.sql import SQLHandler
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.sql import SQLTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
@@ -113,11 +114,15 @@ class PostgresDatabase(Database):
         }
 
 
-class CustomTransformer(AtlasTransformer):
+class CustomTransformer(SQLTransformer):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         super().__init__(connector_name, tenant_id, **kwargs)
 
-        self.entity_class_definitions["DATABASE"] = PostgresDatabase
+        self.entity_class_definitions = get_yaml_query_template_path_mappings(
+            query_templates_base_path=os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "sql_query_templates"
+            )
+        )
 
 
 class SampleSQLHandler(SQLHandler):

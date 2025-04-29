@@ -1,0 +1,40 @@
+# database.yaml
+table: Database
+columns:
+  - name: attributes.name
+    source_query: database_name
+  - name: attributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', database_name)
+    source_columns: [connection_qualified_name, database_name]
+  - name: attributes.connectionQualifiedName
+    source_query: connection_qualified_name
+  - name: attributes.connectionName
+    source_query: connection_name
+  - name: attributes.description
+    source_query: remarks
+  - name: attributes.schemaCount
+    source_query: schema_count
+  - name: attributes.catalogId
+    source_query: catalog_id
+  - name: attributes.source_created_by
+    source_query: source_owner
+  - name: attributes.source_created_at
+    source_query: created
+  - name: attributes.source_updated_at
+    source_query: last_altered
+  - name: attributes.source_id
+    source_query: source_id
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
+  - name: typeName
+    source_query: "'Database'"
+  - name: status
+    source_query: "'ACTIVE'"
