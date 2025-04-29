@@ -1,8 +1,14 @@
 version: 2
 updates:
-  - package-ecosystem: "pip"   # or another ecosystem like "maven", "nuget", etc.
-    directory: "/"             # location of your manifest file
+  - package-ecosystem: pip
+    directory: "/"
     schedule:
-      interval: "daily"
-    target-branch: "main"      # updates are opened against the main branch
+      interval: daily
+    open-pull-requests-limit: 100
+    allow:
+      - dependency-type: "all"
 
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: daily
