@@ -21,7 +21,7 @@ from application_sdk.common.aws_utils import (
 )
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
-from application_sdk.constants import USE_SERVER_SIDE_CURSOR
+from application_sdk.constants import USE_SERVER_SIDE_CURSOR, AWS_SESSION_NAME
 
 activity.logger = get_logger(__name__)
 
@@ -158,7 +158,7 @@ class BaseSQLClient(ClientInterface):
         if not database:
             raise ValueError("database is required for IAM role authentication")
 
-        session_name = os.getenv("AWS_SESSION_NAME", "temp-session")
+        session_name = AWS_SESSION_NAME
         username = self.credentials["username"]
         host = self.credentials["host"]
         port = self.credentials.get("port", 5432)
