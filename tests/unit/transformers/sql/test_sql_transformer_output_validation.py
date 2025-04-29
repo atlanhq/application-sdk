@@ -1,15 +1,13 @@
 import glob
-import os
 import json
+import os
 from typing import Any, Dict, List
 
 import daft
 import pytest
 
-from application_sdk.transformers.sql import SQLTransformer
-
-
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.transformers.sql import SQLTransformer
 
 logger = get_logger(__name__)
 
@@ -20,9 +18,11 @@ TENANT_ID = "default"
 CONNECTION_QUALIFIED_NAME = "default/postgres/1745501106"
 CONNECTION_NAME = "dev"
 
+
 @pytest.fixture
 def sql_transformer():
     return SQLTransformer(connector_name=CONNECTOR_NAME, tenant_id=TENANT_ID)
+
 
 def get_raw_json_files():
     """
@@ -32,12 +32,14 @@ def get_raw_json_files():
     resources_dir = os.path.join(current_dir, "resources/raw")
     return glob.glob(os.path.join(resources_dir, "*.json"))
 
+
 def remove_run_time_sensitive_fields(row: Dict[str, Any]):
     """
     Remove run time sensitive fields from a row
     E.g time sensitive fields: lastSyncRunAt, createdAt, updatedAt which can change on each run
     """
     row["attributes"].pop("lastSyncRunAt")
+
 
 def test_transform_metadata_output_validation(sql_transformer):
     """
@@ -53,10 +55,10 @@ def test_transform_metadata_output_validation(sql_transformer):
     for json_file in test_files:
         file_name = os.path.basename(json_file).removesuffix(".json").upper()
         logger.info(f"Testing for Asset: {file_name}")
-        
+
         # Read the json file into a Daft DataFrame
         input_df = daft.read_json(json_file)
-        
+
         # Transform using SQL transformer
         result = sql_transformer.transform_metadata(
             file_name,
@@ -64,9 +66,9 @@ def test_transform_metadata_output_validation(sql_transformer):
             LAST_SYNC_WORKFLOW_NAME,
             LAST_SYNC_RUN,
             connection_qualified_name=CONNECTION_QUALIFIED_NAME,
-            connection_name=CONNECTION_NAME
+            connection_name=CONNECTION_NAME,
         )
-        
+
         # Assert that the result is not None and has rows
         assert result is not None
         assert result.count_rows() > 0
@@ -76,14 +78,16 @@ def test_transform_metadata_output_validation(sql_transformer):
 
         # read the expected transformed json file
         expected_transformed_output: List[Dict[str, Any]] = []
-        with open(json_file.replace("raw", "transformed"), 'r') as f:
+        with open(json_file.replace("raw", "transformed"), "r") as f:
             for line in f:
                 json_object = json.loads(line)
                 expected_transformed_output.append(json_object)
 
         # assert that the number of records in the transformed output is the same as the expected output
         assert len(transformed_result_ouput) == len(expected_transformed_output)
-        logger.info(f"Validating {len(transformed_result_ouput)} records for {file_name}")
+        logger.info(
+            f"Validating {len(transformed_result_ouput)} records for {file_name}"
+        )
 
         # validate each record in the transformed output with the expected output
         for idx, (expected, actual) in enumerate(
@@ -94,5 +98,5 @@ def test_transform_metadata_output_validation(sql_transformer):
             remove_run_time_sensitive_fields(actual)
             assert expected == actual
             logger.info(f"Record {idx + 1} validation successful")
-        
+
         logger.info(f"All records validated successfully for {file_name}")
