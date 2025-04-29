@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   # Security Checks
-  trivy:
+  build:
     name: Trivy Code Scan
     runs-on: ubuntu-latest
     steps:
