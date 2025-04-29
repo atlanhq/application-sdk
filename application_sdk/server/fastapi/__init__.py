@@ -11,7 +11,7 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
-from application_sdk.application import AtlanApplicationInterface
+from application_sdk.server import AtlanApplicationInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
     FetchMetadataRequest,

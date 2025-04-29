@@ -4,5 +4,5 @@ updates:
     directory: "/"             # location of your manifest file
     schedule:
       interval: "daily"
-    target-branch: "develop"      # updates are opened against the main branch
+    target-branch: "main"      # updates are opened against the main branch
 
