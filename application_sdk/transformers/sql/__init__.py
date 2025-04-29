@@ -1,16 +1,14 @@
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 import daft
+import yaml
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_yaml_query_template_path_mappings
 from application_sdk.transformers import TransformerInterface
 
 logger = get_logger(__name__)
-
-import yaml
 
 
 class SQLTransformer(TransformerInterface):
