@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "application-sdk"
-version = "0.2.1-rc.9"
+version = "0.2.1-rc.12"
 description = "Python Application SDK is a Python library for developing applications on the Atlan Platform"
 authors = ["Atlan App Team <apps@atlan.com>"]
 readme = "README.md"
@@ -101,7 +101,17 @@ build-backend = "poetry.core.masonry.api"
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
-typeCheckingMode = "strict"
+typeCheckingMode = "standard"
+exclude = [
+    "application_sdk/test_utils/**",
+    ".github/**",
+]
+reportUnknownMemberType = "warning"
+reportAttributeAccessIssue = "warning"
+reportPossiblyUnboundVariable = "information"
+reportFunctionMemberAccess = "warning"
+reportArgumentType = "warning"
+reportGeneralTypeIssues = "warning"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

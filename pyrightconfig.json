@@ -1,9 +1,0 @@
-{
-    "exclude": [
-        "application_sdk/test_utils/**"
-    ],
-    "reportUnknownMemberType": "warning",
-    "reportMissingImports": "warning",
-    "reportAttributeAccessIssue": "warning",
-    "reportPossiblyUnboundVariable": "information"
-}

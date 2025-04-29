@@ -11,7 +11,6 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
@@ -38,7 +37,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         batch_size (int): Size of each batch for processing.
     """
 
-    activities_cls: Type[ActivitiesInterface] = SQLQueryExtractionActivities
+    activities_cls: Type[SQLQueryExtractionActivities] = SQLQueryExtractionActivities
     fetch_queries_sql = ""
 
     sql_client: BaseSQLClient | None = None
@@ -51,7 +50,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
     @staticmethod
     def get_activities(
-        activities: ActivitiesInterface,
+        activities: SQLQueryExtractionActivities,
     ) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities for this workflow.
 
@@ -95,7 +94,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
         workflow_args["output_path"] = output_path
 
-        results: List[Dict[str, Any]] = await workflow.execute_activity_method(  # pyright: ignore[reportUnknownMemberType]
+        results: List[Dict[str, Any]] = await workflow.execute_activity_method(
             self.activities_cls.get_query_batches,
             workflow_args,
             retry_policy=retry_policy,
@@ -113,9 +112,9 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             activity_args["end_marker"] = result["end"]
 
             miner_activities.append(
-                workflow.execute_activity(  # pyright: ignore[reportUnknownMemberType]
+                workflow.execute_activity(
                     self.activities_cls.fetch_queries,
-                    activity_args,
+                    args=[activity_args],
                     retry_policy=retry_policy,
                     start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,

@@ -316,7 +316,6 @@ class SQLHandler(HandlerInterface):
             result = 0
             for row in sql_input.to_pylist():
                 result += row["count"]
-
             return {
                 "success": True,
                 "successMessage": f"Tables check successful. Table count: {result}",
@@ -367,7 +366,6 @@ class SQLHandler(HandlerInterface):
                     query=self.client_version_sql,
                     engine=self.sql_client.engine,
                 ).get_dataframe()
-
                 version_string = next(
                     iter(sql_input.to_dict(orient="records")[0].values())
                 )

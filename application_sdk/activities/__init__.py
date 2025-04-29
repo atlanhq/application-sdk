@@ -26,10 +26,7 @@ from application_sdk.handlers import HandlerInterface
 activity.logger = get_logger(__name__)
 
 
-H = TypeVar("H", bound=HandlerInterface)
-
-
-class ActivitiesState(BaseModel, Generic[H]):
+class ActivitiesState(BaseModel):
     """Base state model for workflow activities.
 
     This class provides the base state structure for workflow activities,
@@ -49,11 +46,14 @@ class ActivitiesState(BaseModel, Generic[H]):
     """
 
     model_config = {"arbitrary_types_allowed": True}
-    handler: Optional[H] = None
+    handler: Optional[HandlerInterface] = None
     workflow_args: Optional[Dict[str, Any]] = None
 
 
-class ActivitiesInterface(ABC, Generic[H]):
+ActivitiesStateType = TypeVar("ActivitiesStateType", bound=ActivitiesState)
+
+
+class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
     """Abstract base class defining the interface for workflow activities.
 
     This class provides state management functionality and defines the basic structure
@@ -76,7 +76,7 @@ class ActivitiesInterface(ABC, Generic[H]):
         The state dictionary maps workflow IDs to their respective ActivitiesState
         instances, allowing for isolation between different workflow executions.
         """
-        self._state: Dict[str, ActivitiesState[H]] = {}
+        self._state: Dict[str, ActivitiesStateType] = {}
 
     # State methods
     async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
@@ -102,11 +102,11 @@ class ActivitiesInterface(ABC, Generic[H]):
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
-            self._state[workflow_id] = ActivitiesState[H]()
+            self._state[workflow_id] = ActivitiesState()
 
         self._state[workflow_id].workflow_args = workflow_args
 
-    async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesState[H]:
+    async def _get_state(self, workflow_args: Dict[str, Any]) -> ActivitiesStateType:
         """Retrieve the state for the current workflow.
 
         If state doesn't exist, it will be initialized using _set_state.
@@ -177,7 +177,7 @@ class ActivitiesInterface(ABC, Generic[H]):
         activity.logger.info("Starting preflight check")
 
         try:
-            state: ActivitiesState[H] = await self._get_state(workflow_args)
+            state: ActivitiesStateType = await self._get_state(workflow_args)
             handler = state.handler
 
             if not handler:
