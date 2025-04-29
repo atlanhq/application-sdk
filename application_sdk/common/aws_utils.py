@@ -1,5 +1,5 @@
-import os
 from application_sdk.constants import AWS_SESSION_NAME
+
 
 def get_region_name_from_hostname(hostname: str) -> str:
     """

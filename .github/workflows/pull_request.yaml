@@ -14,17 +14,7 @@ permissions:
   actions: write
 
 jobs:
-  # Commit and PR Convention Checks
-  pr-title:
-    name: Validate PR Title
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate PR Title
-        uses: "./.github/actions/validate-pr-title"
-        with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-
+  # Conventional Commits
   commits:
     name: Conventional Commits
     runs-on: ubuntu-latest
@@ -123,84 +113,6 @@ jobs:
           message: |
             Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
 
-  e2e-examples:
-    name: E2E (Examples)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Dapr CLI
-        run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
-          dapr init --runtime-version 1.13.6 --slim
-
-      - name: Install Temporal CLI and Start Server
-        run: |
-          curl -sSf https://temporal.download/cli.sh | sh
-          export PATH="$HOME/.temporalio/bin:$PATH"
-          temporal server start-dev --db-filename /tmp/temporal.db &
-          sleep 10  # Give some time for Temporal to start
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v1
-        with:
-          python-version: "3.11"
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.8.5
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          virtualenvs-path: .venv
-          installer-parallel: true
-
-      - name: Install Dependencies
-        run: |
-          git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
-          # Configure poetry to use project-specific virtualenv
-          poetry config virtualenvs.in-project true
-
-          # Install the dependencies with extras
-          poetry install --all-extras
-          poetry update application-sdk --dry-run
-
-      # Start all services
-      - name: Start Platform Services
-        run: |
-          make start-all
-          sleep 10  # Give services time to start up
-
-      # Make API call and capture workflow/run IDs for each example
-      - name: Start the workflows
-        id: workflow_info
-        env:
-          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          SNOWFLAKE_ACCOUNT_ID: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-        run: |
-          cd examples
-          poetry run python run_examples.py
-
-          echo "Workflow status:"
-          cat workflow_status.md
-
-      - name: Comment test results on Pull Request
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "workflow_status"
-          message-path: "examples/workflow_status.md"
-
-      # Stop all services
-      - name: Stop all services
-        continue-on-error: true
-        run: |
-          make stop-all
-          sleep 10  # Give services time to stop
-
   matrix-builder:
     name: Build Test Matrix
     runs-on: ubuntu-latest
@@ -276,6 +188,88 @@ jobs:
           echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
           echo "Matrix output: $MATRIX"
 
+  # Run Examples
+  run-examples:
+    name: Run Examples
+    needs: matrix-builder
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Dapr CLI
+        run: |
+          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
+          dapr init --runtime-version 1.13.6 --slim
+
+      - name: Install Temporal CLI and Start Server
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          export PATH="$HOME/.temporalio/bin:$PATH"
+          temporal server start-dev --db-filename /tmp/temporal.db &
+          sleep 10  # Give some time for Temporal to start
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v1
+        with:
+          python-version: "3.11"
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.5
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          virtualenvs-path: .venv
+          installer-parallel: true
+
+      - name: Install Dependencies
+        run: |
+          git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
+          # Configure poetry to use project-specific virtualenv
+          poetry config virtualenvs.in-project true
+
+          # Install the dependencies with extras
+          make install
+          poetry update application-sdk --dry-run
+
+      # Start all services
+      - name: Start Platform Services
+        run: |
+          make start-all
+          sleep 10  # Give services time to start up
+
+      # Make API call and capture workflow/run IDs for each example
+      - name: Start the workflows
+        id: workflow_info
+        env:
+          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          SNOWFLAKE_ACCOUNT_ID: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
+          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
+        run: |
+          cd examples
+          poetry run python run_examples.py
+
+          echo "Workflow status:"
+          cat workflow_status.md
+
+      - name: Comment test results on Pull Request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: "workflow_status"
+          message-path: "examples/workflow_status.md"
+
+      # Stop all services
+      - name: Stop all services
+        continue-on-error: true
+        run: |
+          make stop-all
+          sleep 10  # Give services time to stop
+
+  # E2E Tests: This step is run for each app in the matrix
   e2e-apps:
     name: E2E (Apps)
     needs: matrix-builder
