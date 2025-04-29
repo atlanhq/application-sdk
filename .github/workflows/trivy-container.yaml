@@ -27,4 +27,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - uses: "./.github/actions/trivy-container"
+      - uses: "atlanhq/application-sdk/.github/actions/trivy-container@main"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}

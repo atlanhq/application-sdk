@@ -1,14 +1,10 @@
-## Pull Request Template
-
 ### Changelog
 <!-- Provide a clear and concise description of the changes in this PR in bullet points -->
-
 - _to be added_
 
 ### Additional context, dependencies & links
 <!-- Provide a clear additional context, dependencies & links in bullet points -->
 <!-- links could be jira, slack, docs, etc. -->
-
 - _to be added_
 
 

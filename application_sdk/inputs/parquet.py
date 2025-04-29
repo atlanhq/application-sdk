@@ -1,7 +1,7 @@
 import glob
 import logging
 import os
-from typing import TYPE_CHECKING, AsyncIterator, List, Optional
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
@@ -87,7 +87,9 @@ class ParquetInput(Input):
             # Re-raise to match IcebergInput behavior
             raise
 
-    async def get_batched_dataframe(self) -> AsyncIterator["pd.DataFrame"]:
+    async def get_batched_dataframe(
+        self,
+    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
         """
         Method to read the data from the parquet file(s) in batches
         and return as an async iterator of pandas dataframes.
@@ -138,7 +140,9 @@ class ParquetInput(Input):
             # Re-raise to match IcebergInput behavior
             raise
 
-    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:
+    async def get_batched_daft_dataframe(
+        self,
+    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:  # noqa: F821
         """
         Get batched daft dataframe from parquet file(s)
 
@@ -155,7 +159,8 @@ class ParquetInput(Input):
             # Use daft's native chunking through _chunk_size parameter
             df_iterator = daft.read_parquet(path, _chunk_size=self.chunk_size)
             for batch_df in df_iterator:
-                yield batch_df
+                if isinstance(batch_df, daft.DataFrame):
+                    yield batch_df
         except Exception as error:
             logger.error(
                 f"Error reading data from parquet file(s) in batches using daft: {error}"

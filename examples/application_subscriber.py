@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List, cast
 from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.application.fastapi import Application, EventWorkflowTrigger
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
@@ -27,8 +28,10 @@ class SampleActivities(ActivitiesInterface):
     async def _set_state(self, workflow_args: Dict[str, Any]):
         pass
 
-    async def preflight_check(self, workflow_args: Dict[str, Any]) -> None:
-        pass
+    @activity.defn
+    @auto_heartbeater
+    async def preflight_check(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+        return {"message": "Preflight check completed successfully"}
 
     @activity.defn
     async def activity_1(self):
@@ -126,20 +129,22 @@ async def start_fast_api_app():
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     def should_trigger_workflow(event: AtlanEvent) -> bool:
-        if event.data.event_type == WORKFLOW_END_EVENT:
-            workflow_end_event: WorkflowEndEvent = event.data
+        # First check the event type
+        if event.data.event_type != WORKFLOW_END_EVENT:
+            return False
 
-            if workflow_end_event.workflow_name != "dependent_workflow":
-                return False
+        # After confirming it's a workflow end event, we can safely cast
+        workflow_end_event = cast(WorkflowEndEvent, event.data)
 
-            # We can optionally check other attributes of the workflow as well,
-            # such as the output of the dependent workflow
-            # if workflow_end_event.workflow_output["counter"] > 5:
-            #     return False
+        if workflow_end_event.workflow_name != "dependent_workflow":
+            return False
 
-            return True
+        # We can optionally check other attributes of the workflow as well,
+        # such as the output of the dependent workflow
+        # if workflow_end_event.workflow_output["counter"] > 5:
+        #     return False
 
-        return False
+        return True
 
     # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
     app.register_workflow(
