@@ -163,7 +163,7 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
         "credentials": {
             "authType": "basic",
             "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-            "username": os.getenv("SNOWFLAKE_USERNAME", "snowflake"),
+            "username": os.getenv("SNOWFLAKE_USER", "snowflake"),
             "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
             "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
             "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
