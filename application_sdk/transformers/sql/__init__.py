@@ -128,8 +128,7 @@ class SQLTransformer(TransformerInterface):
         for component, sub_level in level.items():
             if component != "columns":  # Skip the columns key
                 nested_struct = self._build_struct(sub_level, component)
-                if nested_struct:
-                    struct_fields.append(nested_struct)
+                struct_fields.append(nested_struct)
 
         # Only create a struct if we have fields
         if struct_fields:
@@ -184,8 +183,7 @@ class SQLTransformer(TransformerInterface):
             # Build nested structs starting from the root level
             for prefix, level in path_groups.items():
                 struct_expr = self._build_struct(level, prefix)
-                if struct_expr:
-                    new_columns.append(struct_expr)
+                new_columns.append(struct_expr)
 
             return dataframe.select(*new_columns)
         except Exception as e:
