@@ -113,8 +113,86 @@ jobs:
           message: |
             Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
 
-  e2e-examples:
-    name: E2E (Examples)
+  matrix-builder:
+    name: Build Test Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get PR Labels
+        id: get-labels
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const labelNames = labels.map(label => label.name).join(',');
+            console.log(`PR Labels: ${labelNames}`);
+            core.setOutput('labels', labelNames);
+
+      - name: Build matrix from PR labels
+        id: set-matrix
+        run: |
+          # Get the target branch of PR
+          TARGET_BRANCH="${{ github.base_ref }}"
+          # Default matrix if no label provided
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Parse labels from GitHub Script output
+            LABELS="${{ steps.get-labels.outputs.labels }}"
+
+            FOUND_LABEL=false
+            INCLUDES=""
+
+            echo "Found labels: ${LABELS}"
+
+            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+            for LABEL in "${LABEL_ARRAY[@]}"; do
+              if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
+                REPO="${BASH_REMATCH[1]}"
+                BRANCH="${BASH_REMATCH[2]}"
+
+                # Add comma if not the first entry
+                if [[ "$FOUND_LABEL" == "true" ]]; then
+                  INCLUDES="${INCLUDES},"
+                fi
+
+                # Add this pair as a direct include entry
+                INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
+                FOUND_LABEL=true
+                echo "Added pair: $REPO:$BRANCH"
+              fi
+            done
+
+            # Generate matrix JSON with includes
+            if [[ "$FOUND_LABEL" == "true" ]]; then
+              MATRIX="{\"include\":[${INCLUDES}]}"
+              echo "Generated matrix from labels: $MATRIX"
+            else
+              MATRIX="$DEFAULT_MATRIX"
+              echo "No repo:branch labels found, using default matrix"
+            fi
+          else
+            MATRIX="$DEFAULT_MATRIX"
+            echo "Not a PR event, using default matrix"
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix output: $MATRIX"
+
+  # Run Examples
+  run-examples:
+    name: Run Examples
+    needs: matrix-builder
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -191,81 +269,7 @@ jobs:
           make stop-all
           sleep 10  # Give services time to stop
 
-  matrix-builder:
-    name: Build Test Matrix
-    runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Get PR Labels
-        id: get-labels
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number
-            });
-            const labelNames = labels.map(label => label.name).join(',');
-            console.log(`PR Labels: ${labelNames}`);
-            core.setOutput('labels', labelNames);
-
-      - name: Build matrix from PR labels
-        id: set-matrix
-        run: |
-          # Get the target branch of PR
-          TARGET_BRANCH="${{ github.base_ref }}"
-          # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
-
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            # Parse labels from GitHub Script output
-            LABELS="${{ steps.get-labels.outputs.labels }}"
-
-            FOUND_LABEL=false
-            INCLUDES=""
-
-            echo "Found labels: ${LABELS}"
-
-            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
-            for LABEL in "${LABEL_ARRAY[@]}"; do
-              if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
-                REPO="${BASH_REMATCH[1]}"
-                BRANCH="${BASH_REMATCH[2]}"
-
-                # Add comma if not the first entry
-                if [[ "$FOUND_LABEL" == "true" ]]; then
-                  INCLUDES="${INCLUDES},"
-                fi
-
-                # Add this pair as a direct include entry
-                INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
-                FOUND_LABEL=true
-                echo "Added pair: $REPO:$BRANCH"
-              fi
-            done
-
-            # Generate matrix JSON with includes
-            if [[ "$FOUND_LABEL" == "true" ]]; then
-              MATRIX="{\"include\":[${INCLUDES}]}"
-              echo "Generated matrix from labels: $MATRIX"
-            else
-              MATRIX="$DEFAULT_MATRIX"
-              echo "No repo:branch labels found, using default matrix"
-            fi
-          else
-            MATRIX="$DEFAULT_MATRIX"
-            echo "Not a PR event, using default matrix"
-          fi
-
-          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
-          echo "Matrix output: $MATRIX"
-
+  # E2E Tests: This step is run for each app in the matrix
   e2e-apps:
     name: E2E (Apps)
     needs: matrix-builder
