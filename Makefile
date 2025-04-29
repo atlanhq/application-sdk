@@ -14,7 +14,11 @@ start-dapr:
 	dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components
 
 install:
+	# Install the dependencies with extras
 	poetry install --all-extras
+
+	# Activate the virtual environment and install pre-commit hooks
+	poetry run pre-commit install
 
 # Start all services in detached mode
 start-all:

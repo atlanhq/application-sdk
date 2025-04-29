@@ -90,7 +90,7 @@ dapr --version
 ### 6. Install Application SDK
 
 ```bash
-poetry install --all-extras
+make install
 
 # activate the environment
 source .venv/bin/activate
