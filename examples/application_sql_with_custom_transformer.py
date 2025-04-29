@@ -36,6 +36,7 @@ from pyatlan.model.assets import Database
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
+from application_sdk.application.metadata_extraction.sql import BaseSQLMetadataExtractionApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
@@ -142,23 +143,19 @@ class SampleSQLHandler(BaseSQLHandler):
 async def application_sql_with_custom_transformer(
     daemon: bool = True,
 ) -> Dict[str, Any]:
-    print("Starting application_sql_with_custom_transformer")
+    logger.info("Starting application_sql_with_custom_transformer")
 
-    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
-    await workflow_client.load()
-
-    activities = SampleSQLActivities(
+    app = BaseSQLMetadataExtractionApplication(
+        name=APPLICATION_NAME,
         sql_client_class=SQLClient,
         handler_class=SampleSQLHandler,
         transformer_class=CustomTransformer,
     )
 
-    worker: Worker = Worker(
-        workflow_client=workflow_client,
+    await app.setup_workflow(
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
-            activities
-        ),
+        activities_class=SampleSQLActivities,
+        worker_daemon_mode=daemon,
     )
 
     # wait for the worker to start
@@ -190,12 +187,7 @@ async def application_sql_with_custom_transformer(
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    workflow_response = await workflow_client.start_workflow(
-        workflow_args, BaseSQLMetadataExtractionWorkflow
-    )
-
-    # Start the worker in a separate thread
-    await worker.start(daemon=daemon)
+    workflow_response = await app.start_workflow(workflow_args=workflow_args)
 
     return workflow_response
 

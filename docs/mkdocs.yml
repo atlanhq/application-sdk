@@ -92,6 +92,7 @@ nav:
       - Inputs: concepts/inputs.md
       - Outputs: concepts/outputs.md
       - Worker: concepts/worker.md
+      - Example: concepts/application_sql.md
 
   - Configuration Reference: configuration.md
   - API Reference: /application-sdk/main/api

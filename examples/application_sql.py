@@ -33,6 +33,7 @@ from typing import Any, Dict
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
+from application_sdk.application.metadata_extraction.sql import BaseSQLMetadataExtractionApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
@@ -119,9 +120,19 @@ class SampleSQLWorkflowHandler(BaseSQLHandler):
 async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     logger.info("Starting application_sql")
 
-    activities = SampleSQLActivities(
-        sql_client_class=SQLClient, handler_class=SampleSQLWorkflowHandler
+    app = BaseSQLMetadataExtractionApplication(
+        name=APPLICATION_NAME,
+        sql_client_class=SQLClient,
+        handler_class=SampleSQLWorkflowHandler,
     )
+
+    await app.setup_workflow(
+        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
+        activities_class=SampleSQLActivities,
+        worker_daemon_mode=daemon,
+    )
+
+    time.sleep(3)
 
     workflow_args = {
         "credentials": {
@@ -149,14 +160,10 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    app = WorkflowApp(
-        application_name=APPLICATION_NAME,
-        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        activities=activities,
-        workflow_args=workflow_args,
-    )
-    return await app.run(BaseSQLMetadataExtractionWorkflow, daemon=daemon)
+    workflow_response = await app.start_workflow(workflow_args=workflow_args)
 
+    return workflow_response
+    
 
 if __name__ == "__main__":
     asyncio.run(application_sql(daemon=False))
