@@ -1,5 +1,14 @@
 import os
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncIterator,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Union,
+)
 
 import orjson
 from temporalio import activity
@@ -35,22 +44,26 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
 class JsonOutput(Output):
     """Output handler for writing data to JSON files.
 
-    This class handles writing DataFrames to JSON files with support for chunking
-    and automatic uploading to object store.
+    This class provides functionality for writing data to JSON files with support
+    for chunking large datasets, buffering, and automatic file path generation.
+    It can handle both pandas and daft DataFrames as input.
+
+    The output can be written to local files and optionally uploaded to an object
+    store. Files are named using a configurable path generation scheme that
+    includes chunk numbers for split files.
 
     Attributes:
-        output_suffix (str): Suffix for files when uploading to object store.
-        output_path (str): Path where JSON files will be written.
-        output_prefix (str): Prefix for files when uploading to object store.
-        typename (Optional[str]): Type name of the entity e.g database, schema, table.
+        output_path (Optional[str]): Base path where JSON files will be written.
+        output_suffix (str): Suffix added to file paths when uploading to object store.
+        output_prefix (Optional[str]): Prefix for output files and object store paths.
+        typename (Optional[str]): Type identifier for the data being written.
         chunk_start (Optional[int]): Starting index for chunk numbering.
-        buffer_size (int): Size of the buffer in bytes.
+        buffer_size (int): Size of the write buffer in bytes.
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
-        chunk_count (int): Number of chunks created.
-        path_gen (Callable): Function to generate file paths for chunks.
-        buffer (List[pd.DataFrame]): Buffer holding DataFrames before writing.
-        current_buffer_size (int): Current size of the buffer.
+        chunk_count (int): Number of chunks written.
+        buffer (List[Union[pd.DataFrame, daft.DataFrame]]): Buffer for accumulating
+            data before writing.
     """
 
     def __init__(
@@ -154,7 +167,9 @@ class JsonOutput(Output):
         except Exception as e:
             logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(
+        self, dataframe: Union["daft.DataFrame", AsyncIterator[Dict[str, Any]]]
+    ):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
@@ -169,12 +184,13 @@ class JsonOutput(Output):
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
 
-        async for row in dataframe:
-            self.total_record_count += 1
-            # Serialize the row and add it to the buffer
-            buffer.append(
-                orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
-            )
+        if isinstance(dataframe, AsyncIterator):
+            async for row in dataframe:
+                self.total_record_count += 1
+                # Serialize the row and add it to the buffer
+                buffer.append(
+                    orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+                )
 
             # If the buffer reaches the specified size, write it to the file
             if self.chunk_size and len(buffer) >= self.chunk_size:
@@ -210,7 +226,15 @@ class JsonOutput(Output):
 
         if not self.buffer or not self.current_buffer_size:
             return
-        combined_dataframe = pd.concat(self.buffer)
+
+        if not isinstance(self.buffer, List["pd.DataFrame"]):
+            raise TypeError(
+                "_flush_buffer encountered non-list buffer. This should not happen."
+            )
+
+        # Now it's safe to cast for pd.concat
+        pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
+        combined_dataframe = pd.concat(pd_buffer)
 
         # Write DataFrame to JSON file
         if not combined_dataframe.empty:

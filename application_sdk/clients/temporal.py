@@ -62,19 +62,22 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
+        event = ActivityStartEvent()
+        event.activity_id = activity.info().activity_id
+        event.activity_type = activity.info().activity_type
+
         EventStore.create_event(
-            ActivityStartEvent(
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
-            ),
+            event,
             topic_name=EventStore.TOPIC_NAME,
         )
         output = await super().execute_activity(input)
+
+        end_event = ActivityEndEvent()
+        end_event.activity_id = activity.info().activity_id
+        end_event.activity_type = activity.info().activity_type
+
         EventStore.create_event(
-            ActivityEndEvent(
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
-            ),
+            end_event,
             topic_name=EventStore.TOPIC_NAME,
         )
         return output
@@ -154,7 +157,21 @@ class EventInterceptor(Interceptor):
 
 
 class TemporalWorkflowClient(WorkflowClient):
-    """Temporal-specific implementation of WorkflowClient."""
+    """Temporal-specific implementation of WorkflowClient.
+
+    This class provides an implementation of the WorkflowClient interface for
+    the Temporal workflow engine. It handles connection management, workflow
+    execution, and worker creation specific to Temporal.
+
+    Attributes:
+        client: Temporal client instance.
+        worker: Temporal worker instance.
+        application_name (str): Name of the application.
+        worker_task_queue (str): Name of the worker task queue.
+        host (str): Temporal server host.
+        port (str): Temporal server port.
+        namespace (str): Temporal namespace.
+    """
 
     def __init__(
         self,
@@ -163,6 +180,18 @@ class TemporalWorkflowClient(WorkflowClient):
         application_name: str | None = None,
         namespace: str | None = "default",
     ):
+        """Initialize the Temporal workflow client.
+
+        Args:
+            host (str | None, optional): Temporal server host. Defaults to
+                environment variable WORKFLOW_HOST.
+            port (str | None, optional): Temporal server port. Defaults to
+                environment variable WORKFLOW_PORT.
+            application_name (str | None, optional): Name of the application.
+                Defaults to environment variable APPLICATION_NAME.
+            namespace (str | None, optional): Temporal namespace. Defaults to
+                "default" or environment variable WORKFLOW_NAMESPACE.
+        """
         self.client = None
         self.worker = None
         self.application_name = (
@@ -180,36 +209,57 @@ class TemporalWorkflowClient(WorkflowClient):
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
 
+        The task queue name is derived from the application name and is used
+        to route workflow tasks to appropriate workers.
+
         Returns:
-            str: The task queue name.
+            str: The task queue name, which is the same as the application name.
         """
         return self.application_name
 
     def get_connection_string(self) -> str:
         """Get the Temporal server connection string.
 
+        Constructs a connection string from the configured host and port in
+        the format "host:port".
+
         Returns:
-            str: The connection string.
+            str: The connection string for the Temporal server.
         """
         return f"{self.host}:{self.port}"
 
     def get_namespace(self) -> str:
         """Get the Temporal namespace.
 
+        Returns the configured namespace where workflows will be executed.
+        The namespace provides isolation between different environments or
+        applications.
+
         Returns:
-            str: The namespace.
+            str: The Temporal namespace.
         """
         return self.namespace
 
     async def load(self) -> None:
-        """Connect to the Temporal server."""
+        """Connect to the Temporal server.
+
+        Establishes a connection to the Temporal server using the configured
+        connection string and namespace.
+
+        Raises:
+            ConnectionError: If connection to the Temporal server fails.
+        """
         self.client = await Client.connect(
             self.get_connection_string(),
             namespace=self.namespace,
         )
 
     async def close(self) -> None:
-        """Close the Temporal client connection."""
+        """Close the Temporal client connection.
+
+        Gracefully closes the connection to the Temporal server. This is a
+        no-op if the connection is already closed.
+        """
         return
 
     async def start_workflow(
@@ -259,10 +309,8 @@ class TemporalWorkflowClient(WorkflowClient):
             if not self.client:
                 raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
-                workflow_class,
-                {
-                    "workflow_id": workflow_id,
-                },
+                workflow_class,  # type: ignore
+                args=[{"workflow_id": workflow_id}],
                 id=workflow_id,
                 task_queue=self.worker_task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),

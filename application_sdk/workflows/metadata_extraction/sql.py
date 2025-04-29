@@ -5,12 +5,11 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
-from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type, cast
+from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
@@ -38,13 +37,15 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         application_name (str): Name of the application, set to "sql-connector".
     """
 
-    activities_cls: Type[ActivitiesInterface] = BaseSQLMetadataExtractionActivities
+    activities_cls: Type[BaseSQLMetadataExtractionActivities] = (
+        BaseSQLMetadataExtractionActivities
+    )
 
     application_name: str = APPLICATION_NAME
 
     @staticmethod
     def get_activities(
-        activities: ActivitiesInterface,
+        activities: BaseSQLMetadataExtractionActivities,
     ) -> Sequence[Callable[..., Any]]:
         """Get the sequence of activities to be executed by the workflow.
 
@@ -57,15 +58,14 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
-        sql_activities = cast(BaseSQLMetadataExtractionActivities, activities)
         return [
-            sql_activities.preflight_check,
-            sql_activities.fetch_databases,
-            sql_activities.fetch_schemas,
-            sql_activities.fetch_tables,
-            sql_activities.fetch_columns,
-            sql_activities.fetch_procedures,
-            sql_activities.transform_data,
+            activities.preflight_check,
+            activities.fetch_databases,
+            activities.fetch_schemas,
+            activities.fetch_tables,
+            activities.fetch_columns,
+            activities.fetch_procedures,
+            activities.transform_data,
         ]
 
     async def fetch_and_transform(
@@ -91,7 +91,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         """
         raw_statistics = await workflow.execute_activity_method(
             fetch_fn,
-            workflow_args,
+            args=[workflow_args],
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
@@ -216,17 +216,35 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
     def get_fetch_functions(
         self,
-    ) -> List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any] | None]]]:
-        """Get the fetch functions for the SQL metadata extraction workflow.
+    ) -> list[
+        Callable[
+            [BaseSQLMetadataExtractionActivities, Dict[str, Any]],
+            Coroutine[Any, Any, ActivityStatistics | None],
+        ]
+    ]:
+        """Get the list of functions for fetching SQL metadata.
+
+        This method returns a sequence of coroutine functions that fetch different
+        types of SQL metadata. The functions are executed in order to extract
+        metadata about databases, schemas, tables, columns, and procedures.
+
+        Each fetch function takes a dictionary of arguments and returns a coroutine
+        that resolves to either a dictionary of metadata or None if no metadata
+        is available.
 
         Returns:
-            List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any] | None]]]: A list of fetch operations.
+            List[Callable[[Dict[str, Any]], Coroutine[Any, Any, Dict[str, Any] | None]]]:
+                A list of fetch functions in the order they should be executed:
+                1. fetch_databases: Fetch database metadata
+                2. fetch_schemas: Fetch schema metadata
+                3. fetch_tables: Fetch table metadata
+                4. fetch_columns: Fetch column metadata
+                5. fetch_procedures: Fetch stored procedure metadata
         """
-        sql_activities = cast(BaseSQLMetadataExtractionActivities, self.activities_cls)
         return [
-            sql_activities.fetch_databases,
-            sql_activities.fetch_schemas,
-            sql_activities.fetch_tables,
-            sql_activities.fetch_columns,
-            sql_activities.fetch_procedures,
+            self.activities_cls.fetch_databases,
+            self.activities_cls.fetch_schemas,
+            self.activities_cls.fetch_tables,
+            self.activities_cls.fetch_columns,
+            self.activities_cls.fetch_procedures,
         ]

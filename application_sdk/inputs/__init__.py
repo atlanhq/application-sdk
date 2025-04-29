@@ -16,7 +16,7 @@ class Input(ABC):
     """
 
     @abstractmethod
-    def get_batched_dataframe(
+    async def get_batched_dataframe(
         self,
     ) -> Union[Iterator["pd.DataFrame"], AsyncIterator["pd.DataFrame"]]:
         """
@@ -31,7 +31,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_dataframe(self) -> "pd.DataFrame":
+    async def get_dataframe(self) -> "pd.DataFrame":
         """
         Get a single pandas DataFrame.
 
@@ -44,7 +44,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_batched_daft_dataframe(
+    async def get_batched_daft_dataframe(
         self,
     ) -> Union[Iterator["daft.DataFrame"], AsyncIterator["daft.DataFrame"]]:  # noqa: F821
         """
@@ -59,7 +59,7 @@ class Input(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+    async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
         Get a single daft DataFrame.
 

@@ -13,9 +13,15 @@ The SDK empowers developers to build applications that are:
 
 To begin developing with the Application SDK:
 
-1. Install the `patlan` CLI tool to scaffold a sample app using the application-sdk
-2. Follow the getting started guide at [k.atlan.dev/patlan](https://k.atlan.dev/patlan)
-   1. Or clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
+1. Clone the repository
+2. Follow the setup instructions for your platform:
+   - [Windows](./docs/docs/setup/WINDOWS.md)
+   - [Mac](./docs/docs/setup/MAC.md)
+   - [Linux](./docs/docs/setup/LINUX.md)
+3. Run the example application:
+   - [Hello World](./examples/application_hello_world.py)
+   - [SQL](./examples/application_sql.py)
+4. (Optionally) clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
 
 ## Documentation
 
@@ -39,7 +45,7 @@ poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see our [Contributing Guide](./.github/CONTRIBUTING.md) for guidelines.
 
 ## Need Help?
 

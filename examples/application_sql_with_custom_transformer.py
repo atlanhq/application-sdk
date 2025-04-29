@@ -6,7 +6,7 @@ Key components:
 - SampleSQLWorkflowMetadata: Defines metadata extraction queries
 - SampleSQLWorkflowPreflight: Performs preflight checks
 - SampleSQLWorkflowWorker: Implements the main workflow logic (including extraction and transformation)
-- SampleSQLWorkflowBuilder: Configures and builds the workflow
+- SampleSQLWorkflow: Configures and builds the workflow
 
 Workflow steps:
 1. Perform preflight checks
@@ -30,7 +30,6 @@ import asyncio
 import os
 import time
 from typing import Any, Dict
-from urllib.parse import quote_plus
 
 from pyatlan.model.assets import Database
 
@@ -54,9 +53,10 @@ logger = get_logger(__name__)
 
 
 class SQLClient(BaseSQLClient):
-    def get_sqlalchemy_connection_string(self) -> str:
-        encoded_password: str = quote_plus(self.credentials["password"])
-        return f"postgresql+psycopg://{self.credentials['username']}:{encoded_password}@{self.credentials['host']}:{self.credentials['port']}/{self.credentials['database']}"
+    DB_CONFIG = {
+        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        "required": ["username", "password", "host", "port", "database"],
+    }
 
 
 class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
