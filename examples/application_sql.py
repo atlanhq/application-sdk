@@ -44,10 +44,6 @@ from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
 
-# TODO: remove this import
-# from application_sdk.app import WorkflowApp
-
-
 APPLICATION_NAME = "postgres"
 
 logger = get_logger(__name__)
@@ -126,14 +122,13 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
 
     app = BaseSQLMetadataExtractionApplication(
         name=APPLICATION_NAME,
-        sql_client_class=SQLClient,
+        client_class=SQLClient,
         handler_class=SampleSQLWorkflowHandler,
     )
 
     await app.setup_workflow(
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
         activities_class=SampleSQLActivities,
-        worker_daemon_mode=daemon,
     )
 
     time.sleep(3)
@@ -165,6 +160,8 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     }
 
     workflow_response = await app.start_workflow(workflow_args=workflow_args)
+
+    await app.start_worker(daemon=daemon)
 
     return workflow_response
 

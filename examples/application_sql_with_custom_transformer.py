@@ -149,7 +149,7 @@ async def application_sql_with_custom_transformer(
 
     app = BaseSQLMetadataExtractionApplication(
         name=APPLICATION_NAME,
-        sql_client_class=SQLClient,
+        client_class=SQLClient,
         handler_class=SampleSQLHandler,
         transformer_class=CustomTransformer,
     )
@@ -157,7 +157,6 @@ async def application_sql_with_custom_transformer(
     await app.setup_workflow(
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
         activities_class=SampleSQLActivities,
-        worker_daemon_mode=daemon,
     )
 
     # wait for the worker to start
@@ -190,6 +189,8 @@ async def application_sql_with_custom_transformer(
     }
 
     workflow_response = await app.start_workflow(workflow_args=workflow_args)
+
+    await app.start_worker(daemon=daemon)
 
     return workflow_response
 

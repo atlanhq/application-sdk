@@ -5,7 +5,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.server import ServerInterface
 
 
-class ApplicationInterface(ABC):
+class Application(ABC):
     """
     Abstract base class for all application implementations.
 
@@ -27,6 +27,10 @@ class ApplicationInterface(ABC):
 
     @abstractmethod
     async def start_workflow(self, workflow_args, workflow_class):
+        pass
+
+    @abstractmethod
+    async def start_worker(self, daemon: bool = True):
         pass
 
     @abstractmethod
