@@ -1,5 +1,5 @@
 import os
-
+from application_sdk.constants import AWS_SESSION_NAME
 
 def get_region_name_from_hostname(hostname: str) -> str:
     """
@@ -24,7 +24,7 @@ def generate_aws_rds_token_with_iam_role(
     host: str,
     user: str,
     external_id: str | None = None,
-    session_name: str = os.getenv("SESSION_NAME", "temp-session"),
+    session_name: str = AWS_SESSION_NAME,
     port: int = 5432,
     region: str | None = None,
 ) -> str:

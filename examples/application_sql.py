@@ -41,6 +41,13 @@ from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
+from application_sdk.constants import (
+    POSTGRES_HOST,
+    POSTGRES_PORT,
+    POSTGRES_USERNAME,
+    POSTGRES_PASSWORD,
+    POSTGRES_DATABASE,
+)
 
 APPLICATION_NAME = "postgres"
 
@@ -136,11 +143,11 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     workflow_args = {
         "credentials": {
             "authType": "basic",
-            "host": os.getenv("POSTGRES_HOST", "localhost"),
-            "port": os.getenv("POSTGRES_PORT", "5432"),
-            "username": os.getenv("POSTGRES_USER", "postgres"),
-            "password": os.getenv("POSTGRES_PASSWORD", "password"),
-            "database": os.getenv("POSTGRES_DATABASE", "postgres"),
+            "host": POSTGRES_HOST,
+            "port": POSTGRES_PORT,
+            "username": POSTGRES_USERNAME,
+            "password": POSTGRES_PASSWORD,
+            "database": POSTGRES_DATABASE,
         },
         "connection": {
             "connection_name": "test-connection",

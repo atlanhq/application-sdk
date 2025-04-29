@@ -28,6 +28,13 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import SQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
+from application_sdk.constants import (
+    SNOWFLAKE_ACCOUNT_ID,
+    SNOWFLAKE_USERNAME,
+    SNOWFLAKE_PASSWORD,
+    SNOWFLAKE_WAREHOUSE,
+    SNOWFLAKE_ROLE,
+)
 
 logger = get_logger(__name__)
 
@@ -162,11 +169,11 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
         },
         "credentials": {
             "authType": "basic",
-            "account_id": os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost"),
-            "username": os.getenv("SNOWFLAKE_USER", "snowflake"),
-            "password": os.getenv("SNOWFLAKE_PASSWORD", "password"),
-            "warehouse": os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST"),
-            "role": os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST"),
+            "account_id": SNOWFLAKE_ACCOUNT_ID,
+            "username": SNOWFLAKE_USERNAME,
+            "password": SNOWFLAKE_PASSWORD,
+            "warehouse": SNOWFLAKE_WAREHOUSE,
+            "role": SNOWFLAKE_ROLE,
         },
         "connection": {
             "connection_name": "test-connection",
