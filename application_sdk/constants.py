@@ -116,29 +116,3 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 # AWS Constants
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
-
-
-# Snowflake Constants
-#: Snowflake Account ID
-SNOWFLAKE_ACCOUNT_ID = os.getenv("SNOWFLAKE_ACCOUNT_ID", "localhost")
-#: Snowflake Username
-SNOWFLAKE_USERNAME = os.getenv("SNOWFLAKE_USERNAME", "snowflake")
-#: Snowflake Password
-SNOWFLAKE_PASSWORD = os.getenv("SNOWFLAKE_PASSWORD", "password")
-#: Snowflake Warehouse
-SNOWFLAKE_WAREHOUSE = os.getenv("SNOWFLAKE_WAREHOUSE", "PHOENIX_TEST")
-#: Snowflake Role
-SNOWFLAKE_ROLE = os.getenv("SNOWFLAKE_ROLE", "PHEONIX_APP_TEST")
-
-
-# Postgres Constants
-#: Postgres Host
-POSTGRES_HOST = os.getenv("POSTGRES_HOST", "localhost")
-#: Postgres Port
-POSTGRES_PORT = os.getenv("POSTGRES_PORT", "5432")
-#: Postgres Username
-POSTGRES_USERNAME = os.getenv("POSTGRES_USER", "postgres")
-#: Postgres Password
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "password")
-#: Postgres Database
-POSTGRES_DATABASE = os.getenv("POSTGRES_DATABASE", "postgres")
