@@ -14,17 +14,7 @@ permissions:
   actions: write
 
 jobs:
-  # Commit and PR Convention Checks
-  pr-title:
-    name: Validate PR Title
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate PR Title
-        uses: "./.github/actions/validate-pr-title"
-        with:
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-
+  # Conventional Commits
   commits:
     name: Conventional Commits
     runs-on: ubuntu-latest
