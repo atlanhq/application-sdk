@@ -1,8 +1,6 @@
 import os
 from typing import TYPE_CHECKING, Literal, Optional
 
-import daft
-import pandas as pd
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -100,7 +98,7 @@ class ParquetOutput(Output):
             logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
             raise
 
-    async def write_daft_dataframe(self, dataframe: daft.DataFrame):  # noqa: F821
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
