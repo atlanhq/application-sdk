@@ -51,7 +51,10 @@ async def test_tables_check_success(sql_handler: BaseSQLHandler) -> None:
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
     )  # type: ignore
-    with patch("daft.read_sql", return_value=mock_df):
+
+    with patch("daft.read_sql") as mock_read_sql:
+        mock_read_sql.return_value = mock_df
+
         result = await sql_handler.tables_check(payload={})
         assert result["success"] is True
         assert "Table count: 5" in result["successMessage"]
@@ -66,7 +69,10 @@ async def test_tables_check_empty(sql_handler: BaseSQLHandler) -> None:
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
     )  # type: ignore
-    with patch("daft.read_sql", return_value=mock_df):
+
+    with patch("daft.read_sql") as mock_read_sql:
+        mock_read_sql.return_value = mock_df
+
         result = await sql_handler.tables_check(payload={})
         assert result["success"] is True
         assert "Table count: 0" in result["successMessage"]
@@ -81,7 +87,10 @@ async def test_tables_check_failure(sql_handler: BaseSQLHandler) -> None:
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
     )  # type: ignore
-    with patch("daft.read_sql", return_value=mock_df):
+
+    with patch("daft.read_sql") as mock_read_sql:
+        mock_read_sql.return_value = mock_df
+
         result = await sql_handler.tables_check(payload={})
         assert result["success"] is False
         assert "Tables check failed" in result["failureMessage"]

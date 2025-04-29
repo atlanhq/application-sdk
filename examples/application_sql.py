@@ -28,21 +28,25 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 
 import asyncio
 import os
+import time
 from typing import Any, Dict
 
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.application.metadata_extraction.sql import BaseSQLMetadataExtractionApplication
+from application_sdk.application.metadata_extraction.sql import (
+    BaseSQLMetadataExtractionApplication,
+)
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
-from application_sdk.app import WorkflowApp
+
+# TODO: remove this import
+# from application_sdk.app import WorkflowApp
+
 
 APPLICATION_NAME = "postgres"
 
@@ -163,7 +167,7 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     workflow_response = await app.start_workflow(workflow_args=workflow_args)
 
     return workflow_response
-    
+
 
 if __name__ == "__main__":
     asyncio.run(application_sql(daemon=False))

@@ -1,17 +1,16 @@
 from typing import Any, Dict, List, Optional, Type
 
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.clients import ClientInterface
-from application_sdk.handlers import HandlerInterface
-from application_sdk.transformers import TransformerInterface
-from application_sdk.worker import Worker
-from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
-from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionActivities
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.server.fastapi import HttpWorkflowTrigger
-from application_sdk.server.fastapi import Application
+from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.worker import Worker
+from application_sdk.workflows.metadata_extraction.sql import (
+    BaseSQLMetadataExtractionActivities,
+    BaseSQLMetadataExtractionWorkflow,
+)
+
 
 class BaseSQLMetadataExtractionApplication:
     """
@@ -26,8 +25,8 @@ class BaseSQLMetadataExtractionApplication:
         self,
         name: str,
         sql_client_class: Type[BaseSQLClient],
-        handler_class: Optional[Type[HandlerInterface]] = None,
-        transformer_class: Optional[Type[TransformerInterface]] = None,
+        handler_class: Optional[Type[BaseSQLHandler]] = None,
+        transformer_class: Optional[Type[AtlasTransformer]] = None,
     ):
         """
         Initialize the SQL metadata extraction application.
@@ -47,19 +46,25 @@ class BaseSQLMetadataExtractionApplication:
         self.application = None
 
         # setup workflow client for worker and application server
-        self.workflow_client = get_workflow_client(application_name=self.application_name)
+        self.workflow_client = get_workflow_client(
+            application_name=self.application_name
+        )
 
     async def setup_workflow(
         self,
-        workflow_classes: List[Type] = [BaseSQLMetadataExtractionWorkflow],
-        activities_class: Type = BaseSQLMetadataExtractionActivities,
+        workflow_classes: List[Type[BaseSQLMetadataExtractionWorkflow]] = [
+            BaseSQLMetadataExtractionWorkflow
+        ],
+        activities_class: Type[
+            BaseSQLMetadataExtractionActivities
+        ] = BaseSQLMetadataExtractionActivities,
         worker_daemon_mode: bool = True,
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
 
         Args:
-            workflow_classes (List[Type]): List of workflow classes to register. Defaults to [BaseSQLMetadataExtractionWorkflow].
+            workflow_classes (List[Type[BaseSQLMetadataExtractionWorkflow]]): List of workflow classes to register. Defaults to [BaseSQLMetadataExtractionWorkflow].
             activities_class (Type): Activities class to use for workflow activities. Defaults to BaseSQLMetadataExtractionActivities.
             worker_daemon_mode (bool): Whether to run the worker in daemon mode. Defaults to True.
         """
@@ -67,7 +72,7 @@ class BaseSQLMetadataExtractionApplication:
         # load the workflow client
         await self.workflow_client.load()
 
-        workflow_class: BaseSQLMetadataExtractionWorkflow = workflow_classes[0]
+        workflow_class = workflow_classes[0]
 
         # setup sql metadata extraction activities
         # requires a sql client for source connectivity, handler for preflight checks, transformer for atlas mapping
@@ -85,7 +90,11 @@ class BaseSQLMetadataExtractionApplication:
         )
         await worker.start(daemon=worker_daemon_mode)
 
-    async def start_workflow(self, workflow_args: Dict[str, Any], workflow_class: Type = BaseSQLMetadataExtractionWorkflow) -> Any:
+    async def start_workflow(
+        self,
+        workflow_args: Dict[str, Any],
+        workflow_class: Type = BaseSQLMetadataExtractionWorkflow,
+    ) -> Any:
         """
         Start a new workflow execution for SQL metadata extraction.
 
@@ -107,7 +116,12 @@ class BaseSQLMetadataExtractionApplication:
         )
         return workflow_response
 
-    async def setup_server(self, workflow_class: Type = BaseSQLMetadataExtractionWorkflow) -> Any:
+    async def setup_server(
+        self,
+        workflow_class: Type[
+            BaseSQLMetadataExtractionWorkflow
+        ] = BaseSQLMetadataExtractionWorkflow,
+    ) -> Any:
         """
         Set up the FastAPI server for the SQL metadata extraction application.
 

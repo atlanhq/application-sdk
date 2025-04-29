@@ -25,7 +25,9 @@ class TestPrepareMetadata:
         return handler
 
     @pytest.mark.asyncio
-    async def test_successful_metadata_preparation(self, handler: BaseSQLHandler) -> None:
+    async def test_successful_metadata_preparation(
+        self, handler: BaseSQLHandler
+    ) -> None:
         """Test successful metadata preparation with valid input"""
         # Create test DataFrame
         df = daft.from_pydict(

@@ -5,9 +5,9 @@ import pytest
 from hypothesis import HealthCheck, Phase, given, settings
 from hypothesis import strategies as st
 
-from application_sdk.server.fastapi.models import MetadataType
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.server.fastapi.models import MetadataType
 from application_sdk.test_utils.hypothesis.strategies.handlers.sql.sql_metadata import (
     database_list_strategy,
     database_name_strategy,

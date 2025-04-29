@@ -10,6 +10,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -66,7 +67,7 @@ class BaseSQLQueryExtractionActivitiesState(ActivitiesState):
     """
 
     sql_client: BaseSQLClient
-    handler: BaseSQLHandler
+    handler: HandlerInterface
 
 
 class SQLQueryExtractionActivities(ActivitiesInterface):
@@ -82,7 +83,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         fetch_queries_sql (str): SQL query template for fetching queries.
     """
 
-    _state: Dict[str, ActivitiesState[BaseSQLHandler]] = {}
+    _state: Dict[str, BaseSQLQueryExtractionActivitiesState] = {}
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[BaseSQLHandler] = BaseSQLHandler

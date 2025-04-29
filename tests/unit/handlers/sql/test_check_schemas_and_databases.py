@@ -184,7 +184,9 @@ class TestCheckSchemasAndDatabases:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_multiple_databases_and_schemas(self, handler: BaseSQLHandler) -> None:
+    async def test_multiple_databases_and_schemas(
+        self, handler: BaseSQLHandler
+    ) -> None:
         """Test check with multiple databases and schemas"""
         # Test data
         test_data = daft.from_pydict(

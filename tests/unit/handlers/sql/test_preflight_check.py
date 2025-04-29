@@ -172,7 +172,9 @@ async def test_preflight_check_failure(
 
 @given(version_data=version_comparison_strategy)
 async def test_check_client_version_comparison(
-    handler: BaseSQLHandler, version_data: Tuple[str, str, bool], monkeypatch: MonkeyPatch
+    handler: BaseSQLHandler,
+    version_data: Tuple[str, str, bool],
+    monkeypatch: MonkeyPatch,
 ):
     client_version, min_version, expected_success = version_data
 

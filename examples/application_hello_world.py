@@ -5,11 +5,9 @@ from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.utils import auto_heartbeater
-from application_sdk.clients.utils import get_workflow_client
-from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.worker import Worker
-from application_sdk.workflows import WorkflowInterface
 from application_sdk.app import WorkflowApp
+from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.workflows import WorkflowInterface
 
 APPLICATION_NAME = "hello-world"
 

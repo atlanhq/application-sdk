@@ -58,7 +58,9 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_dataframe_authentication(self, handler: BaseSQLHandler) -> None:
+    async def test_empty_dataframe_authentication(
+        self, handler: BaseSQLHandler
+    ) -> None:
         """Test authentication with empty DataFrame response"""
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",

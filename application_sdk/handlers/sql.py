@@ -6,13 +6,13 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from packaging import version
 
-from application_sdk.server.fastapi.models import MetadataType
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.server.fastapi.models import MetadataType
 
 logger = get_logger(__name__)
 
@@ -316,7 +316,6 @@ class BaseSQLHandler(HandlerInterface):
             result = 0
             for row in sql_input.to_pylist():
                 result += row["count"]
-
             return {
                 "success": True,
                 "successMessage": f"Tables check successful. Table count: {result}",
@@ -367,7 +366,6 @@ class BaseSQLHandler(HandlerInterface):
                     query=self.client_version_sql,
                     engine=self.sql_client.engine,
                 ).get_dataframe()
-
                 version_string = next(
                     iter(sql_input.to_dict(orient="records")[0].values())
                 )

@@ -298,7 +298,7 @@ class BaseSQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info("Running query: {query}", query=query)
+        activity.logger.info(f"Running query: {query}")
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -307,6 +307,8 @@ class BaseSQLClient(ClientInterface):
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
+                if not cursor or not cursor.cursor:
+                    raise ValueError("Cursor is not supported")
                 column_names: List[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
@@ -401,7 +403,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info("Running query: {query}", query=query)
+        activity.logger.info(f"Running query: {query}")
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -423,13 +425,15 @@ class AsyncBaseSQLClient(BaseSQLClient):
                     await result.fetchmany(batch_size)
                     if use_server_side_cursor
                     else result.cursor.fetchmany(batch_size)
+                    if result.cursor
+                    else None
                 )
                 if not rows:
                     break
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error("Error executing query: {error}", error=str(e))
+            activity.logger.error(f"Error executing query: {str(e)}")
             raise
 
         activity.logger.info("Query execution completed")

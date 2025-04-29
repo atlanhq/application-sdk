@@ -175,4 +175,4 @@ if __name__ == "__main__":
 
 ## Summary
 
-The `BaseSQLMetadataExtractionApplication` abstraction enables rapid development of robust, extensible SQL metadata extraction applications. By providing clear extension points for clients, handlers, activities, and transformers, it supports a wide range of SQL sources and metadata models, while standardizing workflow orchestration and API serving. 
+The `BaseSQLMetadataExtractionApplication` abstraction enables rapid development of robust, extensible SQL metadata extraction applications. By providing clear extension points for clients, handlers, activities, and transformers, it supports a wide range of SQL sources and metadata models, while standardizing workflow orchestration and API serving.
