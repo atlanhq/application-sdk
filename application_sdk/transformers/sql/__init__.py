@@ -61,7 +61,7 @@ class SQLTransformer(TransformerInterface):
         Returns:
             A list of column expressions for the SQL query
         """
-        columns: List[Dict[str, str]] = []
+        columns: List[str] = []
         literal_columns: List[Dict[str, str]] = []
         column_names = dataframe.column_names + list(default_attributes.keys())
         for column in sql_template["columns"]:
@@ -115,7 +115,7 @@ class SQLTransformer(TransformerInterface):
             logger.error(f"Error generating query: {e}")
             raise e
 
-    def _build_struct(self, level: dict, prefix: str = "") -> daft.Expression:
+    def _build_struct(self, level: dict, prefix: str = "") -> Optional[daft.Expression]:
         """Recursively build nested struct expressions."""
         struct_fields = []
 
@@ -128,7 +128,8 @@ class SQLTransformer(TransformerInterface):
         for component, sub_level in level.items():
             if component != "columns":  # Skip the columns key
                 nested_struct = self._build_struct(sub_level, component)
-                struct_fields.append(nested_struct)
+                if nested_struct:
+                    struct_fields.append(nested_struct)
 
         # Only create a struct if we have fields
         if struct_fields:
@@ -183,7 +184,7 @@ class SQLTransformer(TransformerInterface):
             # Build nested structs starting from the root level
             for prefix, level in path_groups.items():
                 struct_expr = self._build_struct(level, prefix)
-                if struct_expr is not None:
+                if struct_expr:
                     new_columns.append(struct_expr)
 
             return dataframe.select(*new_columns)
@@ -244,7 +245,7 @@ class SQLTransformer(TransformerInterface):
 
         return dataframe.with_columns(default_attributes), entity_sql_template
 
-    def transform_metadata(
+    def transform_metadata(  # type: ignore
         self,
         typename: str,
         dataframe: daft.DataFrame,

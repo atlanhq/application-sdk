@@ -1,5 +1,5 @@
 import os
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, cast
+from typing import Any, Dict, Optional, Tuple, Type, cast
 
 import daft
 from temporalio import activity
@@ -168,7 +168,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
-    ) -> AsyncIterator[Dict[str, Any]]:
+    ) -> Optional[Dict[str, Any]]:
         connection_name = workflow_args.get("connection", {}).get(
             "connection_name", None
         )
