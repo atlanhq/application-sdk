@@ -45,6 +45,16 @@ jobs:
           module-name: application_sdk
           fail-under: "30"
 
+  # Security Checks
+  trivy:
+    name: Trivy Code Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/trivy"
+        with:
+          add-report-comment-to-pr: "true"
+
   codeql:
     name: CodeQL
     runs-on: ubuntu-latest
