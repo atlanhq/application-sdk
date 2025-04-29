@@ -71,8 +71,9 @@ class SQLTransformer(TransformerInterface):
                 columns.append(self._process_column(column))
             elif column["source_query"] in column_names:
                 columns.append(self._process_column(column))
-            elif (
-                column["source_query"].startswith("'")
+            elif isinstance(column["source_query"], bool) or (
+                isinstance(column["source_query"], str)
+                and column["source_query"].startswith("'")
                 and column["source_query"].endswith("'")
                 and len(column["source_query"]) > 1
             ):
@@ -236,6 +237,8 @@ class SQLTransformer(TransformerInterface):
             {
                 column["name"].strip('"').strip("'"): daft.lit(
                     column["source_query"].strip("'")
+                    if isinstance(column["source_query"], str)
+                    else column["source_query"]
                 )
                 for column in literal_columns or []
             }
