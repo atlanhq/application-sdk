@@ -60,8 +60,8 @@ This is a concrete implementation of `HandlerInterface` specifically designed fo
 ## How Handlers are Used
 
 1.  **By the `Application`:**
-    *   When you create an instance of `application_sdk.server.fastapi.Application`, you pass your custom handler instance to its constructor (e.g., `app = Application(handler=MyConnectorHandler())`).
-    *   The `Application`'s default API endpoints (`/test_auth`, `/metadata`, `/preflight_check`) directly call the corresponding methods (`test_auth`, `fetch_metadata`, `preflight_check`) on the provided handler instance to perform the actual work.
+    *   When you create an instance of `application_sdk.server.fastapi.APIServer`, you pass your custom handler instance to its constructor (e.g., `app = APIServer(handler=MyConnectorHandler())`).
+    *   The `APIServer`'s default API endpoints (`/test_auth`, `/metadata`, `/preflight_check`) directly call the corresponding methods (`test_auth`, `fetch_metadata`, `preflight_check`) on the provided handler instance to perform the actual work.
 
 2.  **By `Activities`:**
     *   Standard activity base classes (like `BaseSQLMetadataExtractionActivities`) typically expect a specific handler type (e.g., `BaseSQLHandler`).

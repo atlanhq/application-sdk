@@ -136,7 +136,7 @@ async def run_app():
     await workflow_client.load() # Connect to Temporal
 
     # Instantiate the FastAPI application, passing the connected client
-    fast_api_app = Application(
+    fast_api_app = APIServer(
         handler=MyConnectorHandler(),
         workflow_client=workflow_client
     )

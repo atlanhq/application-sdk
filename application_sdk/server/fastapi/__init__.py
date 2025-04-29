@@ -27,7 +27,7 @@ from application_sdk.constants import (
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
-from application_sdk.server import AtlanApplicationInterface
+from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
     FetchMetadataRequest,
@@ -63,10 +63,10 @@ class EventWorkflowTrigger(WorkflowTrigger):
     should_trigger_workflow: Callable[[Any], bool]
 
 
-class Application(AtlanApplicationInterface):
-    """A FastAPI Application implementation of the Atlan Application Interface.
+class APIServer(ServerInterface):
+    """A FastAPI-based implementation of the ServerInterface.
 
-    This class provides a FastAPI-based web application that handles workflow management,
+    This class provides a FastAPI-based web server that handles workflow management,
     authentication, metadata operations, and event processing. It supports both HTTP and
     event-based workflow triggers.
 

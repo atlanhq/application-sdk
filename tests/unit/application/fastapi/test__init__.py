@@ -7,7 +7,7 @@ from hypothesis import HealthCheck, given, settings
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
 from application_sdk.server.fastapi import (
-    Application,
+    APIServer,
     EventWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
@@ -29,7 +29,7 @@ class TestApplication:
         """Setup method that runs before each test method"""
         self.mock_handler = Mock(spec=HandlerInterface)
         self.mock_handler.preflight_check = AsyncMock()
-        self.app = Application(handler=self.mock_handler)
+        self.app = APIServer(handler=self.mock_handler)
 
     @pytest.mark.asyncio
     @given(payload=payload_strategy)

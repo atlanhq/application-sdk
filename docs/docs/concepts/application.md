@@ -4,12 +4,12 @@ This module provides the core framework for building Atlan applications, particu
 
 ## Core Concepts
 
-1.  **`AtlanApplicationInterface` (`application_sdk.server.__init__.py`)**:
+1.  **`ServerInterface` (`application_sdk.server.__init__.py`)**:
     *   **Purpose:** The abstract base class for all application types within the SDK. It defines a minimal interface, primarily requiring a `start()` method and optionally accepting a `HandlerInterface` instance.
     *   **Extensibility:** Subclasses must implement the `start()` method to define how the application initializes and begins running (e.g., starting a web server).
 
-2.  **`Application` (`application_sdk.server.fastapi.__init__.py`)**:
-    *   **Purpose:** A concrete implementation of `AtlanApplicationInterface` built on top of the FastAPI web framework. It provides a ready-to-use web server setup with pre-configured endpoints for common operations like health checks, authentication testing, metadata fetching, workflow management, and documentation serving.
+2.  **`APIServer` (`application_sdk.server.fastapi.__init__.py`)**:
+    *   **Purpose:** A concrete implementation of `ServerInterface` built on top of the FastAPI web framework. It provides a ready-to-use web server setup with pre-configured endpoints for common operations like health checks, authentication testing, metadata fetching, workflow management, and documentation serving.
     *   **Components:**
         *   Integrates with `HandlerInterface` subclasses to perform backend operations.
         *   Integrates with `WorkflowClient` and `WorkflowInterface` subclasses to manage and trigger Temporal workflows.
@@ -33,20 +33,20 @@ This module provides the core framework for building Atlan applications, particu
 
 ### 1. Using the Default FastAPI Application
 
-For standard use cases where you only need the built-in endpoints to interact with your custom handler and trigger workflows via HTTP, you can instantiate the base `Application` class directly.
+For standard use cases where you only need the built-in endpoints to interact with your custom handler and trigger workflows via HTTP, you can instantiate the base `APIServer` class directly.
 
 ```python
 # In your main application file (e.g., main.py)
 import asyncio
 # Absolute imports
-from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.clients.utils import get_workflow_client # Example utility
 # Assuming your custom classes are defined in a package 'my_connector'
 from my_connector.handlers import MyConnectorHandler # Your handler implementation
 from my_connector.workflows import MyConnectorWorkflow # Your workflow implementation
 
 # Instantiate the base Application with your handler
-fast_api_app = Application(
+fast_api_app = APIServer(
     handler=MyConnectorHandler(),
     # Provide a workflow_client if using HTTP triggers
     workflow_client=get_workflow_client(application_name="my-connector")
@@ -90,7 +90,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
 # Absolute imports
-from application_sdk.server.fastapi import Application
+from application_sdk.server.fastapi import APIServer
 from application_sdk.clients.utils import get_workflow_client # Example utility
 from application_sdk.common.logger_adaptors import get_logger
 # Assuming your custom classes are defined elsewhere
@@ -107,7 +107,7 @@ class CustomProcessingRequest(BaseModel):
     api_key_secret_ref: str # Reference to fetch the actual key
 
 # --- Define your custom application class ---
-class MyCustomApplication(Application):
+class MyCustomApplication(APIServer):
     custom_router: APIRouter = APIRouter()
 
     def register_routers(self):
@@ -285,7 +285,7 @@ class MyConnectorHandler(HandlerInterface): # Or inherit from BaseSQLHandler, et
 from my_connector.handlers import MyConnectorHandler # Import your custom handler
 
 # Instantiate Application with YOUR custom handler
-fast_api_app = Application(
+fast_api_app = APIServer(
     handler=MyConnectorHandler(),
     # ... other setup (workflow_client, etc.) ...
 )

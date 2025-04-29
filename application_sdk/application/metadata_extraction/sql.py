@@ -1,9 +1,10 @@
 from typing import Any, Dict, List, Optional, Type
 
+from application_sdk.application import ApplicationInterface
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.transformers.atlas import AtlasTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -12,7 +13,7 @@ from application_sdk.workflows.metadata_extraction.sql import (
 )
 
 
-class BaseSQLMetadataExtractionApplication:
+class BaseSQLMetadataExtractionApplication(ApplicationInterface):
     """
     Base application abstraction for SQL metadata extraction workflows.
 
@@ -24,7 +25,7 @@ class BaseSQLMetadataExtractionApplication:
     def __init__(
         self,
         name: str,
-        sql_client_class: Type[BaseSQLClient],
+        client_class: Type[BaseSQLClient],
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[AtlasTransformer]] = None,
     ):
@@ -33,13 +34,13 @@ class BaseSQLMetadataExtractionApplication:
 
         Args:
             name (str): Name of the application (used for workflow client and server identification).
-            sql_client_class (Type[BaseSQLClient]): SQL client class for source connectivity.
+            client_class (Type[BaseSQLClient]): SQL client class for source connectivity.
             handler_class (Optional[Type[HandlerInterface]]): Handler class for preflight checks and metadata logic. Defaults to BaseSQLHandler.
             transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to AtlasTransformer.
         """
         self.application_name = name
         self.transformer_class = transformer_class or AtlasTransformer
-        self.sql_client_class = sql_client_class
+        self.client_class = client_class
         self.handler_class = handler_class or BaseSQLHandler
 
         # setup application server. serves the UI, and handles the various triggers
@@ -135,7 +136,7 @@ class BaseSQLMetadataExtractionApplication:
             await self.workflow_client.load()
 
         # setup application server. serves the UI, and handles the various triggers
-        self.application = Application(
+        self.application = APIServer(
             handler=self.handler_class(sql_client=self.sql_client_class()),
             workflow_client=self.workflow_client,
         )
@@ -147,15 +148,9 @@ class BaseSQLMetadataExtractionApplication:
             triggers=[HttpWorkflowTrigger()],
         )
 
-    async def start_server(self, daemon: bool = True) -> Any:
+    async def start_server(self):
         """
         Start the FastAPI server for the application.
-
-        Args:
-            daemon (bool): Whether to run the server in daemon mode. Defaults to True.
-
-        Returns:
-            Any: None
 
         Raises:
             ValueError: If the application server is not initialized.
