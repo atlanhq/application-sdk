@@ -92,7 +92,7 @@ hypothesis = "^6.114.0"
 
 [tool.poetry.group.examples.dependencies]
 snowflake-sqlalchemy = "^1.7.0"
-psycopg = {extras = ["binary"], version = "^3.2.3"}
+psycopg = {extras = ["binary"], version = "^3.2.7"}
 
 [build-system]
 requires = ["poetry-core"]
