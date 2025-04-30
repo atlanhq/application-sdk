@@ -48,7 +48,7 @@ async def fetch_tables(self, workflow_args: Dict[str, Any]):
     prepared_query = prepare_query(self.fetch_table_sql, workflow_args, ...) # Prepare query string
 
     if not prepared_query or not state.sql_client or not state.sql_client.engine:
-        activity.logger.warning("Missing SQL client engine or query for fetching tables.")
+        logger.warning("Missing SQL client engine or query for fetching tables.")
         return None
 
     # Instantiate SQLQueryInput with the client's engine and the specific query
@@ -62,7 +62,7 @@ async def fetch_tables(self, workflow_args: Dict[str, Any]):
         return {"typename": "table", "total_record_count": len(daft_df), ...}
 
     except Exception as e:
-        activity.logger.error(f"Failed to fetch tables: {e}", exc_info=True)
+        logger.error(f"Failed to fetch tables: {e}", exc_info=True)
         raise
 ```
 
@@ -154,7 +154,7 @@ async def transform_data(self, workflow_args: Dict[str, Any]):
             pass
         # ... handle results ...
     except Exception as e:
-        activity.logger.error(f"Error transforming data from Parquet: {e}", exc_info=True)
+        logger.error(f"Error transforming data from Parquet: {e}", exc_info=True)
         raise
 ```
 

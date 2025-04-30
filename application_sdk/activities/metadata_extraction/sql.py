@@ -231,7 +231,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             or not workflow_id
             or not workflow_run_id
         ):
-            activity.logger.warning("Missing required workflow arguments")
+            logger.warning("Missing required workflow arguments")
             raise ValueError("Missing required workflow arguments")
         return output_prefix, output_path, typename, workflow_id, workflow_run_id
 
@@ -269,10 +269,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             ValueError: If `sql_engine` is not provided.
         """
         if not sql_engine:
-            activity.logger.error("SQL engine is not set.")
+            logger.error("SQL engine is not set.")
             raise ValueError("SQL engine must be provided.")
         if not sql_query:
-            activity.logger.warning("Query is empty, skipping execution.")
+            logger.warning("Query is empty, skipping execution.")
             return None
 
         try:
@@ -280,16 +280,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             daft_dataframe = await sql_input.get_daft_dataframe()
 
             if daft_dataframe is None:
-                activity.logger.warning("Query execution returned no data.")
+                logger.warning("Query execution returned no data.")
                 return None
 
             output_prefix = workflow_args.get("output_prefix")
             output_path = workflow_args.get("output_path")
 
             if not output_prefix or not output_path:
-                activity.logger.error(
-                    "Output prefix or path not provided in workflow_args."
-                )
+                logger.error("Output prefix or path not provided in workflow_args.")
                 raise ValueError(
                     "Output prefix and path must be specified in workflow_args."
                 )
@@ -300,14 +298,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 output_suffix=output_suffix,
             )
             await parquet_output.write_daft_dataframe(daft_dataframe)
-            activity.logger.info(
+            logger.info(
                 f"Successfully wrote query results to {parquet_output.get_full_path()}"
             )
 
             statistics = await parquet_output.get_statistics(typename=typename)
             return statistics
         except Exception as e:
-            activity.logger.error(
+            logger.error(
                 f"Error during query execution or output writing: {e}", exc_info=True
             )
             raise
@@ -332,7 +330,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -367,7 +365,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -402,7 +400,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -439,7 +437,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -476,7 +474,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(

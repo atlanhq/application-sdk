@@ -298,7 +298,7 @@ class BaseSQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info(f"Running query: {query}")
+        logger.info(f"Running query: {query}")
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -401,7 +401,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info(f"Running query: {query}")
+        logger.info(f"Running query: {query}")
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -431,7 +431,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error(f"Error executing query: {str(e)}")
+            logger.error(f"Error executing query: {str(e)}")
             raise
 
         logger.info("Query execution completed")
