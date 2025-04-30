@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Type
 
-from application_sdk.application import Application
+from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -13,7 +13,7 @@ from application_sdk.workflows.metadata_extraction.sql import (
 )
 
 
-class BaseSQLMetadataExtractionApplication(Application):
+class BaseSQLMetadataExtractionApplication(BaseApplication):
     """
     Base application abstraction for SQL metadata extraction workflows.
 

@@ -1,16 +1,18 @@
-from abc import ABC, abstractmethod
-from typing import Optional
+from typing import Any, Optional
 
+from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers import HandlerInterface
 from application_sdk.server import ServerInterface
+from application_sdk.worker import Worker
 
 
-class Application(ABC):
+class BaseApplication:
     """
-    Abstract base class for all application implementations.
+    Generic application abstraction for orchestrating workflows, workers, and (optionally) servers.
 
-    This class defines the core interface for all application types,
-    providing a standardized way to set up and manage workflows and servers.
+    This class provides a standard way to set up and run workflows using Temporal, including workflow client,
+    worker, and (optionally) FastAPI server setup. It is intended to be used directly for most simple applications,
+    and can be subclassed for more specialized use cases.
     """
 
     def __init__(
@@ -19,24 +21,50 @@ class Application(ABC):
         handler: Optional[HandlerInterface] = None,
         server: Optional[ServerInterface] = None,
     ):
-        pass
+        self.application_name = name
+        self.handler = handler
+        self.server = server
+        self.workflow_client = get_workflow_client(application_name=name)
+        self.worker = None
+        self.application = None  # For server, if needed
 
-    @abstractmethod
     async def setup_workflow(self, workflow_classes, activities_class):
-        pass
+        """
+        Set up the workflow client and start the worker for the application.
+        """
+        await self.workflow_client.load()
+        activities = activities_class()
+        workflow_class = workflow_classes[0]
+        self.worker = Worker(
+            workflow_client=self.workflow_client,
+            workflow_classes=workflow_classes,
+            workflow_activities=workflow_class.get_activities(activities),
+        )
 
-    @abstractmethod
-    async def start_workflow(self, workflow_args, workflow_class):
-        pass
+    async def start_workflow(self, workflow_args, workflow_class) -> Any:
+        """
+        Start a new workflow execution.
+        """
+        if self.workflow_client is None:
+            raise ValueError("Workflow client not initialized")
+        return await self.workflow_client.start_workflow(workflow_args, workflow_class)
 
-    @abstractmethod
     async def start_worker(self, daemon: bool = True):
-        pass
+        """
+        Start the worker for the application.
+        """
+        if self.worker is None:
+            raise ValueError("Worker not initialized")
+        await self.worker.start(daemon=daemon)
 
-    @abstractmethod
     async def setup_server(self, workflow_class):
+        """
+        Optionally set up a server for the application. (No-op by default)
+        """
         pass
 
-    @abstractmethod
     async def start_server(self):
+        """
+        Optionally start the server for the application. (No-op by default)
+        """
         pass
