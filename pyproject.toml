@@ -8,7 +8,7 @@ readme = "README.md"
 [tool.poetry.dependencies]
 python = "^3.11"
 opentelemetry-exporter-otlp = "^1.27.0"
-psutil = "^6.0.0"  # Being used in fastapi-server and scalene-tests for retrieving cpu and memory usage, info on running processes.
+psutil = "^7.0.0"  # Being used in fastapi-server and scalene-tests for retrieving cpu and memory usage, info on running processes.
 fastapi = {extras = ["standard"], version = "^0.115.0"}
 sqlalchemy = {extras = ["asyncio"], version = "^2.0.36", optional = true}
 pyatlan = "5.0.1"
