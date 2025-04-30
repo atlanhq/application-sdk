@@ -11,7 +11,7 @@ opentelemetry-exporter-otlp = "^1.27.0"
 psutil = "^6.0.0"  # Being used in fastapi-server and scalene-tests for retrieving cpu and memory usage, info on running processes.
 fastapi = {extras = ["standard"], version = "^0.115.0"}
 sqlalchemy = {extras = ["asyncio"], version = "^2.0.36", optional = true}
-pyatlan = "5.0.1"
+pyatlan = "6.0.6"
 orjson = {version = "^3.10.7", optional = true}   # Being used in parquet.py
 pyarrow = {version = "^17.0.0", optional = true}  # Being used in parquet.py
 pyyaml = {version = "^6.0.2", optional = true}
