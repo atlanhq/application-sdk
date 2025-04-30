@@ -124,7 +124,7 @@ jobs:
 
       - name: Get PR Labels
         id: get-labels
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
@@ -210,7 +210,7 @@ jobs:
           sleep 10  # Give some time for Temporal to start
 
       - name: Set up Python 3.11
-        uses: actions/setup-python@v1
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
