@@ -45,7 +45,7 @@ poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](./.github/CONTRIBUTING.md) for guidelines.
+We welcome contributions! Please see our [Contributing Guide](./CONTRIBUTING.md) for guidelines.
 
 ## Need Help?
 
