@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 class HelloWorldWorkflow(WorkflowInterface):
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
-        print("HELLO WORLD")
+        logger.info("HELLO WORLD")
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
@@ -37,7 +37,7 @@ class HelloWorldActivities(ActivitiesInterface):
 
 
 async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
-    print("Starting application_hello_world")
+    logger.info("Starting application_hello_world")
 
     workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
     await workflow_client.load()

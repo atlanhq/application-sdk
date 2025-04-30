@@ -84,6 +84,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
+        """Initialize the SQL metadata extraction activities.
+
+        Args:
+            sql_client_class (Type[BaseSQLClient], optional): Class for SQL client operations.
+                Defaults to BaseSQLClient.
+            handler_class (Type[BaseSQLHandler], optional): Class for SQL handling operations.
+                Defaults to BaseSQLHandler.
+            transformer_class (Type[TransformerInterface], optional): Class for metadata transformation.
+                Defaults to AtlasTransformer.
+        """
         if sql_client_class:
             self.sql_client_class = sql_client_class
         if handler_class:

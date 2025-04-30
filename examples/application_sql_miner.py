@@ -22,11 +22,12 @@ from datetime import datetime, timedelta
 from typing import Any, Dict
 
 from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
+from application_sdk.application.metadata_extraction.sql import (
+    BaseSQLMetadataExtractionApplication,
+)
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.worker import Worker
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 logger = get_logger(__name__)
@@ -128,23 +129,20 @@ class SampleSnowflakeHandler(BaseSQLHandler):
 
 
 async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
-    print("Starting application_sql_miner")
+    logger.info("Starting application_sql_miner")
 
-    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
-    await workflow_client.load()
-
-    activities = SampleSQLMinerActivities(
-        sql_client_class=SQLClient, handler_class=SampleSnowflakeHandler
+    app = BaseSQLMetadataExtractionApplication(
+        name=APPLICATION_NAME,
+        client_class=SQLClient,
+        handler_class=SampleSnowflakeHandler,
     )
-
-    worker: Worker = Worker(
-        workflow_client=workflow_client,
+    await app.setup_workflow(
         workflow_classes=[SQLQueryExtractionWorkflow],
-        workflow_activities=SQLQueryExtractionWorkflow.get_activities(activities),
+        activities_class=SampleSQLMinerActivities,
     )
 
-    # wait for the worker to start
     time.sleep(3)
+
     start_time_epoch = int((datetime.now() - timedelta(hours=5)).timestamp())
 
     workflow_args = {
@@ -180,12 +178,12 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
         },
     }
 
-    workflow_response = await workflow_client.start_workflow(
-        workflow_class=SQLQueryExtractionWorkflow,
+    workflow_response = await app.start_workflow(
         workflow_args=workflow_args,
+        workflow_class=SQLQueryExtractionWorkflow,
     )
 
-    await worker.start(daemon=daemon)
+    await app.start_worker(daemon=daemon)
 
     return workflow_response
 

@@ -16,6 +16,8 @@ from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.transformers import TransformerInterface
+from application_sdk.transformers.atlas import AtlasTransformer
 
 logger = get_logger(__name__)
 
@@ -87,6 +89,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[BaseSQLHandler] = BaseSQLHandler
+    transformer_class: Type[TransformerInterface] = AtlasTransformer
 
     fetch_queries_sql: str
 
@@ -94,6 +97,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         self,
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
+        transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
         """Initialize the SQL query extraction activities.
 
@@ -107,6 +111,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             self.sql_client_class = sql_client_class
         if handler_class:
             self.handler_class = handler_class
+        if transformer_class:
+            self.transformer_class = transformer_class
 
         super().__init__()
 
