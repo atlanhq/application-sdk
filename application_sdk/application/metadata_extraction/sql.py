@@ -155,15 +155,3 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
-
-    async def start_server(self):
-        """
-        Start the FastAPI server for the application.
-
-        Raises:
-            ValueError: If the application server is not initialized.
-        """
-        if self.application is None:
-            raise ValueError("Application server not initialized")
-
-        await self.application.start()
