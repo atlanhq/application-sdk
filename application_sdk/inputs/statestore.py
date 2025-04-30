@@ -9,7 +9,8 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import STATE_STORE_NAME
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 class StateStoreInput:
@@ -34,7 +35,7 @@ class StateStoreInput:
                     raise ValueError(f"State not found for key: {key}")
                 return json.loads(state.data)
         except Exception as e:
-            activity.logger.error(f"Failed to extract state: {str(e)}")
+            logger.error(f"Failed to extract state: {str(e)}")
             raise e
 
     @classmethod

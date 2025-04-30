@@ -7,7 +7,7 @@ from _pytest.monkeypatch import MonkeyPatch
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.test_utils.hypothesis.strategies.handlers.sql.sql_preflight import (
     metadata_list_strategy,
     mixed_mapping_strategy,
@@ -34,8 +34,8 @@ def mock_sql_client() -> Mock:
 
 
 @pytest.fixture
-def handler(mock_sql_client: Mock) -> SQLHandler:
-    handler = SQLHandler(sql_client=mock_sql_client)
+def handler(mock_sql_client: Mock) -> BaseSQLHandler:
+    handler = BaseSQLHandler(sql_client=mock_sql_client)
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
     handler.tables_check_sql = "SELECT COUNT(*) FROM information_schema.tables"
     return handler
@@ -43,7 +43,7 @@ def handler(mock_sql_client: Mock) -> SQLHandler:
 
 @given(metadata=metadata_list_strategy)
 async def test_fetch_metadata(
-    handler: SQLHandler, metadata: List[Dict[str, str]]
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:
     handler.prepare_metadata = AsyncMock(return_value=metadata)
     result = await handler.prepare_metadata()
@@ -56,7 +56,7 @@ async def test_fetch_metadata(
 
 
 async def test_fetch_metadata_no_resource() -> None:
-    handler = SQLHandler()
+    handler = BaseSQLHandler()
     with pytest.raises(ValueError, match="SQL client is not defined"):
         await handler.fetch_metadata()
 
@@ -64,7 +64,7 @@ async def test_fetch_metadata_no_resource() -> None:
 @pytest.mark.skip(reason="Failing due to IndexError: list index out of range")
 @given(metadata=metadata_list_strategy, mapping=mixed_mapping_strategy)
 async def test_check_schemas_and_databases_success(
-    handler: SQLHandler, metadata: List[Dict[str, str]], mapping: Dict[str, Any]
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]], mapping: Dict[str, Any]
 ) -> None:
     handler.prepare_metadata = AsyncMock(return_value=metadata)
     # Create a payload with a database and schema that exists in the metadata
@@ -85,7 +85,7 @@ async def test_check_schemas_and_databases_success(
 
 @given(metadata=metadata_list_strategy)
 async def test_check_schemas_and_databases_failure(
-    handler: SQLHandler, metadata: List[Dict[str, str]]
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:
     handler.prepare_metadata = AsyncMock(return_value=metadata)
     # Create an invalid mapping that doesn't exist in metadata
@@ -101,7 +101,7 @@ async def test_check_schemas_and_databases_failure(
 @pytest.mark.skip(reason="Failing due to IndexError: list index out of range")
 @given(metadata=metadata_list_strategy)
 async def test_check_schemas_and_databases_with_wildcard_success(
-    handler: SQLHandler, metadata: List[Dict[str, str]]
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:
     handler.prepare_metadata = AsyncMock(return_value=metadata)
     # Use the first database from metadata with wildcard schema
@@ -118,7 +118,7 @@ async def test_check_schemas_and_databases_with_wildcard_success(
 @pytest.mark.skip(reason="Failing due to IndexError: list index out of range")
 @given(metadata=metadata_list_strategy)
 async def test_preflight_check_success(
-    handler: SQLHandler, metadata: List[Dict[str, str]]
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:
     handler.prepare_metadata = AsyncMock(return_value=metadata)
     # Create a valid payload using the first database and schema from metadata
@@ -150,7 +150,7 @@ async def test_preflight_check_success(
 
 @given(metadata=metadata_list_strategy)
 async def test_preflight_check_failure(
-    handler: SQLHandler, metadata: List[Dict[str, str]]
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:
     handler.prepare_metadata = AsyncMock(return_value=metadata)
     # Create an invalid payload
@@ -172,7 +172,9 @@ async def test_preflight_check_failure(
 
 @given(version_data=version_comparison_strategy)
 async def test_check_client_version_comparison(
-    handler: SQLHandler, version_data: Tuple[str, str, bool], monkeypatch: MonkeyPatch
+    handler: BaseSQLHandler,
+    version_data: Tuple[str, str, bool],
+    monkeypatch: MonkeyPatch,
 ):
     client_version, min_version, expected_success = version_data
 
@@ -199,7 +201,7 @@ async def test_check_client_version_comparison(
 
 
 async def test_check_client_version_no_minimum_version(
-    handler: SQLHandler, monkeypatch: MonkeyPatch
+    handler: BaseSQLHandler, monkeypatch: MonkeyPatch
 ):
     # Setup dialect version info
     if handler.sql_client.engine is not None:
@@ -215,7 +217,7 @@ async def test_check_client_version_no_minimum_version(
     assert result["failureMessage"] == ""
 
 
-async def test_check_client_version_no_client_version(handler: SQLHandler):
+async def test_check_client_version_no_client_version(handler: BaseSQLHandler):
     # Remove server_version_info attribute
     if handler.sql_client.engine is not None:
         delattr(handler.sql_client.engine.dialect, "server_version_info")
@@ -231,7 +233,7 @@ async def test_check_client_version_no_client_version(handler: SQLHandler):
 
 
 async def test_check_client_version_sql_query(
-    handler: SQLHandler, monkeypatch: MonkeyPatch
+    handler: BaseSQLHandler, monkeypatch: MonkeyPatch
 ):
     # Remove server_version_info attribute
     if handler.sql_client.engine is not None:
@@ -262,7 +264,7 @@ async def test_check_client_version_sql_query(
         assert "error" in result
 
 
-async def test_check_client_version_exception(handler: SQLHandler):
+async def test_check_client_version_exception(handler: BaseSQLHandler):
     # Force an exception during version check
     if handler.sql_client.engine is not None:
         with patch.object(
@@ -277,7 +279,7 @@ async def test_check_client_version_exception(handler: SQLHandler):
 
 
 async def test_preflight_check_version_failure(
-    handler: SQLHandler, metadata: Optional[List[Dict[str, str]]] = None
+    handler: BaseSQLHandler, metadata: Optional[List[Dict[str, str]]] = None
 ) -> None:
     """Test that preflight check fails when client version check fails."""
     if metadata is None:

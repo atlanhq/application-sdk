@@ -34,21 +34,27 @@ Follow any post-installation instructions shown in the terminal.
 
 We'll use pyenv to manage Python versions:
 
+- Install pyenv
 ```bash
-# Install pyenv
 brew install pyenv
+```
 
-# Set up shell environment
+- Set up shell environment
+```bash
 echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
 echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
 echo 'eval "$(pyenv init -)"' >> ~/.zshrc
 source ~/.zshrc
+```
 
-# Install and set Python 3.11.10
+- Install and set Python 3.11.10
+```bash
 pyenv install 3.11.10
 pyenv global 3.11.10
+```
 
-# Verify installation
+- Verify installation
+```bash
 python --version  # Should show Python 3.11.10
 ```
 

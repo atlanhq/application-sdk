@@ -158,19 +158,20 @@ from application_sdk.activities.metadata_extraction.sql import BaseSQLMetadataEx
 from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.common.logger_adaptors import get_logger
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 class AdvancedSQLActivities(BaseSQLMetadataExtractionActivities):
 
     @activity.defn
     @auto_heartbeater # Important for long-running activities
     async def fetch_tables(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        activity.logger.info("Starting custom fetch_tables logic")
+        logger.info("Starting custom fetch_tables logic")
         state = await self._get_state(workflow_args)
         # Access handler via state.handler
         # Implement completely custom logic, maybe call handler differently
         custom_result = await state.handler.execute_custom_table_fetch(workflow_args)
-        activity.logger.info("Finished custom fetch_tables logic")
+        logger.info("Finished custom fetch_tables logic")
         # Ensure the return format matches what the workflow expects (often ActivityStatistics)
         return custom_result
 
@@ -202,10 +203,10 @@ class ExtendedSQLActivities(BaseSQLMetadataExtractionActivities):
     @activity.defn
     @auto_heartbeater
     async def perform_custom_validation(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        activity.logger.info("Performing custom validation step")
+        logger.info("Performing custom validation step")
         state = await self._get_state(workflow_args)
         validation_results = await state.handler.validate_metadata(workflow_args)
-        activity.logger.info("Custom validation complete")
+        logger.info("Custom validation complete")
         return {"validation_status": "success" if validation_results else "failed"}
 
 # In your application's workflow file (e.g., my_workflow.py)

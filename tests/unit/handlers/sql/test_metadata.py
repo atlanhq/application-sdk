@@ -5,9 +5,9 @@ import pytest
 from hypothesis import HealthCheck, Phase, given, settings
 from hypothesis import strategies as st
 
-from application_sdk.application.fastapi.models import MetadataType
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.server.fastapi.models import MetadataType
 from application_sdk.test_utils.hypothesis.strategies.handlers.sql.sql_metadata import (
     database_list_strategy,
     database_name_strategy,
@@ -57,13 +57,13 @@ def mock_sql_client() -> MagicMock:
 
 
 @pytest.fixture
-def handler(mock_sql_client: Any) -> SQLHandler:
-    handler = SQLHandler(sql_client=mock_sql_client)
+def handler(mock_sql_client: Any) -> BaseSQLHandler:
+    handler = BaseSQLHandler(sql_client=mock_sql_client)
     handler.prepare_metadata = AsyncMock()
     return handler
 
 
-def setup_handler_config(handler: SQLHandler, config: Dict[str, str]) -> None:
+def setup_handler_config(handler: BaseSQLHandler, config: Dict[str, str]) -> None:
     """Helper function to set up handler configuration"""
     handler.metadata_sql = config["metadata_sql"]
     handler.fetch_databases_sql = config["fetch_databases_sql"]

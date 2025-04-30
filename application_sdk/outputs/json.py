@@ -17,11 +17,12 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
+logger = get_logger(__name__)
+activity.logger = logger
+
 if TYPE_CHECKING:
     import daft
     import pandas as pd
-
-activity.logger = get_logger(__name__)
 
 
 def path_gen(chunk_start: int | None, chunk_count: int) -> str:
@@ -164,7 +165,7 @@ class JsonOutput(Output):
             await self._flush_buffer()
 
         except Exception as e:
-            activity.logger.error(f"Error writing dataframe to json: {str(e)}")
+            logger.error(f"Error writing dataframe to json: {str(e)}")
 
     async def write_daft_dataframe(
         self, dataframe: Union["daft.DataFrame", AsyncIterator[Dict[str, Any]]]

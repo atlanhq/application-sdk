@@ -4,7 +4,7 @@ import daft
 import pytest
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 
 
 class TestAuthenticationHandler:
@@ -15,13 +15,13 @@ class TestAuthenticationHandler:
         return client
 
     @pytest.fixture
-    def handler(self, mock_sql_client: Mock) -> SQLHandler:
-        handler = SQLHandler(sql_client=mock_sql_client)
+    def handler(self, mock_sql_client: Mock) -> BaseSQLHandler:
+        handler = BaseSQLHandler(sql_client=mock_sql_client)
         handler.test_authentication_sql = "SELECT 1;"
         return handler
 
     @pytest.mark.asyncio
-    async def test_successful_authentication(self, handler: SQLHandler) -> None:
+    async def test_successful_authentication(self, handler: BaseSQLHandler) -> None:
         """Test successful authentication with valid credentials"""
         # Mock a successful DataFrame response
         mock_df = daft.from_pydict({"result": [1]})
@@ -40,7 +40,7 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_failed_authentication(self, handler: SQLHandler) -> None:
+    async def test_failed_authentication(self, handler: BaseSQLHandler) -> None:
         """Test failed authentication with invalid credentials"""
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",
@@ -58,7 +58,9 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_empty_dataframe_authentication(self, handler: SQLHandler) -> None:
+    async def test_empty_dataframe_authentication(
+        self, handler: BaseSQLHandler
+    ) -> None:
         """Test authentication with empty DataFrame response"""
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",
@@ -76,7 +78,7 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_none_dataframe_authentication(self, handler: SQLHandler) -> None:
+    async def test_none_dataframe_authentication(self, handler: BaseSQLHandler) -> None:
         """Test authentication with None DataFrame response"""
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",
@@ -95,7 +97,7 @@ class TestAuthenticationHandler:
 
     @pytest.mark.asyncio
     async def test_malformed_dataframe_authentication(
-        self, handler: SQLHandler
+        self, handler: BaseSQLHandler
     ) -> None:
         """Test authentication with malformed DataFrame that raises on to_dict"""
         with patch(
@@ -116,7 +118,7 @@ class TestAuthenticationHandler:
             mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_custom_sql_query(self, handler: SQLHandler) -> None:
+    async def test_custom_sql_query(self, handler: BaseSQLHandler) -> None:
         """Test authentication with custom SQL query"""
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",

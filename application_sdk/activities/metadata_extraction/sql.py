@@ -11,8 +11,7 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
-from application_sdk.handlers import HandlerInterface
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -21,7 +20,8 @@ from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 queries = read_sql_files(queries_prefix="app/sql")
 
@@ -34,12 +34,12 @@ class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
 
     Attributes:
         sql_client (BaseSQLClient): Client for SQL database operations.
-        handler (SQLHandler): Handler for SQL-specific operations.
+        handler (BaseSQLHandler): Handler for SQL-specific operations.
         transformer (TransformerInterface): Transformer for metadata conversion.
     """
 
     sql_client: Optional[BaseSQLClient] = None
-    handler: Optional[HandlerInterface] = None
+    handler: Optional[BaseSQLHandler] = None
     transformer: Optional[TransformerInterface] = None
 
 
@@ -56,7 +56,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         fetch_table_sql (Optional[str]): SQL query for fetching tables.
         fetch_column_sql (Optional[str]): SQL query for fetching columns.
         sql_client_class (Type[BaseSQLClient]): Class for SQL client operations.
-        handler_class (Type[SQLHandler]): Class for SQL handling operations.
+        handler_class (Type[BaseSQLHandler]): Class for SQL handling operations.
         transformer_class (Type[TransformerInterface]): Class for metadata transformation.
         extract_temp_table_regex_table_sql (str): SQL snippet for excluding temporary tables during tables extraction.
             Defaults to an empty string.
@@ -76,15 +76,25 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     extract_temp_table_regex_column_sql = queries.get("EXTRACT_TEMP_TABLE_REGEX_COLUMN")
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
-    handler_class: Type[SQLHandler] = SQLHandler
+    handler_class: Type[BaseSQLHandler] = BaseSQLHandler
     transformer_class: Type[TransformerInterface] = AtlasTransformer
 
     def __init__(
         self,
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
-        handler_class: Optional[Type[SQLHandler]] = None,
+        handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
+        """Initialize the SQL metadata extraction activities.
+
+        Args:
+            sql_client_class (Type[BaseSQLClient], optional): Class for SQL client operations.
+                Defaults to BaseSQLClient.
+            handler_class (Type[BaseSQLHandler], optional): Class for SQL handling operations.
+                Defaults to BaseSQLHandler.
+            transformer_class (Type[TransformerInterface], optional): Class for metadata transformation.
+                Defaults to AtlasTransformer.
+        """
         if sql_client_class:
             self.sql_client_class = sql_client_class
         if handler_class:
@@ -156,7 +166,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             if state and state.sql_client is not None:
                 await state.sql_client.close()
         except Exception as e:
-            activity.logger.warning("Failed to close SQL client", exc_info=e)
+            logger.warning("Failed to close SQL client", exc_info=e)
 
         await super()._clean_state()
 
@@ -191,11 +201,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 if transformed_metadata:
                     yield transformed_metadata
                 else:
-                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
+                    logger.warning(f"Skipped invalid {typename} data: {row}")
             except Exception as row_error:
-                activity.logger.error(
-                    f"Error processing row for {typename}: {row_error}"
-                )
+                logger.error(f"Error processing row for {typename}: {row_error}")
 
     def _validate_output_args(
         self, workflow_args: Dict[str, Any]
@@ -223,7 +231,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             or not workflow_id
             or not workflow_run_id
         ):
-            activity.logger.warning("Missing required workflow arguments")
+            logger.warning("Missing required workflow arguments")
             raise ValueError("Missing required workflow arguments")
         return output_prefix, output_path, typename, workflow_id, workflow_run_id
 
@@ -261,10 +269,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             ValueError: If `sql_engine` is not provided.
         """
         if not sql_engine:
-            activity.logger.error("SQL engine is not set.")
+            logger.error("SQL engine is not set.")
             raise ValueError("SQL engine must be provided.")
         if not sql_query:
-            activity.logger.warning("Query is empty, skipping execution.")
+            logger.warning("Query is empty, skipping execution.")
             return None
 
         try:
@@ -272,16 +280,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             daft_dataframe = await sql_input.get_daft_dataframe()
 
             if daft_dataframe is None:
-                activity.logger.warning("Query execution returned no data.")
+                logger.warning("Query execution returned no data.")
                 return None
 
             output_prefix = workflow_args.get("output_prefix")
             output_path = workflow_args.get("output_path")
 
             if not output_prefix or not output_path:
-                activity.logger.error(
-                    "Output prefix or path not provided in workflow_args."
-                )
+                logger.error("Output prefix or path not provided in workflow_args.")
                 raise ValueError(
                     "Output prefix and path must be specified in workflow_args."
                 )
@@ -292,14 +298,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 output_suffix=output_suffix,
             )
             await parquet_output.write_daft_dataframe(daft_dataframe)
-            activity.logger.info(
+            logger.info(
                 f"Successfully wrote query results to {parquet_output.get_full_path()}"
             )
 
             statistics = await parquet_output.get_statistics(typename=typename)
             return statistics
         except Exception as e:
-            activity.logger.error(
+            logger.error(
                 f"Error during query execution or output writing: {e}", exc_info=True
             )
             raise
@@ -324,7 +330,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -359,7 +365,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -394,7 +400,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -431,7 +437,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(
@@ -468,7 +474,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             await self._get_state(workflow_args),
         )
         if not state.sql_client or not state.sql_client.engine:
-            activity.logger.error("SQL client or engine not initialized")
+            logger.error("SQL client or engine not initialized")
             raise ValueError("SQL client or engine not initialized")
 
         prepared_query = prepare_query(

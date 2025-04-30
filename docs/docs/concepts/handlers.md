@@ -8,7 +8,7 @@ Handlers serve as the core implementation layer for a connector. Their primary r
 
 1.  **System Interaction Logic:** Containing the methods that perform actions specific to the target system, such as validating credentials, performing health checks, fetching metadata lists, or executing specific queries/API calls needed by activities.
 2.  **Client Management:** Often managing the lifecycle (loading, closing) of the specific `ClientInterface` implementation needed to communicate with the target system.
-3.  **API Implementation:** Providing the concrete implementation for the standard API endpoints exposed by `application_sdk.application.fastapi.Application` (like `/test_auth`, `/metadata`, `/preflight_check`).
+3.  **API Implementation:** Providing the concrete implementation for the standard API endpoints exposed by `application_sdk.server.fastapi.Application` (like `/test_auth`, `/metadata`, `/preflight_check`).
 4.  **Activity Logic Delegation:** Providing methods that activities can call (via the shared activity state) to perform tasks related to the target system.
 
 Essentially, while `Clients` provide the *connection* abstraction, `Handlers` provide the *operational* abstraction for a specific data source type.
@@ -33,7 +33,7 @@ Subclasses **must** implement the following asynchronous methods:
     *   **Purpose:** Fetch metadata from the target system. The specific type and format of metadata depend on the implementation and the arguments passed (e.g., fetching databases vs. schemas). Should return the fetched metadata, often as a list of dictionaries.
     *   **Used By:** The `/workflows/v1/metadata` endpoint in `Application`.
 
-## `SQLHandler` (`application_sdk.handlers.sql.py`)
+## `BaseSQLHandler` (`application_sdk.handlers.sql.py`)
 
 This is a concrete implementation of `HandlerInterface` specifically designed for interacting with SQL-based data sources.
 
@@ -60,11 +60,11 @@ This is a concrete implementation of `HandlerInterface` specifically designed fo
 ## How Handlers are Used
 
 1.  **By the `Application`:**
-    *   When you create an instance of `application_sdk.application.fastapi.Application`, you pass your custom handler instance to its constructor (e.g., `app = Application(handler=MyConnectorHandler())`).
-    *   The `Application`'s default API endpoints (`/test_auth`, `/metadata`, `/preflight_check`) directly call the corresponding methods (`test_auth`, `fetch_metadata`, `preflight_check`) on the provided handler instance to perform the actual work.
+    *   When you create an instance of `application_sdk.server.fastapi.APIServer`, you pass your custom handler instance to its constructor (e.g., `app = APIServer(handler=MyConnectorHandler())`).
+    *   The `APIServer`'s default API endpoints (`/test_auth`, `/metadata`, `/preflight_check`) directly call the corresponding methods (`test_auth`, `fetch_metadata`, `preflight_check`) on the provided handler instance to perform the actual work.
 
 2.  **By `Activities`:**
-    *   Standard activity base classes (like `BaseSQLMetadataExtractionActivities`) typically expect a specific handler type (e.g., `SQLHandler`).
+    *   Standard activity base classes (like `BaseSQLMetadataExtractionActivities`) typically expect a specific handler type (e.g., `BaseSQLHandler`).
     *   During activity initialization (usually within the overridden `_set_state` method of the activity class), the appropriate handler is instantiated (often passing the corresponding client).
     *   This handler instance is stored in the `ActivitiesState` object associated with the workflow run.
     *   Activity methods then access this handler via `state.handler` (e.g., `state = await self._get_state(...)`, `await state.handler.some_custom_check()`) to execute system-specific logic required for that activity step.
@@ -125,9 +125,9 @@ class MyApiHandler(HandlerInterface):
 # Usage: Pass an instance of MyApiHandler to Application or Activities
 ```
 
-### 2. Subclassing `SQLHandler` (for SQL sources)
+### 2. Subclassing `BaseSQLHandler` (for SQL sources)
 
-If your target is a SQL database, inherit from `SQLHandler`. You'll typically need to:
+If your target is a SQL database, inherit from `BaseSQLHandler`. You'll typically need to:
 *   Provide the appropriate `SQLClient` subclass during initialization.
 *   Override specific methods (`test_auth`, `preflight_check`, etc.) if the default SQL-based logic isn't sufficient or needs modification.
 *   Override SQL query class attributes (`test_authentication_sql`, `metadata_sql`, etc.) if the default queries (from `app/sql`) are incorrect for your specific SQL dialect.
@@ -137,14 +137,14 @@ If your target is a SQL database, inherit from `SQLHandler`. You'll typically ne
 # In my_postgres_connector/handlers.py
 from typing import Dict, Any
 # Absolute imports
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.common.logger_adaptors import get_logger
 # Import your specific SQL client
 from .clients import PostgreSQLClient
 
 logger = get_logger(__name__)
 
-class MyPostgresHandler(SQLHandler):
+class MyPostgresHandler(BaseSQLHandler):
     # Override specific SQL queries if needed (or rely on defaults loaded from app/sql)
     # Example: Using a slightly different query for version check
     client_version_sql = "SELECT version();"
@@ -206,4 +206,4 @@ class MyPostgresHandler(SQLHandler):
 
 ## Summary
 
-Handlers are essential components that contain the specific logic for interacting with a target data source. They implement the `HandlerInterface` contract and are used by both the `Application` (for standard API endpoints) and `Activities` (for workflow steps). For SQL sources, subclassing `SQLHandler` provides a convenient starting point, while non-SQL sources require implementing `HandlerInterface` directly.
+Handlers are essential components that contain the specific logic for interacting with a target data source. They implement the `HandlerInterface` contract and are used by both the `Application` (for standard API endpoints) and `Activities` (for workflow steps). For SQL sources, subclassing `BaseSQLHandler` provides a convenient starting point, while non-SQL sources require implementing `HandlerInterface` directly.

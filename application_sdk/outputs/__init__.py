@@ -24,11 +24,12 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
+logger = get_logger(__name__)
+activity.logger = logger
+
 if TYPE_CHECKING:
     import daft
     import pandas as pd
-
-activity.logger = get_logger(__name__)
 
 
 def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bool:  # noqa: F821
@@ -60,7 +61,7 @@ def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bo
         if isinstance(dataframe, daft.DataFrame):
             return dataframe.count_rows() == 0
     except Exception:
-        activity.logger.warning("Module daft not found")
+        logger.warning("Module daft not found")
     return True
 
 
@@ -113,7 +114,7 @@ class Output(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self.write_dataframe(dataframe)
         except Exception as e:
-            activity.logger.error(f"Error writing batched dataframe to json: {str(e)}")
+            logger.error(f"Error writing batched dataframe to json: {str(e)}")
 
     @abstractmethod
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
@@ -156,9 +157,7 @@ class Output(ABC):
                     if not is_empty_dataframe(dataframe):
                         await self.write_daft_dataframe(dataframe)
         except Exception as e:
-            activity.logger.error(
-                f"Error writing batched daft dataframe to json: {str(e)}"
-            )
+            logger.error(f"Error writing batched daft dataframe to json: {str(e)}")
 
     @abstractmethod
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
@@ -192,7 +191,7 @@ class Output(ABC):
                 statistics.typename = typename
             return statistics
         except Exception as e:
-            activity.logger.error(f"Error getting statistics: {str(e)}")
+            logger.error(f"Error getting statistics: {str(e)}")
             raise
 
     async def write_statistics(self) -> Optional[Dict[str, Any]]:
@@ -222,4 +221,4 @@ class Output(ABC):
             )
             return statistics
         except Exception as e:
-            activity.logger.error(f"Error writing statistics: {str(e)}")
+            logger.error(f"Error writing statistics: {str(e)}")

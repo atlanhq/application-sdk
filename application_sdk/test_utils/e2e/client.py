@@ -4,9 +4,9 @@ from urllib.parse import urljoin
 import requests
 
 
-class FastApiServerClient:
+class APIServerClient:
     """
-    Client for the Fast API Server
+    Client for the API Server
     """
 
     def __init__(self, host: str, version: str = "v1"):

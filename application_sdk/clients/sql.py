@@ -22,7 +22,8 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 class BaseSQLClient(ClientInterface):
@@ -86,7 +87,7 @@ class BaseSQLClient(ClientInterface):
             )
             self.connection = self.engine.connect()
         except Exception as e:
-            activity.logger.error(f"Error loading SQL client: {str(e)}")
+            logger.error(f"Error loading SQL client: {str(e)}")
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
@@ -297,7 +298,7 @@ class BaseSQLClient(ClientInterface):
         if self.use_server_side_cursor:
             self.connection.execution_options(yield_per=batch_size)
 
-        activity.logger.info(f"Running query: {query}")
+        logger.info(f"Running query: {query}")
 
         with ThreadPoolExecutor() as pool:
             try:
@@ -323,12 +324,10 @@ class BaseSQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                activity.logger.error(
-                    "Error running query in batch: {error}", error=str(e)
-                )
+                logger.error("Error running query in batch: {error}", error=str(e))
                 raise e
 
-        activity.logger.info("Query execution completed")
+        logger.info("Query execution completed")
 
 
 class AsyncBaseSQLClient(BaseSQLClient):
@@ -375,7 +374,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 raise ValueError("Failed to create async engine")
             self.connection = await self.engine.connect()
         except Exception as e:
-            activity.logger.error(f"Error establishing database connection: {str(e)}")
+            logger.error(f"Error establishing database connection: {str(e)}")
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
@@ -402,7 +401,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         if not self.connection:
             raise ValueError("Connection is not established")
 
-        activity.logger.info(f"Running query: {query}")
+        logger.info(f"Running query: {query}")
         use_server_side_cursor = self.use_server_side_cursor
 
         try:
@@ -432,7 +431,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            activity.logger.error(f"Error executing query: {str(e)}")
+            logger.error(f"Error executing query: {str(e)}")
             raise
 
-        activity.logger.info("Query execution completed")
+        logger.info("Query execution completed")

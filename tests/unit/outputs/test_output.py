@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, mock_open, patch
 
 import pandas as pd
 import pytest
-from temporalio import activity
 
 from application_sdk.outputs import Output, is_empty_dataframe
 
@@ -89,7 +88,7 @@ class TestOutput:
             yield pd.DataFrame({"col": [1]})
             raise Exception("Test error")
 
-        with patch.object(activity.logger, "error") as mock_logger:
+        with patch("application_sdk.outputs.logger.error") as mock_logger:
             await self.output.write_batched_dataframe(generate_error())
             mock_logger.assert_called_once()
             assert (
@@ -137,7 +136,7 @@ class TestOutput:
         with patch("pandas.DataFrame.to_json") as mock_to_json:
             mock_to_json.side_effect = Exception("Test error")
 
-            with patch.object(activity.logger, "error") as mock_logger:
+            with patch("application_sdk.outputs.logger.error") as mock_logger:
                 result = await self.output.write_statistics()
                 assert result is None
                 mock_logger.assert_called_once()

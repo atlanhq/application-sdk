@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.engine import Engine
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 
 
 class MockBaseSQLClient(BaseSQLClient):
@@ -34,15 +34,15 @@ class MockBaseSQLClient(BaseSQLClient):
 
 
 @pytest.fixture
-def sql_handler() -> SQLHandler:
+def sql_handler() -> BaseSQLHandler:
     sql_client = MockBaseSQLClient()
-    handler = SQLHandler(sql_client)
+    handler = BaseSQLHandler(sql_client)
     handler.tables_check_sql = "SELECT COUNT(*) as count FROM tables"
     handler.extract_temp_table_regex_table_sql = "WHERE table_name NOT LIKE 'temp%'"
     return handler
 
 
-async def test_tables_check_success(sql_handler: SQLHandler) -> None:
+async def test_tables_check_success(sql_handler: BaseSQLHandler) -> None:
     """Test tables check with successful response."""
     # Create a mock DataFrame with table count
     if not sql_handler.sql_client.engine:
@@ -60,7 +60,7 @@ async def test_tables_check_success(sql_handler: SQLHandler) -> None:
         assert "Table count: 5" in result["successMessage"]
 
 
-async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
+async def test_tables_check_empty(sql_handler: BaseSQLHandler) -> None:
     """Test tables check with empty response."""
     # Create a mock DataFrame with zero count
     if not sql_handler.sql_client.engine:
@@ -78,7 +78,7 @@ async def test_tables_check_empty(sql_handler: SQLHandler) -> None:
         assert "Table count: 0" in result["successMessage"]
 
 
-async def test_tables_check_failure(sql_handler: SQLHandler) -> None:
+async def test_tables_check_failure(sql_handler: BaseSQLHandler) -> None:
     """Test tables check with failure response."""
     # Create a DataFrame with invalid data that will cause an error
     if not sql_handler.sql_client.engine:

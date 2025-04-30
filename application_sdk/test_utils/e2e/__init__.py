@@ -12,7 +12,7 @@ from pandera.io import from_yaml
 from temporalio.client import WorkflowExecutionStatus
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.test_utils.e2e.client import FastApiServerClient
+from application_sdk.test_utils.e2e.client import APIServerClient
 from application_sdk.test_utils.e2e.conftest import workflow_details
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml
 
@@ -67,7 +67,7 @@ class TestInterface:
         cls.credentials = config["credentials"]
         cls.metadata = config["metadata"]
         cls.connection = config["connection"]
-        cls.client = FastApiServerClient(
+        cls.client = APIServerClient(
             host=config["server_config"]["server_host"],
             version=config["server_config"]["server_version"],
         )
