@@ -85,6 +85,7 @@ nav:
   - Concepts:
       - Activities: concepts/activities.md
       - Workflows: concepts/workflows.md
+      - Server: concepts/server.md
       - Application: concepts/application.md
       - Clients: concepts/clients.md
       - Common: concepts/common.md
