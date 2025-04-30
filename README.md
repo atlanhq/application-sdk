@@ -2,13 +2,6 @@
 
 Application SDK is a Python library for developing applications on the Atlan Platform. It provides a comprehensive PaaS (Platform as a Service) system with tools and services to build, test, and manage applications.
 
-The SDK empowers developers to build applications that are:
-
-- Scalable
-- Secure
-- Reliable
-- Easy to maintain
-
 ## Getting Started
 
 To begin developing with the Application SDK:
@@ -55,3 +48,10 @@ Get support through any of these channels:
 - Slack: **#pod-app-framework**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 
+## Security
+
+Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](./SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
+
+## License
+
+This repository is licensed under the [Apache-2.0 License](./LICENSE).

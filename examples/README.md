@@ -2,28 +2,46 @@
 
 This folder contains sample applications that demonstrate how to use the Atlan SDK to build applications on the Atlan Platform.
 
-## Requirements
+## Example Applications
 
-- Install [Dapr CLI](https://docs.dapr.io/getting-started/install-dapr-cli/)
+| Example Script | Description |
+|---------------|-------------|
+| [application_sql.py](./application_sql.py) | SQL workflow for extracting metadata from a PostgreSQL database. |
+| [application_sql_with_custom_transformer.py](./application_sql_with_custom_transformer.py) | SQL workflow with a custom transformer for database entities. Demonstrates advanced metadata extraction and transformation. |
+| [application_sql_miner.py](./application_sql_miner.py) | SQL Miner workflow for extracting query metadata from a Snowflake database. |
+| [application_hello_world.py](./application_hello_world.py) | Minimal "Hello World" workflow using the Atlan SDK and Temporal. |
+| [application_fastapi.py](./application_fastapi.py) | Example of exposing workflow operations via a FastAPI server. |
+| [application_custom_fastapi.py](./application_custom_fastapi.py) | FastAPI server with custom routes and workflow integration. |
+| [application_subscriber.py](./application_subscriber.py) | Demonstrates event-driven workflow execution using event triggers and subscriptions. |
+| [run_examples.py](./run_examples.py) | Utility to run and monitor all example workflows, outputting results to a markdown file. |
 
-## Dapr PaaS Components
+---
 
-1. State store - Uses SQLite as the state store at `/tmp/dapr/statestore.db`
-2. Object store - Uses local file system at `/tmp/dapr/objectstore`
-3. Secret store - Uses system environment variables
-4. Event store - Uses in-memory event store
+## 1. Setup Your Environment
 
-## Running examples
+Before running any examples, you must set up your development environment. Please follow the OS-specific setup guide:
 
-1. Configure poetry to use the virtual environment `poetry config virtualenvs.in-project true`
-2. Install the dependencies using `poetry install --extras "workflows"`
-3. Activate the virtual environment using `source .venv/bin/activate`
-4. Run `make start-all` to start the Dapr runtime and Temporal server
-5. Run the example using `python application_sql.py` or using the VSCode launch configuration provided in the next section.
+- [Setup for macOS](../docs/docs/setup/MAC.md)
+- [Setup for Linux](../docs/docs/setup/LINUX.md)
+- [Setup for Windows](../docs/docs/setup/WINDOWS.md)
+
+---
+
+## 2. Running Examples
+
+Once your environment is set up:
+
+1. Configure poetry to use the virtual environment: `poetry config virtualenvs.in-project true`
+2. Activate the virtual environment: `source .venv/bin/activate`
+3. Run `make start-all` to start the Dapr runtime and Temporal server
+4. Run the example using `python <example_script.py>` or use the VSCode launch configuration provided below.
+
+> **Warning:**
+> Example scripts use default credentials (e.g., `password`, `postgres`). **Never use these defaults in production.** Always set secure environment variables for real deployments.
 
 ### Run and Debug examples via VSCode or Cursor
 
-1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables and run the configuration
+1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables, and run the configuration:
 
 ```json
 {
@@ -62,7 +80,4 @@ This folder contains sample applications that demonstrate how to use the Atlan S
 
 - You can navigate to the Run and Debug section in the IDE to run the configurations of your choice.
 
-## Examples
-
-1. [SQL Application](./application_sql.py) - Demonstrates how to build a SQL application using the Atlan SDK
-2. [Hello World Application](./application_hello_world.py) - Demonstrates how to build a simple application using the Atlan SDK
+> **Need help?** If you encounter any issues during setup, reach out on Slack (#pod-app-framework) or email apps@atlan.com.

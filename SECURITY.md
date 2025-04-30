@@ -1,9 +1,7 @@
 # Vulnerability Disclosure
 
 If you think you have found a potential security vulnerability,
-please open a [draft Security Advisory](https://github.com/atlanhq/agent-toolkit/security/advisories/new)
-via GitHub. We will coordinate verification and next steps through
-that secure medium.
+please open a [draft Security Advisory](https://github.com/atlanhq/agent-toolkit/security/advisories/new) via GitHub. We will coordinate verification and next steps through that secure medium.
 
 If English is not your first language, please try to describe the
 problem and its impact to the best of your ability. For greater detail,
