@@ -202,8 +202,9 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
-        workflow.logger = get_logger(__name__)
-        activity.logger = get_logger(__name__)
+        logger = get_logger(__name__)
+        workflow.logger = logger
+        activity.logger = logger
 
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.

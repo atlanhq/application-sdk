@@ -20,7 +20,8 @@ from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 queries = read_sql_files(queries_prefix="app/sql")
 
@@ -165,7 +166,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             if state and state.sql_client is not None:
                 await state.sql_client.close()
         except Exception as e:
-            activity.logger.warning("Failed to close SQL client", exc_info=e)
+            logger.warning("Failed to close SQL client", exc_info=e)
 
         await super()._clean_state()
 
@@ -200,11 +201,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 if transformed_metadata:
                     yield transformed_metadata
                 else:
-                    activity.logger.warning(f"Skipped invalid {typename} data: {row}")
+                    logger.warning(f"Skipped invalid {typename} data: {row}")
             except Exception as row_error:
-                activity.logger.error(
-                    f"Error processing row for {typename}: {row_error}"
-                )
+                logger.error(f"Error processing row for {typename}: {row_error}")
 
     def _validate_output_args(
         self, workflow_args: Dict[str, Any]

@@ -8,7 +8,8 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import OBJECT_STORE_NAME
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 class ObjectStoreOutput:
@@ -33,7 +34,7 @@ class ObjectStoreOutput:
                 with open(file_path, "rb") as f:
                     file_content = f.read(1024 * 1024 * 10)  # Read up to 10MB
             except IOError as e:
-                activity.logger.error(f"Error reading file {file_path}: {str(e)}")
+                logger.error(f"Error reading file {file_path}: {str(e)}")
                 raise e
 
             relative_path = os.path.relpath(file_path, output_prefix)
@@ -50,9 +51,9 @@ class ObjectStoreOutput:
                     data=file_content,
                     binding_metadata=metadata,
                 )
-                activity.logger.debug(f"Successfully pushed file: {relative_path}")
+                logger.debug(f"Successfully pushed file: {relative_path}")
             except Exception as e:
-                activity.logger.error(
+                logger.error(
                     f"Error pushing file {relative_path} to object store: {str(e)}"
                 )
                 raise e
@@ -86,11 +87,11 @@ class ObjectStoreOutput:
                     file_path = os.path.join(root, file)
                     await cls.push_file_to_object_store(output_prefix, file_path)
 
-            activity.logger.info(
+            logger.info(
                 f"Completed pushing data from {input_files_path} to object store"
             )
         except Exception as e:
-            activity.logger.error(
+            logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e

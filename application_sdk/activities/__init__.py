@@ -23,7 +23,8 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 # Define a custom type for the handler
 HandlerType = TypeVar("HandlerType", bound=HandlerInterface)
@@ -133,7 +134,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 await self._set_state(workflow_args)
             return self._state[workflow_id]
         except Exception as e:
-            activity.logger.error(f"Error getting state: {str(e)}", exc_info=e)
+            logger.error(f"Error getting state: {str(e)}", exc_info=e)
             await self._clean_state()
             raise
 
@@ -152,7 +153,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if workflow_id in self._state:
                 self._state.pop(workflow_id)
         except Exception as e:
-            activity.logger.warning("Failed to clean state", exc_info=e)
+            logger.warning("Failed to clean state", exc_info=e)
 
     @activity.defn
     @auto_heartbeater
@@ -177,7 +178,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             This method is decorated with @activity.defn to mark it as a Temporal activity
             and with @auto_heartbeater to automatically send heartbeats during execution.
         """
-        activity.logger.info("Starting preflight check")
+        logger.info("Starting preflight check")
 
         try:
             state: ActivitiesStateType = await self._get_state(workflow_args)
@@ -193,9 +194,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if not result or "error" in result:
                 raise ValueError("Preflight check failed")
 
-            activity.logger.info("Preflight check completed successfully")
+            logger.info("Preflight check completed successfully")
             return result
 
         except Exception as e:
-            activity.logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
+            logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
             raise
