@@ -50,7 +50,7 @@ columns:
     source_query: row_count
   - name: attributes.sizeBytes
     source_query: size_bytes
-  - name: custom_attributes.tableType
+  - name: customAttributes.table_type
     source_query: table_type
   - name: attributes.isPartitioned
     source_query: |
@@ -77,23 +77,23 @@ columns:
   - name: attributes.constraint
     source_query: COALESCE(partition_constraint, '')
     source_columns: [partition_constraint]
-  - name: custom_attributes.is_insertable_into
+  - name: customAttributes.is_insertable_into
     source_query: COALESCE(is_insertable_into, False)
     source_columns: [is_insertable_into]
-  - name: custom_attributes.number_columns_in_part_key
+  - name: customAttributes.number_columns_in_part_key
     source_query: number_columns_in_part_key
-  - name: custom_attributes.columns_participating_in_part_key
+  - name: customAttributes.columns_participating_in_part_key
     source_query: columns_participating_in_part_key
-  - name: custom_attributes.is_typed
+  - name: customAttributes.is_typed
     source_query: COALESCE(is_typed, False)
     source_columns: [is_typed]
-  - name: custom_attributes.self_referencing_col_name
+  - name: customAttributes.self_referencing_col_name
     source_query: COALESCE(self_referencing_col_name, '')
     source_columns: [self_referencing_col_name]
-  - name: custom_attributes.ref_generation
+  - name: customAttributes.ref_generation
     source_query: COALESCE(ref_generation, '')
     source_columns: [ref_generation]
-  - name: custom_attributes.engine
+  - name: customAttributes.engine
     source_query: engine
   - name: attributes.tenantId
     source_query: tenant_id
@@ -122,34 +122,34 @@ columns:
     source_columns: [is_partition, table_type]
   - name: status
     source_query: "'ACTIVE'"
-  - name: custom_attributes.is_transient
+  - name: customAttributes.is_transient
     source_query: COALESCE(is_transient, '')
     source_columns: [is_transient]
-  - name: custom_attributes.catalog_id
+  - name: customAttributes.catalog_id
     source_query: COALESCE(table_catalog_id, '')
     source_columns: [table_catalog_id]
-  - name: custom_attributes.schema_id
+  - name: customAttributes.schema_id
     source_query: COALESCE(table_schema_id, '')
     source_columns: [table_schema_id]
-  - name: custom_attributes.last_ddl
+  - name: customAttributes.last_ddl
     source_query: COALESCE(last_ddl, '')
     source_columns: [last_ddl]
-  - name: custom_attributes.last_ddl_by
+  - name: customAttributes.last_ddl_by
     source_query: COALESCE(last_ddl_by, '')
     source_columns: [last_ddl_by]
-  - name: custom_attributes.is_secure
+  - name: customAttributes.is_secure
     source_query: COALESCE(is_secure, '')
     source_columns: [is_secure]
-  - name: custom_attributes.retention_time
+  - name: customAttributes.retention_time
     source_query: COALESCE(retention_time, '')
     source_columns: [retention_time]
-  - name: custom_attributes.stage_url
+  - name: customAttributes.stage_url
     source_query: COALESCE(stage_url, '')
     source_columns: [stage_url]
-  - name: custom_attributes.auto_clustering_on
+  - name: customAttributes.auto_clustering_on
     source_query: COALESCE(auto_clustering_on, '')
     source_columns: [auto_clustering_on]
-  - name: custom_attributes.auto_increment
+  - name: customAttributes.auto_increment
     source_query: COALESCE(auto_increment, '')
     source_columns: [auto_increment]
   - name: attributes.externalLocation

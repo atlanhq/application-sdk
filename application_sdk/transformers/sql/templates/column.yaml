@@ -137,32 +137,32 @@ columns:
     source_columns: [belongs_to_partition, connection_qualified_name, table_catalog, table_schema, table_name]
   - name: attributes.order
     source_query: ordinal_position
-  - name: custom_attributes.ordinal_position
+  - name: customAttributes.ordinal_position
     source_query: ordinal_position
-  - name: custom_attributes.is_self_referencing
+  - name: customAttributes.is_self_referencing
     source_query: COALESCE(is_self_referencing, 'NO')
     source_columns: [is_self_referencing]
-  - name: custom_attributes.type_name
+  - name: customAttributes.type_name
     source_query: COALESCE(type_name, data_type)
-  - name: custom_attributes.numeric_precision
+  - name: customAttributes.numeric_precision
     source_query: numeric_precision
-  - name: custom_attributes.character_octet_length
+  - name: customAttributes.character_octet_length
     source_query: character_octet_length
-  - name: custom_attributes.is_auto_increment
+  - name: customAttributes.is_auto_increment
     source_query: is_auto_increment
-  - name: custom_attributes.is_generated
+  - name: customAttributes.is_generated
     source_query: is_generated
-  - name: custom_attributes.num_prec_radix
+  - name: customAttributes.num_prec_radix
     source_query: num_prec_radix
-  - name: custom_attributes.extra_info
+  - name: customAttributes.extra_info
     source_query: extra_info
-  - name: custom_attributes.buffer_length
+  - name: customAttributes.buffer_length
     source_query: buffer_length
-  - name: custom_attributes.column_size
+  - name: customAttributes.column_size
     source_query: column_size
-  - name: custom_attributes.is_identity
+  - name: customAttributes.is_identity
     source_query: is_identity
-  - name: custom_attributes.identity_cycle
+  - name: customAttributes.identity_cycle
     source_query: identity_cycle
   - name: attributes.tenantId
     source_query: tenant_id

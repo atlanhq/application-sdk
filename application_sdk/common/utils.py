@@ -335,7 +335,7 @@ def get_yaml_query_template_path_mappings(
     # Get the default yaml files from sdk
     default_yaml_dir = (
         f"{os.path.dirname(os.path.dirname(os.path.dirname(__file__)))}/"
-        f"application_sdk/transformers/sql/sql_query_templates"
+        f"application_sdk/transformers/sql/templates"
     )
     default_yaml_files: List[str] = glob.glob(
         os.path.join(
