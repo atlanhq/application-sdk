@@ -22,7 +22,9 @@ class HelloWorldWorkflow(WorkflowInterface):
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
-        return []
+        return [
+            activities.preflight_check,
+        ]
 
 
 class HelloWorldActivities(ActivitiesInterface):

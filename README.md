@@ -14,7 +14,6 @@ To begin developing with the Application SDK:
 3. Run the example application:
    - [Hello World](./examples/application_hello_world.py)
    - [SQL](./examples/application_sql.py)
-4. (Optionally) clone an existing application -- [sql](https://github.com/atlanhq/atlan-postgres-app) example, [hello-world](https://github.com/atlanhq/atlan-hello-world-app) example.
 
 ## Documentation
 
@@ -26,7 +25,7 @@ To begin developing with the Application SDK:
 ### Example Applications
 
 - View a production-grade SQL application built using application-sdk [here](https://github.com/atlanhq/atlan-postgres-app)
-- View a hello-world application built using application-sdk [here](https://github.com/atlanhq/atlan-hello-world-app)
+- View sample apps built using application-sdk [here](https://github.com/atlanhq/atlan-sample-apps)
 
 ### Installation
 
