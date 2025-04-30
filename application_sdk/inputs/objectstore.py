@@ -9,7 +9,8 @@ from temporalio import activity
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import OBJECT_STORE_NAME
 
-activity.logger = get_logger(__name__)
+logger = get_logger(__name__)
+activity.logger = logger
 
 
 class ObjectStoreInput:
@@ -50,13 +51,13 @@ class ObjectStoreInput:
                     )
                     file_list = orjson.loads(response.data.decode("utf-8"))
                 except Exception as e:
-                    activity.logger.error(
+                    logger.error(
                         f"Error listing files in object store path {download_file_prefix}: {str(e)}"
                     )
                     raise e
 
             if not file_list:
-                activity.logger.info(
+                logger.info(
                     f"No files found in object store path: {download_file_prefix}"
                 )
                 return
@@ -70,13 +71,11 @@ class ObjectStoreInput:
                     download_file_prefix, local_file_path
                 )
 
-            activity.logger.debug(
+            logger.debug(
                 f"Successfully downloaded all files from: {download_file_prefix}"
             )
         except Exception as e:
-            activity.logger.error(
-                f"Error downloading files from object store: {str(e)}"
-            )
+            logger.error(f"Error downloading files from object store: {str(e)}")
             raise e
 
     @classmethod
@@ -110,9 +109,9 @@ class ObjectStoreInput:
                     f.write(response.data)
                     f.close()
 
-                activity.logger.debug(f"Successfully downloaded file: {relative_path}")
+                logger.debug(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
-                activity.logger.error(
+                logger.error(
                     f"Error downloading file {relative_path} to object store: {str(e)}"
                 )
                 raise e

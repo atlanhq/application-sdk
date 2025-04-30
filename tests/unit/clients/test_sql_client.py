@@ -6,7 +6,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     metadata_args_strategy,
     sql_credentials_strategy,
@@ -28,8 +28,8 @@ def sql_client():
 
 
 @pytest.fixture
-def handler(sql_client: Any) -> SQLHandler:
-    handler = SQLHandler(sql_client)
+def handler(sql_client: Any) -> BaseSQLHandler:
+    handler = BaseSQLHandler(sql_client)
     handler.database_alias_key = "TABLE_CATALOG"
     handler.schema_alias_key = "TABLE_SCHEMA"
     return handler
@@ -92,7 +92,7 @@ def test_load_property_based(
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
-async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
+async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
     """Test basic metadata fetching with fixed configuration"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     import daft
@@ -113,7 +113,7 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
 @given(args=metadata_args_strategy, data=sql_data_strategy)
 @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
 async def test_fetch_metadata_property_based(
-    handler: SQLHandler,
+    handler: BaseSQLHandler,
     args: Dict[str, Any],
     data: List[Dict[str, Any]],
 ):
@@ -163,7 +163,7 @@ async def test_fetch_metadata_property_based(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, handler: SQLHandler
+    mock_run_query: Any, handler: BaseSQLHandler
 ):
     """Test metadata fetching without database alias key"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -186,7 +186,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, handler: SQLHandler
+    mock_run_query: Any, handler: BaseSQLHandler
 ):
     """Test metadata fetching with custom result keys"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
@@ -209,7 +209,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, handler: SQLHandler
+    mock_run_query: AsyncMock, handler: BaseSQLHandler
 ):
     """Test error handling in metadata fetching"""
     mock_run_query.side_effect = Exception("Simulated query failure")

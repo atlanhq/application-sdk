@@ -85,6 +85,7 @@ nav:
   - Concepts:
       - Activities: concepts/activities.md
       - Workflows: concepts/workflows.md
+      - Server: concepts/server.md
       - Application: concepts/application.md
       - Clients: concepts/clients.md
       - Common: concepts/common.md
@@ -92,6 +93,7 @@ nav:
       - Inputs: concepts/inputs.md
       - Outputs: concepts/outputs.md
       - Worker: concepts/worker.md
+      - Example: concepts/application_sql.md
 
   - Configuration Reference: configuration.md
   - API Reference: /application-sdk/main/api

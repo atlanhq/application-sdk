@@ -28,16 +28,18 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 
 import asyncio
 import os
+import time
 from typing import Any, Dict
 
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
+from application_sdk.application.metadata_extraction.sql import (
+    BaseSQLMetadataExtractionApplication,
+)
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.handlers.sql import SQLHandler
-from application_sdk.worker import Worker
+from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
@@ -96,7 +98,7 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
     """
 
 
-class SampleSQLWorkflowHandler(SQLHandler):
+class SampleSQLWorkflowHandler(BaseSQLHandler):
     tables_check_sql = """
     SELECT count(*)
         FROM INFORMATION_SCHEMA.TABLES
@@ -118,20 +120,18 @@ class SampleSQLWorkflowHandler(SQLHandler):
 async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     logger.info("Starting application_sql")
 
-    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
-    await workflow_client.load()
-
-    activities = SampleSQLActivities(
-        sql_client_class=SQLClient, handler_class=SampleSQLWorkflowHandler
+    app = BaseSQLMetadataExtractionApplication(
+        name=APPLICATION_NAME,
+        client_class=SQLClient,
+        handler_class=SampleSQLWorkflowHandler,
     )
 
-    worker: Worker = Worker(
-        workflow_client=workflow_client,
+    await app.setup_workflow(
         workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        workflow_activities=BaseSQLMetadataExtractionWorkflow.get_activities(
-            activities
-        ),
+        activities_class=SampleSQLActivities,
     )
+
+    time.sleep(3)
 
     workflow_args = {
         "credentials": {
@@ -159,12 +159,9 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
         # "cron_schedule": "0/30 * * * *", # uncomment to run the workflow on a cron schedule, every 30 minutes
     }
 
-    workflow_response = await workflow_client.start_workflow(
-        workflow_args, BaseSQLMetadataExtractionWorkflow
-    )
+    workflow_response = await app.start_workflow(workflow_args=workflow_args)
 
-    # Start the worker in a separate thread
-    await worker.start(daemon=daemon)
+    await app.start_worker(daemon=daemon)
 
     return workflow_response
 

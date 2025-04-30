@@ -92,7 +92,7 @@ jobs:
           poetry config virtualenvs.in-project true
 
           # Install the dependencies with extras
-          poetry install --all-extras
+          make install
           poetry update application-sdk --dry-run
 
       # Start all services

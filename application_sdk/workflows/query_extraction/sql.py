@@ -19,6 +19,7 @@ from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.query_extraction import QueryExtractionWorkflow
 
 logger = get_logger(__name__)
+workflow.logger = logger
 
 
 @workflow.defn
@@ -83,7 +84,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         workflow_id = workflow_config["workflow_id"]
         workflow_args = StateStoreInput.extract_configuration(workflow_id)
 
-        workflow.logger.info(f"Starting miner workflow for {workflow_id}")
+        logger.info(f"Starting miner workflow for {workflow_id}")
         retry_policy = RetryPolicy(
             maximum_attempts=6,
             backoff_coefficient=2,
@@ -123,4 +124,4 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
 
         await asyncio.gather(*miner_activities)
 
-        workflow.logger.info(f"Miner workflow completed for {workflow_id}")
+        logger.info(f"Miner workflow completed for {workflow_id}")

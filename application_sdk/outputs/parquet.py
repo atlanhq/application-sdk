@@ -1,18 +1,18 @@
 import os
 from typing import TYPE_CHECKING, Literal, Optional
 
-import daft
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
+logger = get_logger(__name__)
+activity.logger = logger
+
 if TYPE_CHECKING:
     import daft
     import pandas as pd
-
-activity.logger = get_logger(__name__)
 
 
 class ParquetOutput(Output):
@@ -95,12 +95,10 @@ class ParquetOutput(Output):
             # Upload the file to object store
             await self.upload_file(file_path)
         except Exception as e:
-            activity.logger.error(
-                f"Error writing pandas dataframe to parquet: {str(e)}"
-            )
+            logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
             raise
 
-    async def write_daft_dataframe(self, dataframe: daft.DataFrame):  # noqa: F821
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
@@ -124,7 +122,7 @@ class ParquetOutput(Output):
             # Upload the file to object store
             await self.upload_file(self.output_path)
         except Exception as e:
-            activity.logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
+            logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
             raise
 
     async def upload_file(self, local_file_path: str) -> None:
@@ -133,9 +131,7 @@ class ParquetOutput(Output):
         Args:
             local_file_path (str): Path to the local file to upload.
         """
-        activity.logger.info(
-            f"Uploading file: {local_file_path} to {self.output_prefix}"
-        )
+        logger.info(f"Uploading file: {local_file_path} to {self.output_prefix}")
         await ObjectStoreOutput.push_files_to_object_store(
             self.output_prefix, local_file_path
         )

@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from application_sdk.clients.sql import AsyncBaseSQLClient
-from application_sdk.handlers.sql import SQLHandler
+from application_sdk.handlers.sql import BaseSQLHandler
 
 
 @pytest.fixture
@@ -16,8 +16,8 @@ def async_sql_client():
 
 
 @pytest.fixture
-def handler(async_sql_client: Any) -> SQLHandler:
-    handler = SQLHandler(async_sql_client)
+def handler(async_sql_client: Any) -> BaseSQLHandler:
+    handler = BaseSQLHandler(async_sql_client)
     handler.database_alias_key = "TABLE_CATALOG"
     handler.schema_alias_key = "TABLE_SCHEMA"
     return handler
@@ -46,7 +46,7 @@ def test_load(create_async_engine: Any, async_sql_client: AsyncBaseSQLClient):
 
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
-async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
+async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
     import daft
@@ -68,7 +68,7 @@ async def test_fetch_metadata(mock_run_query: Any, handler: SQLHandler):
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
-    mock_run_query: Any, handler: SQLHandler
+    mock_run_query: Any, handler: BaseSQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
@@ -91,7 +91,7 @@ async def test_fetch_metadata_without_database_alias_key(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_result_keys(
-    mock_run_query: Any, handler: SQLHandler
+    mock_run_query: Any, handler: BaseSQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
     import daft
@@ -114,7 +114,7 @@ async def test_fetch_metadata_with_result_keys(
 
 @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
 async def test_fetch_metadata_with_error(
-    mock_run_query: AsyncMock, handler: SQLHandler
+    mock_run_query: AsyncMock, handler: BaseSQLHandler
 ):
     mock_run_query.side_effect = Exception("Simulated query failure")
 

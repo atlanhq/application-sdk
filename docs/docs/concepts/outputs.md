@@ -98,7 +98,7 @@ async def query_executor(
         return stats.model_dump()
 
     except Exception as e:
-        activity.logger.error(f"Error executing query and writing output for {typename}: {e}", exc_info=True)
+        logger.error(f"Error executing query and writing output for {typename}: {e}", exc_info=True)
         raise
 ```
 

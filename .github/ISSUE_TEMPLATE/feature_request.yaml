@@ -1,0 +1,59 @@
+name: "💡 Feature Request"
+description: Suggest a new feature or enhancement for the Application SDK.
+title: "💡 [REQUEST] - <title>"
+labels: ["enhancement"]
+
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: "📝 Summary"
+      description: Briefly describe the proposed feature.
+      placeholder: What would you like to see added or improved?
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: "💡 Basic Example"
+      description: Provide a simple code snippet or example of how this feature would work.
+      placeholder: Share a code example or expected usage.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: "🎯 Motivation"
+      description: What problem does this feature solve or what use case does it support?
+      placeholder: Why is this feature needed?
+    validations:
+      required: true
+
+  - type: textarea
+    id: drawbacks
+    attributes:
+      label: "⚠️ Drawbacks"
+      description: Any potential downsides, risks, or performance impacts?
+      placeholder: Be honest and neutral about what this might affect.
+    validations:
+      required: false
+
+  - type: textarea
+    id: unresolved
+    attributes:
+      label: "❓ Unresolved Questions"
+      description: Are there any open questions or decisions to be made?
+      placeholder: Anything unclear about how to approach this?
+    validations:
+      required: false
+
+  - type: textarea
+    id: references
+    attributes:
+      label: "🔗 Reference Issues / PRs"
+      description: Link to any related issues or pull requests.
+      placeholder: e.g. #123, #456
+    validations:
+      required: false

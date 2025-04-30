@@ -125,7 +125,7 @@ The common pattern is to use the `get_workflow_client` utility function.
 import asyncio
 # Absolute imports
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.application.fastapi import Application, HttpWorkflowTrigger
+from application_sdk.server.fastapi import Application, HttpWorkflowTrigger
 # Assuming your custom classes are defined
 from my_connector.handlers import MyConnectorHandler
 from my_connector.workflows import MyConnectorWorkflow
@@ -136,7 +136,7 @@ async def run_app():
     await workflow_client.load() # Connect to Temporal
 
     # Instantiate the FastAPI application, passing the connected client
-    fast_api_app = Application(
+    fast_api_app = APIServer(
         handler=MyConnectorHandler(),
         workflow_client=workflow_client
     )

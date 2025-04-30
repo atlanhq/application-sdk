@@ -111,3 +111,8 @@ OTEL_BATCH_DELAY_MS = int(os.getenv("OTEL_BATCH_DELAY_MS", "5000"))
 OTEL_BATCH_SIZE = int(os.getenv("OTEL_BATCH_SIZE", "512"))
 #: Maximum size of the export queue
 OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
+
+
+# AWS Constants
+#: AWS Session Name
+AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")

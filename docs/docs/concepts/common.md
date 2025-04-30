@@ -36,11 +36,12 @@ def my_function(data):
 
 # In a Temporal Activity:
 from temporalio import activity
-activity.logger = get_logger(__name__) # Temporal integration
+logger = get_logger(__name__)
+activity.logger = logger # Temporal integration
 
 @activity.defn
 async def my_activity():
-    activity.logger.info("Starting my activity...")
+    logger.info("Starting my activity...")
     # Logger automatically includes workflow/activity context
 ```
 

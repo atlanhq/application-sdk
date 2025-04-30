@@ -11,23 +11,6 @@ from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
 from uvicorn import Config, Server
 
-from application_sdk.application import AtlanApplicationInterface
-from application_sdk.application.fastapi.middleware.logmiddleware import LogMiddleware
-from application_sdk.application.fastapi.models import (
-    FetchMetadataRequest,
-    FetchMetadataResponse,
-    PreflightCheckRequest,
-    PreflightCheckResponse,
-    TestAuthRequest,
-    TestAuthResponse,
-    WorkflowConfigRequest,
-    WorkflowConfigResponse,
-    WorkflowData,
-    WorkflowRequest,
-    WorkflowResponse,
-)
-from application_sdk.application.fastapi.routers.server import get_server_router
-from application_sdk.application.fastapi.utils import internal_server_error_handler
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
@@ -44,6 +27,23 @@ from application_sdk.constants import (
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
+from application_sdk.server import ServerInterface
+from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
+from application_sdk.server.fastapi.models import (
+    FetchMetadataRequest,
+    FetchMetadataResponse,
+    PreflightCheckRequest,
+    PreflightCheckResponse,
+    TestAuthRequest,
+    TestAuthResponse,
+    WorkflowConfigRequest,
+    WorkflowConfigResponse,
+    WorkflowData,
+    WorkflowRequest,
+    WorkflowResponse,
+)
+from application_sdk.server.fastapi.routers.server import get_server_router
+from application_sdk.server.fastapi.utils import internal_server_error_handler
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -63,10 +63,10 @@ class EventWorkflowTrigger(WorkflowTrigger):
     should_trigger_workflow: Callable[[Any], bool]
 
 
-class Application(AtlanApplicationInterface):
-    """A FastAPI Application implementation of the Atlan Application Interface.
+class APIServer(ServerInterface):
+    """A FastAPI-based implementation of the ServerInterface.
 
-    This class provides a FastAPI-based web application that handles workflow management,
+    This class provides a FastAPI-based web server that handles workflow management,
     authentication, metadata operations, and event processing. It supports both HTTP and
     event-based workflow triggers.
 
