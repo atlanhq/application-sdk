@@ -24,7 +24,7 @@ duckdb-engine = {version = "^0.17.0", optional = true}
 temporalio = {version = "^1.7.1", optional = true}
 getdaft = {extras = ["sql"], version = "^0.4.8", optional = true}
 pyiceberg = {version = "^0.8.1", optional = true} # For iceberg input and output support
-boto3 = {version = "^1.38.4", optional = true} # For iam auth support
+boto3 = {version = "^1.38.5", optional = true} # For iam auth support
 pydantic = "^2.10.6"
 loguru = "^0.7.3"
 uvloop = "^0.21.0" # in worker module for managing Temporal workers.
