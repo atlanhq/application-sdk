@@ -1,0 +1,27 @@
+application-sdk
+
+Copyright [2025] Atlan, Inc.
+Copyright [2015-2021] The Apache Software Foundation
+Copyright [2013-2021] Elasticsearch
+
+
+This product includes software developed at
+The Apache Software Foundation (http://www.apache.org/).
+The license is granted to Elasticsearch B.V.
+
+
+=============================================================
+Apache License 2.0 Dependencies:
+=============================================================
+
+- pyatlan (https://github.com/atlanhq/atlan-python)
+  Based on original code from:
+  - Apache Atlas (https://github.com/apache/atlas) under Apache-2.0 license
+  - Elasticsearch DSL (https://github.com/elastic/elasticsearch-dsl-py) under Apache-2.0 license
+- orjson (https://github.com/ijl/orjson)
+- getdaft (https://github.com/Eventual-Inc/Daft)
+- pyiceberg (https://github.com/apache/iceberg-python)
+- pyarrow (https://github.com/apache/arrow/tree/main/python)
+- dapr (https://github.com/dapr/python-sdk/)
+- boto3 (https://github.com/boto/boto3)
+- uvloop (https://github.com/MagicStack/uvloop)
