@@ -34,110 +34,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: "./.github/actions/setup-deps"
-      - name: Get branch name
-        run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
-        id: get_branch
-      - name: Run Unit and Integration Tests with Coverage
-        run: |
-          poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
-          poetry run coverage xml
-          poetry run coverage html
-          poetry run coverage report --fail-under=60
-      - name: Comment Coverage Report on PR
-        uses: orgoro/coverage@v3.2
+      - uses: "./.github/actions/unit-tests"
         with:
-          coverageFile: coverage.xml
-          token: ${{ secrets.ORG_PAT_GITHUB }}
-      - name: Upload Coverage Report to S3
-        uses: atlanhq/kryptonite/upload@v1
-        with:
-          source: ./htmlcov
-          target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
-      - name: Comment Coverage Report URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "coverage"
-          message: |
-            Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-under: "60"
 
   e2e-examples:
     name: E2E (Examples)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Dapr CLI
-        run: |
-          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
-          dapr init --runtime-version 1.13.6 --slim
-
-      - name: Install Temporal CLI and Start Server
-        run: |
-          curl -sSf https://temporal.download/cli.sh | sh
-          export PATH="$HOME/.temporalio/bin:$PATH"
-          temporal server start-dev --db-filename /tmp/temporal.db &
-          sleep 10  # Give some time for Temporal to start
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - uses: "./.github/actions/e2e-examples"
         with:
-          python-version: "3.11"
-
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 1.8.5
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          virtualenvs-path: .venv
-          installer-parallel: true
-
-      - name: Install Dependencies
-        run: |
-          git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
-          # Configure poetry to use project-specific virtualenv
-          poetry config virtualenvs.in-project true
-
-          # Install the dependencies with extras
-          make install
-          poetry update application-sdk --dry-run
-
-      # Start all services
-      - name: Start Platform Services
-        run: |
-          make start-all
-          sleep 10  # Give services time to start up
-
-      # Make API call and capture workflow/run IDs for each example
-      - name: Start the workflows
-        id: workflow_info
-        env:
-          POSTGRES_HOST: ${{ secrets.POSTGRES_HOST }}
-          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          SNOWFLAKE_ACCOUNT_ID: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
-          SNOWFLAKE_USER: ${{ secrets.SNOWFLAKE_USER }}
-          SNOWFLAKE_PASSWORD: ${{ secrets.SNOWFLAKE_PASSWORD }}
-        run: |
-          cd examples
-          poetry run python run_examples.py
-
-          echo "Workflow status:"
-          cat workflow_status.md
-
-      - name: Comment test results on Pull Request
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "workflow_status"
-          message-path: "examples/workflow_status.md"
-
-      # Stop all services
-      - name: Stop all services
-        continue-on-error: true
-        run: |
-          make stop-all
-          sleep 10  # Give services time to stop
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          postgres-host: ${{ secrets.POSTGRES_HOST }}
+          postgres-password: ${{ secrets.POSTGRES_PASSWORD }}
+          snowflake-account-id: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+          snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
+          snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
 
   e2e-apps:
     name: E2E (Apps)
@@ -147,67 +61,33 @@ jobs:
         repo_name: ["atlan-postgres-app"]
     steps:
       - uses: actions/checkout@v4
+      - uses: "./.github/actions/e2e-apps"
         with:
-          ref: ${{ github.ref }}
-      - name: Get the application-sdk commit SHA
-        run: |
-          if [ "${{ github.event.pull_request.head.sha }}" ]; then
-            echo "distinct_id=${{ github.event.pull_request.head.sha }}" >> $GITHUB_ENV
-          else
-            echo "distinct_id=${{ github.sha }}" >> $GITHUB_ENV
-          fi
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: ${{ matrix.repo_name }}
 
-          if [ "${{ github.base_ref }}" ]; then
-            echo "base_branch=refs/heads/${{ github.base_ref }}" >> $GITHUB_ENV
-          else
-            echo "base_branch=${{ github.ref }}" >> $GITHUB_ENV
-          fi
-      - name: Trigger E2E Integrations Tests
-        uses: codex-/return-dispatch@v2
-        id: return_dispatch
+  # Documentation
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/setup-deps"
+      - name: Install graphviz
+        run: |
+          sudo apt install graphviz
+      - name: Generate Sphinx Docs and UML Diagrams
+        run: |
+          source .venv/bin/activate
+          make apidocs
+      - name: Upload Docs
+        uses: atlanhq/kryptonite/upload@v1
         with:
-          token: "${{ secrets.ORG_PAT_GITHUB }}"
-          ref: ${{ env.base_branch }}
-          repo: ${{ matrix.repo_name }}
-          owner: "atlanhq"
-          workflow: "e2e-integration-test.yaml"
-          workflow_timeout_seconds: 120
-          workflow_job_steps_retry_seconds: 10
-          distinct_id: "${{ env.distinct_id }}"
-      - name: Check the test logs using the below run URL
-        run: |
-          echo ${{steps.return_dispatch.outputs.run_id}}
-          echo ${{steps.return_dispatch.outputs.run_url}}
-      - name: Check Workflow Status
-        run: |
-          repo_owner="atlanhq"
-          repo_name="${{ matrix.repo_name }}"
-          run_id="${{steps.return_dispatch.outputs.run_id}}"
-
-          echo "Checking status of workflow run $run_id in $repo_name"
-
-          status="in_progress"
-          start_time=$(date +%s)
-          timeout=240
-          while [[ "$status" == "in_progress" || "$status" == "queued" ]]; do
-            sleep 10
-            response=$(curl -s -H "Authorization: Bearer ${{ secrets.ORG_PAT_GITHUB }}" \
-              https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id)
-            status=$(echo $response | jq -r '.status')
-            conclusion=$(echo $response | jq -r '.conclusion')
-
-            current_time=$(date +%s)
-            elapsed_time=$((current_time - start_time))
-
-            if [[ $elapsed_time -ge $timeout ]]; then
-              echo "Workflow run timeout reached after $timeout seconds"
-              exit 1
-            fi
-          done
-
-          if [[ "$conclusion" != "success" ]]; then
-            echo "Workflow run $run_id in $repo_name failed with conclusion $conclusion"
-            exit 1
-          else
-            echo "Workflow run $run_id in $repo_name succeeded"
-          fi
+          source: ./docs/site
+          target: application-sdk/${{ github.head_ref }}
+      - name: Comment Kryptonite URL on PR
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: "docs"
+          message: |
+            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}

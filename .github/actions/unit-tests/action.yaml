@@ -1,0 +1,61 @@
+name: Unit Tests for application-sdk
+
+description: |
+  Runs unit tests for Atlan Application SDK.
+
+  This action executes a comprehensive suite of unit tests for application-sdk, ensuring code quality and functionality.
+
+  It includes:
+  - Running pytest for all test files in the tests/ directory
+  - Generating code coverage reports in XML and HTML formats
+  - Enforcing a minimum coverage threshold of 60%
+  - Publishing coverage reports to S3 for easy access
+  - Adding coverage report comments to pull requests
+
+inputs:
+  github-token:
+    required: true
+    description: The GitHub token to use for the action.
+  fail-under:
+    required: false
+    description: The minimum coverage threshold to enforce. Default is 60%.
+    default: "60"
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@v4
+
+    - uses: "./.github/actions/setup-deps"
+
+    - name: Get branch name
+      shell: bash
+      run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
+      id: get_branch
+
+    - name: Run Unit and Integration Tests with Coverage
+      shell: bash
+      run: |
+        poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
+        poetry run coverage xml
+        poetry run coverage html
+        poetry run coverage report --fail-under=${{ inputs.fail-under }}
+
+    - name: Comment Coverage Report on PR
+      uses: orgoro/coverage@v3.2
+      with:
+        coverageFile: coverage.xml
+        token: ${{ inputs.github-token }}
+
+    - name: Upload Coverage Report to S3
+      uses: atlanhq/kryptonite/upload@v1
+      with:
+        source: ./htmlcov
+        target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+
+    - name: Comment Coverage Report URL on PR
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: "coverage"
+        message: |
+          Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
