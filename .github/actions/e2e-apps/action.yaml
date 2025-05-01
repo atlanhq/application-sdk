@@ -73,9 +73,9 @@ runs:
 
         status="in_progress"
         start_time=$(date +%s)
-        timeout=180
+        timeout=300
         while [[ "$status" == "in_progress" || "$status" == "queued" ]]; do
-          sleep 10
+          sleep 30
           response=$(curl -s -H "Authorization: Bearer ${{ inputs.github-token }}" \
             https://api.github.com/repos/$repo_owner/$repo_name/actions/runs/$run_id)
           status=$(echo $response | jq -r '.status')
