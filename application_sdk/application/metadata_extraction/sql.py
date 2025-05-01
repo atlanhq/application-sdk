@@ -5,7 +5,7 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.sql import SQLTransformer
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
@@ -27,7 +27,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         name: str,
         client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
-        transformer_class: Optional[Type[AtlasTransformer]] = None,
+        transformer_class: Optional[Type[SQLTransformer]] = None,
     ):
         """
         Initialize the SQL metadata extraction application.
@@ -36,10 +36,10 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             name (str): Name of the application (used for workflow client and server identification).
             client_class (Type[BaseSQLClient]): SQL client class for source connectivity.
             handler_class (Optional[Type[HandlerInterface]]): Handler class for preflight checks and metadata logic. Defaults to BaseSQLHandler.
-            transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to AtlasTransformer.
+            transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to SQLTransformer.
         """
         self.application_name = name
-        self.transformer_class = transformer_class or AtlasTransformer
+        self.transformer_class = transformer_class or SQLTransformer
         self.client_class = client_class or BaseSQLClient
         self.handler_class = handler_class or BaseSQLHandler
 

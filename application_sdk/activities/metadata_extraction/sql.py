@@ -17,7 +17,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.sql import SQLTransformer
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -76,7 +76,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[BaseSQLHandler] = BaseSQLHandler
-    transformer_class: Type[TransformerInterface] = AtlasTransformer
+    transformer_class: Type[TransformerInterface] = SQLTransformer
 
     def __init__(
         self,
@@ -92,7 +92,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             handler_class (Type[BaseSQLHandler], optional): Class for SQL handling operations.
                 Defaults to BaseSQLHandler.
             transformer_class (Type[TransformerInterface], optional): Class for metadata transformation.
-                Defaults to AtlasTransformer.
+                Defaults to SQLTransformer.
         """
         if sql_client_class:
             self.sql_client_class = sql_client_class
