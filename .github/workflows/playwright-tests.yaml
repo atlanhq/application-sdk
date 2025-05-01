@@ -1,0 +1,100 @@
+name: Playwright UI Tests
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        description: 'Python version to use'
+        default: '3.11'
+        required: false
+        type: string
+      working-directory:
+        description: 'Directory containing the UI tests'
+        required: true
+        type: string
+      app-port:
+        description: 'Port on which the app will run'
+        default: '8000'
+        required: false
+        type: string
+      dapr-version:
+        description: 'Dapr runtime version'
+        default: '1.13.6'
+        required: false
+        type: string
+    secrets:
+      ORG_PAT_GITHUB:
+        description: 'GitHub PAT for private repo access'
+        required: true
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+    steps:
+    - uses: actions/checkout@v3
+
+    # Install Dapr
+    - name: Install Dapr CLI
+      run: |
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash
+        dapr init --runtime-version ${{ inputs.dapr-version }} --slim
+
+    # Install Temporal
+    - name: Install Temporal CLI and Start Server
+      run: |
+        curl -sSf https://temporal.download/cli.sh | sh
+        export PATH="$HOME/.temporalio/bin:$PATH"
+        temporal server start-dev --db-filename /tmp/temporal.db &
+        sleep 10  # Give some time for Temporal to start
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install poetry
+      run: |
+        pip install poetry
+        poetry config virtualenvs.in-project true
+
+    - name: Install Dependencies
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
+        poetry install -vv
+        poetry update application-sdk --dry-run
+
+    - name: Install Playwright
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        poetry run playwright install --with-deps
+
+    # Start platform services
+    - name: Start Platform Services
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        make start-deps
+        sleep 10  # Give services time to start up
+
+    # Start the application
+    - name: Start the application
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        make run-app &
+        sleep 10  # Give the app time to start
+
+    - name: Run UI Tests
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        export PYTHONPATH=$(pwd)
+        poetry run pytest tests/ui/ -v
+
+    - name: Generate Coverage Report
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        poetry run coverage xml
+        poetry run coverage report
