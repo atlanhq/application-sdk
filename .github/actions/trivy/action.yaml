@@ -1,0 +1,178 @@
+name: Trivy Code Scanner for Atlan Apps
+
+description: |
+  Runs Trivy security scanner on the codebase to detect and report vulnerabilities and secrets.
+  This action uses Trivy to scan the codebase for vulnerabilities and secrets, reporting them as SARIF and JSON files.
+  The results are uploaded to the GitHub Security tab and commented on the PR.
+
+inputs:
+  add-report-comment-to-pr:
+    description: Whether to add a comment to the PR with the Trivy scan results
+    required: false
+    default: 'true'
+  slack-webhook-url:
+    description: Slack webhook URL for notifications
+    required: false
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+
+
+    - name: Trivy Vulnerability Scan (SARIF)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'sarif'
+        output: 'trivy-vuln-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0'
+        scanners: 'vuln'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Trivy Vulnerability Scan (JSON)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'json'
+        output: 'trivy-vuln-results.json'
+        exit-code: '0'
+        scanners: 'vuln'
+        severity: 'CRITICAL,HIGH'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Trivy Secret Scan (SARIF)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'sarif'
+        output: 'trivy-secret-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0'
+        scanners: 'secret'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Trivy Secret Scan (JSON)
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'json'
+        output: 'trivy-secret-results.json'
+        exit-code: '0'
+        scanners: 'secret'
+        scan-ref: './'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Upload Vulnerability Scan Results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-vuln-results.sarif'
+        category: 'trivy-vulnerability'
+
+    - name: Upload Secret Scan Results
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-secret-results.sarif'
+        category: 'trivy-secret'
+
+    - name: Set up Python
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      if: inputs.add-report-comment-to-pr == 'true'
+      shell: bash
+      run: |
+        pip install mdutils
+
+    - name: Convert Vulnerability Scan Results to Markdown
+      if: inputs.add-report-comment-to-pr == 'true'
+      shell: bash
+      run: |
+        python .github/scripts/trivy-to-markdown.py trivy-vuln-results.json trivy-vuln-results.md Vulnerability
+
+    - name: Convert Secret Scan Results to Markdown
+      if: inputs.add-report-comment-to-pr == 'true'
+      shell: bash
+      run: |
+        python .github/scripts/trivy-to-markdown.py trivy-secret-results.json trivy-secret-results.md Secret
+
+    - name: Comment on PR with Vulnerability Scan Results
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: trivy-vuln
+        message-path: trivy-vuln-results.md
+
+    - name: Comment on PR with Secret Scan Results
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: trivy-secret
+        message-path: trivy-secret-results.md
+
+    - name: Fail on High/Critical Vulnerabilities
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'table'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '1'
+        scanners: 'vuln'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Fail on Any Secrets Found
+      if: inputs.add-report-comment-to-pr == 'true'
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        format: 'table'
+        exit-code: '1'
+        scanners: 'secret'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+
+    - name: Send Slack Notification for Vulnerabilities
+      if: inputs.add-report-comment-to-pr == 'true' && inputs.slack-webhook-url != ''
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        author_name: Github-Actions
+        fields: repo,workflow
+        text: "🚨 *Security Alert: High/Critical Vulnerabilities Detected* \n
+               Repository: ${{ github.repository }} \n
+               Branch: ${{ github.ref_name }} \n
+               PR: ${{ github.event.pull_request.html_url }} \n
+               , please review and address these vulnerabilities."
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
+
+    - name: Send Slack Notification for Secrets
+      if: inputs.add-report-comment-to-pr == 'true' && inputs.slack-webhook-url != ''
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        author_name: Github-Actions
+        fields: repo,workflow
+        text: "🔒 *Security Alert: Secrets Detected* \n
+               Repository: ${{ github.repository }} \n
+               Branch: ${{ github.ref_name }} \n
+               PR: ${{ github.event.pull_request.html_url }} \n
+               , please review and remove any exposed secrets."
+      env:
+        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}

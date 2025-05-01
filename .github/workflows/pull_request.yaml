@@ -1,0 +1,225 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, labeled, reopened]
+    branches: [main, develop]
+
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+  pull-requests: write
+  security-events: write
+  actions: write
+
+jobs:
+  # Conventional Commits
+  commits:
+    name: Conventional Commits
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: webiny/action-conventional-commits@v1.3.0
+        with:
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+
+  # Code Quality Checks
+  lint:
+    name: Pre-commit Checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/setup-deps"
+      - uses: pre-commit/action@v3.0.1
+
+  docstr:
+    name: Docstring Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/docstring-coverage"
+        with:
+          module-name: application_sdk
+          fail-under: "30"
+
+  # Security Checks
+  trivy:
+    name: Trivy Code Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/trivy"
+        with:
+          add-report-comment-to-pr: "true"
+
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ["python"]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+      - name: Autobuild
+        uses: github/codeql-action/autobuild@v3
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v3
+        with:
+          category: "/language:${{matrix.language}}"
+
+  # Testing
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/unit-tests"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-under: "60"
+
+  matrix-builder:
+    name: Build Test Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get PR Labels
+        id: get-labels
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+            const labelNames = labels.map(label => label.name).join(',');
+            console.log(`PR Labels: ${labelNames}`);
+            core.setOutput('labels', labelNames);
+
+      - name: Build matrix from PR labels
+        id: set-matrix
+        run: |
+          # Get the target branch of PR
+          TARGET_BRANCH="${{ github.base_ref }}"
+          # Default matrix if no label provided
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Parse labels from GitHub Script output
+            LABELS="${{ steps.get-labels.outputs.labels }}"
+
+            FOUND_LABEL=false
+            INCLUDES=""
+
+            echo "Found labels: ${LABELS}"
+
+            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+            for LABEL in "${LABEL_ARRAY[@]}"; do
+              if [[ $LABEL =~ ^([^:]+):([^:]+)$ ]]; then
+                REPO="${BASH_REMATCH[1]}"
+                BRANCH="${BASH_REMATCH[2]}"
+
+                # Add comma if not the first entry
+                if [[ "$FOUND_LABEL" == "true" ]]; then
+                  INCLUDES="${INCLUDES},"
+                fi
+
+                # Add this pair as a direct include entry
+                INCLUDES="${INCLUDES}{\"repo_name\":\"${REPO}\",\"target_branch\":\"${BRANCH}\"}"
+                FOUND_LABEL=true
+                echo "Added pair: $REPO:$BRANCH"
+              fi
+            done
+
+            # Generate matrix JSON with includes
+            if [[ "$FOUND_LABEL" == "true" ]]; then
+              MATRIX="{\"include\":[${INCLUDES}]}"
+              echo "Generated matrix from labels: $MATRIX"
+            else
+              MATRIX="$DEFAULT_MATRIX"
+              echo "No repo:branch labels found, using default matrix"
+            fi
+          else
+            MATRIX="$DEFAULT_MATRIX"
+            echo "Not a PR event, using default matrix"
+          fi
+
+          echo "matrix=$MATRIX" >> $GITHUB_OUTPUT
+          echo "Matrix output: $MATRIX"
+
+  # Run Examples
+  run-examples:
+    name: Run Examples
+    needs: matrix-builder
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'run-examples') || contains(github.event.pull_request.labels.*.name, 'run-examples'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/e2e-examples"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          postgres-host: ${{ secrets.POSTGRES_HOST }}
+          postgres-password: ${{ secrets.POSTGRES_PASSWORD }}
+          snowflake-account-id: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+          snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
+          snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
+
+  # E2E Tests: This step is run for each app in the matrix
+  e2e-apps:
+    name: E2E (Apps)
+    needs: matrix-builder
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.matrix-builder.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: ${{ matrix.repo_name }}
+
+  # Documentation
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/setup-deps"
+      - name: Install graphviz
+        run: |
+          sudo apt install graphviz
+      - name: Generate Sphinx Docs and UML Diagrams
+        run: |
+          source .venv/bin/activate
+          make apidocs
+      - name: Upload Docs
+        uses: atlanhq/kryptonite/upload@v1
+        with:
+          source: ./docs/site
+          target: application-sdk/${{ github.head_ref }}
+      - name: Comment Kryptonite URL on PR
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: "docs"
+          message: |
+            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}

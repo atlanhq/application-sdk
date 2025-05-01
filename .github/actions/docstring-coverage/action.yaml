@@ -1,0 +1,70 @@
+name: Docstring Coverage Reporting for Atlan Apps
+description: |
+  Reports python docstring coverage in a specified python module as a docstring comment using interrogate.
+  This action analyzes python files for missing docstrings in functions, classes, and modules, generates
+  both summary and detailed coverage reports, and can fail the build if coverage falls below the specified
+  threshold (default is 80%).
+
+inputs:
+  fail-under:
+    description: Minimum required docstring coverage percentage
+    required: false
+    default: '80'
+  module-name:
+    description: 'Target python module for coverage check'
+    required: false
+    default: 'app'
+
+runs:
+  using: 'composite'
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python 3.11
+      id: setup-python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install interrogate
+      shell: bash
+      run: pip install interrogate
+
+    - name: Create Coverage Report Header
+      shell: bash
+      run: |
+        echo "### 📜 Docstring Coverage Report" > docstring-cov.md
+        echo >> docstring-cov.md
+
+    - name: Run Basic Coverage Check
+      shell: bash
+      run: |
+        interrogate ${{ inputs.module-name }} --fail-under ${{ inputs.fail-under }} >> docstring-cov.md
+
+    - name: Add Detailed Report Section
+      shell: bash
+      run: |
+        echo >> docstring-cov.md
+        echo >> docstring-cov.md
+        echo "<details><summary>Detailed Coverage Report</summary>" >> docstring-cov.md
+        echo >> docstring-cov.md
+        echo "\`\`\`" >> docstring-cov.md
+
+    - name: Run Detailed Coverage Check
+      shell: bash
+      run: |
+        interrogate ${{ inputs.package-name }} --fail-under ${{ inputs.fail-under }} -v >> docstring-cov.md
+
+    - name: Close Detailed Report Section
+      shell: bash
+      run: |
+        echo "\`\`\`" >> docstring-cov.md
+        echo "</details>" >> docstring-cov.md
+
+    - name: Comment Docstring Coverage on PR
+      uses: mshick/add-pr-comment@v2
+      with:
+        message-id: "docstring-coverage"
+        message-path: docstring-cov.md

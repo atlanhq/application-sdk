@@ -1,0 +1,6 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Atlan Apps Support
+    url: https://atlan.com/
+    about: |
+      Please only file issues here that you believe represent actual bugs or feature requests for the Atlan Apps.

@@ -1,0 +1,59 @@
+name: On-Push Checks
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+
+jobs:
+  sync-branches:
+    name: Sync Branches
+    runs-on: ubuntu-latest
+    if: github.ref_name == 'main'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Sync Branches
+        uses: "./.github/actions/sync-branches"
+        with:
+          source-branch: main
+          target-branch: develop
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+
+  # Testing
+  unit:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/unit-tests"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          fail-under: "60"
+
+  e2e-examples:
+    name: E2E (Examples)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/e2e-examples"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          postgres-host: ${{ secrets.POSTGRES_HOST }}
+          postgres-password: ${{ secrets.POSTGRES_PASSWORD }}
+          snowflake-account-id: ${{ secrets.SNOWFLAKE_ACCOUNT_ID }}
+          snowflake-user: ${{ secrets.SNOWFLAKE_USER }}
+          snowflake-password: ${{ secrets.SNOWFLAKE_PASSWORD }}
+
+  e2e-apps:
+    name: E2E (Apps)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        repo_name: ["atlan-postgres-app"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: "./.github/actions/e2e-apps"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}
+          repo-name: ${{ matrix.repo_name }}
