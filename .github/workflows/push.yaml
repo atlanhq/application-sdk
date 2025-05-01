@@ -15,19 +15,6 @@ permissions:
   actions: write
 
 jobs:
-  sync-branches:
-    name: Sync Branches
-    runs-on: ubuntu-latest
-    if: github.ref_name == 'main'
-    steps:
-      - uses: actions/checkout@v4
-      - name: Sync Branches
-        uses: "./.github/actions/sync-branches"
-        with:
-          source-branch: main
-          target-branch: develop
-          github-token: ${{ secrets.ORG_PAT_GITHUB }}
-
   # Testing
   unit:
     name: Unit Tests
