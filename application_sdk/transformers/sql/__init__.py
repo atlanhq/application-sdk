@@ -129,23 +129,53 @@ class SQLTransformer(TransformerInterface):
             raise e
 
     def _build_struct(self, level: dict, prefix: str = "") -> Optional[daft.Expression]:
-        """Recursively build nested struct expressions."""
+        """
+        Recursively build nested struct expressions.
+
+        Args:
+            level (dict): The current level of the struct hierarchy
+            prefix (str): The prefix for the current struct level
+
+        Returns:
+            Optional[daft.Expression]: The constructed struct expression or None if all fields are null
+        """
         struct_fields = []
+        non_null_fields = []
 
         # Handle columns at this level
         if "columns" in level:
             for full_col, suffix in level["columns"]:
-                struct_fields.append(daft.col(full_col).alias(suffix))
+                field = daft.col(full_col).alias(suffix)
+                struct_fields.append(field)
+                # Add to non_null check by negating is_null()
+                non_null_fields.append(~daft.col(full_col).is_null())
 
         # Handle nested levels
         for component, sub_level in level.items():
             if component != "columns":  # Skip the columns key
                 nested_struct = self._build_struct(sub_level, component)
-                struct_fields.append(nested_struct)
+                if nested_struct is not None:
+                    struct_fields.append(nested_struct)
+                    # Add nested struct's non-null check
+                    non_null_fields.append(~nested_struct.is_null())
 
         # Only create a struct if we have fields
         if struct_fields:
-            return daft.struct(*struct_fields).alias(prefix)
+            # Create the struct first
+            struct = daft.struct(*struct_fields)
+
+            # If we have non-null checks, apply them
+            if non_null_fields:
+                # Combine all non-null checks with OR to check if any field is non-null
+                any_non_null = non_null_fields[0]
+                for check in non_null_fields[1:]:
+                    any_non_null = any_non_null | check
+
+                # Use if_else on the any_non_null Expression
+                return any_non_null.if_else(struct, None).alias(prefix)
+
+            return struct.alias(prefix)
+
         return None
 
     def _get_grouped_dataframe_by_prefix(

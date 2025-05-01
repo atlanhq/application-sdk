@@ -60,7 +60,12 @@ columns:
       END
     source_columns: [table_kind]
   - name: attributes.parentTable.typeName
-    source_query: "'Table'"
+    source_query: |
+      CASE
+        WHEN is_partition = TRUE THEN 'Table'
+        ELSE NULL
+      END
+    source_columns: [is_partition]
   - name: attributes.parentTable.uniqueAttributes.qualifiedName
     source_query: |
       CASE
