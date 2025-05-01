@@ -1,0 +1,13 @@
+@import url("https://assets.atlan.com/assets/Avenir-Medium.woff");
+
+:root {
+  --md-text-font: "Avenir Medium", sans;
+}
+
+div.mermaid {
+    text-align: center;
+  }
+
+  .md-grid {
+    max-width: 90%;
+  }
