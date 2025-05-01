@@ -1,3 +1,4 @@
+import textwrap
 from unittest.mock import mock_open, patch
 
 import daft
@@ -130,7 +131,9 @@ def test_generate_sql_query(
         "source_query": "'Database'",
     } == literal_columns[0]
 
-    expected_result = """\n            SELECT\n                table_name AS "attributes.name",concat(connection_qualified_name, \'/\', table_catalog, \'/\', table_schema, \'/\', table_name) AS "attributes.qualifiedName",case when table_type = \'TABLE\' then \'table\' when table_type = \'VIEW\' then \'view\' else table_type end AS "attributes.type","attributes.literal" AS "attributes.literal"\n            FROM dataframe\n            """
+    expected_result = textwrap.dedent(
+        """\n            SELECT\n                table_name AS "attributes.name",concat(connection_qualified_name, \'/\', table_catalog, \'/\', table_schema, \'/\', table_name) AS "attributes.qualifiedName",case when table_type = \'TABLE\' then \'table\' when table_type = \'VIEW\' then \'view\' else table_type end AS "attributes.type","attributes.literal" AS "attributes.literal"\n            FROM dataframe\n            """
+    )
     assert result == expected_result
 
 
