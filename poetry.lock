@@ -4771,13 +4771,13 @@ sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
 name = "sqlglot"
-version = "26.16.2"
+version = "26.16.3"
 description = "An easily customizable SQL parser and transpiler"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "sqlglot-26.16.2-py3-none-any.whl", hash = "sha256:0162f6c651f5786e2c0a6a1399c07967d8dfef61d9dde1858d58d4903c649ef1"},
-    {file = "sqlglot-26.16.2.tar.gz", hash = "sha256:81278c5dcbc4935fe233d6d492ea2e991ba6d03c6609ac49a4d2e373cfa77898"},
+    {file = "sqlglot-26.16.3-py3-none-any.whl", hash = "sha256:8474df47636be75c5e1ffe20e7f5317bac699e8bbca160b6e5bba75d86695f8b"},
+    {file = "sqlglot-26.16.3.tar.gz", hash = "sha256:691d2d9128af94b853db97c06856d40d276482dce1429246b5094c3f6cc364a3"},
 ]
 
 [package.extras]
