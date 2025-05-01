@@ -1,0 +1,108 @@
+# define the data hierarchy
+database:
+  - name: snowflake
+    schema:
+      - name: account_usage
+        tables:
+          - name: databases
+          - name: schemas
+          - name: tables
+          - name: views
+          - name: columns
+
+# define the hierarchy of the data
+hierarchy:
+  # total columns ~ 5 * 20 * (10[tables] * 50[columns] + 10[views] * 50[columns])  = 100,000
+  - name: databases
+    records: 5
+    children:
+      - name: schemata
+        records: 20
+        children:
+          - name: tables
+            records: 10
+            children:
+              - name: columns
+                records: 50
+          - name: views
+            records: 10
+            children:
+              - name: columns
+                records: 50
+
+# define the schema for each table
+schema:
+  - name: databases
+    table_schema:
+      - name: database_id
+        type: integer
+      - name: database_name
+        type: string
+  - name: schemata
+    table_schema:
+      - name: schema_id
+        type: integer
+      - name: schema_name
+        type: string
+      - name: status
+        type: enum
+        values:
+          - active
+          - inactive
+      - name: schema_catalog
+        derived: databases.database_name
+  - name: tables
+    table_schema:
+      - name: table_id
+        type: integer
+      - name: table_name
+        type: string
+      - name: table_catalog
+        derived: databases.database_name
+      - name: table_type
+        type: enum
+        values:
+          - TABLE
+          - "EXTERNAL TABLE"
+      - name: table_schema
+        derived: schemata.schema_name
+  - name: views
+    table_schema:
+      - name: table_id
+        type: integer
+      - name: table_name
+        type: string
+      - name: table_catalog
+        derived: databases.database_name
+      - name: table_type
+        type: enum
+        values:
+          - VIEW
+          - "MATERIALIZED VIEW"
+      - name: table_schema
+        derived: schemata.schema_name
+      - name: is_secure
+        type: boolean
+      - name: view_definition
+        type: string
+  - name: columns
+    table_schema:
+      - name: column_id
+        type: integer
+      - name: column_name
+        type: string
+      - name: column_type
+        type: enum
+        values:
+          - string
+          - integer
+          - float
+          - boolean
+          - date
+          - datetime
+      - name: column_catalog
+        derived: databases.database_name
+      - name: column_schema
+        derived: schemata.schema_name
+      - name: column_table
+        derived: [tables.table_name, views.table_name]

@@ -1,0 +1,375 @@
+{
+  "regular_columns": {
+    "typeName": "Column",
+    "attributes": {
+      "name": "ID",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE/ID",
+      "dataType": "NUMBER",
+      "order": 1,
+      "isNullable": false,
+      "isPrimary": true,
+      "isForeign": false,
+      "maxLength": 0,
+      "precision": 2,
+      "numericScale": 0,
+      "table": {
+        "typeName": "Table",
+        "attributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE"
+        },
+        "uniqueAttributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE"
+        }
+      },
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "source_id": "col123",
+      "catalog_id": "db123",
+      "schema_id": "schema123",
+      "table_id": "table123",
+      "is_auto_increment": "YES",
+      "is_generated": "NO"
+    }
+  },
+  "view_columns": {
+    "typeName": "Column",
+    "attributes": {
+      "name": "AMOUNT",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_VIEW/AMOUNT",
+      "dataType": "DECIMAL",
+      "order": 1,
+      "isNullable": true,
+      "precision": 10,
+      "numericScale": 2,
+      "view": {
+        "typeName": "View",
+        "attributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_VIEW"
+        },
+        "uniqueAttributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_VIEW"
+        }
+      },
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    }
+  },
+  "materialized_view_columns": {
+    "typeName": "Column",
+    "attributes": {
+      "name": "TOTAL_AMOUNT",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_MV/TOTAL_AMOUNT",
+      "dataType": "DECIMAL",
+      "order": 1,
+      "isNullable": true,
+      "precision": 15,
+      "numericScale": 2,
+      "materialisedView": {
+        "typeName": "MaterialisedView",
+        "attributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_MV"
+        },
+        "uniqueAttributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_MV"
+        }
+      },
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    }
+  },
+  "columns_with_custom_attrs": {
+    "typeName": "Column",
+    "attributes": {
+      "name": "PARENT_ID",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE/PARENT_ID",
+      "dataType": "NUMBER",
+      "order": 2,
+      "isNullable": true,
+      "table": {
+        "typeName": "Table",
+        "attributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE"
+        },
+        "uniqueAttributes": {
+          "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE"
+        }
+      },
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_self_referencing": "YES",
+      "source_id": "col124",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "numeric_precision": 10
+    }
+  },
+  "column_with_view_parent": {
+    "typeName": "Column",
+    "attributes": {
+      "qualifiedName": "default/postgres/1741637459/wwi/public/test_1_active_employees/department",
+      "name": "department",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1741637459",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657269776,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1741637459/wwi",
+      "schemaName": "public",
+      "schemaQualifiedName": "default/postgres/1741637459/wwi/public",
+      "viewName": "test_1_active_employees",
+      "viewQualifiedName": "default/postgres/1741637459/wwi/public/test_1_active_employees",
+      "dataType": "text",
+      "order": 3,
+      "isPartition": false,
+      "isPrimary": false,
+      "isForeign": false,
+      "isNullable": true,
+      "numericScale": 0.0,
+      "maxLength": 0,
+      "view": {
+        "typeName": "View",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1741637459/wwi/public/test_1_active_employees"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "ordinal_position": 3,
+      "is_self_referencing": "NO",
+      "type_name": "text",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "column_size": "text"
+    }
+  },
+  "column_with_materialized_view_parent": {
+    "typeName": "Column",
+    "attributes": {
+      "qualifiedName": "default/postgres/1741637459/wwi/public/test_1_employee_salary_stats/department",
+      "name": "department",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1741637459",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657269778,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1741637459/wwi",
+      "schemaName": "public",
+      "schemaQualifiedName": "default/postgres/1741637459/wwi/public",
+      "viewName": "test_1_employee_salary_stats",
+      "viewQualifiedName": "default/postgres/1741637459/wwi/public/test_1_employee_salary_stats",
+      "dataType": "text",
+      "order": 1,
+      "isPartition": false,
+      "isPrimary": false,
+      "isForeign": false,
+      "isNullable": true,
+      "numericScale": 0.0,
+      "maxLength": 0,
+      "materialisedView": {
+        "typeName": "MaterialisedView",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1741637459/wwi/public/test_1_employee_salary_stats"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "ordinal_position": 1,
+      "is_self_referencing": "NO",
+      "type_name": "text",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "column_size": "text"
+    }
+  },
+  "column_with_foreign_table_parent": {
+    "typeName": "Column",
+    "attributes": {
+      "qualifiedName": "default/postgres/1741637459/wwi/public/test_1_foreign_employees/emp_id",
+      "name": "emp_id",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1741637459",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657269793,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1741637459/wwi",
+      "schemaName": "public",
+      "schemaQualifiedName": "default/postgres/1741637459/wwi/public",
+      "tableName": "test_1_foreign_employees",
+      "tableQualifiedName": "default/postgres/1741637459/wwi/public/test_1_foreign_employees",
+      "dataType": "int4",
+      "order": 1,
+      "isPartition": false,
+      "isPrimary": false,
+      "isForeign": false,
+      "precision": 32,
+      "isNullable": true,
+      "numericScale": 0.0,
+      "maxLength": 0,
+      "table": {
+        "typeName": "Table",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1741637459/wwi/public/test_1_foreign_employees"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "ordinal_position": 1,
+      "is_self_referencing": "NO",
+      "type_name": "int4",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "column_size": "integer"
+    }
+  },
+  "column_variation_1": {
+    "typeName": "Column",
+    "attributes": {
+      "qualifiedName": "default/postgres/1741637459/wwi/purchasing/purchase_order_lines/is_order_line_finalized",
+      "name": "is_order_line_finalized",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1741637459",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657269820,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1741637459/wwi",
+      "schemaName": "purchasing",
+      "schemaQualifiedName": "default/postgres/1741637459/wwi/purchasing",
+      "tableName": "purchase_order_lines",
+      "tableQualifiedName": "default/postgres/1741637459/wwi/purchasing/purchase_order_lines",
+      "dataType": "bool",
+      "order": 10,
+      "isPartition": false,
+      "isPrimary": false,
+      "isForeign": false,
+      "isNullable": false,
+      "numericScale": 0.0,
+      "maxLength": 0,
+      "table": {
+        "typeName": "Table",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1741637459/wwi/purchasing/purchase_order_lines"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "ordinal_position": 10,
+      "is_self_referencing": "NO",
+      "type_name": "bool",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "column_size": "boolean"
+    }
+  },
+  "column_variation_2": {
+    "typeName": "Column",
+    "attributes": {
+      "qualifiedName": "default/postgres/1741637459/wwi/fivetran_log_fivetran_platform/fivetran_platform__connector_status/destination_name",
+      "name": "destination_name",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1741637459",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657269465,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1741637459/wwi",
+      "schemaName": "fivetran_log_fivetran_platform",
+      "schemaQualifiedName": "default/postgres/1741637459/wwi/fivetran_log_fivetran_platform",
+      "tableName": "fivetran_platform__connector_status",
+      "tableQualifiedName": "default/postgres/1741637459/wwi/fivetran_log_fivetran_platform/fivetran_platform__connector_status",
+      "dataType": "varchar",
+      "order": 5,
+      "isPartition": false,
+      "isPrimary": false,
+      "isForeign": false,
+      "isNullable": true,
+      "numericScale": 0.0,
+      "maxLength": 0,
+      "table": {
+        "typeName": "Table",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1741637459/wwi/fivetran_log_fivetran_platform/fivetran_platform__connector_status"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "ordinal_position": 5,
+      "is_self_referencing": "NO",
+      "type_name": "varchar",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "column_size": "character varying"
+    }
+  },
+  "column_partitioned_table": {
+    "typeName": "Column",
+    "attributes": {
+      "qualifiedName": "default/postgres/1741637459/wwi/application/eu_cities/name",
+      "name": "name",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1741637459",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657269117,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1741637459/wwi",
+      "schemaName": "application",
+      "schemaQualifiedName": "default/postgres/1741637459/wwi/application",
+      "tableName": "eu_cities",
+      "tableQualifiedName": "default/postgres/1741637459/wwi/application/eu_cities",
+      "dataType": "varchar",
+      "order": 2,
+      "isPartition": false,
+      "isPrimary": false,
+      "isForeign": false,
+      "isNullable": false,
+      "numericScale": 0.0,
+      "maxLength": 0,
+      "tablePartition": {
+        "typeName": "TablePartition",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1741637459/wwi/application/eu_cities"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "ordinal_position": 2,
+      "is_self_referencing": "NO",
+      "type_name": "varchar",
+      "is_auto_increment": "NO",
+      "is_generated": "NO",
+      "column_size": "character varying"
+    }
+  }
+}

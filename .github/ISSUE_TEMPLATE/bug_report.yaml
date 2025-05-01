@@ -1,0 +1,75 @@
+name: "🐛 Bug Report"
+description: File a bug report for the Application SDK.
+title: "🐛 [BUG] - <title>"
+labels: ["bug"]
+
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: "🐞 Description"
+      description: Clear and concise description of the issue.
+      placeholder: What went wrong?
+    validations:
+      required: true
+
+  - type: input
+    id: reprod-url
+    attributes:
+      label: "🔗 Reproduction Repo/Script (if any)"
+      description: Link to a minimal repo or script that reproduces the issue.
+      placeholder: https://github.com/your/repo
+    validations:
+      required: false
+
+  - type: textarea
+    id: reprod
+    attributes:
+      label: "📋 Reproduction Steps"
+      description: Steps to reproduce the bug.
+      value: |
+        1. Import SDK
+        2. Call method `...`
+        3. Observe error `...`
+      render: bash
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: "🪵 Logs / Tracebacks"
+      description: Paste any relevant logs or error messages here (no need for backticks).
+      render: bash
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: "✅ Expected vs 🧨 Actual"
+      description: What was the expected behavior and what actually happened?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: environment
+    attributes:
+      label: "💻 Environment"
+      description: What environment are you running this in?
+      options:
+        - MacOS
+        - Linux
+        - Windows
+        - Other (mention in description)
+    validations:
+      required: false
+
+  - type: input
+    id: sdk-version
+    attributes:
+      label: "📦 SDK Version"
+      description: What version of the SDK are you using?
+      placeholder: e.g. 0.1.0
+    validations:
+      required: true

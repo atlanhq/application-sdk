@@ -1,0 +1,106 @@
+---
+description:
+globs: tests/**/*.py
+alwaysApply: false
+---
+- **Test Framework**
+    - Write tests before fixing bugs
+    - Keep tests readable and maintainable
+    - Test edge cases and error conditions
+    - Use pytest as the primary testing framework
+    - Use hypothesis for property-based testing
+    - All tests must be deterministic
+    - Use fixtures for common setup/teardown
+
+- **Test Organization**
+    - Unit tests: `tests/unit/`
+    - Integration tests: `tests/integration/`
+    - End-to-end tests: `tests/e2e/`
+    - Test files should mirror the source structure
+    - Test file names should start with `test_`
+
+- **Test Configuration**
+  ```toml
+  [tool.pytest.ini_options]
+  asyncio_mode = "auto"
+
+  [tool.coverage.run]
+  omit = [
+      "tests/**",
+  ]
+
+  [tool.coverage.report]
+  exclude_lines = [
+      "pragma: no cover",
+      "def __repr__",
+      "if self.debug:",
+      "raise NotImplementedError",
+      "if __name__ == .__main__.:",
+      "pass",
+      "raise ImportError",
+  ]
+  fail_under = 60
+  ```
+
+- **Example Test Structure**
+  ```python
+  # ✅ DO: Proper test structure
+  import pytest
+  from hypothesis import given, strategies as st
+
+  class TestUserService:
+      """Test suite for UserService."""
+
+      @pytest.fixture
+      def user_service(self):
+          """Create a UserService instance for testing."""
+          return UserService()
+
+      def test_get_user_success(self, user_service):
+          """Test successful user retrieval."""
+          # Arrange
+          user_id = "123"
+
+          # Act
+          result = user_service.get_user(user_id)
+
+          # Assert
+          assert result is not None
+          assert result.id == user_id
+
+      @given(st.text(min_size=1))
+      def test_get_user_with_hypothesis(self, user_service, user_id):
+          """Test user retrieval with property-based testing."""
+          result = user_service.get_user(user_id)
+          assert result is not None
+
+      # ❌ DON'T: Improper test structure
+      def test_get_user(self):  # No docstring
+          service = UserService()  # No fixture
+          assert service.get_user("123")  # No proper assertion
+  ```
+
+- **Test Writing Guidelines**
+  - Each test should focus on a single aspect
+  - Use descriptive test names
+  - Include docstrings for test functions
+  - Mock external dependencies
+
+- **Test Categories**
+  - Unit Tests: Test individual components in isolation
+  - Integration Tests: Test component interactions
+  - End-to-End Tests: Test complete workflows
+  - Performance Tests: Test system performance
+  - Security Tests: Test security aspects
+
+- **Mocking Guidelines**
+  - Use pytest-mock for mocking
+  - Mock external services and APIs
+  - Mock database operations
+  - Mock time-dependent operations
+  - Mock random number generation
+
+- **Test Data Management**
+  - Keep test data minimal and focused
+  - Use factories for complex objects
+  - Clean up test data after tests

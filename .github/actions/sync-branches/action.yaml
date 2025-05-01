@@ -1,0 +1,32 @@
+name: Sync Branches for Atlan Apps
+description: |
+  Automatically synchronizes and merges branches in the repository to maintain consistency across different development streams.
+  It's particularly useful for keeping development branches up-to-date with the main branch and maintaining a consistent state
+  across the repository's branches.
+
+inputs:
+  source-branch:
+    description: 'Source branch to sync from'
+    required: true
+  target-branch:
+    description: 'Target branch to sync to'
+    required: true
+  github-token:
+    description: 'GitHub token'
+    required: true
+
+runs:
+  using: 'composite'
+  steps:
+    - name: "Auto-merge ${{ inputs.source-branch }} -> ${{ inputs.target-branch }}"
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          await github.rest.repos.merge({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            base: "${{ inputs.target-branch }}",
+            head: "${{ inputs.source-branch }}",
+            commit_message: "ci: auto-merge ${{ inputs.source-branch }} into ${{ inputs.target-branch }}"
+          });

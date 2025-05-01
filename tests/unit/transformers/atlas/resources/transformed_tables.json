@@ -1,0 +1,234 @@
+{
+  "regular_table": {
+    "typeName": "Table",
+    "attributes": {
+      "name": "TEST_TABLE",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE",
+      "columnCount": 10,
+      "rowCount": 1000,
+      "sizeBytes": 1024,
+      "databaseName": "TEST_DB",
+      "schemaName": "TEST_SCHEMA",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaQualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "description": "Test table",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_transient": "NO",
+      "source_id": "table123",
+      "catalog_id": "db123",
+      "schema_id": "schema123",
+      "last_ddl": "2024-01-01",
+      "last_ddl_by": "ADMIN",
+      "is_secure": "YES",
+      "retention_time": 90,
+      "auto_clustering_on": "YES",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    }
+  },
+  "table_variation_1": {
+    "typeName": "Table",
+    "attributes": {
+      "qualifiedName": "default/postgres/1728518400/wwi/fivetran_log/user",
+      "name": "user",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "test-connection",
+      "connectionQualifiedName": "default/postgres/1728518400",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1728518400/wwi",
+      "schemaName": "fivetran_log",
+      "schemaQualifiedName": "default/postgres/1728518400/wwi/fivetran_log",
+      "columnCount": 10,
+      "rowCount": 40,
+      "sizeBytes": 0,
+      "externalLocation": "",
+      "externalLocationRegion": "",
+      "externalLocationFormat": "",
+      "atlanSchema": {
+        "typeName": "Schema",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1728518400/wwi/fivetran_log"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "table_type": "TABLE",
+      "is_insertable_into": "YES",
+      "number_columns_in_part_key": null,
+      "columns_participating_in_part_key": null,
+      "is_typed": "NO",
+      "engine": null
+    }
+  },
+  "regular_view": {
+    "typeName": "View",
+    "attributes": {
+      "name": "TEST_VIEW",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_VIEW",
+      "definition": "SELECT * FROM TEST_TABLE",
+      "columnCount": 5,
+      "databaseName": "TEST_DB",
+      "schemaName": "TEST_SCHEMA",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaQualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "description": "Test table",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_secure": "YES"
+    }
+  },
+  "view_variation_1": {
+    "typeName": "View",
+    "attributes": {
+      "qualifiedName": "default/postgres/1728518400/wwi/fivetran_log_stg_fivetran_platform/stg_fivetran_platform__connector_tmp",
+      "name": "stg_fivetran_platform__connector_tmp",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "postgres",
+      "connectionQualifiedName": "default/postgres/1728518400",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657267491,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1728518400/wwi",
+      "schemaName": "fivetran_log_stg_fivetran_platform",
+      "schemaQualifiedName": "default/postgres/1728518400/wwi/fivetran_log_stg_fivetran_platform",
+      "columnCount": 10,
+      "sizeBytes": 0,
+      "definition": " SELECT connector.connector_id,\n    connector.connecting_user_id,\n    connector.connector_type_id,\n    connector.connector_name,\n    connector.signed_up,\n    connector.paused,\n    connector.sync_frequency,\n    connector._fivetran_deleted,\n    connector.destination_id,\n    connector._fivetran_synced\n   FROM fivetran_log.connector;",
+      "atlanSchema": {
+        "typeName": "Schema",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1728518400/wwi/fivetran_log_stg_fivetran_platform"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "table_type": "VIEW",
+      "is_insertable_into": "YES",
+      "number_columns_in_part_key": null,
+      "columns_participating_in_part_key": null,
+      "is_typed": "NO",
+      "engine": null
+    }
+  },
+  "regular_materialized_view": {
+    "typeName": "MaterialisedView",
+    "attributes": {
+      "name": "TEST_MV",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_MV",
+      "definition": "SELECT sum(amount) FROM transactions",
+      "columnCount": 3,
+      "rowCount": 100,
+      "sizeBytes": 512,
+      "databaseName": "TEST_DB",
+      "schemaName": "TEST_SCHEMA",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaQualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "description": "Test table",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_secure": "YES",
+      "auto_refresh": "YES"
+    }
+  },
+  "materialized_view_variation_1": {
+    "typeName": "MaterialisedView",
+    "attributes": {
+      "qualifiedName": "default/postgres/1728518400/wwi/application/cities_mat_view",
+      "name": "cities_mat_view",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "postgres",
+      "connectionQualifiedName": "default/postgres/1728518400",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657267571,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1728518400/wwi",
+      "schemaName": "application",
+      "schemaQualifiedName": "default/postgres/1728518400/wwi/application",
+      "columnCount": 5,
+      "rowCount": 37940,
+      "sizeBytes": 0,
+      "definition": " SELECT cities.city_id,\n    cities.city_name,\n    cities.state_province_id,\n    cities.latest_recorded_population,\n    cities.last_edited_by\n   FROM application.cities;",
+      "atlanSchema": {
+        "typeName": "Schema",
+        "attributes": {},
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1728518400/wwi/application"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "table_type": "MATERIALIZED VIEW",
+      "is_insertable_into": null,
+      "number_columns_in_part_key": null,
+      "columns_participating_in_part_key": null,
+      "is_typed": null,
+      "engine": null
+    }
+  },
+  "partitioned_table": {
+    "typeName": "TablePartition",
+    "attributes": {
+      "qualifiedName": "default/postgres/1728518400/wwi/application/other_cities",
+      "name": "other_cities",
+      "tenantId": "default",
+      "connectorName": "postgres",
+      "connectionName": "postgres",
+      "connectionQualifiedName": "default/postgres/1728518400",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRunAt": 1741657267553,
+      "lastSyncRun": "test_run_id",
+      "databaseName": "wwi",
+      "databaseQualifiedName": "default/postgres/1728518400/wwi",
+      "schemaName": "application",
+      "schemaQualifiedName": "default/postgres/1728518400/wwi/application",
+      "tableName": "partitioned_cities",
+      "tableQualifiedName": "default/postgres/1728518400/wwi/application/partitioned_cities",
+      "columnCount": 2,
+      "rowCount": 37926,
+      "sizeBytes": 0,
+      "externalLocation": "",
+      "externalLocationRegion": "",
+      "externalLocationFormat": "",
+      "parentTable": {
+        "typeName": "Table",
+        "uniqueAttributes": {
+          "qualifiedName": "default/postgres/1728518400/wwi/application/partitioned_cities"
+        }
+      }
+    },
+    "status": "ACTIVE",
+    "customAttributes": {
+      "table_type": "TABLE",
+      "is_insertable_into": "YES",
+      "number_columns_in_part_key": null,
+      "columns_participating_in_part_key": null,
+      "is_typed": "NO",
+      "engine": null
+    }
+  }
+}

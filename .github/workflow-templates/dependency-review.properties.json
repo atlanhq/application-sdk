@@ -1,0 +1,17 @@
+{
+    "name": "Atlan Application Dependency Review",
+    "creator": "Atlan",
+    "description": "Scans Pull Requests on each push for the introduction and/or resolution of vulnerable dependencies to the repository",
+    "iconName": "",
+    "categories": [
+      "Dependency review",
+      "Dependency graph",
+      "Go",
+      "Java",
+      "JavaScript",
+      "TypeScript",
+      "Python",
+      "Ruby",
+      "Actions",
+      "PHP"]
+}

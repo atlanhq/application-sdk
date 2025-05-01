@@ -1,0 +1,9 @@
+{
+  "regular_database": {
+    "database_name": "TEST_DB",
+    "schema_count": 5,
+    "source_id": "db123",
+    "created_on": "2024-01-01",
+    "source_owner": "ADMIN"
+  }
+}

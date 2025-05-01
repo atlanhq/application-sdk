@@ -1,0 +1,15 @@
+{
+  "regular_schema": {
+    "schema_name": "TEST_SCHEMA",
+    "catalog_name": "TEST_DB",
+    "table_count": 10,
+    "views_count": 5,
+    "source_id": "sch123",
+    "catalog_id": "cat123",
+    "comment": "Test schema",
+    "created": 1704067200000,
+    "last_altered": 1704153600000,
+    "source_owner": "ADMIN",
+    "is_managed_access": true
+  }
+}

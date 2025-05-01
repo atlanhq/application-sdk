@@ -1,0 +1,32 @@
+{
+    "simple_procedure": {
+        "typeName": "Procedure",
+        "attributes": {
+            "qualifiedName": "default/postgres/1741637459/wwi/public/_procedures_/pg_stat_statements_reset",
+            "name": "pg_stat_statements_reset",
+            "tenantId": "default",
+            "connectorName": "postgres",
+            "connectionName": "test-connection",
+            "connectionQualifiedName": "default/postgres/1741637459",
+            "subType": "-1",
+            "sourceCreatedBy": "rdsadmin",
+            "lastSyncWorkflowName": "test_workflow_id",
+            "lastSyncRunAt": 1741657268274,
+            "lastSyncRun": "test_run_id",
+            "databaseName": "wwi",
+            "databaseQualifiedName": "default/postgres/1741637459/wwi",
+            "schemaName": "public",
+            "schemaQualifiedName": "default/postgres/1741637459/wwi/public",
+            "definition": "pg_stat_statements_reset_1_7",
+            "atlanSchema": {
+                "typeName": "Schema",
+                "attributes": {},
+                "uniqueAttributes": {
+                    "qualifiedName": "default/postgres/1741637459/wwi/public"
+                }
+            }
+        },
+        "status": "ACTIVE",
+        "customAttributes": {}
+    }
+}

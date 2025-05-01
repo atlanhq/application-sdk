@@ -1,0 +1,220 @@
+# This is a github action that runs scale tests for your application
+# Ideally a run.py script is added to the application (see step: Run container tests) that can be used
+# 1. Generate scale data
+# 2. Run the scale tests
+# 3. Post the results to the pull request comment
+# This leverages the scale data generator and test containers to run the scale tests
+
+name: Scale Tests
+
+on:
+  workflow_call:
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+
+jobs:
+  test:
+    if: ((github.event.action == 'labeled' && github.event.label.name == 'scale-test') || contains(github.event.pull_request.labels.*.name, 'scale-test'))
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      #----------------------------------------------
+      #  -----  install & configure poetry  -----
+      #----------------------------------------------
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 1.8.5
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          virtualenvs-path: .venv
+          installer-parallel: true
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install testcontainers psutil
+
+      - name: Install Dependencies
+        run: |
+          git config --global url."https://${{ secrets.ORG_PAT_GITHUB }}@github.com/".insteadOf "git@github.com:"
+          # Configure poetry to use project-specific virtualenv
+          poetry config virtualenvs.in-project true
+
+          # Install the dependencies
+          poetry install -vv
+          poetry update application-sdk --dry-run
+
+      # Install Dapr
+      - name: Install Dapr CLI
+        run: |
+          wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
+          dapr init --runtime-version 1.13.6 --slim
+
+      # Install Temporal
+      - name: Install Temporal CLI and Start Server
+        run: |
+          curl -sSf https://temporal.download/cli.sh | sh
+          export PATH="$HOME/.temporalio/bin:$PATH"
+          temporal server start-dev --ip 0.0.0.0 --db-filename /tmp/temporal.db &
+          sleep 10  # Give some time for Temporal to start
+
+      # Start dapr and temporal services
+      - name: Start Platform Services
+        run: |
+          make start-deps
+          sleep 10  # Give services time to start up
+
+      - name: Build docker image
+        id: docker_build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./install/Dockerfile
+          tags: test-sample:latest
+          secrets: |
+            PRIVATE_REPO_ACCESS_TOKEN=${{ secrets.ORG_PAT_GITHUB }}
+          network: host
+
+      - name: Run container tests
+        run: |
+          # Add debug information to verify service accessibility
+          nc -zv 172.17.0.1 7233 || echo "Temporal port not accessible"
+          nc -zv 172.17.0.1 3500 || echo "Dapr HTTP port not accessible"
+          nc -zv 172.17.0.1 50001 || echo "Dapr gRPC port not accessible"
+
+          # Create Python script inline
+          cat << 'EOF' > run_scale_tests.py
+          import json
+          import os
+          import time
+          import argparse
+          import socket
+          import psutil
+          from typing import Dict, Generator
+          from testcontainers.core.container import DockerContainer
+
+          DOCKER_HOST_IP = os.getenv("DOCKER_HOST_IP", "172.17.0.1")
+          ATLAN_TEMPORAL_PORT = os.getenv("ATLAN_TEMPORAL_PORT", "7233")
+          ATLAN_DAPR_GRPC_PORT = os.getenv("ATLAN_DAPR_GRPC_PORT", "50001")
+          ATLAN_DAPR_HTTP_PORT = os.getenv("ATLAN_DAPR_HTTP_PORT", "3500")
+
+          def get_container_config(command: str, image_name: str = "test-sample:latest"):
+              container = DockerContainer(image_name)
+              docker_env = {
+                  "DAPR_GRPC_ENDPOINT": f"{DOCKER_HOST_IP}:{ATLAN_DAPR_GRPC_PORT}",
+                  "DAPR_HTTP_ENDPOINT": f"http://{DOCKER_HOST_IP}:{ATLAN_DAPR_HTTP_PORT}",
+                  "DAPR_HTTP_PORT": ATLAN_DAPR_HTTP_PORT,
+                  "ATLAN_TEMPORAL_HOST": DOCKER_HOST_IP,
+                  "ATLAN_TEMPORAL_PORT": ATLAN_TEMPORAL_PORT,
+              }
+              for key, value in docker_env.items():
+                  container = container.with_env(key, value)
+              if command:
+                  container = container.with_command(command)
+              return container
+
+          def calculate_cpu_usage(stats: Dict) -> float:
+              cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - stats["precpu_stats"]["cpu_usage"]["total_usage"]
+              system_delta = 0
+              if "system_cpu_usage" in stats["precpu_stats"] and "system_cpu_usage" in stats["cpu_stats"]:
+                  system_delta = stats["cpu_stats"]["system_cpu_usage"] - stats["precpu_stats"]["system_cpu_usage"]
+              return (cpu_delta / system_delta) * stats["cpu_stats"]["online_cpus"] * 100 if system_delta > 0 else 0.0
+
+          def calculate_memory_usage(stats: Dict) -> tuple[float, float, float]:
+              memory_usage = stats["memory_stats"].get("usage", 0)
+              memory_limit = stats["memory_stats"].get("limit", 100)
+              memory_percent = (memory_usage / memory_limit) * 100
+              memory_usage_mb = memory_usage / (1024 * 1024)
+              memory_limit_mb = memory_limit / (1024 * 1024)
+              return memory_usage_mb, memory_limit_mb, memory_percent
+
+          def monitor_container_stats(container: DockerContainer) -> Generator:
+              docker_container = container.get_wrapped_container()
+              for stats in docker_container.stats(stream=True):
+                  stat = json.loads(stats.decode("utf-8"))
+                  cpu_percent = calculate_cpu_usage(stat)
+                  memory_usage_mb, memory_limit_mb, memory_percent = calculate_memory_usage(stat)
+                  yield {
+                      "cpu_percent": cpu_percent,
+                      "memory_usage_mb": memory_usage_mb,
+                      "memory_limit_mb": memory_limit_mb,
+                      "memory_percent": memory_percent,
+                  }
+
+          def stream_container_logs(container: DockerContainer, tail: int = 100) -> Generator:
+              docker_container = container.get_wrapped_container()
+              return docker_container.logs(stream=True, follow=True, timestamps=True, tail=tail, stderr=True, stdout=True)
+
+          def main(command: str, output_file: str):
+              # Debug connection to temporal
+              s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+              try:
+                  s.connect((DOCKER_HOST_IP, 7233))
+                  print("Successfully connected to Temporal service")
+              except Exception as e:
+                  print(f"Failed to connect to Temporal service: {e}")
+              finally:
+                  s.close()
+
+              total_cpu_count = psutil.cpu_count()
+              total_memory = psutil.virtual_memory().total / (1024 * 1024)
+
+              cpu_stats = []
+              memory_stats = []
+
+              with get_container_config(command=command) as container:
+                  start_time = time.time()
+                  for stats, log in zip(monitor_container_stats(container), stream_container_logs(container)):
+                      cpu_stats.append(stats["cpu_percent"])
+                      memory_stats.append(stats["memory_percent"])
+                      print(log.decode("utf-8"))
+
+                  with open(output_file, "w") as f:
+                      f.write("## 📊 Scale Test Performance Metrics\n\n")
+                      f.write(f"> Time taken to complete the workflow: {time.time() - start_time:.2f} seconds\n\n")
+                      f.write("### 💻 System Resources\n")
+                      f.write("| Resource | Total Available |\n")
+                      f.write("|----------|------------------|\n")
+                      f.write(f"| CPU Cores | {total_cpu_count} |\n")
+                      f.write(f"| Memory | {total_memory:.2f} MB ({total_memory/1024:.2f} GB) |\n\n")
+                      f.write("### 📈 Container Usage Metrics\n")
+                      f.write("| Metric | Min | Max | Average |\n")
+                      f.write("|--------|-----|-----|----------|\n")
+                      f.write(f"| CPU Usage | {min(cpu_stats):.2f}% | {max(cpu_stats):.2f}% | {sum(cpu_stats)/len(cpu_stats):.2f}% |\n")
+                      f.write(f"| Memory Usage | {min(memory_stats):.2f}% | {max(memory_stats):.2f}% | {sum(memory_stats)/len(memory_stats):.2f}% |\n")
+
+          if __name__ == "__main__":
+              parser = argparse.ArgumentParser()
+              parser.add_argument("--output-file", type=str, default="scale_test_metrics.md")
+              args = parser.parse_args()
+              command = "/app/.venv/bin/python -m pytest --log-cli-level=INFO tests/scale/workflow.py"
+              main(command, args.output_file)
+          EOF
+
+          # Run the scale test
+          python run_scale_tests.py --output-file scale_test_metrics.md
+        env:
+          DOCKER_HOST: "unix:///var/run/docker.sock"
+          PYTHONPATH: ${{ github.workspace }}
+
+      - name: Comment workflow status on Pull Request
+        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: 'scale_test_status'
+          message-path: scale_test_metrics.md

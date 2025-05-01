@@ -1,0 +1,32 @@
+# Trivy container scan. This can be reused across all the applications.
+
+name: Atlan Application Trivy container scan
+
+on:
+  workflow_call:
+    secrets:
+      ORG_PAT_GITHUB:
+        required: true
+
+    inputs:
+      skip-files:
+        description: "Comma-separated list of files or directories to be skipped"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+  security-events: write
+
+jobs:
+  build:
+    runs-on: "ubuntu-24.04"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - uses: "atlanhq/application-sdk/.github/actions/trivy-container@main"
+        with:
+          github-token: ${{ secrets.ORG_PAT_GITHUB }}

@@ -1,0 +1,50 @@
+name: Trivy Container Scan for Atlan Apps
+
+description: |
+  Runs Trivy security scanner on container images to detect and report vulnerabilities.
+  This action uses Trivy to scan the container image for vulnerabilities and report them as a SARIF file.
+  The SARIF file can be uploaded to the GitHub Security tab for further analysis.
+
+inputs:
+  skip-files:
+    description: Comma-separated list of files or directories to be skipped
+    required: false
+  github-token:
+    required: true
+    description: The GitHub token to use for the action.
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Build and push docker image
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: ./install/Dockerfile
+        push: false
+        secrets: |
+          "PRIVATE_REPO_ACCESS_TOKEN=${{ inputs.github-token }}"
+        tags: "docker-trivy-tag"
+
+    - name: Post Trivy scan results as PR comment
+      uses: aquasecurity/trivy-action@0.29.0
+      with:
+        image-ref: 'docker-trivy-tag:latest'
+        ignore-unfixed: true
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL,HIGH'
+        exit-code: '0' # Don't fail here since we already failed above if needed
+        skip-files: '${{ inputs.skip-files }}'
+      env:
+        TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
+        TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
