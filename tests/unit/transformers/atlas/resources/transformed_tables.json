@@ -1,0 +1,79 @@
+{
+  "regular_table": {
+    "typeName": "Table",
+    "attributes": {
+      "name": "TEST_TABLE",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_TABLE",
+      "columnCount": 10,
+      "rowCount": 1000,
+      "sizeBytes": 1024,
+      "databaseName": "TEST_DB",
+      "schemaName": "TEST_SCHEMA",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaQualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "description": "Test table",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_transient": "NO",
+      "source_id": "table123",
+      "catalog_id": "db123",
+      "schema_id": "schema123",
+      "last_ddl": "2024-01-01",
+      "last_ddl_by": "ADMIN",
+      "is_secure": "YES",
+      "retention_time": 90,
+      "auto_clustering_on": "YES",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    }
+  },
+  "regular_view": {
+    "typeName": "View",
+    "attributes": {
+      "name": "TEST_VIEW",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_VIEW",
+      "definition": "SELECT * FROM TEST_TABLE",
+      "columnCount": 5,
+      "databaseName": "TEST_DB",
+      "schemaName": "TEST_SCHEMA",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaQualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "description": "Test table",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_secure": "YES"
+    }
+  },
+  "regular_materialized_view": {
+    "typeName": "MaterialisedView",
+    "attributes": {
+      "name": "TEST_MV",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA/TEST_MV",
+      "definition": "SELECT sum(amount) FROM transactions",
+      "columnCount": 3,
+      "rowCount": 100,
+      "sizeBytes": 512,
+      "databaseName": "TEST_DB",
+      "schemaName": "TEST_SCHEMA",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "schemaQualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "sourceCreatedBy": "ADMIN",
+      "description": "Test table",
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id"
+    },
+    "customAttributes": {
+      "is_secure": "YES",
+      "auto_refresh": "YES"
+    }
+  }
+}
