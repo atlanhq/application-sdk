@@ -1,0 +1,24 @@
+{
+  "regular_schema": {
+    "typeName": "Schema",
+    "attributes": {
+      "name": "TEST_SCHEMA",
+      "qualifiedName": "default/snowflake/1728518400/TEST_DB/TEST_SCHEMA",
+      "databaseName": "TEST_DB",
+      "databaseQualifiedName": "default/snowflake/1728518400/TEST_DB",
+      "tableCount": 10,
+      "viewsCount": 5,
+      "lastSyncRun": "test_run_id",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "sourceCreatedBy": "ADMIN",
+      "sourceCreatedAt": 1704067200,
+      "sourceUpdatedAt": 1704153600,
+      "description": "Test schema"
+    },
+    "customAttributes": {
+      "source_id": "sch123",
+      "catalog_id": "cat123",
+      "is_managed_access": true
+    }
+  }
+}

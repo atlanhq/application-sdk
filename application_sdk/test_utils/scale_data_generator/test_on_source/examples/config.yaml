@@ -1,0 +1,19 @@
+# define the hierarchy of the data
+hierarchy:
+  # total assets = 5 * 10 * (5[tables] * 20[columns] + 5[views] * 20[columns])  = 10,000
+  - name: databases
+    records: 5
+    children:
+      - name: schema
+        records: 10
+        children:
+          - name: tables
+            records: 5
+            children:
+              - name: columns
+                records: 20
+          - name: views
+            records: 5
+            children:
+              - name: columns
+                records: 20
