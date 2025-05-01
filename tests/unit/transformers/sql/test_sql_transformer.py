@@ -147,7 +147,7 @@ def test_build_struct(sql_transformer):
         "nested": {"columns": [("nested.column", "column")]},
     }
     result = sql_transformer._build_struct(level, "test")
-    expected_result = "struct(col(attributes.name) as name, col(attributes.qualifiedName) as qualifiedName, struct(col(nested.column) as column) as nested) as test"
+    expected_result = "if [[not(is_null(col(attributes.name))) | not(is_null(col(attributes.qualifiedName)))] | not(is_null(if [not(is_null(col(nested.column)))] then [struct(col(nested.column) as column)] else [lit(Null)] as nested))] then [struct(col(attributes.name) as name, col(attributes.qualifiedName) as qualifiedName, if [not(is_null(col(nested.column)))] then [struct(col(nested.column) as column)] else [lit(Null)] as nested)] else [lit(Null)] as test"
     assert str(result) == expected_result
 
 
