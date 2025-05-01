@@ -359,7 +359,7 @@ def get_yaml_query_template_path_mappings(
     result: Dict[str, str] = {}
     for file in default_yaml_files + yaml_files:
         file_name = os.path.basename(file).upper().replace(".YAML", "")
-        if file_name in assets:
+        if not assets or (assets and file_name in assets):
             result[file_name] = file
 
     return result
