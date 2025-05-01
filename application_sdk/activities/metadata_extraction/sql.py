@@ -488,6 +488,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         raw_input = await raw_input.get_daft_dataframe()
         if state.transformer:
+            workflow_args["connection_name"] = workflow_args.get("connection", {}).get(
+                "connection_name", None
+            )
+            workflow_args["connection_qualified_name"] = workflow_args.get(
+                "connection", {}
+            ).get("connection_qualified_name", None)
             transform_metadata = state.transformer.transform_metadata(
                 dataframe=raw_input, **workflow_args
             )
