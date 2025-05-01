@@ -1,0 +1,8 @@
+{
+    "name": "Atlan Application Python Pre-commit Checks",
+    "creator": "Atlan",
+    "enterprise": true,
+    "description": "Runs pre-commit checks on your codebase for formatting, security, and best practices.",
+    "iconName": "",
+    "categories": ["Code Scanning", "C", "C++", "C#", "Go", "Java", "JavaScript", "TypeScript", "Python", "Ruby", "Kotlin", "Swift"]
+}
