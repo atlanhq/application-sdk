@@ -78,3 +78,9 @@ This document outlines the development standards for the Application SDK, includ
     - Design tests to verify resource cleanup, especially for long-running processes or components managing external resources.
     - Be mindful of potential memory leaks in complex data structures or long-lived objects.
 
+<<<<<<< HEAD
+=======
+## Code Review Process
+<!-- will be removed once we fix the pre-commit/lint related issues in the repository -->
+- IMPORTANT!! - Do not focus on fixing pre-commits/linting errors
+>>>>>>> 1d4ab16 (feat: repurposed sql_transformer_mapper branch)
