@@ -1,4 +1,9 @@
 ---
+description: 
+globs: 
+alwaysApply: true
+---
+---
 description:
 globs:
 alwaysApply: true
@@ -52,8 +57,7 @@ This document outlines the development standards for the Application SDK, includ
     - Fix technical debt early
     - Leave code cleaner than you found it
 
-- **Testing Standards**
-    - testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
+- **Testing Stand testing standards are defined in [testing.mdc](mdc:.cursor/rules)
 
 - **Logging Standards**
     - logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
@@ -64,7 +68,7 @@ This document outlines the development standards for the Application SDK, includ
     - Test for common vulnerabilities (e.g., injection flaws, insecure configurations).
     - Verify input validation and sanitization logic rigorously.
     - Ensure proper authentication and authorization are enforced.
-    - Incorporate automated dependency vulnerability scanning into the CI/CD pipeline.
+    - Incorporate automated dlnerability scanning into the CI/CD pipeline.
     - Avoid logging sensitive information; refer to [logging.mdc](mdc:.cursor/rules/logging.mdc).
 
 - **Performance Optimization**
@@ -77,10 +81,3 @@ This document outlines the development standards for the Application SDK, includ
     - Ensure resources (files, network connections, database sessions) are properly closed/released.
     - Design tests to verify resource cleanup, especially for long-running processes or components managing external resources.
     - Be mindful of potential memory leaks in complex data structures or long-lived objects.
-
-<<<<<<< HEAD
-=======
-## Code Review Process
-<!-- will be removed once we fix the pre-commit/lint related issues in the repository -->
-- IMPORTANT!! - Do not focus on fixing pre-commits/linting errors
->>>>>>> 1d4ab16 (feat: repurposed sql_transformer_mapper branch)
