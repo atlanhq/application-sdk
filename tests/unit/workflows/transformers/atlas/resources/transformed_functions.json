@@ -1,0 +1,42 @@
+{
+  "regular_function": {
+    "typeName": "Function",
+    "attributes": {
+      "qualifiedName": "default/snowflake/1728518400/SNOWFLAKE/CIS_BENCHMARKS/myFunction",
+      "name": "myFunction",
+      "tenantId": "default",
+      "connectorName": "snowflake",
+      "connectionQualifiedName": "default/snowflake/1728518400",
+      "lastSyncWorkflowName": "test_workflow_id",
+      "lastSyncRun": "test_run_id",
+      "databaseName": "SNOWFLAKE",
+      "databaseQualifiedName": "default/snowflake/1728518400/SNOWFLAKE",
+      "schemaName": "CIS_BENCHMARKS",
+      "schemaQualifiedName": "default/snowflake/1728518400/SNOWFLAKE/CIS_BENCHMARKS",
+      "functionDefinition": "",
+      "functionReturnType": "OBJECT",
+      "functionArguments": [
+        "arg1 type1"
+      ],
+      "functionLanguage": "SQL",
+      "functionType": "Scalar",
+      "functionIsExternal": false,
+      "functionIsDMF": false,
+      "functionIsSecure": false,
+      "functionIsMemoizable": true,
+      "functionSchema": {
+        "typeName": "Schema",
+        "attributes": {
+          "qualifiedName": "default/snowflake/1728518400/SNOWFLAKE/CIS_BENCHMARKS",
+          "name": ""
+        },
+        "guid": "",
+        "isIncomplete": true,
+        "uniqueAttributes": {
+          "qualifiedName": "default/snowflake/1728518400/SNOWFLAKE/CIS_BENCHMARKS"
+        }
+      }
+    }
+  },
+  "customAttributes": {}
+}
