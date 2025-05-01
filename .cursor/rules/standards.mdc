@@ -1,9 +1,4 @@
 ---
-description: 
-globs: 
-alwaysApply: true
----
----
 description:
 globs:
 alwaysApply: true
@@ -57,7 +52,8 @@ This document outlines the development standards for the Application SDK, includ
     - Fix technical debt early
     - Leave code cleaner than you found it
 
-- **Testing Stand testing standards are defined in [testing.mdc](mdc:.cursor/rules)
+- **Testing Standards**
+    - testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
 
 - **Logging Standards**
     - logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
@@ -68,7 +64,7 @@ This document outlines the development standards for the Application SDK, includ
     - Test for common vulnerabilities (e.g., injection flaws, insecure configurations).
     - Verify input validation and sanitization logic rigorously.
     - Ensure proper authentication and authorization are enforced.
-    - Incorporate automated dlnerability scanning into the CI/CD pipeline.
+    - Incorporate automated dependency vulnerability scanning into the CI/CD pipeline.
     - Avoid logging sensitive information; refer to [logging.mdc](mdc:.cursor/rules/logging.mdc).
 
 - **Performance Optimization**

@@ -1,9 +1,4 @@
 ---
-description: 
-globs: application_sdk/**/*.py
-alwaysApply: false
----
----
 description:
 globs: application_sdk/**/*.py
 alwaysApply: false
