@@ -6,6 +6,14 @@ on:
       - main
       - develop
 
+permissions:
+  id-token: write
+  contents: write
+  issues: write
+  pull-requests: write
+  security-events: write
+  actions: write
+
 jobs:
   sync-branches:
     name: Sync Branches
