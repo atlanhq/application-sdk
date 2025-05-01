@@ -1,14 +1,5 @@
 import os
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
 from temporalio import activity
@@ -167,9 +158,7 @@ class JsonOutput(Output):
         except Exception as e:
             logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def write_daft_dataframe(
-        self, dataframe: Union["daft.DataFrame", AsyncIterator[Dict[str, Any]]]
-    ):  # noqa: F821
+    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
@@ -184,21 +173,20 @@ class JsonOutput(Output):
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
 
-        if isinstance(dataframe, AsyncIterator):
-            async for row in dataframe:
-                self.total_record_count += 1
-                # Serialize the row and add it to the buffer
-                buffer.append(
-                    orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
-                )
+        for row in dataframe.iter_rows():
+            self.total_record_count += 1
+            # Serialize the row and add it to the buffer
+            buffer.append(
+                orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+            )
 
-            # If the buffer reaches the specified size, write it to the file
-            if self.chunk_size and len(buffer) >= self.chunk_size:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()  # Clear the buffer
+        # If the buffer reaches the specified size, write it to the file
+        if self.chunk_size and len(buffer) >= self.chunk_size:
+            self.chunk_count += 1
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+            with open(output_file_name, "w") as f:
+                f.writelines(buffer)
+            buffer.clear()  # Clear the buffer
 
         # Write any remaining rows in the buffer
         if buffer:

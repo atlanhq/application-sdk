@@ -1,3 +1,4 @@
+import textwrap
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Type
 
@@ -16,7 +17,16 @@ class SQLTransformer(TransformerInterface):
         self.connector_name = connector_name
         self.tenant_id = tenant_id
         self.entity_class_definitions: Dict[str, str] = (
-            get_yaml_query_template_path_mappings()
+            get_yaml_query_template_path_mappings(
+                assets=[
+                    "TABLE",
+                    "COLUMN",
+                    "DATABASE",
+                    "SCHEMA",
+                    "EXTRAS-PROCEDURE",
+                    "FUNCTION",
+                ]
+            )
         )
 
     def _process_column_name(self, column_name: str) -> str:
@@ -57,6 +67,7 @@ class SQLTransformer(TransformerInterface):
         Args:
             sql_template (Dict[str, Any]): The SQL template
             dataframe (daft.DataFrame): The DataFrame to get columns from
+            default_attributes (Dict[str, Any]): The default attributes to add to the SQL query
 
         Returns:
             A list of column expressions for the SQL query
@@ -95,6 +106,7 @@ class SQLTransformer(TransformerInterface):
         Args:
             yaml_path (str): The path to the YAML template
             dataframe (daft.DataFrame): The DataFrame to reference for column names
+            default_attributes (Dict[str, Any]): The default attributes to add to the SQL query
 
         Returns:
             str: The generated SQL query
@@ -106,11 +118,11 @@ class SQLTransformer(TransformerInterface):
                 sql_template, dataframe, default_attributes
             )
 
-            sql_query = f"""
+            sql_query = textwrap.dedent(f"""
             SELECT
                 {','.join(columns)}
             FROM dataframe
-            """
+            """)
             return sql_query, literal_columns or None
         except Exception as e:
             logger.error(f"Error generating query: {e}")
@@ -279,6 +291,9 @@ class SQLTransformer(TransformerInterface):
             )
 
             # run the SQL on the dataframe
+            logger.info(
+                f"Running transformer for asset [{typename}] with SQL:\n {entity_sql_template}"
+            )
             transformed_df = daft.sql(entity_sql_template)
 
             # We have a flat structured dataframe with columns that have dot notation

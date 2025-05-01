@@ -317,3 +317,49 @@ def run_sync(func):
             return await loop.run_in_executor(pool, func, *args, **kwargs)
 
     return wrapper
+
+
+def get_yaml_query_template_path_mappings(
+    custom_templates_path: Optional[str] = None,
+    assets: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """
+    Returns a dictionary mapping of data assets (TABLE, COLUMN, DATABASE, SCHEMA)
+    to the path of the YAML file that contains the SQL query template.
+
+    Args:
+        custom_templates_path: The path of the directory containing the YAML files. To be used for custom templates.
+
+    Returns:
+        A dictionary mapping of data assets to the path of the YAML file that contains the SQL query template.
+    """
+    default_yaml_files: List[str] = glob.glob(
+        os.path.join(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "transformers/sql/templates",
+            ),
+            "**/*.yaml",
+        ),
+        recursive=True,
+    )
+
+    yaml_files: List[str] = (
+        glob.glob(
+            os.path.join(
+                custom_templates_path,
+                "**/*.yaml",
+            ),
+            recursive=True,
+        )
+        if custom_templates_path
+        else []
+    )
+
+    result: Dict[str, str] = {}
+    for file in default_yaml_files + yaml_files:
+        file_name = os.path.basename(file).upper().replace(".YAML", "")
+        if file_name in assets:
+            result[file_name] = file
+
+    return result

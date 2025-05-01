@@ -1,7 +1,6 @@
 import os
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, cast
+from typing import Any, Dict, Optional, Tuple, Type, cast
 
-import daft
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -169,41 +168,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             logger.warning("Failed to close SQL client", exc_info=e)
 
         await super()._clean_state()
-
-    async def _transform_batch(
-        self,
-        results: "daft.DataFrame",
-        typename: str,
-        state: BaseSQLMetadataExtractionActivitiesState,
-        workflow_id: str,
-        workflow_run_id: str,
-        workflow_args: Dict[str, Any],
-    ) -> AsyncIterator[Dict[str, Any]]:
-        connection_name = workflow_args.get("connection", {}).get(
-            "connection_name", None
-        )
-        connection_qualified_name = workflow_args.get("connection", {}).get(
-            "connection_qualified_name", None
-        )
-        if not state.transformer:
-            raise ValueError("Transformer is not set")
-
-        for row in results.iter_rows():
-            try:
-                transformed_metadata = state.transformer.transform_metadata(
-                    typename,
-                    row,
-                    workflow_id=workflow_id,
-                    workflow_run_id=workflow_run_id,
-                    connection_name=connection_name,
-                    connection_qualified_name=connection_qualified_name,
-                )
-                if transformed_metadata:
-                    yield transformed_metadata
-                else:
-                    logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                logger.error(f"Error processing row for {typename}: {row_error}")
 
     def _validate_output_args(
         self, workflow_args: Dict[str, Any]
@@ -523,15 +487,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_size=None,
         )
         raw_input = await raw_input.get_daft_dataframe()
-
-        transformed_chunk = self._transform_batch(
-            raw_input,
-            typename,
-            state,
-            workflow_id,
-            workflow_run_id,
-            workflow_args,
-        )
+        if state.transformer:
+            transform_metadata = state.transformer.transform_metadata(
+                dataframe=raw_input, **workflow_args
+            )
 
         transformed_output = JsonOutput(
             output_prefix=output_prefix,
@@ -539,5 +498,5 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_suffix="transformed",
             typename=typename,
         )
-        await transformed_output.write_daft_dataframe(transformed_chunk)
+        await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
