@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: "atlanhq/application-sdk/.github/actions/unit-tests"
+      - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           fail-under: "60"
@@ -44,7 +44,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: "atlanhq/application-sdk/.github/actions/e2e-examples"
+      - uses: "./.github/actions/e2e-examples"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           postgres-host: ${{ secrets.POSTGRES_HOST }}
@@ -61,7 +61,7 @@ jobs:
         repo_name: ["atlan-postgres-app"]
     steps:
       - uses: actions/checkout@v4
-      - uses: "atlanhq/application-sdk/.github/actions/e2e-apps"
+      - uses: "./.github/actions/e2e-apps"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: "atlanhq/application-sdk/.github/actions/setup-deps"
+      - uses: "./.github/actions/setup-deps"
       - name: Install graphviz
         run: |
           sudo apt install graphviz
