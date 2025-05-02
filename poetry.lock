@@ -292,17 +292,17 @@ uvloop = ["uvloop (>=0.15.2)"]
 
 [[package]]
 name = "boto3"
-version = "1.38.6"
+version = "1.38.7"
 description = "The AWS SDK for Python"
 optional = false
 python-versions = ">=3.9"
 files = [
-    {file = "boto3-1.38.6-py3-none-any.whl", hash = "sha256:fe5bbd349310ef560b247e61453983ee6078ad4c2672620ca66bc0d29d64e728"},
-    {file = "boto3-1.38.6.tar.gz", hash = "sha256:9d764c402cadd112020812b9621a567058aa29d41a491d2d04b070be19ad5173"},
+    {file = "boto3-1.38.7-py3-none-any.whl", hash = "sha256:c548983189b0a88f09cd4c572519b1923695b25cd877def58b61e03f41a6fd96"},
+    {file = "boto3-1.38.7.tar.gz", hash = "sha256:0269f793f0affc646b95c2cd12d42a4db49d5f30ef1073f616a112a384933f8e"},
 ]
 
 [package.dependencies]
-botocore = ">=1.38.6,<1.39.0"
+botocore = ">=1.38.7,<1.39.0"
 jmespath = ">=0.7.1,<2.0.0"
 s3transfer = ">=0.12.0,<0.13.0"
 
@@ -311,13 +311,13 @@ crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
 
 [[package]]
 name = "boto3-stubs"
-version = "1.38.6"
-description = "Type annotations for boto3 1.38.6 generated with mypy-boto3-builder 8.10.1"
+version = "1.38.7"
+description = "Type annotations for boto3 1.38.7 generated with mypy-boto3-builder 8.10.1"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "boto3_stubs-1.38.6-py3-none-any.whl", hash = "sha256:501117865f52445654c9192885abd5995cfd31fec46aac02c7f5ea0b78492252"},
-    {file = "boto3_stubs-1.38.6.tar.gz", hash = "sha256:3459d1203da5ca3400a1606b5dac53b10c31877ac11bbf95a82b85784ff32771"},
+    {file = "boto3_stubs-1.38.7-py3-none-any.whl", hash = "sha256:1d3fbc6a3a79d1bf91da081c22a83797297d261190b4a36052aac4953425fb17"},
+    {file = "boto3_stubs-1.38.7.tar.gz", hash = "sha256:fda87e0ef0dbada1179b6bf563567ddf45d6d014c5d682d2b5db101263c2eb44"},
 ]
 
 [package.dependencies]
@@ -373,7 +373,7 @@ bedrock-data-automation-runtime = ["mypy-boto3-bedrock-data-automation-runtime (
 bedrock-runtime = ["mypy-boto3-bedrock-runtime (>=1.38.0,<1.39.0)"]
 billing = ["mypy-boto3-billing (>=1.38.0,<1.39.0)"]
 billingconductor = ["mypy-boto3-billingconductor (>=1.38.0,<1.39.0)"]
-boto3 = ["boto3 (==1.38.6)"]
+boto3 = ["boto3 (==1.38.7)"]
 braket = ["mypy-boto3-braket (>=1.38.0,<1.39.0)"]
 budgets = ["mypy-boto3-budgets (>=1.38.0,<1.39.0)"]
 ce = ["mypy-boto3-ce (>=1.38.0,<1.39.0)"]
@@ -738,13 +738,13 @@ xray = ["mypy-boto3-xray (>=1.38.0,<1.39.0)"]
 
 [[package]]
 name = "botocore"
-version = "1.38.6"
+version = "1.38.7"
 description = "Low-level, data-driven core of boto 3."
 optional = false
 python-versions = ">=3.9"
 files = [
-    {file = "botocore-1.38.6-py3-none-any.whl", hash = "sha256:ccac197e444b7fcdc2ddbdafddddf9f82454a7e1f9d2a55ef9dcc0258b3b27e3"},
-    {file = "botocore-1.38.6.tar.gz", hash = "sha256:07e0721f6b1758183ed425f481a7af79e4897a3c02c2c486e101c576aee7377c"},
+    {file = "botocore-1.38.7-py3-none-any.whl", hash = "sha256:a002ec18cc02c4b039d20c39ca88ecf2fdb9533c0a5f3670e8c0fcdd3ee4a045"},
+    {file = "botocore-1.38.7.tar.gz", hash = "sha256:5c6df7171390437683072aadc0d2dfbcbfa72df52a134a5d4bed811ed214c3df"},
 ]
 
 [package.dependencies]
@@ -757,13 +757,13 @@ crt = ["awscrt (==0.23.8)"]
 
 [[package]]
 name = "botocore-stubs"
-version = "1.38.6"
+version = "1.38.7"
 description = "Type annotations and code completion for botocore"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "botocore_stubs-1.38.6-py3-none-any.whl", hash = "sha256:9a17a5cc2d36120f3683ebe78c40a96281497592e07175a8bf6ee6cd01910a50"},
-    {file = "botocore_stubs-1.38.6.tar.gz", hash = "sha256:56ed87b3e0870d21a968a8346129b578e1f6b70ee902d00bbb6b162c291222f4"},
+    {file = "botocore_stubs-1.38.7-py3-none-any.whl", hash = "sha256:2962994f615bb20c2456029ba71291bd8936505fc8459d9df05a869f225ebe3b"},
+    {file = "botocore_stubs-1.38.7.tar.gz", hash = "sha256:c61f6353217ef0f993da9ac59162ae45b79038431ea3a68475af2f4403b08e95"},
 ]
 
 [package.dependencies]
@@ -1686,17 +1686,17 @@ tqdm = ["tqdm"]
 
 [[package]]
 name = "getdaft"
-version = "0.4.12"
+version = "0.4.13"
 description = "Distributed Dataframes for Multimodal Data"
 optional = true
 python-versions = ">=3.9"
 files = [
-    {file = "getdaft-0.4.12-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:c8a62d885f10d3cca4a164b4559259d8e41a4db46e7a8111b250162592a5b446"},
-    {file = "getdaft-0.4.12-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:b4ca9cf9a1960f22bd0ad866df71b306d66b18ea44fde3b09caaeb5d3bcfe14d"},
-    {file = "getdaft-0.4.12-cp39-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:57927497d933623ec7c27653431f311a0ca50550ce2f50d65ce9dd467e236b54"},
-    {file = "getdaft-0.4.12-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:272852c993c0c0ed685f38b390b5562a2eb8b93b34b81d344e6b4f0fc51e425f"},
-    {file = "getdaft-0.4.12-cp39-abi3-win_amd64.whl", hash = "sha256:f7f33af0d69ff6c712a19cb675ee52a570594c3ec83fe6e097ae72b06ac4b9c2"},
-    {file = "getdaft-0.4.12.tar.gz", hash = "sha256:04226d5f1c774b8731ae5689d7265fdf1aa4ddbc7e4aeffbcdf602b2b8593437"},
+    {file = "getdaft-0.4.13-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:060c6736213bb231d14575d233c9c7c123592269c11e86e11ef229191ccabbf9"},
+    {file = "getdaft-0.4.13-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:b9e40d37e13592ec8bf9b28c2a44de2c4902529035ee5b4acf02634d9718cb24"},
+    {file = "getdaft-0.4.13-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:bca5a02a743d775481ec0836be3c252c0e9c43f94b023e00573292e7bffc1840"},
+    {file = "getdaft-0.4.13-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:bd8ddab4b153a9c0cbb5f6527f474e5e19040ed88d27822c8c729bc12f6b2808"},
+    {file = "getdaft-0.4.13-cp39-abi3-win_amd64.whl", hash = "sha256:9ffaea41f4da01964bbdbc8fb8d4a126b6c19f36a29898b4c9c474930e3d60c5"},
+    {file = "getdaft-0.4.13.tar.gz", hash = "sha256:d70c3518bccc090ea34455499c63ba4e377ab0afffa47bc75658940cb433cb28"},
 ]
 
 [package.dependencies]
@@ -4771,13 +4771,13 @@ sqlcipher = ["sqlcipher3_binary"]
 
 [[package]]
 name = "sqlglot"
-version = "26.16.2"
+version = "26.16.4"
 description = "An easily customizable SQL parser and transpiler"
 optional = true
 python-versions = ">=3.8"
 files = [
-    {file = "sqlglot-26.16.2-py3-none-any.whl", hash = "sha256:0162f6c651f5786e2c0a6a1399c07967d8dfef61d9dde1858d58d4903c649ef1"},
-    {file = "sqlglot-26.16.2.tar.gz", hash = "sha256:81278c5dcbc4935fe233d6d492ea2e991ba6d03c6609ac49a4d2e373cfa77898"},
+    {file = "sqlglot-26.16.4-py3-none-any.whl", hash = "sha256:dbff0ace2e21c9169182d6852b8f6eb56d86fc6477354abcb5bda7ab93292975"},
+    {file = "sqlglot-26.16.4.tar.gz", hash = "sha256:0de74266e4ab1286801c40640a8bd99f96c1ec0fc20681f3c55802f39ce4b3ec"},
 ]
 
 [package.extras]
@@ -5711,4 +5711,4 @@ workflows = ["dapr", "orjson", "temporalio"]
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "4b147211aba6bb58e0747fefcc78799fe8317199da490bf08311f5225335da65"
+content-hash = "6c8e86f0bed71ff642ce0ebf144e1cbaebf46bb2a30dceef8903d93fd43d11c9"
