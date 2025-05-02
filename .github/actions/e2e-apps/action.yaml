@@ -20,6 +20,9 @@ inputs:
   repo-name:
     required: true
     description: The name of the app repository to test.
+  target-branch:
+    required: true
+    description: The target branch to test.
 
 runs:
   using: "composite"
@@ -48,12 +51,12 @@ runs:
       id: return_dispatch
       with:
         token: "${{ inputs.github-token }}"
-        ref: ${{ env.base_branch }}
+        ref: ${{ inputs.target-branch }}
         repo: ${{ inputs.repo-name }}
         owner: "atlanhq"
         workflow: "e2e-integration-test.yaml"
-        workflow_timeout_seconds: 120
-        workflow_job_steps_retry_seconds: 10
+        workflow_timeout_seconds: 300
+        workflow_job_steps_retry_seconds: 20
         distinct_id: "${{ env.distinct_id }}"
 
     - name: Check the test logs using the below run URL
