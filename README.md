@@ -51,6 +51,9 @@ Get support through any of these channels:
 
 Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](./SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
 
-## License
 
-This repository is licensed under the [Apache-2.0 License](./LICENSE).
+## License and Attribution
+
+This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
+
+This project includes dependencies with various open-source licenses. See the [NOTICE](NOTICE) file for third-party attributions.
