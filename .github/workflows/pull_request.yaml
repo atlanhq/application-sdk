@@ -17,6 +17,7 @@ jobs:
   # Conventional Commits
   commits:
     name: Conventional Commits
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -29,6 +30,7 @@ jobs:
   # Code Quality Checks
   lint:
     name: Pre-commit Checks
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +39,7 @@ jobs:
 
   docstr:
     name: Docstring Coverage
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +51,7 @@ jobs:
   # Security Checks
   trivy:
     name: Trivy Code Scan
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,6 +61,7 @@ jobs:
 
   codeql:
     name: CodeQL
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -83,6 +88,7 @@ jobs:
   # Testing
   unit:
     name: Unit Tests
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -202,6 +208,8 @@ jobs:
   # Documentation
   docs:
     name: Docs
+    # Only run on PR open/sync/reopen, not when labels are added
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
