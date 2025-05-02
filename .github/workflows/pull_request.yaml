@@ -197,6 +197,7 @@ jobs:
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           repo-name: ${{ matrix.repo_name }}
+          target-branch: "refs/heads/${{ matrix.target_branch }}"
 
   # Documentation
   docs:
