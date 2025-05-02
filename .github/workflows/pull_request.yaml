@@ -14,10 +14,14 @@ permissions:
   actions: write
 
 jobs:
+  # Define reusable condition
+  defaults:
+    if-condition: &if-condition github.event.action != 'labeled'
+
   # Conventional Commits
   commits:
     name: Conventional Commits
-    if: github.event.action != 'labeled'
+    if: *if-condition
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
