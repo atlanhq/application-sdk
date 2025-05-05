@@ -343,8 +343,8 @@ async def application_sql_with_custom_pyatlan_transformer(
             "authType": "basic",
             "host": os.getenv("POSTGRES_HOST", "localhost"),
             "port": os.getenv("POSTGRES_PORT", "5432"),
-            "username": os.getenv("POSTGRES_USER", "myuser"),
-            "password": os.getenv("POSTGRES_PASSWORD", "mypassword"),
+            "username": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", "password"),
             "database": os.getenv("POSTGRES_DATABASE", "postgres"),
         },
         "connection": {
