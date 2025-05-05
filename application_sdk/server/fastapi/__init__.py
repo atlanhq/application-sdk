@@ -1,4 +1,8 @@
+import io
 from typing import Any, Callable, List, Optional, Type
+
+import pandas as pd
+from dapr.clients import DaprClient
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -12,7 +16,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptors import PARQUET_FILE, get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
@@ -21,6 +25,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    OBJECT_STORE_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -148,6 +153,28 @@ class APIServer(ServerInterface):
         # Initialize parent class
         super().__init__(handler)
 
+    async def observability(self, request: Request) -> HTMLResponse:
+        # 1. Fetch the parquet file from Dapr object store
+        store_name = (
+            OBJECT_STORE_NAME if OBJECT_STORE_NAME is not None else "objectstore"
+        )
+        file_name = PARQUET_FILE if PARQUET_FILE is not None else "logs.parquet"
+        key = f"logs/{file_name}"
+
+        with DaprClient() as d:
+            # Adjust store_name and key as per your config
+            response = d.get_state(store_name=store_name, key=key)
+            parquet_bytes = response.data
+
+        # 2. Decode the parquet file
+        df = pd.read_parquet(io.BytesIO(parquet_bytes))
+
+        # 3. Render as HTML using Jinja2
+        html_table = df.to_html(classes="table table-striped", index=False)
+        return self.templates.TemplateResponse(
+            "logs.html", {"request": request, "logs_table": html_table}
+        )
+
     def setup_atlan_docs(self):
         """Set up and serve Atlan documentation.
 
@@ -263,6 +290,13 @@ class APIServer(ServerInterface):
         """
         Method to register the routes for the FastAPI application
         """
+
+        self.app.add_api_route(
+            "/observability",
+            self.observability,
+            methods=["GET"],
+            response_class=HTMLResponse,
+        )
 
         self.workflow_router.add_api_route(
             "/auth",
