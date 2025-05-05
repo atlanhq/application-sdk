@@ -1,3 +1,4 @@
+import datetime
 import logging
 import os
 import sys
@@ -21,6 +22,7 @@ from temporalio import activity, workflow
 from application_sdk.constants import (
     ENABLE_OTLP_LOGS,
     LOG_LEVEL,
+    OBJECT_STORE_NAME,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -34,6 +36,17 @@ from application_sdk.constants import (
 
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+
+# Initialize Dapr client
+dapr_client = DaprClient()
+
+# Constants for parquet logging
+LOG_DIR = "logs"
+PARQUET_FILE = "logs.parquet"
+PARQUET_PATH = os.path.join(LOG_DIR, PARQUET_FILE)
+
+# Ensure log directory exists
+os.makedirs(LOG_DIR, exist_ok=True)
 
 
 # Add a Loguru handler for the Python logging system
@@ -97,6 +110,9 @@ class AtlanLoggerAdapter:
             sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
         )
 
+        # Add sink for parquet logging
+        self.logger.add(self.parquet_sink, level=LOG_LEVEL)
+
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:
             try:
@@ -142,12 +158,7 @@ class AtlanLoggerAdapter:
                 self.logger.add(self.otlp_sink, level=LOG_LEVEL)
 
             except Exception as e:
-                self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
-
-        # Buffer logic is commented out for now. Each log record will be sent immediately.
-        self._parquet_log_dir: str = os.getenv("PARQUET_LOG_DIR", "/tmp/parquet_logs")
-        os.makedirs(self._parquet_log_dir, exist_ok=True)
-        self._log_file_prefix: str = f"{self.logger_name}_logs"
+                logging.error(f"Failed to setup OTLP logging: {str(e)}")
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         try:
@@ -164,7 +175,7 @@ class AtlanLoggerAdapter:
                     if "=" in item  # Ensure there's an "=" to split
                 }
         except Exception as e:
-            self.logger.error(f"Failed to parse OTLP resource attributes: {str(e)}")
+            logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
     def _create_log_record(self, record: dict) -> LogRecord:
@@ -202,37 +213,74 @@ class AtlanLoggerAdapter:
             attributes=attributes,
         )
 
+    async def parquet_sink(self, message: Any):
+        """Process log message and store in parquet file."""
+        try:
+            # Create log record dictionary
+            log_record = {
+                # Store the timestamp as a datetime object
+                "timestamp": message.record["time"].timestamp(),
+                "level": message.record["level"].name,
+                "logger_name": message.record["extra"].get("logger_name", ""),
+                "message": message.record["message"],
+                "file": str(message.record["file"].path),
+                "line": message.record["line"],
+                "function": message.record["function"],
+            }
+
+            # Add any extra fields from the record
+            for key, value in message.record["extra"].items():
+                if key not in log_record:
+                    log_record[key] = value
+
+            # Convert to DataFrame
+            df = pd.DataFrame([log_record])
+
+            # Check if the Parquet file exists and read it
+            if os.path.exists(PARQUET_PATH):
+                existing_table = pq.read_table(PARQUET_PATH)
+                existing_df = existing_table.to_pandas()
+                # Concatenate the existing data with the new data
+                df = pd.concat([existing_df, df], ignore_index=True)
+
+            # Convert to PyArrow Table
+            table = pa.Table.from_pandas(df)
+
+            # Write to parquet file
+            pq.write_table(table, PARQUET_PATH, compression="snappy")
+
+            # Upload to object store using Dapr
+            with open(PARQUET_PATH, "rb") as f:
+                file_content = f.read()
+                now = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
+                # Format the filename to include date in DD-MM-YYYY and hour
+                date_hour = (
+                    now[6:8] + "-" + now[4:6] + "-" + now[:4] + "_" + now[9:11]
+                )  # Extract date in DD-MM-YYYY and hour
+                filename = f"logs/{date_hour}.parquet"
+                metadata = {
+                    "key": filename,
+                    "blobName": filename,
+                    "fileName": filename,
+                }
+                with DaprClient() as client:
+                    client.invoke_binding(
+                        binding_name=OBJECT_STORE_NAME,
+                        operation="create",
+                        data=file_content,
+                        binding_metadata=metadata,
+                    )
+
+        except Exception as e:
+            logging.error(f"Error writing log to parquet: {e}")
+
     def otlp_sink(self, message: Any):
-        """Process log message, emit to OTLP, and send to Dapr objectstore as Parquet."""
+        """Process log message and emit to OTLP."""
         try:
             log_record = self._create_log_record(message.record)
             self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
         except Exception as e:
-            self.logger.error(f"Error processing log record: {e}")
-        # Immediately send each log record to Dapr objectstore in Parquet format by appending to a file
-        try:
-            df = pd.DataFrame([message.record])
-            file_name = f"{self._log_file_prefix}_{int(time_ns())}.parquet"
-            file_path = os.path.join(self._parquet_log_dir, file_name)
-            table = pa.Table.from_pandas(df)
-            pq.write_table(table, file_path)
-            with DaprClient() as client:
-                with open(file_path, "rb") as f:
-                    file_content = f.read()
-                metadata = {
-                    "key": file_name,
-                    "blobName": file_name,
-                    "fileName": file_name,
-                }
-                client.invoke_binding(
-                    binding_name="objectstore",  # Use the binding defined in objectstore.yaml
-                    operation="create",
-                    data=file_content,
-                    binding_metadata=metadata,
-                )
-            self.logger.info(f"Uploaded log Parquet file to objectstore: {file_name}")
-        except Exception as e:
-            self.logger.error(f"Failed to upload log Parquet file: {e}")
+            logging.error(f"Error processing log record: {e}")
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
@@ -318,11 +366,9 @@ class AtlanLoggerAdapter:
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context.
-
         This method is specifically designed for logging activity-related information.
         It automatically adds activity context if available and formats the message
         with activity-specific information.
-
         Args:
             msg: The message to log
             *args: Additional positional arguments
@@ -346,10 +392,8 @@ _logger_instances: Dict[str, AtlanLoggerAdapter] = {}
 
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
     """Get or create an instance of AtlanLoggerAdapter.
-
     Args:
         name (str, optional): Logger name. If None, uses the caller's module name.
-
     Returns:
         AtlanLoggerAdapter: Logger instance for the specified name
     """
