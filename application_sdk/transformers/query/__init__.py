@@ -6,13 +6,35 @@ import daft
 import yaml
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import get_yaml_query_template_path_mappings
+from application_sdk.transformers.common.utils import get_yaml_query_template_path_mappings
 from application_sdk.transformers import TransformerInterface
 
 logger = get_logger(__name__)
 
 
-class SQLTransformer(TransformerInterface):
+class QueryBasedTransformer(TransformerInterface):
+    """
+    Query based transformer that uses a YAML file to define the SQL query for each asset type.
+    And uses the daft engine to execute the SQL query on the raw data(dataframe) to get the transformed data.
+
+    Execution Flow:
+    1. Initialise the transformer with the connector name and tenant id.
+    2. Create a map of the asset type [DATABASE, SCHEMA, TABLE, COLUMN, etc] to each of it's yaml template path 
+    from the default templates dir or the custom templates dir if provided.
+    3. Call the transform_metadata method with the raw assets dataframe which does the following:
+        - Load the YAML template for the given typename using the asset type to template path mapping.
+        - Prepare the default attributes and the yaml SQL template required for transformation.
+        - Generate the SQL query from the YAML template.
+        - Execute the SQL query on the daft raw dataframe to get the transformed dataframe.
+        - Convert the flat structured dataframe with dot notation column names into a nested struct dataframe.
+        - Return the transformed dataframe.
+    
+    Args:
+        connector_name (str): The name of the connector
+        tenant_id (str): The tenant id
+        **kwargs: Any additional keyword arguments
+    """
+
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         self.connector_name = connector_name
         self.tenant_id = tenant_id
@@ -302,6 +324,7 @@ class SQLTransformer(TransformerInterface):
             if dataframe.count_rows() == 0:
                 return None
 
+            # Load the YAML template for the given typename
             typename = typename.upper()
             self.entity_class_definitions = (
                 entity_class_definitions or self.entity_class_definitions

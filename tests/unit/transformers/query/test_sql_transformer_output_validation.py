@@ -7,7 +7,7 @@ import daft
 import pytest
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.transformers.sql import SQLTransformer
+from application_sdk.transformers.query import QueryBasedTransformer
 
 logger = get_logger(__name__)
 
@@ -21,7 +21,7 @@ CONNECTION_NAME = "dev"
 
 @pytest.fixture
 def sql_transformer():
-    return SQLTransformer(connector_name=CONNECTOR_NAME, tenant_id=TENANT_ID)
+    return QueryBasedTransformer(connector_name=CONNECTOR_NAME, tenant_id=TENANT_ID)
 
 
 def get_raw_json_files():

@@ -43,9 +43,11 @@ from application_sdk.clients.sql import BaseSQLClient
 
 # from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.utils import get_yaml_query_template_path_mappings
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.transformers.sql import SQLTransformer
+from application_sdk.transformers.common.utils import (
+    get_yaml_query_template_path_mappings,
+)
+from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
@@ -117,7 +119,7 @@ class PostgresDatabase(Database):
         }
 
 
-class CustomTransformer(SQLTransformer):
+class CustomTransformer(QueryBasedTransformer):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         super().__init__(connector_name, tenant_id, **kwargs)
 

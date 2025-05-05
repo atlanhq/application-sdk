@@ -5,12 +5,12 @@ import daft
 import pytest
 from daft.logical.schema import Field
 
-from application_sdk.transformers.sql import SQLTransformer
+from application_sdk.transformers.query import QueryBasedTransformer
 
 
 @pytest.fixture
 def sql_transformer():
-    return SQLTransformer(connector_name="test_connector", tenant_id="test_tenant")
+    return QueryBasedTransformer(connector_name="test_connector", tenant_id="test_tenant")
 
 
 @pytest.fixture
@@ -218,7 +218,7 @@ def test_get_grouped_dataframe_by_prefix(sql_transformer):
     assert expected_schema == [schema for schema in result.schema()]
 
 
-@patch("application_sdk.transformers.sql.SQLTransformer.generate_sql_query")
+@patch("application_sdk.transformers.sql.QueryBasedTransformer.generate_sql_query")
 def test_prepare_template_and_attributes(
     mock_generate, sql_transformer, sample_dataframe
 ):
@@ -259,10 +259,10 @@ def test_transform_metadata_empty_dataframe(sql_transformer):
 
 
 @patch(
-    "application_sdk.transformers.sql.SQLTransformer._prepare_template_and_attributes"
+    "application_sdk.transformers.sql.QueryBasedTransformer._prepare_template_and_attributes"
 )
 @patch(
-    "application_sdk.transformers.sql.SQLTransformer._get_grouped_dataframe_by_prefix"
+    "application_sdk.transformers.sql.QueryBasedTransformer._get_grouped_dataframe_by_prefix"
 )
 def test_transform_metadata(
     mock_group, mock_prepare, sql_transformer, sample_dataframe
