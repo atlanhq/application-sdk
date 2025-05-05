@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.logger_adaptors import PARQUET_FILE, get_logger
+from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
@@ -25,7 +25,6 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
-    OBJECT_STORE_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -155,16 +154,16 @@ class APIServer(ServerInterface):
 
     async def observability(self, request: Request) -> HTMLResponse:
         # 1. Fetch the parquet file from Dapr object store
-        store_name = (
-            OBJECT_STORE_NAME if OBJECT_STORE_NAME is not None else "objectstore"
-        )
-        file_name = PARQUET_FILE if PARQUET_FILE is not None else "logs.parquet"
-        key = f"logs/{file_name}"
 
         with DaprClient() as d:
-            # Adjust store_name and key as per your config
-            response = d.get_state(store_name=store_name, key=key)
-            parquet_bytes = response.data
+            resp = d.invoke_binding(
+                binding_name="objectstore",
+                operation="get",  # or "read" depending on your binding
+                data=b"",
+                binding_metadata={"fileName": "logs/05-05-2025_11.parquet"},
+            )
+
+        parquet_bytes = resp.data
 
         # 2. Decode the parquet file
         df = pd.read_parquet(io.BytesIO(parquet_bytes))
