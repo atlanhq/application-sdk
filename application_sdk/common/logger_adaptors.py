@@ -1,9 +1,14 @@
 import logging
+import os
 import sys
 from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Tuple
 
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
+from dapr.clients import DaprClient
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
@@ -139,6 +144,11 @@ class AtlanLoggerAdapter:
             except Exception as e:
                 self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
 
+        # Buffer logic is commented out for now. Each log record will be sent immediately.
+        self._parquet_log_dir: str = os.getenv("PARQUET_LOG_DIR", "/tmp/parquet_logs")
+        os.makedirs(self._parquet_log_dir, exist_ok=True)
+        self._log_file_prefix: str = f"{self.logger_name}_logs"
+
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         try:
             # Check if the environment variable is not empty
@@ -193,12 +203,36 @@ class AtlanLoggerAdapter:
         )
 
     def otlp_sink(self, message: Any):
-        """Process log message and emit to OTLP."""
+        """Process log message, emit to OTLP, and send to Dapr objectstore as Parquet."""
         try:
             log_record = self._create_log_record(message.record)
             self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
         except Exception as e:
             self.logger.error(f"Error processing log record: {e}")
+        # Immediately send each log record to Dapr objectstore in Parquet format by appending to a file
+        try:
+            df = pd.DataFrame([message.record])
+            file_name = f"{self._log_file_prefix}_{int(time_ns())}.parquet"
+            file_path = os.path.join(self._parquet_log_dir, file_name)
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, file_path)
+            with DaprClient() as client:
+                with open(file_path, "rb") as f:
+                    file_content = f.read()
+                metadata = {
+                    "key": file_name,
+                    "blobName": file_name,
+                    "fileName": file_name,
+                }
+                client.invoke_binding(
+                    binding_name="objectstore",  # Use the binding defined in objectstore.yaml
+                    operation="create",
+                    data=file_content,
+                    binding_metadata=metadata,
+                )
+            self.logger.info(f"Uploaded log Parquet file to objectstore: {file_name}")
+        except Exception as e:
+            self.logger.error(f"Failed to upload log Parquet file: {e}")
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
