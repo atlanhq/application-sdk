@@ -6,8 +6,10 @@ import daft
 import yaml
 
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.transformers.common.utils import get_yaml_query_template_path_mappings
 from application_sdk.transformers import TransformerInterface
+from application_sdk.transformers.common.utils import (
+    get_yaml_query_template_path_mappings,
+)
 
 logger = get_logger(__name__)
 
@@ -19,7 +21,7 @@ class QueryBasedTransformer(TransformerInterface):
 
     Execution Flow:
     1. Initialise the transformer with the connector name and tenant id.
-    2. Create a map of the asset type [DATABASE, SCHEMA, TABLE, COLUMN, etc] to each of it's yaml template path 
+    2. Create a map of the asset type [DATABASE, SCHEMA, TABLE, COLUMN, etc] to each of it's yaml template path
     from the default templates dir or the custom templates dir if provided.
     3. Call the transform_metadata method with the raw assets dataframe which does the following:
         - Load the YAML template for the given typename using the asset type to template path mapping.
@@ -28,7 +30,7 @@ class QueryBasedTransformer(TransformerInterface):
         - Execute the SQL query on the daft raw dataframe to get the transformed dataframe.
         - Convert the flat structured dataframe with dot notation column names into a nested struct dataframe.
         - Return the transformed dataframe.
-    
+
     Args:
         connector_name (str): The name of the connector
         tenant_id (str): The tenant id

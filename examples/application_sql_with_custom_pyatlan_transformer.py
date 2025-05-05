@@ -29,11 +29,13 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 import asyncio
 import os
 import time
-from typing import Any, Dict, List, cast
+from typing import Any, Dict, cast
 
 import daft
+from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
+from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionActivitiesState,
@@ -42,17 +44,15 @@ from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
 from application_sdk.clients.sql import BaseSQLClient
-
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
+from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.atlas.sql import Column, Procedure, Table
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
-from application_sdk.outputs.json import JsonOutput
-from temporalio import activity
-from application_sdk.activities.common.utils import auto_heartbeater
 
 APPLICATION_NAME = "postgres-custom-transformer"
 DATABASE_DIALECT = "postgresql"
@@ -116,7 +116,7 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
         workflow_id: str,
         workflow_run_id: str,
         workflow_args: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
+    ) -> daft.DataFrame:
         connection_name = workflow_args.get("connection", {}).get(
             "connection_name", None
         )
@@ -191,9 +191,6 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
         )
         await transformed_output.write_daft_dataframe(transform_df)
         return await transformed_output.get_statistics()
-
-
-from application_sdk.transformers.atlas.sql import Column, Procedure, Table
 
 
 class PostgresTable(Table):

@@ -10,7 +10,9 @@ from application_sdk.transformers.query import QueryBasedTransformer
 
 @pytest.fixture
 def sql_transformer():
-    return QueryBasedTransformer(connector_name="test_connector", tenant_id="test_tenant")
+    return QueryBasedTransformer(
+        connector_name="test_connector", tenant_id="test_tenant"
+    )
 
 
 @pytest.fixture
