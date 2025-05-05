@@ -213,14 +213,16 @@ jobs:
         run: |
           source .venv/bin/activate
           make apidocs
-      - name: Upload Docs
-        uses: atlanhq/kryptonite/upload@v1
-        with:
-          source: ./docs/site
-          target: application-sdk/${{ github.head_ref }}
-      - name: Comment Kryptonite URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "docs"
-          message: |
-            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
+
+      # FIXME(inishchith): Uncomment when fixed @junaidrahim
+      # - name: Upload Docs
+      #   uses: atlanhq/kryptonite/upload@v1
+      #   with:
+      #     source: ./docs/site
+      #     target: application-sdk/${{ github.head_ref }}
+      # - name: Comment Kryptonite URL on PR
+      #   uses: mshick/add-pr-comment@v2
+      #   with:
+      #     message-id: "docs"
+      #     message: |
+      #       🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
