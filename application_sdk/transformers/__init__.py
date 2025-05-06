@@ -1,5 +1,8 @@
 from abc import ABC, abstractmethod
-from typing import Any, Dict, Type
+from typing import TYPE_CHECKING, Any, Dict, Type
+
+if TYPE_CHECKING:
+    import daft
 
 
 class TransformerInterface(ABC):
