@@ -1,5 +1,5 @@
 import textwrap
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 import daft
@@ -334,7 +334,9 @@ class QueryBasedTransformer(TransformerInterface):
             "tenant_id": daft.lit(self.tenant_id),
             "last_sync_workflow_name": daft.lit(workflow_id),
             "last_sync_run": daft.lit(workflow_run_id),
-            "last_sync_run_at": daft.lit(datetime.now()),
+            "last_sync_run_at": daft.lit(
+                int(datetime.now(timezone.utc).timestamp() * 1000)
+            ),
             "connector_name": daft.lit(self.connector_name),
         }
         entity_sql_template, literal_columns = self.generate_sql_query(
