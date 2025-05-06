@@ -58,12 +58,12 @@ pyenv global 3.11.10
 python --version  # Should show Python 3.11.10
 ```
 
-### 3. Install Poetry 1.8.5
+### 3. Install Poetry 2.1.3
 
 Poetry manages Python dependencies and project environments:
 
 ```bash
-pip install poetry==1.8.5
+pip install poetry==2.1.3
 ```
 
 ### 4. Install Temporal CLI

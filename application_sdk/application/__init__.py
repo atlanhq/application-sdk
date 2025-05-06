@@ -1,4 +1,4 @@
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.server import ServerInterface
@@ -38,13 +38,19 @@ class BaseApplication:
 
         self.workflow_client = get_workflow_client(application_name=name)
 
-    async def setup_workflow(self, workflow_classes, activities_class):
+    async def setup_workflow(
+        self,
+        workflow_classes,
+        activities_class,
+        passthrough_modules: List[str] = [],
+    ):
         """
         Set up the workflow client and start the worker for the application.
 
         Args:
             workflow_classes (list): The workflow classes for the application.
             activities_class (ActivitiesInterface): The activities class for the application.
+            passthrough_modules (list): The modules to pass through to the worker.
         """
         await self.workflow_client.load()
         activities = activities_class()
@@ -53,6 +59,7 @@ class BaseApplication:
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
             workflow_activities=workflow_class.get_activities(activities),
+            passthrough_modules=passthrough_modules,
         )
 
     async def start_workflow(self, workflow_args, workflow_class) -> Any:

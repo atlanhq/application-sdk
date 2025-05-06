@@ -47,15 +47,16 @@ runs:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
-    - name: Upload Coverage Report to S3
-      uses: atlanhq/kryptonite/upload@v1
-      with:
-        source: ./htmlcov
-        target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+    # FIXME(inishchith): Uncomment when fixed @junaidrahim
+    # - name: Upload Coverage Report to S3
+    #   uses: atlanhq/kryptonite/upload@v1
+    #   with:
+    #     source: ./htmlcov
+    #     target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
 
-    - name: Comment Coverage Report URL on PR
-      uses: mshick/add-pr-comment@v2
-      with:
-        message-id: "coverage"
-        message: |
-          Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+    # - name: Comment Coverage Report URL on PR
+    #   uses: mshick/add-pr-comment@v2
+    #   with:
+    #     message-id: "coverage"
+    #     message: |
+    #       Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
