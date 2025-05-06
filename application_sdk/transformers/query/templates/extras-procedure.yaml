@@ -40,6 +40,11 @@ columns:
     source_query: last_sync_run_at
   - name: attributes.connectorName
     source_query: connector_name
+  - name: attributes.atlanSchema.typeName
+    source_query: "'Schema'"
+  - name: attributes.atlanSchema.uniqueAttributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', procedure_catalog, '/', procedure_schema)
+    source_columns: [connection_qualified_name, procedure_catalog, procedure_schema]
   - name: typeName
     source_query: "'Procedure'"
   - name: status
