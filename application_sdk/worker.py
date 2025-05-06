@@ -49,11 +49,13 @@ class Worker:
         >>> await worker.start(daemon=True)
     """
 
+    default_passthrough_modules = ["application_sdk", "pandas", "os", "app"]
+
     def __init__(
         self,
         workflow_client: Optional[WorkflowClient] = None,
         workflow_activities: Sequence[CallableType] = [],
-        passthrough_modules: List[str] = ["application_sdk", "pandas", "os", "app"],
+        passthrough_modules: List[str] = [],
         workflow_classes: Sequence[ClassType] = [],
         max_concurrent_activities: Optional[int] = None,
     ):
@@ -82,7 +84,9 @@ class Worker:
         self.workflow_worker: Optional[TemporalWorker] = None
         self.workflow_activities = workflow_activities
         self.workflow_classes = workflow_classes
-        self.passthrough_modules = passthrough_modules
+        self.passthrough_modules = list(
+            set(passthrough_modules + self.default_passthrough_modules)
+        )
         self.max_concurrent_activities = max_concurrent_activities
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
