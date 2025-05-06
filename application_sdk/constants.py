@@ -116,3 +116,7 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 # AWS Constants
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
+
+# Log batching configuration
+LOG_BATCH_SIZE = int(os.environ.get("LOG_BATCH_SIZE", 100))
+LOG_FLUSH_INTERVAL = int(os.environ.get("LOG_FLUSH_INTERVAL", 10))

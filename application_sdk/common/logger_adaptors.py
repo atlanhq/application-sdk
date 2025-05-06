@@ -1,9 +1,10 @@
-import datetime
+import asyncio
 import logging
 import os
 import sys
+import threading
 from contextvars import ContextVar
-from time import time_ns
+from time import time, time_ns
 from typing import Any, Dict, Tuple
 
 import pandas as pd
@@ -21,6 +22,8 @@ from temporalio import activity, workflow
 
 from application_sdk.constants import (
     ENABLE_OTLP_LOGS,
+    LOG_BATCH_SIZE,
+    LOG_FLUSH_INTERVAL,
     LOG_LEVEL,
     OBJECT_STORE_NAME,
     OTEL_BATCH_DELAY_MS,
@@ -41,7 +44,7 @@ request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", defa
 dapr_client = DaprClient()
 
 # Constants for parquet logging
-LOG_DIR = "logs"
+LOG_DIR = "/tmp/logs"
 PARQUET_FILE = "logs.parquet"
 PARQUET_PATH = os.path.join(LOG_DIR, PARQUET_FILE)
 
@@ -93,6 +96,13 @@ SEVERITY_MAPPING = {
 
 
 class AtlanLoggerAdapter:
+    _log_buffer = []
+    _buffer_lock = threading.Lock()
+    _last_flush_time = time()
+    _batch_size = LOG_BATCH_SIZE
+    _flush_interval = LOG_FLUSH_INTERVAL
+    _flush_task_started = False
+
     def __init__(self, logger_name: str) -> None:
         """Create the logger adapter with enhanced configuration."""
         self.logger_name = logger_name
@@ -160,6 +170,19 @@ class AtlanLoggerAdapter:
             except Exception as e:
                 logging.error(f"Failed to setup OTLP logging: {str(e)}")
 
+        if not AtlanLoggerAdapter._flush_task_started:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._periodic_flush())
+                else:
+                    threading.Thread(
+                        target=self._start_asyncio_flush, daemon=True
+                    ).start()
+                AtlanLoggerAdapter._flush_task_started = True
+            except Exception:
+                pass
+
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         try:
             # Check if the environment variable is not empty
@@ -213,12 +236,17 @@ class AtlanLoggerAdapter:
             attributes=attributes,
         )
 
+    def _start_asyncio_flush(self):
+        asyncio.run(self._periodic_flush())
+
+    async def _periodic_flush(self):
+        while True:
+            await asyncio.sleep(self._flush_interval)
+            await self._flush_buffer(force=True)
+
     async def parquet_sink(self, message: Any):
-        """Process log message and store in parquet file."""
         try:
-            # Create log record dictionary
             log_record = {
-                # Store the timestamp as a datetime object
                 "timestamp": message.record["time"].timestamp(),
                 "level": message.record["level"].name,
                 "logger_name": message.record["extra"].get("logger_name", ""),
@@ -227,37 +255,50 @@ class AtlanLoggerAdapter:
                 "line": message.record["line"],
                 "function": message.record["function"],
             }
-
-            # Add any extra fields from the record
             for key, value in message.record["extra"].items():
                 if key not in log_record:
                     log_record[key] = value
 
-            # Convert to DataFrame
-            df = pd.DataFrame([log_record])
+            with self._buffer_lock:
+                self._log_buffer.append(log_record)
+                now = time()
+                if (
+                    len(self._log_buffer) >= self._batch_size
+                    or (now - self._last_flush_time) >= self._flush_interval
+                ):
+                    self._last_flush_time = now
+                    buffer_copy = self._log_buffer[:]
+                    self._log_buffer.clear()
+                else:
+                    buffer_copy = None
 
-            # Check if the Parquet file exists and read it
+            if buffer_copy is not None:
+                await self._flush_records(buffer_copy)
+        except Exception as e:
+            logging.error(f"Error buffering log: {e}")
+
+    async def _flush_buffer(self, force=False):
+        with self._buffer_lock:
+            if self._log_buffer:
+                buffer_copy = self._log_buffer[:]
+                self._log_buffer.clear()
+            else:
+                buffer_copy = None
+        if buffer_copy:
+            await self._flush_records(buffer_copy)
+
+    async def _flush_records(self, records):
+        try:
+            df = pd.DataFrame(records)
             if os.path.exists(PARQUET_PATH):
                 existing_table = pq.read_table(PARQUET_PATH)
                 existing_df = existing_table.to_pandas()
-                # Concatenate the existing data with the new data
                 df = pd.concat([existing_df, df], ignore_index=True)
-
-            # Convert to PyArrow Table
             table = pa.Table.from_pandas(df)
-
-            # Write to parquet file
             pq.write_table(table, PARQUET_PATH, compression="snappy")
-
-            # Upload to object store using Dapr
             with open(PARQUET_PATH, "rb") as f:
                 file_content = f.read()
-                now = datetime.datetime.utcnow().strftime("%Y%m%dT%H%M%S%f")
-                # Format the filename to include date in DD-MM-YYYY and hour
-                date_hour = (
-                    now[6:8] + "-" + now[4:6] + "-" + now[:4] + "_" + now[9:11]
-                )  # Extract date in DD-MM-YYYY and hour
-                filename = f"logs/{date_hour}.parquet"
+                filename = "logs/log.parquet"
                 metadata = {
                     "key": filename,
                     "blobName": filename,
@@ -270,9 +311,8 @@ class AtlanLoggerAdapter:
                         data=file_content,
                         binding_metadata=metadata,
                     )
-
         except Exception as e:
-            logging.error(f"Error writing log to parquet: {e}")
+            logging.error(f"Error flushing log batch to parquet: {e}")
 
     def otlp_sink(self, message: Any):
         """Process log message and emit to OTLP."""

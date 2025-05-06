@@ -1,14 +1,14 @@
-import io
+import os
+import socket
 from typing import Any, Callable, List, Optional, Type
 
-import pandas as pd
-from dapr.clients import DaprClient
+import duckdb
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -84,6 +84,7 @@ class APIServer(ServerInterface):
         docs_export_path (str): Path where documentation will be exported.
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
+        _duckdb_ui_con: duckdb.Connection: Store the DuckDB UI connection
 
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
@@ -105,6 +106,7 @@ class APIServer(ServerInterface):
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
+    _duckdb_ui_con = None  # Store the DuckDB UI connection
 
     def __init__(
         self,
@@ -152,27 +154,36 @@ class APIServer(ServerInterface):
         # Initialize parent class
         super().__init__(handler)
 
-    async def observability(self, request: Request) -> HTMLResponse:
-        # 1. Fetch the parquet file from Dapr object store
+    def _is_duckdb_ui_running(self, host="0.0.0.0", port=9000):
+        """Check if DuckDB UI is already running on the default port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            result = sock.connect_ex((host, port))
+            return result == 0
 
-        with DaprClient() as d:
-            resp = d.invoke_binding(
-                binding_name="objectstore",
-                operation="get",  # or "read" depending on your binding
-                data=b"",
-                binding_metadata={"fileName": "logs/05-05-2025_11.parquet"},
-            )
+    def _start_duckdb_ui(self, db_path="/tmp/logs/observability.db"):
+        """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
+        logs_dir = "/tmp/logs"
+        if not self._is_duckdb_ui_running():
+            os.makedirs(logs_dir, exist_ok=True)
+            con = duckdb.connect(db_path)
+            # Attach all .parquet files in /tmp/logs as tables
+            for fname in os.listdir(logs_dir):
+                fpath = os.path.join(logs_dir, fname)
+                if fname.endswith(".parquet"):
+                    tbl = os.path.splitext(fname)[0]
+                    con.execute(
+                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
+                    )
+            # Start DuckDB UI using SQL command
+            con.execute("CALL start_ui();")
+            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
 
-        parquet_bytes = resp.data
-
-        # 2. Decode the parquet file
-        df = pd.read_parquet(io.BytesIO(parquet_bytes))
-
-        # 3. Render as HTML using Jinja2
-        html_table = df.to_html(classes="table table-striped", index=False)
-        return self.templates.TemplateResponse(
-            "logs.html", {"request": request, "logs_table": html_table}
-        )
+    def observability(self, request: Request) -> RedirectResponse:
+        """Endpoint to launch DuckDB UI for log self-serve exploration."""
+        self._start_duckdb_ui()
+        # Redirect to the local DuckDB UI
+        return RedirectResponse(url="http://127.0.0.1:9000")
 
     def setup_atlan_docs(self):
         """Set up and serve Atlan documentation.
@@ -294,7 +305,7 @@ class APIServer(ServerInterface):
             "/observability",
             self.observability,
             methods=["GET"],
-            response_class=HTMLResponse,
+            response_class=RedirectResponse,
         )
 
         self.workflow_router.add_api_route(
