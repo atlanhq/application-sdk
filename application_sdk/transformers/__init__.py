@@ -1,8 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Type
-
-if TYPE_CHECKING:
-    import daft
+from typing import Any, Dict, Type
 
 
 class TransformerInterface(ABC):
@@ -20,12 +17,12 @@ class TransformerInterface(ABC):
     def transform_metadata(
         self,
         typename: str,
-        dataframe: daft.DataFrame,
+        dataframe: "daft.DataFrame",
         workflow_id: str,
         workflow_run_id: str,
         entity_class_definitions: Dict[str, Type[Any]] | None = None,
         **kwargs: Any,
-    ) -> daft.DataFrame:
+    ) -> "daft.DataFrame":
         """Transform metadata from one format to another.
 
         This method should convert the input metadata into a different format
