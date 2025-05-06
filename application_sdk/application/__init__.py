@@ -50,6 +50,7 @@ class BaseApplication:
         Args:
             workflow_classes (list): The workflow classes for the application.
             activities_class (ActivitiesInterface): The activities class for the application.
+            passthrough_modules (list): The modules to pass through to the worker.
         """
         if passthrough_modules is None:
             passthrough_modules = []

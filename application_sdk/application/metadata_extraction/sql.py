@@ -70,6 +70,8 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_classes (List[Type[BaseSQLMetadataExtractionWorkflow]]): List of workflow classes to register. Defaults to [BaseSQLMetadataExtractionWorkflow].
             activities_class (Type): Activities class to use for workflow activities. Defaults to BaseSQLMetadataExtractionActivities.
             worker_daemon_mode (bool): Whether to run the worker in daemon mode. Defaults to True.
+            passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
+
         """
         if passthrough_modules is None:
             passthrough_modules = []
