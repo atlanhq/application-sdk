@@ -10,7 +10,7 @@ inputs:
     description: The GitHub token to use for the action.
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - uses: actions/checkout@v4
       with:
