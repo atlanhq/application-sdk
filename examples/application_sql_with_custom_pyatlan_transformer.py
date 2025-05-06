@@ -29,16 +29,10 @@ Note: This example is specific to PostgreSQL but can be adapted for other SQL da
 import asyncio
 import os
 import time
-from typing import Any, Dict, cast
+from typing import Any, Dict
 
-import daft
-from temporalio import activity
-
-from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
-    BaseSQLMetadataExtractionActivitiesState,
 )
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
@@ -46,8 +40,6 @@ from application_sdk.application.metadata_extraction.sql import (
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.inputs.parquet import ParquetInput
-from application_sdk.outputs.json import JsonOutput
 from application_sdk.transformers.atlas import AtlasTransformer
 from application_sdk.transformers.atlas.sql import Column, Procedure, Table
 from application_sdk.workflows.metadata_extraction.sql import (
@@ -107,90 +99,6 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
         AND concat(current_database(), concat('.', c.table_schema)) ~ '{normalized_include_regex}'
         {temp_table_regex_sql};
     """
-
-    async def _transform_batch(
-        self,
-        results: "daft.DataFrame",
-        typename: str,
-        state: BaseSQLMetadataExtractionActivitiesState,
-        workflow_id: str,
-        workflow_run_id: str,
-        workflow_args: Dict[str, Any],
-    ) -> daft.DataFrame:
-        connection_name = workflow_args.get("connection", {}).get(
-            "connection_name", None
-        )
-        connection_qualified_name = workflow_args.get("connection", {}).get(
-            "connection_qualified_name", None
-        )
-        if not state.transformer:
-            raise ValueError("Transformer is not set")
-
-        transformed_metadata_list = []
-        for row in results.iter_rows():
-            try:
-                transformed_metadata = state.transformer.transform_metadata(
-                    typename,
-                    row,
-                    workflow_id=workflow_id,
-                    workflow_run_id=workflow_run_id,
-                    connection_name=connection_name,
-                    connection_qualified_name=connection_qualified_name,
-                )
-                if transformed_metadata:
-                    transformed_metadata_list.append(transformed_metadata)
-                else:
-                    logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                logger.error(f"Error processing row for {typename}: {row_error}")
-
-        return daft.from_pylist(transformed_metadata_list)
-
-    @activity.defn
-    @auto_heartbeater
-    async def transform_data(
-        self,
-        workflow_args: Dict[str, Any],
-    ) -> ActivityStatistics:
-        """Transforms raw data into the required format.
-
-        Args:
-            raw_input (Any): Input data to transform.
-            transformed_output (JsonOutput): Output handler for transformed data.
-            **kwargs: Additional keyword arguments.
-
-        Returns:
-            ActivityStatistics: Statistics about the transformed data, including:
-                - total_record_count: Total number of records processed
-                - chunk_count: Number of chunks processed
-                - typename: Type of data processed
-        """
-        state = cast(
-            BaseSQLMetadataExtractionActivitiesState,
-            await self._get_state(workflow_args),
-        )
-        output_prefix, output_path, typename, workflow_id, workflow_run_id = (
-            self._validate_output_args(workflow_args)
-        )
-
-        raw_input = ParquetInput(
-            path=os.path.join(output_path, "raw"),
-            input_prefix=output_prefix,
-            file_names=workflow_args.get("file_names"),
-            chunk_size=None,
-        )
-        raw_input = await raw_input.get_daft_dataframe()
-        transform_df = await self._transform_batch(
-            raw_input, typename, state, workflow_id, workflow_run_id, workflow_args
-        )
-        transformed_output = JsonOutput(
-            output_prefix=output_prefix,
-            output_path=output_path,
-            output_suffix="transformed",
-            typename=typename,
-        )
-        await transformed_output.write_daft_dataframe(transform_df)
-        return await transformed_output.get_statistics()
 
 
 class PostgresTable(Table):

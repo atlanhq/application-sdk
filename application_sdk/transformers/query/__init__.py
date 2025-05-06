@@ -53,7 +53,7 @@ class QueryBasedTransformer(TransformerInterface):
             )
         )
 
-    def _process_column_name(self, column_name: str) -> str:
+    def quote_column_name(self, column_name: str) -> str:
         """Handle column names that contain dots by quoting them.
 
         Args:
@@ -66,7 +66,9 @@ class QueryBasedTransformer(TransformerInterface):
             return f'"{column_name}"'
         return column_name
 
-    def _process_column(self, column: Dict[str, str], is_literal: bool = False) -> str:
+    def convert_to_sql_expression(
+        self, column: Dict[str, str], is_literal: bool = False
+    ) -> str:
         """Process a single column definition into a SQL column expression.
 
         Args:
@@ -75,12 +77,12 @@ class QueryBasedTransformer(TransformerInterface):
         Returns:
             A SQL column expression string
         """
-        column["name"] = self._process_column_name(column["name"])
+        column["name"] = self.quote_column_name(column["name"])
         if is_literal:
             return f"{column['name']} AS {column['name']}"
         return f"{column['source_query']} AS {column['name']}"
 
-    def _get_columns(
+    def get_sql_column_expressions(
         self,
         sql_template: Dict[str, Any],
         dataframe: daft.DataFrame,
@@ -99,22 +101,45 @@ class QueryBasedTransformer(TransformerInterface):
         columns: List[str] = []
         literal_columns: List[Dict[str, str]] = []
         column_names = dataframe.column_names + list(default_attributes.keys())
+
+        # Add the columns from the SQL template to the columns list only if they are present in the dataframe
+        # Otherwise the dataframe will throw an error
         for column in sql_template["columns"]:
+            # If the column has a source_columns attribute and all of the source_columns are present in the dataframe,
+            # then add the column to the columns list
+            # E.g
+            # - name: attributes.qualifiedName
+            #   source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+            #   source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
             if column.get("source_columns") and (
                 all(col in column_names for col in column["source_columns"])
             ):
-                columns.append(self._process_column(column))
+                columns.append(self.convert_to_sql_expression(column))
+
+            # Else if the column has a source_query attribute and the source_query is present in the dataframe,
+            # then add the column to the columns list
+            # E.g
+            # - name: attributes.tableName
+            #   source_query: table_name
             elif column["source_query"] in column_names:
-                columns.append(self._process_column(column))
+                columns.append(self.convert_to_sql_expression(column))
+
+            # Else if the column has a string literal, then add the column to the literal_columns list
+            # E.g 1. String Literal
+            # - name: attributes.typeName
+            #   source_query: "'Table'"
+
+            # E.g 2. Boolean Literal
+            # - name: attributes.isPartition
+            #   source_query: True
             elif isinstance(column["source_query"], bool) or (
                 isinstance(column["source_query"], str)
                 and column["source_query"].startswith("'")
                 and column["source_query"].endswith("'")
                 and len(column["source_query"]) > 1
             ):
-                # This is a string literal and should be added as is
                 literal_columns.append(column)
-                columns.append(self._process_column(column, is_literal=True))
+                columns.append(self.convert_to_sql_expression(column, is_literal=True))
 
         return columns, literal_columns or None
 
@@ -136,12 +161,17 @@ class QueryBasedTransformer(TransformerInterface):
             str: The generated SQL query
         """
         try:
+            # Load the YAML template from the path
             with open(yaml_path, "r") as f:
                 sql_template = yaml.safe_load(f)
-            columns, literal_columns = self._get_columns(
+
+            # Get the SQL columns expressions for the SQL query
+            columns, literal_columns = self.get_sql_column_expressions(
                 sql_template, dataframe, default_attributes
             )
 
+            # Join all the SQL column expressions to create the full SELECT statement for the SQL query
+            # This will be used for transforming the dataframe
             sql_query = textwrap.dedent(f"""
             SELECT
                 {','.join(columns)}
@@ -202,10 +232,28 @@ class QueryBasedTransformer(TransformerInterface):
 
         return None
 
-    def _get_grouped_dataframe_by_prefix(
+    def get_grouped_dataframe_by_prefix(
         self, dataframe: daft.DataFrame
     ) -> daft.DataFrame:
         """Group columns with the same prefix into structs, supporting any level of nesting.
+
+        We have a flat structured dataframe with columns that have dot notation in the yaml template
+        e.g:
+        - name: attributes.name
+        source_query: table_name
+        - name: attributes.qualifiedName
+        source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
+        - name: attributes.connectionQualifiedName
+        source_query: connection_qualified_name
+
+        This method will group the columns with the same prefix into structs.
+        e.g:
+        struct(
+            name: table_name,
+            qualifiedName: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
+            connectionQualifiedName: connection_qualified_name
+        ).alias("attributes")
 
         Args:
             dataframe (daft.DataFrame): DataFrame to restructure
@@ -257,7 +305,7 @@ class QueryBasedTransformer(TransformerInterface):
             logger.error(f"Error grouping columns by prefix: {e}")
             raise e
 
-    def _prepare_template_and_attributes(
+    def prepare_template_and_attributes(
         self,
         dataframe: daft.DataFrame,
         workflow_id: str,
@@ -336,7 +384,7 @@ class QueryBasedTransformer(TransformerInterface):
                 raise ValueError(f"No SQL transformation registered for {typename}")
 
             # prepare the SQL to run on the dataframe and the default attributes
-            dataframe, entity_sql_template = self._prepare_template_and_attributes(
+            dataframe, entity_sql_template = self.prepare_template_and_attributes(
                 dataframe,
                 workflow_id,
                 workflow_run_id,
@@ -353,7 +401,7 @@ class QueryBasedTransformer(TransformerInterface):
 
             # We have a flat structured dataframe with columns that have dot notation
             # for their path. We want to group the columns with the same prefix into structs.
-            return self._get_grouped_dataframe_by_prefix(transformed_df)
+            return self.get_grouped_dataframe_by_prefix(transformed_df)
         except Exception as e:
             logger.error(f"Error transforming {typename}: {e}")
             raise e

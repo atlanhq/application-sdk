@@ -130,7 +130,7 @@ class CustomTransformer(QueryBasedTransformer):
             assets=[
                 "TABLE",
                 "COLUMN",
-                "DATABASE",
+                "DATABASE",  # The database template will be overridden by the custom database template specified at examples/sql_query_templates/database.yaml
                 "SCHEMA",
                 "EXTRAS-PROCEDURE",
                 "FUNCTION",

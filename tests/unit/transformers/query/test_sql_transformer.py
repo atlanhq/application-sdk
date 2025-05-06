@@ -66,35 +66,35 @@ def sample_yaml_template():
 
 
 # Unit Tests for Individual Methods
-def test_process_column_name(sql_transformer):
-    """Test the _process_column_name method"""
-    assert sql_transformer._process_column_name("normal_column") == "normal_column"
-    assert (
-        sql_transformer._process_column_name("column.with.dots") == '"column.with.dots"'
-    )
+def test_quote_column_name(sql_transformer):
+    """Test the quote_column_name method"""
+    assert sql_transformer.quote_column_name("normal_column") == "normal_column"
+    assert sql_transformer.quote_column_name("column.with.dots") == '"column.with.dots"'
 
 
-def test_process_column(sql_transformer):
-    """Test the _process_column method"""
+def test_convert_to_sql_expression(sql_transformer):
+    """Test the convert_to_sql_expression method"""
     column = {"name": "test.column", "source_query": "source_column"}
-    result = sql_transformer._process_column(column)
+    result = sql_transformer.convert_to_sql_expression(column)
     assert result == 'source_column AS "test.column"'
 
 
-def test_process_column_with_literal(sql_transformer):
-    """Test the _process_column method with literal=True"""
+def test_convert_to_sql_expression_with_literal(sql_transformer):
+    """Test the convert_to_sql_expression method with literal=True"""
     column = {
         "name": "test.column",
         "source_query": "'Database'",  # testing the literal value
     }
-    result = sql_transformer._process_column(column, is_literal=True)
+    result = sql_transformer.convert_to_sql_expression(column, is_literal=True)
     assert result == '"test.column" AS "test.column"'
 
 
-def test_get_columns(sql_transformer, sample_dataframe, sample_yaml_template):
-    """Test the _get_columns method"""
+def test_get_sql_column_expressions(
+    sql_transformer, sample_dataframe, sample_yaml_template
+):
+    """Test the get_sql_column_expressions method"""
     default_attributes = {}
-    columns, literal_columns = sql_transformer._get_columns(
+    columns, literal_columns = sql_transformer.get_sql_column_expressions(
         sample_yaml_template, sample_dataframe, default_attributes
     )
     assert len(columns) == 4
@@ -155,7 +155,7 @@ def test_build_struct(sql_transformer):
 
 def test_get_grouped_dataframe_by_prefix(sql_transformer):
     """
-    Test the _get_grouped_dataframe_by_prefix method
+    Test the get_grouped_dataframe_by_prefix method
     and validate the schema of the transformed dataframe
     to make sure it follows the nesting structure
     """
@@ -185,7 +185,7 @@ def test_get_grouped_dataframe_by_prefix(sql_transformer):
         }
     )
 
-    result = sql_transformer._get_grouped_dataframe_by_prefix(df)
+    result = sql_transformer.get_grouped_dataframe_by_prefix(df)
     assert result.count_rows() == 3
     expected_schema = [
         Field.create(name="typeName", dtype=daft.DataType.string()),
@@ -220,7 +220,7 @@ def test_get_grouped_dataframe_by_prefix(sql_transformer):
     assert expected_schema == [schema for schema in result.schema()]
 
 
-@patch("application_sdk.transformers.sql.QueryBasedTransformer.generate_sql_query")
+@patch("application_sdk.transformers.query.QueryBasedTransformer.generate_sql_query")
 def test_prepare_template_and_attributes(
     mock_generate, sql_transformer, sample_dataframe
 ):
@@ -231,7 +231,7 @@ def test_prepare_template_and_attributes(
     connection_qualified_name = "test_connection"
     connection_name = "test_conn"
 
-    result_df, sql_template = sql_transformer._prepare_template_and_attributes(
+    result_df, sql_template = sql_transformer.prepare_template_and_attributes(
         sample_dataframe,
         workflow_id,
         workflow_run_id,
@@ -261,10 +261,10 @@ def test_transform_metadata_empty_dataframe(sql_transformer):
 
 
 @patch(
-    "application_sdk.transformers.sql.QueryBasedTransformer._prepare_template_and_attributes"
+    "application_sdk.transformers.query.QueryBasedTransformer.prepare_template_and_attributes"
 )
 @patch(
-    "application_sdk.transformers.sql.QueryBasedTransformer._get_grouped_dataframe_by_prefix"
+    "application_sdk.transformers.query.QueryBasedTransformer.get_grouped_dataframe_by_prefix"
 )
 def test_transform_metadata(
     mock_group, mock_prepare, sql_transformer, sample_dataframe
