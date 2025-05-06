@@ -12,7 +12,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
-
+from application_sdk.common.credential_providers import CredentialProviderFactory
 from application_sdk.clients import ClientInterface
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
@@ -37,6 +37,7 @@ class BaseSQLClient(ClientInterface):
         engine: SQLAlchemy engine instance.
         sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
         credentials (Dict[str, Any]): Database credentials.
+        resolved_credentials (Dict[str, Any]): Resolved credentials after reading from secret manager.
         use_server_side_cursor (bool): Whether to use server-side cursors.
     """
 
@@ -44,6 +45,7 @@ class BaseSQLClient(ClientInterface):
     engine = None
     sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
+    resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
     DB_CONFIG: Dict[str, Any] = {}
 
@@ -65,6 +67,7 @@ class BaseSQLClient(ClientInterface):
         """
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
+        self.resolved_credentials = {}
         self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
     async def load(self, credentials: Dict[str, Any]) -> None:
@@ -76,7 +79,8 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If connection fails due to authentication or connection issues
         """
-        self.credentials = credentials
+        self.credentials = credentials  # Update the instance credentials
+        self.resolved_credentials = await self.resolve_credentials(credentials)
         try:
             from sqlalchemy import create_engine
 
@@ -92,6 +96,23 @@ class BaseSQLClient(ClientInterface):
                 self.engine.dispose()
                 self.engine = None
             raise ValueError(str(e))
+
+    async def resolve_credentials(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Resolve credentials based on credential source.
+        
+        Args:
+            credentials (Dict[str, Any]): Source credentials.
+            
+        Returns:
+            Dict[str, Any]: Resolved credentials.
+            
+        Raises:
+            ValueError: If credential resolution fails.
+        """
+        credential_source = credentials.get("credentialSource", "direct")
+        provider = CredentialProviderFactory.get_provider(credential_source)
+        return await provider.get_credentials(credentials)    
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -111,10 +132,10 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If required credentials (username or database) are missing.
         """
-        extra = parse_credentials_extra(self.credentials)
-        aws_access_key_id = self.credentials["username"]
-        aws_secret_access_key = self.credentials["password"]
-        host = self.credentials["host"]
+        extra = parse_credentials_extra(self.resolved_credentials)
+        aws_access_key_id = self.resolved_credentials.get("username")
+        aws_secret_access_key = self.resolved_credentials.get("password")
+        host = self.resolved_credentials.get("host")
         user = extra.get("username")
         database = extra.get("database")
         if not user:
@@ -122,8 +143,8 @@ class BaseSQLClient(ClientInterface):
         if not database:
             raise ValueError("database is required for IAM user authentication")
 
-        port = self.credentials["port"]
-        region = self.credentials.get("region", None)
+        port = self.resolved_credentials.get("port",5432)
+        region = self.resolved_credentials.get("region", None)
         token = generate_aws_rds_token_with_iam_user(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
@@ -148,7 +169,7 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If required credentials (aws_role_arn or database) are missing.
         """
-        extra = parse_credentials_extra(self.credentials)
+        extra = parse_credentials_extra(self.resolved_credentials)
         aws_role_arn = extra.get("aws_role_arn")
         database = extra.get("database")
         external_id = extra.get("aws_external_id")
@@ -159,10 +180,11 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("database is required for IAM role authentication")
 
         session_name = AWS_SESSION_NAME
-        username = self.credentials["username"]
-        host = self.credentials["host"]
-        port = self.credentials.get("port", 5432)
-        region = self.credentials.get("region", None)
+        username = self.resolved_credentials.get("username", None)
+        host = self.resolved_credentials.get("host", None)
+        port = self.resolved_credentials.get("port", 5432)
+        region = self.resolved_credentials.get("region", None)
+
         token = generate_aws_rds_token_with_iam_role(
             role_arn=aws_role_arn,
             host=host,
@@ -187,7 +209,7 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If an invalid authentication type is specified.
         """
-        authType = self.credentials.get("authType", "basic")  # Default to basic auth
+        authType = self.resolved_credentials.get("authType", "basic")  # Default to basic auth
         token = None
 
         match authType:
@@ -196,7 +218,7 @@ class BaseSQLClient(ClientInterface):
             case "iam_role":
                 token = self.get_iam_role_token()
             case "basic":
-                token = self.credentials["password"]
+                token = self.resolved_credentials.get("password")
             case _:
                 raise ValueError(f"Invalid auth type: {authType}")
 
@@ -238,7 +260,7 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If required connection parameters are missing.
         """
-        extra = parse_credentials_extra(self.credentials)
+        extra = parse_credentials_extra(self.resolved_credentials)
         auth_token = self.get_auth_token()
 
         # Prepare parameters
@@ -247,7 +269,7 @@ class BaseSQLClient(ClientInterface):
             if param == "password":
                 param_values[param] = auth_token
             else:
-                value = self.credentials.get(param) or extra.get(param)
+                value = self.resolved_credentials.get(param) or extra.get(param)
                 if value is None:
                     raise ValueError(f"{param} is required")
                 param_values[param] = value
@@ -262,7 +284,7 @@ class BaseSQLClient(ClientInterface):
         if self.DB_CONFIG.get("parameters"):
             parameter_keys = self.DB_CONFIG["parameters"]
             self.DB_CONFIG["parameters"] = {
-                key: self.credentials.get(key) or extra.get(key)
+                key: self.resolved_credentials.get(key) or extra.get(key)
                 for key in parameter_keys
             }
             conn_str = self.add_connection_params(
@@ -362,6 +384,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
             ValueError: If connection fails due to invalid credentials or connection issues.
         """
         self.credentials = credentials
+        self.resolved_credentials = await self.resolve_credentials(credentials)
+        
         try:
             from sqlalchemy.ext.asyncio import create_async_engine
 
