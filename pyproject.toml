@@ -76,7 +76,6 @@ scale_data_generator = [
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.2.0"
 isort = "^5.13.2"
-pylint = "^3.3.3"
 boto3-stubs = {version = "^1.38.6", optional = true} # For boto related type checking
 mkdocs = "^1.6.1"
 mkdocs-material = "^9.6.4"
