@@ -42,7 +42,7 @@ class BaseApplication:
         self,
         workflow_classes,
         activities_class,
-        passthrough_modules: Optional[List[str]] = None,
+        passthrough_modules: List[str] = [],
     ):
         """
         Set up the workflow client and start the worker for the application.
@@ -52,8 +52,6 @@ class BaseApplication:
             activities_class (ActivitiesInterface): The activities class for the application.
             passthrough_modules (list): The modules to pass through to the worker.
         """
-        if passthrough_modules is None:
-            passthrough_modules = []
         await self.workflow_client.load()
         activities = activities_class()
         workflow_class = workflow_classes[0]
@@ -61,13 +59,7 @@ class BaseApplication:
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
             workflow_activities=workflow_class.get_activities(activities),
-            passthrough_modules=[
-                "application_sdk",
-                "pandas",
-                "os",
-                "app",
-                *passthrough_modules,
-            ],
+            passthrough_modules=passthrough_modules,
         )
 
     async def start_workflow(self, workflow_args, workflow_class) -> Any:

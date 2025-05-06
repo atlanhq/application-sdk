@@ -61,7 +61,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         activities_class: Type[
             BaseSQLMetadataExtractionActivities
         ] = BaseSQLMetadataExtractionActivities,
-        passthrough_modules: Optional[List[str]] = None,
+        passthrough_modules: List[str] = [],
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
@@ -73,8 +73,6 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
 
         """
-        if passthrough_modules is None:
-            passthrough_modules = []
 
         # load the workflow client
         await self.workflow_client.load()
@@ -94,13 +92,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
             workflow_activities=workflow_class.get_activities(activities),
-            passthrough_modules=[
-                "application_sdk",
-                "pandas",
-                "os",
-                "app",
-                *passthrough_modules,
-            ],
+            passthrough_modules=passthrough_modules,
         )
 
     async def start_workflow(
