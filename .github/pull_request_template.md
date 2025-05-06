@@ -17,4 +17,12 @@
 <!-- for any cautionary notes, use https://github.com/orgs/community/discussions/16925 -->
 
 
-<!-- for any questions, reachout to #pod-app-framework or apps@atlan.com -->
+---
+
+### Copyleft License Compliance
+
+- [ ] Have you used any code that is subject to a Copyleft license (e.g., GPL, AGPL, LGPL)?
+- [ ] If yes, have you modified the code in the context of this project? please share additional details.
+
+
+<!-- for any questions, reach out to #pod-app-framework or apps@atlan.com -->

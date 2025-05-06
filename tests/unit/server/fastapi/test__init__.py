@@ -12,7 +12,7 @@ from application_sdk.server.fastapi import (
     PreflightCheckRequest,
     PreflightCheckResponse,
 )
-from application_sdk.test_utils.hypothesis.strategies.application.fastapi.fastapi import (
+from application_sdk.test_utils.hypothesis.strategies.server.fastapi import (
     event_data_strategy,
     payload_strategy,
 )
@@ -23,7 +23,7 @@ class SampleWorkflow(WorkflowInterface):
     pass
 
 
-class TestApplication:
+class TestServer:
     @pytest.fixture(autouse=True)
     def setup_method(self):
         """Setup method that runs before each test method"""
