@@ -188,9 +188,8 @@ jobs:
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
       - name: Upload Docs to Kryptonite Bucket
-        if: ${{ github.event_name == 'push' }}
         run: |
-            aws s3 sync ./docs/site application-sdk/${{ github.head_ref }}
+          aws s3 sync ./docs/site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
 
       - name: Comment Kryptonite URL on PR
         uses: mshick/add-pr-comment@v2
