@@ -13,8 +13,31 @@ The SDK uses the `loguru` library for enhanced logging capabilities, combined wi
     *   **Context Enrichment**: Automatically includes details from the current Temporal Workflow or Activity context (like `workflow_id`, `run_id`, `activity_id`, `attempt`, etc.) and FastAPI request context (`request_id`) if available.
     *   **OTLP Integration**: If `ENABLE_OTLP_LOGS` is true, logs are exported via the OpenTelemetry Protocol (OTLP) using `OTLPLogExporter`. Resource attributes (`service.name`, `service.version`, `k8s.workflow.node.name`, etc.) are automatically added based on environment variables (`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_WF_NODE_NAME`, `SERVICE_NAME`, `SERVICE_VERSION`).
     *   **Custom Level**: Includes a custom `"ACTIVITY"` log level.
+    *   **Parquet Sink**: Logs are automatically written to a parquet file for efficient storage and querying. The sink implements buffering and periodic flushing based on batch size and time interval.
+    *   **Log Retention**: Implements automatic cleanup of old logs based on the configured retention period. Logs older than `LOG_RETENTION_DAYS` are automatically removed.
 *   **Severity Mapping**: Maps standard log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) and the custom ACTIVITY level to OpenTelemetry `SeverityNumber`.
 *   **Configuration**: Log level (`LOG_LEVEL`), OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`), batching (`OTEL_BATCH_DELAY_MS`, `OTEL_BATCH_SIZE`), etc., are configured via environment variables defined in `application_sdk.constants`.
+
+### Log Storage and Retention
+
+The logger implements a sophisticated storage and retention system:
+
+1. **Parquet Storage**:
+   - Logs are stored in parquet format for efficient storage and querying
+   - Implements buffering to reduce I/O operations
+   - Flushes logs based on two conditions:
+     - When buffer size reaches `LOG_BATCH_SIZE`
+     - When time since last flush exceeds `LOG_FLUSH_INTERVAL`
+
+2. **Log Retention**:
+   - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
+   - Runs cleanup once per day
+   - Maintains state of last cleanup in Dapr state store
+   - Handles both local parquet files and object store cleanup
+
+3. **Storage Locations**:
+   - Local: `/tmp/logs/logs.parquet`
+   - Object Store: `logs/log.parquet` (via Dapr object store binding)
 
 ### Usage
 
@@ -43,6 +66,24 @@ activity.logger = logger # Temporal integration
 async def my_activity():
     logger.info("Starting my activity...")
     # Logger automatically includes workflow/activity context
+```
+
+### Configuration
+
+The logger can be configured using the following environment variables:
+
+```bash
+# Log level and format
+LOG_LEVEL=INFO
+
+# Parquet storage settings
+LOG_BATCH_SIZE=100  # Number of logs to buffer before writing
+LOG_FLUSH_INTERVAL=5  # Seconds between forced flushes
+LOG_RETENTION_DAYS=30  # Days to keep logs before cleanup
+
+# OTLP settings (if enabled)
+ENABLE_OTLP_LOGS=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
 ## AWS Utilities (`aws_utils.py`)
