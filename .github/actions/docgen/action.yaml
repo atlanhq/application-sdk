@@ -10,7 +10,7 @@ inputs:
     description: The GitHub token to use for the action.
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - uses: actions/checkout@v4
       with:
@@ -24,7 +24,7 @@ runs:
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
-        version: 1.8.5
+        version: 2.1.3
         virtualenvs-create: true
         virtualenvs-in-project: true
         virtualenvs-path: .venv

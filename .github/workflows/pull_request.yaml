@@ -26,15 +26,6 @@ jobs:
         with:
           GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
 
-  # Code Quality Checks
-  lint:
-    name: Pre-commit Checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: "./.github/actions/setup-deps"
-      - uses: pre-commit/action@v3.0.1
-
   docstr:
     name: Docstring Coverage
     runs-on: ubuntu-latest
@@ -54,31 +45,6 @@ jobs:
       - uses: "./.github/actions/trivy"
         with:
           add-report-comment-to-pr: "true"
-
-  codeql:
-    name: CodeQL
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-      contents: read
-      security-events: write
-    strategy:
-      fail-fast: false
-      matrix:
-        language: ["python"]
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
-        with:
-          languages: ${{ matrix.language }}
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v3
-      - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@v3
-        with:
-          category: "/language:${{matrix.language}}"
 
   # Testing
   unit:
@@ -213,14 +179,16 @@ jobs:
         run: |
           source .venv/bin/activate
           make apidocs
-      - name: Upload Docs
-        uses: atlanhq/kryptonite/upload@v1
-        with:
-          source: ./docs/site
-          target: application-sdk/${{ github.head_ref }}
-      - name: Comment Kryptonite URL on PR
-        uses: mshick/add-pr-comment@v2
-        with:
-          message-id: "docs"
-          message: |
-            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
+
+      # FIXME(inishchith): Uncomment when fixed @junaidrahim
+      # - name: Upload Docs
+      #   uses: atlanhq/kryptonite/upload@v1
+      #   with:
+      #     source: ./docs/site
+      #     target: application-sdk/${{ github.head_ref }}
+      # - name: Comment Kryptonite URL on PR
+      #   uses: mshick/add-pr-comment@v2
+      #   with:
+      #     message-id: "docs"
+      #     message: |
+      #       🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}

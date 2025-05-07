@@ -37,7 +37,7 @@ Download and install Python from the official website:
    python --version  # Should show Python 3.11.10
    ```
 
-### 2. Install Poetry 1.8.5
+### 2. Install Poetry 2.1.3
 
 Install Poetry using PowerShell:
 
@@ -50,10 +50,10 @@ $env:Path += ";$env:APPDATA\Python\Scripts"
 [Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
 
 # Install specific version
-poetry self update 1.8.5
+poetry self update 2.1.3
 
 # Verify installation
-poetry --version  # Should show Poetry 1.8.5
+poetry --version  # Should show Poetry 2.1.3
 ```
 
 ### 3. Install Temporal CLI
