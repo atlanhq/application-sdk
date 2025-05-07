@@ -1,0 +1,95 @@
+name: Pre-release Version Bump
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  bump-version:
+    # Only run when PR is merged (not when closed without merging)
+    if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'bump-version')
+    name: Update version and changelog
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Need full history for changelog
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.1.3
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          virtualenvs-path: .venv
+          installer-parallel: true
+
+      - name: Install dependencies
+        run: |
+          pip install semver
+
+      - name: Get current version
+        id: current_version
+        run: echo "CURRENT_VERSION=$(poetry version -s)" >> $GITHUB_ENV
+
+      - name: Update version
+        id: version_update
+        run: |
+          python .github/scripts/pre_release.py main
+          poetry lock
+          echo "NEW_VERSION=$(poetry version -s)" >> $GITHUB_ENV
+
+      - name: Update version.py
+        run: |
+          echo '"""' > application_sdk/version.py
+          echo 'Version information for the application_sdk package.' >> application_sdk/version.py
+          echo '"""' >> application_sdk/version.py
+          echo '' >> application_sdk/version.py
+          echo '__version__ = "${{ env.NEW_VERSION }}"' >> application_sdk/version.py
+
+      - name: Generate changelog
+        id: changelog
+        run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
+
+      - name: Create branch for version bump
+        run: |
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          branch_name="bump-version-${{ github.ref_name }}"
+          git checkout -b $branch_name
+
+          git add pyproject.toml poetry.lock CHANGELOG.md application_sdk/version.py
+          git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
+          git push origin $branch_name
+          echo "BRANCH_NAME=$branch_name" >> $GITHUB_ENV
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+          title: "Bump version to ${{ env.NEW_VERSION }}"
+          body: |
+            Automated version bump after merge to main.
+
+            This PR updates:
+            - pyproject.toml
+            - application_sdk/version.py
+            - CHANGELOG.md
+
+            Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}
+          branch: ${{ env.BRANCH_NAME }}
+          base: main
+          labels: "automated,version-bump"
