@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -41,11 +42,29 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
         return f"{str(chunk_start+1)}-{str(chunk_count)}.json"
 
 
+def convert_datetime_to_epoch(data: Any) -> Any:
+    """Convert datetime objects to epoch timestamps in milliseconds.
+
+    Args:
+        data: The data to convert
+
+    Returns:
+        The converted data with datetime fields as epoch timestamps
+    """
+    if isinstance(data, datetime):
+        return int(data.timestamp() * 1000)
+    elif isinstance(data, dict):
+        return {k: convert_datetime_to_epoch(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_datetime_to_epoch(item) for item in data]
+    return data
+
+
 class JsonOutput(Output):
     """Output handler for writing data to JSON files.
 
     This class provides functionality for writing data to JSON files with support
-    for chunking large datasets, buffering, and automatic file path generation.
+    for chunking large datasets, buffering, and automatic file path ge`neration.
     It can handle both pandas and daft DataFrames as input.
 
     The output can be written to local files and optionally uploaded to an object
@@ -187,9 +206,13 @@ class JsonOutput(Output):
         if isinstance(dataframe, AsyncIterator):
             async for row in dataframe:
                 self.total_record_count += 1
+                # Convert datetime fields to epoch timestamps before serialization
+                converted_row = convert_datetime_to_epoch(row)
                 # Serialize the row and add it to the buffer
                 buffer.append(
-                    orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+                    orjson.dumps(
+                        converted_row, option=orjson.OPT_APPEND_NEWLINE
+                    ).decode("utf-8")
                 )
 
             # If the buffer reaches the specified size, write it to the file
