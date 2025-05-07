@@ -154,7 +154,7 @@ class APIServer(ServerInterface):
         # Initialize parent class
         super().__init__(handler)
 
-    def _is_duckdb_ui_running(self, host="0.0.0.0", port=9000):
+    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
         """Check if DuckDB UI is already running on the default port."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             sock.settimeout(0.5)
@@ -183,7 +183,7 @@ class APIServer(ServerInterface):
         """Endpoint to launch DuckDB UI for log self-serve exploration."""
         self._start_duckdb_ui()
         # Redirect to the local DuckDB UI
-        return RedirectResponse(url="http://127.0.0.1:9000")
+        return RedirectResponse(url="http://0.0.0.0:4213")
 
     def setup_atlan_docs(self):
         """Set up and serve Atlan documentation.
