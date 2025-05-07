@@ -356,12 +356,11 @@ class AtlanLoggerAdapter:
 
             # Convert timestamp to datetime if it's not already
             if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
 
             # Calculate cutoff date (LOG_RETENTION_DAYS ago from today)
-            cutoff_date = pd.Timestamp.now().date() - pd.Timedelta(
-                days=LOG_RETENTION_DAYS
-            )
+            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=LOG_RETENTION_DAYS)
+            cutoff_date = cutoff_date.date()
 
             # Filter out logs older than LOG_RETENTION_DAYS
             df = df[df["timestamp"].dt.date >= cutoff_date]
