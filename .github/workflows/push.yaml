@@ -68,15 +68,15 @@ jobs:
         run: |
           source .venv/bin/activate
           make apidocs
-      # FIXME(inishchith): Uncomment when fixed @junaidrahim
-      # - name: Upload Docs
-      #   uses: atlanhq/kryptonite/upload@v1
-      #   with:
-      #     source: ./docs/site
-      #     target: application-sdk/${{ github.head_ref }}
-      # - name: Comment Kryptonite URL on PR
-      #   uses: mshick/add-pr-comment@v2
-      #   with:
-      #     message-id: "docs"
-      #     message: |
-      #       🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          # Only usable in atlanhq repositories
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Upload Docs to Kryptonite Bucket
+        if: ${{ github.event_name == 'push' }}
+        run: |
+            aws s3 sync ./docs/site application-sdk/${{ github.head_ref }}
