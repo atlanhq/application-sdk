@@ -28,7 +28,7 @@ The logger implements a sophisticated storage and retention system:
    - Implements buffering to reduce I/O operations
    - Flushes logs based on two conditions:
      - When buffer size reaches `LOG_BATCH_SIZE`
-     - When time since last flush exceeds `LOG_FLUSH_INTERVAL`
+     - When time since last flush exceeds `LOG_FLUSH_INTERVAL_SECONDS`
 
 2. **Log Retention**:
    - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
@@ -79,7 +79,7 @@ LOG_LEVEL=INFO
 
 # Parquet storage settings
 LOG_BATCH_SIZE=100  # Number of logs to buffer before writing
-LOG_FLUSH_INTERVAL=5  # Seconds between forced flushes
+LOG_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
 LOG_RETENTION_DAYS=30  # Days to keep logs before cleanup
 
 # OTLP settings (if enabled)

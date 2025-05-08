@@ -3,23 +3,37 @@ import logging
 import os
 import threading
 from time import time
-from typing import Any
+from typing import Any, Optional
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 from dapr.clients import DaprClient
+from pydantic import BaseModel
 
 from application_sdk.constants import (
     LOG_BATCH_SIZE,
     LOG_CLEANUP_ENABLED,
     LOG_DIR,
     LOG_FILE_NAME,
-    LOG_FLUSH_INTERVAL,
+    LOG_FLUSH_INTERVAL_SECONDS,
     LOG_RETENTION_DAYS,
     OBJECT_STORE_NAME,
     STATE_STORE_NAME,
 )
+
+
+class LogRecord(BaseModel):
+    """Pydantic model for log records."""
+
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    file: str
+    line: int
+    function: str
+    extra: Optional[dict[str, Any]] = None
 
 
 class AtlanObservability:
@@ -32,7 +46,7 @@ class AtlanObservability:
         self._buffer_lock = threading.Lock()
         self._last_flush_time = time()
         self._batch_size = LOG_BATCH_SIZE
-        self._flush_interval = LOG_FLUSH_INTERVAL
+        self._flush_interval = LOG_FLUSH_INTERVAL_SECONDS
         self.parquet_path = os.path.join(LOG_DIR, LOG_FILE_NAME)
 
         # Ensure log directory exists
@@ -40,21 +54,23 @@ class AtlanObservability:
 
     async def parquet_sink(self, message: Any):
         try:
-            log_record = {
-                "timestamp": message.record["time"].timestamp(),
-                "level": message.record["level"].name,
-                "logger_name": message.record["extra"].get("logger_name", ""),
-                "message": message.record["message"],
-                "file": str(message.record["file"].path),
-                "line": message.record["line"],
-                "function": message.record["function"],
-            }
-            for key, value in message.record["extra"].items():
-                if key not in log_record:
-                    log_record[key] = value
+            log_record = LogRecord(
+                timestamp=message.record["time"].timestamp(),
+                level=message.record["level"].name,
+                logger_name=message.record["extra"].get("logger_name", ""),
+                message=message.record["message"],
+                file=str(message.record["file"].path),
+                line=message.record["line"],
+                function=message.record["function"],
+                extra={
+                    k: v
+                    for k, v in message.record["extra"].items()
+                    if k != "logger_name"
+                },
+            )
 
             with self._buffer_lock:
-                self._log_buffer.append(log_record)
+                self._log_buffer.append(log_record.model_dump())
                 now = time()
                 if (
                     len(self._log_buffer) >= self._batch_size
@@ -92,11 +108,10 @@ class AtlanObservability:
             pq.write_table(table, self.parquet_path, compression="snappy")
             with open(self.parquet_path, "rb") as f:
                 file_content = f.read()
-                filename = "logs/log.parquet"
                 metadata = {
-                    "key": filename,
-                    "blobName": filename,
-                    "fileName": filename,
+                    "key": LOG_FILE_NAME,
+                    "blobName": LOG_FILE_NAME,
+                    "fileName": LOG_FILE_NAME,
                 }
                 with DaprClient() as client:
                     client.invoke_binding(
@@ -111,32 +126,89 @@ class AtlanObservability:
         except Exception as e:
             logging.error(f"Error flushing log batch to parquet: {e}")
 
+    async def _should_run_cleanup(self) -> bool:
+        """Check if cleanup should run based on last purge date."""
+        current_date = pd.Timestamp.now().date()
+        try:
+            with DaprClient() as client:
+                state = client.get_state(
+                    store_name=STATE_STORE_NAME, key="last_log_purge"
+                )
+                if not state.data:
+                    # If no last purge date exists, set initial date and return
+                    client.save_state(
+                        store_name=STATE_STORE_NAME,
+                        key="last_log_purge",
+                        value=json.dumps({"date": current_date.isoformat()}),
+                    )
+                    return False
+                last_purge_date = pd.Timestamp(
+                    json.loads(state.data).get("date")
+                ).date()
+                return last_purge_date != current_date
+        except Exception as e:
+            logging.error(f"Error checking last purge date: {e}")
+            return False
+
+    async def _update_last_purge_date(self, current_date: pd.Timestamp):
+        """Update the last purge date in state store."""
+        try:
+            with DaprClient() as client:
+                client.save_state(
+                    store_name=STATE_STORE_NAME,
+                    key="last_log_purge",
+                    value=json.dumps({"date": current_date.isoformat()}),
+                )
+        except Exception as e:
+            logging.error(f"Error updating last purge date: {e}")
+
+    async def _filter_old_logs(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Filter out logs older than LOG_RETENTION_DAYS."""
+        if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
+            df["timestamp"] = pd.to_datetime(df["timestamp"])
+
+        cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=LOG_RETENTION_DAYS)
+        cutoff_date = cutoff_date.date()
+
+        return df[df["timestamp"].dt.date >= cutoff_date]
+
+    async def _update_log_file(self, df: pd.DataFrame):
+        """Update the log file with filtered logs."""
+        if len(df) > 0:
+            table = pa.Table.from_pandas(df)
+            pq.write_table(table, self.parquet_path, compression="snappy")
+
+            # Update in object store
+            with open(self.parquet_path, "rb") as f:
+                file_content = f.read()
+                metadata = {
+                    "key": LOG_FILE_NAME,
+                    "blobName": LOG_FILE_NAME,
+                    "fileName": LOG_FILE_NAME,
+                }
+                with DaprClient() as client:
+                    client.invoke_binding(
+                        binding_name=OBJECT_STORE_NAME,
+                        operation="create",
+                        data=file_content,
+                        binding_metadata=metadata,
+                    )
+        else:
+            # If no logs remain, delete the file
+            os.remove(self.parquet_path)
+            # Delete from object store
+            with DaprClient() as client:
+                client.invoke_binding(
+                    binding_name=OBJECT_STORE_NAME,
+                    operation="delete",
+                    data=b"",
+                    binding_metadata={"key": "logs/log.parquet"},
+                )
+
     async def _cleanup_old_logs(self):
         """Clean up logs older than LOG_RETENTION_DAYS. Runs once per day."""
         try:
-            current_date = pd.Timestamp.now().date()
-
-            # Check if we've already run cleanup today
-            try:
-                with DaprClient() as client:
-                    state = client.get_state(
-                        store_name=STATE_STORE_NAME, key="last_log_purge"
-                    )
-                    if not state.data:
-                        # If no last purge date exists, set initial date and return
-                        client.save_state(
-                            store_name=STATE_STORE_NAME,
-                            key="last_log_purge",
-                            value=json.dumps({"date": current_date.isoformat()}),
-                        )
-                        return
-                    last_purge_date = pd.Timestamp(
-                        json.loads(state.data).get("date")
-                    ).date()
-                    if last_purge_date == current_date:
-                        return
-            except Exception as e:
-                logging.error(f"Error checking last purge date: {e}")
+            if not await self._should_run_cleanup():
                 return
 
             if not os.path.exists(self.parquet_path):
@@ -146,57 +218,14 @@ class AtlanObservability:
             table = pq.read_table(self.parquet_path)
             df = table.to_pandas()
 
-            # Convert timestamp to datetime if it's not already
-            if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
+            # Filter out old logs
+            filtered_df = await self._filter_old_logs(df)
 
-            # Calculate cutoff date (LOG_RETENTION_DAYS ago from today)
-            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=LOG_RETENTION_DAYS)
-            cutoff_date = cutoff_date.date()
+            # Update log file with filtered logs
+            await self._update_log_file(filtered_df)
 
-            # Filter out logs older than LOG_RETENTION_DAYS
-            df = df[df["timestamp"].dt.date >= cutoff_date]
-
-            if len(df) > 0:
-                # Write back filtered logs
-                table = pa.Table.from_pandas(df)
-                pq.write_table(table, self.parquet_path, compression="snappy")
-
-                # Update in object store
-                with open(self.parquet_path, "rb") as f:
-                    file_content = f.read()
-                    filename = "logs/log.parquet"
-                    metadata = {
-                        "key": filename,
-                        "blobName": filename,
-                        "fileName": filename,
-                    }
-                    with DaprClient() as client:
-                        client.invoke_binding(
-                            binding_name=OBJECT_STORE_NAME,
-                            operation="create",
-                            data=file_content,
-                            binding_metadata=metadata,
-                        )
-            else:
-                # If no logs remain, delete the file
-                os.remove(self.parquet_path)
-                # Delete from object store
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="delete",
-                        data=b"",
-                        binding_metadata={"key": "logs/log.parquet"},
-                    )
-
-            # Update last purge date in state store
-            with DaprClient() as client:
-                client.save_state(
-                    store_name=STATE_STORE_NAME,
-                    key="last_log_purge",
-                    value=json.dumps({"date": current_date.isoformat()}),
-                )
+            # Update last purge date
+            await self._update_last_purge_date(pd.Timestamp.now())
 
         except Exception as e:
             logging.error(f"Error cleaning up old logs: {e}")
