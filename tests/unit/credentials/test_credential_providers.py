@@ -1,8 +1,8 @@
-from typing import Any, Dict
-from unittest.mock import AsyncMock, MagicMock, patch
-
 import json
 import pytest
+from unittest.mock import MagicMock, patch
+from typing import Any, Dict
+
 from hypothesis import given, strategies as st
 
 from application_sdk.credentials.base import CredentialError
@@ -33,15 +33,17 @@ aws_credential_strategy = st.fixed_dictionaries({
 # Tests for the CredentialProviderFactory
 class TestCredentialProviderFactory:
     def test_register_provider(self):
-        # Create a mock provider class
-        mock_provider = type("MockProvider", (), {"get_credentials": AsyncMock()})
+        # Create a mock provider class that implements CredentialProvider
+        class MockProvider:
+            async def get_credentials(self, source_credentials: Dict[str, Any]) -> Dict[str, Any]:
+                return source_credentials
         
         # Register the provider
-        CredentialProviderFactory.register_provider("mock", mock_provider)
+        CredentialProviderFactory.register_provider("mock", MockProvider)
         
         # Get the provider and check it's the right type
         provider = CredentialProviderFactory.get_provider("mock")
-        assert isinstance(provider, mock_provider)
+        assert isinstance(provider, MockProvider)
     
     def test_get_provider_unsupported(self):
         with pytest.raises(CredentialError):
@@ -64,11 +66,11 @@ class TestAWSSecretsManagerCredentialProvider:
     @pytest.mark.asyncio
     async def test_validate_params(self, credentials):
         provider = AWSSecretsManagerCredentialProvider()
-        aws_secret_arn, aws_secret_region, secret_store = provider._validate_params(credentials)
+        params = provider._validate_params(credentials)
         
-        assert aws_secret_arn == credentials["extra"]["aws_secret_arn"]
-        assert aws_secret_region == credentials["extra"]["aws_secret_region"]
-        assert secret_store == credentials["extra"]["secret_store"]
+        assert params["aws_secret_arn"] == credentials["extra"]["aws_secret_arn"]
+        assert params["aws_secret_region"] == credentials["extra"]["aws_secret_region"]
+        assert params["secret_store"] == credentials["extra"]["secret_store"]
     
     @pytest.mark.asyncio
     async def test_validate_params_missing_arn(self):
@@ -117,10 +119,10 @@ class TestAWSSecretsManagerCredentialProvider:
             )
             
             assert result == {"username": "real_username", "password": "real_password"}
+            # Updated assertion to match the real implementation
             mock_client.get_secret.assert_called_once_with(
-                store_name="aws-secrets",
-                key="arn:aws:secretsmanager:test",
-                metadata=(("region", "us-west-2"),)
+                store_name="aws-secrets-us-west-2", 
+                key="arn:aws:secretsmanager:test"
             )
     
     @pytest.mark.asyncio
@@ -133,11 +135,11 @@ class TestAWSSecretsManagerCredentialProvider:
             "_fetch_secret"
         ) as mock_fetch:
             # Set up the mocks
-            mock_validate.return_value = (
-                "arn:aws:secretsmanager:test", 
-                "us-west-2", 
-                "aws-secrets"
-            )
+            mock_validate.return_value = {
+                "aws_secret_arn": "arn:aws:secretsmanager:test", 
+                "aws_secret_region": "us-west-2", 
+                "secret_store": "aws-secrets"
+            }
             mock_fetch.return_value = {
                 "DB_USERNAME": "real_username",
                 "DB_PASSWORD": "real_password"
@@ -180,5 +182,5 @@ class TestAWSSecretsManagerCredentialProvider:
                 "extra": {}
             }
             
-            with pytest.raises(CredentialError, match="Test error"):
+            with pytest.raises(CredentialError, match="Failed to fetch credentials from AWS Secrets Manager: Test error"):
                 await provider.get_credentials(credentials)

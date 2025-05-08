@@ -1,10 +1,10 @@
+from application_sdk.credentials.credentials_utils import process_secret_data, apply_secret_values
 import json
 import pytest
+from unittest.mock import MagicMock, patch
+from typing import Any, Dict
+
 from hypothesis import given, strategies as st
-from typing import Dict, Any
-
-from application_sdk.credentials.credentials_utils import process_secret_data, apply_secret_values
-
 
 # Helper strategy for credentials dictionaries
 credential_dict_strategy = st.dictionaries(
@@ -12,7 +12,6 @@ credential_dict_strategy = st.dictionaries(
     values=st.one_of(st.text(), st.integers(), st.booleans()),
     min_size=1
 )
-
 
 # Tests for the utility functions
 class TestCredentialUtils:
@@ -65,12 +64,12 @@ class TestCredentialUtils:
         result = apply_secret_values(test_credentials, secret_data)
         
         # Check that substitutions were made correctly
-        for key, value in result.items():
-            if key != "extra" and key.startswith("test_") and isinstance(value, str) and value in secret_data:
+        for key, value in test_credentials.items():
+            if key != "extra" and isinstance(value, str) and value in secret_data:
                 assert result[key] == secret_data[value]
                 
         # Check extra dict substitutions
-        if "extra" in result:
-            for key, value in result["extra"].items():
-                if key.startswith("extra_") and isinstance(value, str) and value in secret_data:
+        if "extra" in test_credentials:
+            for key, value in test_credentials["extra"].items():
+                if isinstance(value, str) and value in secret_data:
                     assert result["extra"][key] == secret_data[value]
