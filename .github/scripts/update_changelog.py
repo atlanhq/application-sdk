@@ -175,20 +175,14 @@ def format_changelog_section(categories, current_version, new_version):
     return changelog
 
 
-def update_changelog_file(changelog_content, new_version):
+def update_changelog_file(changelog_content):
     """
     Update the CHANGELOG.md file with new content.
 
     Args:
         changelog_content (str): New changelog section
-        new_version (str): The new version
     """
     changelog_path = "CHANGELOG.md"
-    release_notes_path = ".github/release_notes.md"
-
-    # Create release notes file for the GitHub release description
-    with open(release_notes_path, "w") as f:
-        f.write(changelog_content)
 
     # If CHANGELOG.md doesn't exist or is empty, create it with initial content
     if not os.path.exists(changelog_path) or os.path.getsize(changelog_path) == 0:
@@ -219,6 +213,8 @@ def update_changelog_file(changelog_content, new_version):
         # If no title, just prepend the new content
         new_content = "# Changelog\n\n" + changelog_content + existing_content
 
+    print(new_content)
+
     # Write updated changelog
     with open(changelog_path, "w") as f:
         f.write(new_content)
@@ -237,7 +233,7 @@ def main():
     changelog_content = format_changelog_section(
         categories, current_version, new_version
     )
-    update_changelog_file(changelog_content, new_version)
+    update_changelog_file(changelog_content)
 
     print(f"Changelog updated for version {new_version}")
 
