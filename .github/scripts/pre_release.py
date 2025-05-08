@@ -101,15 +101,16 @@ def update_pyproject_version(new_version: str) -> None:
 
 def main():
     """Main entry point for the pre-GA versioning process."""
+    enforce_on_branch = "nishchith/release-auto"
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
     )
     logging.info("Starting version update process")
 
     current_branch = str(sys.argv[1])
-    if current_branch != "main":
+    if current_branch != enforce_on_branch:
         logging.warning(
-            f"Not on main branch (on {current_branch}). Skipping version bump."
+            f"Not on {enforce_on_branch} branch (on {current_branch}). Skipping version bump."
         )
         return
 

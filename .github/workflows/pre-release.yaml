@@ -4,7 +4,8 @@ on:
   pull_request:
     types: [closed]
     branches:
-      - main
+      - nishchith/release-auto
+      # - main
 
 jobs:
   bump-version:
@@ -47,7 +48,8 @@ jobs:
       - name: Update version
         id: version_update
         run: |
-          python .github/scripts/pre_release.py main
+          python .github/scripts/pre_release.py nishchith/release-auto
+          # python .github/scripts/pre_release.py main
           poetry lock
           echo "NEW_VERSION=$(poetry version -s)" >> $GITHUB_ENV
 
@@ -82,7 +84,7 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB }}
           title: "Bump version to ${{ env.NEW_VERSION }}"
           body: |
-            Automated version bump after merge to main.
+            Automated version bump after merge to nishchith/release-auto.
 
             This PR updates:
             - pyproject.toml
@@ -91,5 +93,5 @@ jobs:
 
             Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}
           branch: ${{ env.BRANCH_NAME }}
-          base: main
-          labels: "release" # triggers the tag-and-publish workflow on merge to main
+          base: nishchith/release-auto
+          labels: "release" # triggers the tag-and-publish workflow on merge to nishchith/release-auto
