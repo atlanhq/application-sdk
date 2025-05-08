@@ -123,3 +123,8 @@ LOG_FLUSH_INTERVAL = int(os.environ.get("LOG_FLUSH_INTERVAL", 10))
 
 # Log Retention configuration
 LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", 30))
+LOG_CLEANUP_ENABLED = bool(os.environ.get("LOG_CLEANUP_ENABLED", False))
+
+# Log Location configuration
+LOG_DIR = os.environ.get("LOG_DIR", "/tmp/logs")
+LOG_FILE_NAME = os.environ.get("LOG_FILE_NAME", "log.parquet")
