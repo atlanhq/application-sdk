@@ -39,7 +39,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install semver
+          pip install semver packaging
 
       - name: Get current version
         id: current_version
