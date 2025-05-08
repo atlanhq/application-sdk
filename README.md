@@ -1,5 +1,5 @@
 # Atlan Application SDK
-[![On-Push Checks](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml) [![CodeQL Advanced](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml)
+[![On-Push Checks](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml) [![CodeQL Advanced](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml) [![PyPI version](https://img.shields.io/pypi/v/atlan-application-sdk.svg)](https://pypi.org/project/atlan-application-sdk/)
 
 Application SDK is a Python library for developing applications on the Atlan Platform. It provides a comprehensive PaaS (Platform as a Service) system with tools and services to build, test, and manage applications.
 
@@ -30,14 +30,21 @@ To begin developing with the Application SDK:
 
 ### Installation
 
-Install `application-sdk` as a dependency in your project:
+Install `atlan-application-sdk` as a dependency in your project:
 
+- Using pip:
 ```bash
-poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
+# pip install the latest version from PyPI
+pip install atlan-application-sdk
+```
 
-# OR
+- Using alternative package managers:
+```bash
+# Using uv to install the latest version from PyPI
+uv pip install atlan-application-sdk
 
-poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#release-tag
+# using Poetry to install the latest version from PyPI
+poetry add atlan-application-sdk
 ```
 
 ## Contributing

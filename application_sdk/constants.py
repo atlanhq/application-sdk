@@ -88,7 +88,7 @@ OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 #: Service name for OpenTelemetry
-SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "application-sdk")
+SERVICE_NAME: str = os.getenv("OTEL_SERVICE_NAME", "atlan-application-sdk")
 #: Service version for OpenTelemetry
 SERVICE_VERSION: str = os.getenv("OTEL_SERVICE_VERSION", "0.1.0")
 #: Additional resource attributes for OpenTelemetry
