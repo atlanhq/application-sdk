@@ -71,6 +71,7 @@ def categorize_commits(commits):
             continue
 
         commit_hash, author_name, message_subject = parts
+        commit_link = f"https://github.com/atlanhq/application-sdk/commit/{commit_hash}"
 
         # Categorize based on conventional commit prefixes
         if re.match(r"^feat(\(.*\))?:", message_subject) or re.match(
@@ -78,17 +79,17 @@ def categorize_commits(commits):
         ):
             # Extract the message without the prefix
             msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message_subject)
-            categories["features"].append((commit_hash, author_name, msg))
+            categories["features"].append((commit_link, author_name, msg))
         elif re.match(r"^fix(\(.*\))?:", message_subject):
             msg = re.sub(r"^fix(\(.*\))?:\s*", "", message_subject)
-            categories["fixes"].append((commit_hash, author_name, msg))
+            categories["fixes"].append((commit_link, author_name, msg))
         elif re.match(r"^chore(\(.*\))?:", message_subject) or re.match(
             r"^build(\(.*\))?:", message_subject
         ):
             msg = re.sub(r"^(chore|build)(\(.*\))?:\s*", "", message_subject)
-            categories["chores"].append((commit_hash, author_name, msg))
+            categories["chores"].append((commit_link, author_name, msg))
         else:
-            categories["other"].append((commit_hash, author_name, message_subject))
+            categories["other"].append((commit_link, author_name, message_subject))
 
     return categories
 
@@ -150,15 +151,25 @@ def format_changelog_section(categories, current_version, new_version):
     # Add Features section
     if categories["features"]:
         changelog += "### Features\n\n"
-        for commit_hash, author_name, msg in categories["features"]:
-            changelog += f"- {msg} (by {author_name} - {commit_hash})\n"
+        for commit_link, author_name, msg in categories["features"]:
+            short_sha = commit_link.split("/")[-1][
+                :7
+            ]  # Extract short SHA (first 7 chars)
+            changelog += (
+                f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
+            )
         changelog += "\n"
 
     # Add Fixes section
     if categories["fixes"]:
         changelog += "### Bug Fixes\n\n"
-        for commit_hash, author_name, msg in categories["fixes"]:
-            changelog += f"- {msg} (by {author_name} - {commit_hash})\n"
+        for commit_link, author_name, msg in categories["fixes"]:
+            short_sha = commit_link.split("/")[-1][
+                :7
+            ]  # Extract short SHA (first 7 chars)
+            changelog += (
+                f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
+            )
         changelog += "\n"
 
     # NOTE: Ignore chores and other changes
