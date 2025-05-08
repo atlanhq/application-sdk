@@ -75,7 +75,7 @@ jobs:
 
           git add pyproject.toml poetry.lock CHANGELOG.md application_sdk/version.py .github/release_notes.md
           git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
-          git push origin $branch_name
+          git push origin $branch_name -f
           echo "BRANCH_NAME=$branch_name" >> $GITHUB_ENV
 
       - name: Create Pull Request
