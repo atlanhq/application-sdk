@@ -92,4 +92,4 @@ jobs:
             Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}
           branch: ${{ env.BRANCH_NAME }}
           base: main
-          labels: "automated,version-bump"
+          labels: "release" # triggers the tag-and-publish workflow on merge to main
