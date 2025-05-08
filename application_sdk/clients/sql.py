@@ -143,8 +143,8 @@ class BaseSQLClient(ClientInterface):
         if not database:
             raise ValueError("database is required for IAM user authentication")
 
-        port = self.resolved_credentials.get("port",5432)
-        region = self.resolved_credentials.get("region", None)
+        port = self.resolved_credentials.get("port")
+        region = self.resolved_credentials.get("region")
         token = generate_aws_rds_token_with_iam_user(
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
@@ -180,10 +180,10 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("database is required for IAM role authentication")
 
         session_name = AWS_SESSION_NAME
-        username = self.resolved_credentials.get("username", None)
-        host = self.resolved_credentials.get("host", None)
-        port = self.resolved_credentials.get("port", 5432)
-        region = self.resolved_credentials.get("region", None)
+        username = self.resolved_credentials.get("username")
+        host = self.resolved_credentials.get("host")
+        port = self.resolved_credentials.get("port")
+        region = self.resolved_credentials.get("region")
 
         token = generate_aws_rds_token_with_iam_role(
             role_arn=aws_role_arn,
