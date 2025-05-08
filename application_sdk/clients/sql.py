@@ -12,7 +12,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
-from application_sdk.credentials.factory import CredentialProviderFactory
+
 from application_sdk.clients import ClientInterface
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
@@ -21,6 +21,7 @@ from application_sdk.common.aws_utils import (
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
+from application_sdk.credentials.factory import CredentialProviderFactory
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -100,19 +101,19 @@ class BaseSQLClient(ClientInterface):
     async def resolve_credentials(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
         """
         Resolve credentials based on credential source.
-        
+
         Args:
             credentials (Dict[str, Any]): Source credentials.
-            
+
         Returns:
             Dict[str, Any]: Resolved credentials.
-            
+
         Raises:
             ValueError: If credential resolution fails.
         """
         credential_source = credentials.get("credentialSource", "direct")
         provider = CredentialProviderFactory.get_provider(credential_source)
-        return await provider.get_credentials(credentials)    
+        return await provider.get_credentials(credentials)
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -209,7 +210,9 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If an invalid authentication type is specified.
         """
-        authType = self.resolved_credentials.get("authType", "basic")  # Default to basic auth
+        authType = self.resolved_credentials.get(
+            "authType", "basic"
+        )  # Default to basic auth
         token = None
 
         match authType:
@@ -222,7 +225,8 @@ class BaseSQLClient(ClientInterface):
             case _:
                 raise ValueError(f"Invalid auth type: {authType}")
 
-        encoded_token = quote_plus(token)
+        # Handle None values and ensure token is a string before encoding
+        encoded_token = quote_plus(str(token or ""))
         return encoded_token
 
     def add_connection_params(
@@ -385,7 +389,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         """
         self.credentials = credentials
         self.resolved_credentials = await self.resolve_credentials(credentials)
-        
+
         try:
             from sqlalchemy.ext.asyncio import create_async_engine
 
