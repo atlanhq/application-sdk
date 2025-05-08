@@ -11,7 +11,14 @@ columns:
   - name: attributes.connectionName
     source_query: connection_name
   - name: attributes.description
-    source_query: remarks
+    source_query: |
+      CASE
+        WHEN remarks IS NOT NULL THEN
+          REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
+        ELSE
+          NULL
+      END
+    source_columns: [remarks]
   - name: attributes.databaseName
     source_query: procedure_catalog
   - name: attributes.databaseQualifiedName
