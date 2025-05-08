@@ -163,14 +163,22 @@ class AtlanObservability:
             logging.error(f"Error updating last purge date: {e}")
 
     async def _filter_old_logs(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Filter out logs older than LOG_RETENTION_DAYS."""
+        """Filter out logs older than LOG_RETENTION_DAYS.
+
+        Args:
+            df: Input DataFrame containing log records
+
+        Returns:
+            DataFrame containing only logs newer than LOG_RETENTION_DAYS
+        """
         if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
             df["timestamp"] = pd.to_datetime(df["timestamp"])
 
         cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=LOG_RETENTION_DAYS)
         cutoff_date = cutoff_date.date()
 
-        return df[df["timestamp"].dt.date >= cutoff_date]
+        # Ensure we return a DataFrame by using loc
+        return df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
 
     async def _update_log_file(self, df: pd.DataFrame):
         """Update the log file with filtered logs."""
