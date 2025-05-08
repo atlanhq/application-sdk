@@ -25,6 +25,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    LOG_DIR,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -163,13 +164,12 @@ class APIServer(ServerInterface):
 
     def _start_duckdb_ui(self, db_path="/tmp/logs/observability.db"):
         """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
-        logs_dir = "/tmp/logs"
         if not self._is_duckdb_ui_running():
-            os.makedirs(logs_dir, exist_ok=True)
+            os.makedirs(LOG_DIR, exist_ok=True)
             con = duckdb.connect(db_path)
             # Attach all .parquet files in /tmp/logs as tables
-            for fname in os.listdir(logs_dir):
-                fpath = os.path.join(logs_dir, fname)
+            for fname in os.listdir(LOG_DIR):
+                fpath = os.path.join(LOG_DIR, fname)
                 if fname.endswith(".parquet"):
                     tbl = os.path.splitext(fname)[0]
                     con.execute(

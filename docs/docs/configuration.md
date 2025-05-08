@@ -49,7 +49,7 @@ The Application SDK uses environment variables for configuration. These can be s
 |---------------------|-------------|---------------|
 | `LOG_LEVEL` | Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO` |
 | `LOG_BATCH_SIZE` | Number of log records to buffer before writing to parquet file | `100` |
-| `LOG_FLUSH_INTERVAL` | Time interval (in seconds) to flush logs to parquet file | `5` |
+| `LOG_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush logs to parquet file | `5` |
 | `LOG_RETENTION_DAYS` | Number of days to retain log records before automatic cleanup | `30` |
 | `LOG_DIR` | Directory where log files are stored | `/tmp/logs` |
 | `LOG_FILE_NAME` | Name of the parquet file used for log storage | `logs.parquet` |

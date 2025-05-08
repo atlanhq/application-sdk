@@ -6,7 +6,6 @@ from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Tuple
 
-from dapr.clients import DaprClient
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
@@ -33,9 +32,6 @@ from application_sdk.constants import (
 
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
-
-# Initialize Dapr client
-dapr_client = DaprClient()
 
 
 # Add a Loguru handler for the Python logging system
