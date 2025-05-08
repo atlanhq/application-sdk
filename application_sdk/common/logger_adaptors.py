@@ -1,16 +1,11 @@
 import asyncio
-import json
 import logging
-import os
 import sys
 import threading
 from contextvars import ContextVar
-from time import time, time_ns
+from time import time_ns
 from typing import Any, Dict, Tuple
 
-import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from dapr.clients import DaprClient
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
@@ -21,13 +16,10 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
+from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_LOGS,
-    LOG_BATCH_SIZE,
-    LOG_FLUSH_INTERVAL,
     LOG_LEVEL,
-    LOG_RETENTION_DAYS,
-    OBJECT_STORE_NAME,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -37,7 +29,6 @@ from application_sdk.constants import (
     OTEL_WF_NODE_NAME,
     SERVICE_NAME,
     SERVICE_VERSION,
-    STATE_STORE_NAME,
 )
 
 # Create a context variable for request_id
@@ -45,14 +36,6 @@ request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", defa
 
 # Initialize Dapr client
 dapr_client = DaprClient()
-
-# Constants for parquet logging
-LOG_DIR = "/tmp/logs"
-PARQUET_FILE = "logs.parquet"
-PARQUET_PATH = os.path.join(LOG_DIR, PARQUET_FILE)
-
-# Ensure log directory exists
-os.makedirs(LOG_DIR, exist_ok=True)
 
 
 # Add a Loguru handler for the Python logging system
@@ -98,16 +81,12 @@ SEVERITY_MAPPING = {
 }
 
 
-class AtlanLoggerAdapter:
-    _log_buffer = []
-    _buffer_lock = threading.Lock()
-    _last_flush_time = time()
-    _batch_size = LOG_BATCH_SIZE
-    _flush_interval = LOG_FLUSH_INTERVAL
+class AtlanLoggerAdapter(AtlanObservability):
     _flush_task_started = False
 
     def __init__(self, logger_name: str) -> None:
         """Create the logger adapter with enhanced configuration."""
+        super().__init__()
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
@@ -246,168 +225,6 @@ class AtlanLoggerAdapter:
         while True:
             await asyncio.sleep(self._flush_interval)
             await self._flush_buffer(force=True)
-
-    async def parquet_sink(self, message: Any):
-        try:
-            log_record = {
-                "timestamp": message.record["time"].timestamp(),
-                "level": message.record["level"].name,
-                "logger_name": message.record["extra"].get("logger_name", ""),
-                "message": message.record["message"],
-                "file": str(message.record["file"].path),
-                "line": message.record["line"],
-                "function": message.record["function"],
-            }
-            for key, value in message.record["extra"].items():
-                if key not in log_record:
-                    log_record[key] = value
-
-            with self._buffer_lock:
-                self._log_buffer.append(log_record)
-                now = time()
-                if (
-                    len(self._log_buffer) >= self._batch_size
-                    or (now - self._last_flush_time) >= self._flush_interval
-                ):
-                    self._last_flush_time = now
-                    buffer_copy = self._log_buffer[:]
-                    self._log_buffer.clear()
-                else:
-                    buffer_copy = None
-
-            if buffer_copy is not None:
-                await self._flush_records(buffer_copy)
-        except Exception as e:
-            logging.error(f"Error buffering log: {e}")
-
-    async def _flush_buffer(self, force=False):
-        with self._buffer_lock:
-            if self._log_buffer:
-                buffer_copy = self._log_buffer[:]
-                self._log_buffer.clear()
-            else:
-                buffer_copy = None
-        if buffer_copy:
-            await self._flush_records(buffer_copy)
-
-    async def _flush_records(self, records):
-        try:
-            df = pd.DataFrame(records)
-            if os.path.exists(PARQUET_PATH):
-                existing_table = pq.read_table(PARQUET_PATH)
-                existing_df = existing_table.to_pandas()
-                df = pd.concat([existing_df, df], ignore_index=True)
-            table = pa.Table.from_pandas(df)
-            pq.write_table(table, PARQUET_PATH, compression="snappy")
-            with open(PARQUET_PATH, "rb") as f:
-                file_content = f.read()
-                filename = "logs/log.parquet"
-                metadata = {
-                    "key": filename,
-                    "blobName": filename,
-                    "fileName": filename,
-                }
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="create",
-                        data=file_content,
-                        binding_metadata=metadata,
-                    )
-            # Clean up old logs after flushing
-            await self._cleanup_old_logs()
-        except Exception as e:
-            logging.error(f"Error flushing log batch to parquet: {e}")
-
-    async def _cleanup_old_logs(self):
-        """Clean up logs older than LOG_RETENTION_DAYS. Runs once per day."""
-        try:
-            current_date = pd.Timestamp.now().date()
-
-            # Check if we've already run cleanup today
-            try:
-                with DaprClient() as client:
-                    state = client.get_state(
-                        store_name=STATE_STORE_NAME, key="last_log_purge"
-                    )
-                    if not state.data:
-                        # If no last purge date exists, set initial date and return
-                        client.save_state(
-                            store_name=STATE_STORE_NAME,
-                            key="last_log_purge",
-                            value=json.dumps({"date": current_date.isoformat()}),
-                        )
-                        return
-                    last_purge_date = pd.Timestamp(
-                        json.loads(state.data).get("date")
-                    ).date()
-                    if last_purge_date == current_date:
-                        return
-            except Exception as e:
-                logging.error(f"Error checking last purge date: {e}")
-                return
-
-            if not os.path.exists(PARQUET_PATH):
-                return
-
-            # Read existing logs
-            table = pq.read_table(PARQUET_PATH)
-            df = table.to_pandas()
-
-            # Convert timestamp to datetime if it's not already
-            if not pd.api.types.is_datetime64_any_dtype(df["timestamp"]):
-                df["timestamp"] = pd.to_datetime(df["timestamp"])
-
-            # Calculate cutoff date (LOG_RETENTION_DAYS ago from today)
-            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=LOG_RETENTION_DAYS)
-            cutoff_date = cutoff_date.date()
-
-            # Filter out logs older than LOG_RETENTION_DAYS
-            df = df[df["timestamp"].dt.date >= cutoff_date]
-
-            if len(df) > 0:
-                # Write back filtered logs
-                table = pa.Table.from_pandas(df)
-                pq.write_table(table, PARQUET_PATH, compression="snappy")
-
-                # Update in object store
-                with open(PARQUET_PATH, "rb") as f:
-                    file_content = f.read()
-                    filename = "logs/log.parquet"
-                    metadata = {
-                        "key": filename,
-                        "blobName": filename,
-                        "fileName": filename,
-                    }
-                    with DaprClient() as client:
-                        client.invoke_binding(
-                            binding_name=OBJECT_STORE_NAME,
-                            operation="create",
-                            data=file_content,
-                            binding_metadata=metadata,
-                        )
-            else:
-                # If no logs remain, delete the file
-                os.remove(PARQUET_PATH)
-                # Delete from object store
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="delete",
-                        data=b"",
-                        binding_metadata={"key": "logs/log.parquet"},
-                    )
-
-            # Update last purge date in state store
-            with DaprClient() as client:
-                client.save_state(
-                    store_name=STATE_STORE_NAME,
-                    key="last_log_purge",
-                    value=json.dumps({"date": current_date.isoformat()}),
-                )
-
-        except Exception as e:
-            logging.error(f"Error cleaning up old logs: {e}")
 
     def otlp_sink(self, message: Any):
         """Process log message and emit to OTLP."""
