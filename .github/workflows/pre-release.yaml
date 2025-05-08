@@ -65,7 +65,9 @@ jobs:
         id: changelog
         run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
 
-      - name: Create branch for version bump
+      - name: Commit version bump and changelog
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           git config --global user.name 'atlan-ci'
           git config --global user.email 'it@atlan.com'
@@ -75,23 +77,15 @@ jobs:
 
           git add pyproject.toml poetry.lock CHANGELOG.md application_sdk/version.py
           git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
-          git push origin $branch_name -f
-          echo "BRANCH_NAME=$branch_name" >> $GITHUB_ENV
+          git push origin $branch_name --force
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v5
-        with:
-          token: ${{ secrets.ORG_PAT_GITHUB }}
-          title: "Bump version to ${{ env.NEW_VERSION }}"
-          body: |
-            Automated version bump after merge to nishchith/release-auto.
+          gh pr create --base ${{ github.ref_name }} --title "Bump version to ${{ env.NEW_VERSION }}" --body "Automated version bump after merge to nishchith/release-auto.
 
             This PR updates:
             - pyproject.toml
             - application_sdk/version.py
             - CHANGELOG.md
 
-            Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}
-          branch: ${{ env.BRANCH_NAME }}
-          base: nishchith/release-auto
-          labels: "release" # triggers the tag-and-publish workflow on merge to nishchith/release-auto
+            Version: ${{ env.CURRENT_VERSION }} → ${{ env.NEW_VERSION }}" --label "release"
+
+          # gh pr merge --squash --admin
