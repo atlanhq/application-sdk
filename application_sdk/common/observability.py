@@ -3,21 +3,24 @@ import logging
 import os
 import threading
 from time import time
+from typing import Any
+
 import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
-from typing import Any
 from dapr.clients import DaprClient
+
 from application_sdk.constants import (
-    LOG_RETENTION_DAYS,
-    OBJECT_STORE_NAME,
-    STATE_STORE_NAME,
     LOG_BATCH_SIZE,
-    LOG_FLUSH_INTERVAL,
     LOG_CLEANUP_ENABLED,
     LOG_DIR,
     LOG_FILE_NAME,
+    LOG_FLUSH_INTERVAL,
+    LOG_RETENTION_DAYS,
+    OBJECT_STORE_NAME,
+    STATE_STORE_NAME,
 )
+
 
 class AtlanObservability:
     """Base class for Atlan observability."""
@@ -197,6 +200,3 @@ class AtlanObservability:
 
         except Exception as e:
             logging.error(f"Error cleaning up old logs: {e}")
-
-    
-    
