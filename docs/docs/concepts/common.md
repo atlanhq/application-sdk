@@ -9,6 +9,7 @@ The SDK uses the `loguru` library for enhanced logging capabilities, combined wi
 ### Key Concepts
 
 *   **`InterceptHandler`**: A standard `logging.Handler` that intercepts logs from standard Python logging (including libraries like `boto3`) and redirects them through `loguru`, ensuring consistent formatting and handling.
+*   **`AtlanObservability`**: A superclass responsible for managing log retention, logs batching and parquet sink operations.
 *   **`AtlanLoggerAdapter`**: The main interface for logging within the SDK. It wraps `loguru`, configures standard output format (including colors), handles OTLP exporter setup, and automatically enriches log messages with context.
     *   **Context Enrichment**: Automatically includes details from the current Temporal Workflow or Activity context (like `workflow_id`, `run_id`, `activity_id`, `attempt`, etc.) and FastAPI request context (`request_id`) if available.
     *   **OTLP Integration**: If `ENABLE_OTLP_LOGS` is true, logs are exported via the OpenTelemetry Protocol (OTLP) using `OTLPLogExporter`. Resource attributes (`service.name`, `service.version`, `k8s.workflow.node.name`, etc.) are automatically added based on environment variables (`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_WF_NODE_NAME`, `SERVICE_NAME`, `SERVICE_VERSION`).
