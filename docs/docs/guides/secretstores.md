@@ -94,7 +94,7 @@ End users of your app can set up their credentials in AWS Secrets Manager by fol
 
 When users set up a connection in your app, they should:
 
-1. **Select AWS Secrets Manager** as the credential source 
+1. **Select AWS Secrets Manager** as the credential source
 2. **Enter the Secret ARN and Region**
 3. **Use key names as references**:
    - Instead of entering actual credentials, users should enter the key names from their secret
