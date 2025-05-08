@@ -1,9 +1,26 @@
 [tool.poetry]
-name = "application-sdk"
-version = "0.1.0"
+name = "atlan-application-sdk"
+version = "0.1.1rc0"
 description = "Python Application SDK is a Python library for developing applications on the Atlan Platform"
+license = "Apache LICENSE 2.0"
 authors = ["Atlan App Team <apps@atlan.com>"]
 readme = "README.md"
+repository = "https://github.com/atlanhq/application-sdk"
+documentation = "https://github.com/atlanhq/application-sdk/README.md"
+keywords = ["atlan", "sdk", "platform", "app", "development"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+]
+packages = [
+    { include = "application_sdk" }
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
