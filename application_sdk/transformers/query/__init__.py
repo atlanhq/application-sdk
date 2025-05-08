@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 import daft
 import yaml
+from pyatlan.model.enums import AtlanConnectorType
 
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
@@ -342,7 +343,9 @@ class QueryBasedTransformer(TransformerInterface):
             "last_sync_run_at": daft.lit(
                 int(datetime.now(timezone.utc).timestamp() * 1000)
             ),
-            "connector_name": daft.lit(self.connector_name),
+            "connector_name": daft.lit(
+                AtlanConnectorType.get_connector_name(connection_qualified_name)
+            ),
         }
         entity_sql_template, literal_columns = self.generate_sql_query(
             entity_sql_template_path, dataframe, default_attributes=default_attributes
