@@ -6,6 +6,10 @@ on:
     branches:
       - nishchith/release-auto
       # - main
+  # TODO: Remove this once we have a stable release branch
+  push:
+    branches:
+      - nishchith/release-auto
 
 jobs:
   bump-version:

@@ -41,7 +41,7 @@ def get_commits_since_last_tag(current_version):
 
     # Get commits with format: <hash> <subject>
     result = subprocess.run(
-        ["git", "log", range_spec, "--pretty=format:%h %s"],
+        ["git", "log", range_spec, "--pretty=format:%h¦%an¦%s"],
         capture_output=True,
         text=True,
     )
@@ -66,29 +66,29 @@ def categorize_commits(commits):
             continue
 
         # Extract commit hash and message
-        parts = commit.split(" ", 1)
-        if len(parts) < 2:
+        parts = commit.split("¦", 2)
+        if len(parts) < 3:
             continue
 
-        commit_hash, message = parts
+        commit_hash, author_name, message_subject = parts
 
         # Categorize based on conventional commit prefixes
-        if re.match(r"^feat(\(.*\))?:", message) or re.match(
-            r"^docs(\(.*\))?:", message
+        if re.match(r"^feat(\(.*\))?:", message_subject) or re.match(
+            r"^docs(\(.*\))?:", message_subject
         ):
             # Extract the message without the prefix
-            msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message)
-            categories["features"].append((commit_hash, msg))
-        elif re.match(r"^fix(\(.*\))?:", message):
-            msg = re.sub(r"^fix(\(.*\))?:\s*", "", message)
-            categories["fixes"].append((commit_hash, msg))
-        elif re.match(r"^chore(\(.*\))?:", message) or re.match(
-            r"^build(\(.*\))?:", message
+            msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message_subject)
+            categories["features"].append((commit_hash, author_name, msg))
+        elif re.match(r"^fix(\(.*\))?:", message_subject):
+            msg = re.sub(r"^fix(\(.*\))?:\s*", "", message_subject)
+            categories["fixes"].append((commit_hash, author_name, msg))
+        elif re.match(r"^chore(\(.*\))?:", message_subject) or re.match(
+            r"^build(\(.*\))?:", message_subject
         ):
-            msg = re.sub(r"^(chore|build)(\(.*\))?:\s*", "", message)
-            categories["chores"].append((commit_hash, msg))
+            msg = re.sub(r"^(chore|build)(\(.*\))?:\s*", "", message_subject)
+            categories["chores"].append((commit_hash, author_name, msg))
         else:
-            categories["other"].append((commit_hash, message))
+            categories["other"].append((commit_hash, author_name, message_subject))
 
     return categories
 
@@ -150,15 +150,15 @@ def format_changelog_section(categories, current_version, new_version):
     # Add Features section
     if categories["features"]:
         changelog += "### Features\n\n"
-        for _, msg in categories["features"]:
-            changelog += f"- {msg}\n"
+        for commit_hash, author_name, msg in categories["features"]:
+            changelog += f"- {msg} (by {author_name} - {commit_hash})\n"
         changelog += "\n"
 
     # Add Fixes section
     if categories["fixes"]:
         changelog += "### Bug Fixes\n\n"
-        for _, msg in categories["fixes"]:
-            changelog += f"- {msg}\n"
+        for commit_hash, author_name, msg in categories["fixes"]:
+            changelog += f"- {msg} (by {author_name} - {commit_hash})\n"
         changelog += "\n"
 
     # NOTE: Ignore chores and other changes
