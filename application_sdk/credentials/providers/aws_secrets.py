@@ -95,13 +95,12 @@ class AWSSecretsManagerCredentialProvider(CredentialProvider):
         """
         from dapr.clients import DaprClient
         
-        component_metadata = (("region", aws_secret_region),)
+        secret_store_region = f"{secret_store}-{aws_secret_region}"
         
         with DaprClient() as client:
             secret = client.get_secret(
-                store_name=secret_store, 
-                key=aws_secret_arn,
-                metadata=component_metadata
+                store_name=secret_store_region, 
+                key=aws_secret_arn
             )
             
             return process_secret_data(secret.secret)

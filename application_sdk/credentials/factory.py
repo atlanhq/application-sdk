@@ -3,13 +3,19 @@
 from typing import Dict, Type
 
 from application_sdk.credentials.base import CredentialError, CredentialProvider
-
+from application_sdk.credentials.providers.direct import DirectCredentialProvider
+from application_sdk.credentials.providers.aws_secrets import AWSSecretsManagerCredentialProvider
 
 class CredentialProviderFactory:
     """Factory for creating credential providers based on credential source."""
     
     # Storage for registered providers
-    _providers: Dict[str, Type[CredentialProvider]] = {}
+    _providers: Dict[str, Type[CredentialProvider]] = {
+        "direct": DirectCredentialProvider,
+        "aws_secrets_manager": AWSSecretsManagerCredentialProvider,
+        # Add more providers here as needed
+    }
+
     
     @classmethod
     def register_provider(cls, source_type: str, provider_class: Type[CredentialProvider]):

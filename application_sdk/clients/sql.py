@@ -12,7 +12,7 @@ from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
-from application_sdk.common.credential_providers import CredentialProviderFactory
+from application_sdk.credentials.factory import CredentialProviderFactory
 from application_sdk.clients import ClientInterface
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,

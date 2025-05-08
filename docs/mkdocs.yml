@@ -93,6 +93,7 @@ nav:
       - Inputs: concepts/inputs.md
       - Outputs: concepts/outputs.md
       - Worker: concepts/worker.md
+      - Secret Stores: concepts/secretstores.md
       - Example: concepts/application_sql.md
 
   - Configuration Reference: configuration.md
