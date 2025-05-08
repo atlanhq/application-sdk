@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.error_codes import SQL_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import SQL_SERVER_MIN_VERSION
@@ -84,7 +85,10 @@ class BaseSQLHandler(HandlerInterface):
                     }
                 )
         except Exception as exc:
-            logger.error(f"Failed to fetch metadata: {str(exc)}")
+            logger.error(
+                f"Failed to fetch metadata: {str(exc)}",
+                error_code=SQL_ERRORS["SQL_METADATA_FETCH_ERROR"].code,
+            )
             raise exc
         return result
 
@@ -100,13 +104,17 @@ class BaseSQLHandler(HandlerInterface):
                 engine=self.sql_client.engine, query=self.test_authentication_sql
             )
             df = await sql_input.get_daft_dataframe()
+            if df is None:
+                raise ValueError("No data returned from authentication query")
             df.to_pylist()
             return True
         except Exception as exc:
+            error_msg = str(exc)
             logger.error(
-                f"Failed to authenticate with the given credentials: {str(exc)}"
+                f"Failed to authenticate with the given credentials: {error_msg}",
+                error_code=SQL_ERRORS["SQL_AUTH_ERROR"].code,
             )
-            raise exc
+            raise ValueError(error_msg) from exc
 
     async def fetch_metadata(
         self,
@@ -145,7 +153,10 @@ class BaseSQLHandler(HandlerInterface):
                 else:
                     raise ValueError(f"Invalid metadata type: {metadata_type}")
             except Exception as e:
-                logger.error(f"Failed to fetch metadata: {str(e)}")
+                logger.error(
+                    f"Failed to fetch metadata: {str(e)}",
+                    error_code=SQL_ERRORS["SQL_METADATA_FETCH_ERROR"].code,
+                )
                 raise
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
@@ -185,9 +196,9 @@ class BaseSQLHandler(HandlerInterface):
         """
         Method to perform preflight checks
         """
-        logger.info("Starting preflight check")
-        results: Dict[str, Any] = {}
         try:
+            logger.info("Starting preflight check")
+            results: Dict[str, Any] = {}
             (
                 results["databaseSchemaCheck"],
                 results["tablesCheck"],
@@ -210,10 +221,14 @@ class BaseSQLHandler(HandlerInterface):
                 )
 
             logger.info("Preflight check completed successfully")
+            return results
         except Exception as exc:
-            logger.error(f"Error during preflight check {exc}", exc_info=True)
-            results["error"] = f"Preflight check failed: {str(exc)}"
-        return results
+            logger.error(
+                f"Error during preflight check {exc}",
+                error_code=SQL_ERRORS["SQL_PREFLIGHT_CHECK_ERROR"].code,
+                exc_info=True,
+            )
+            raise
 
     async def check_schemas_and_databases(
         self, payload: Dict[str, Any]
@@ -245,7 +260,11 @@ class BaseSQLHandler(HandlerInterface):
                 else "",
             }
         except Exception as exc:
-            logger.error("Error during schema and database check", exc_info=True)
+            logger.error(
+                "Error during schema and database check",
+                error_code=SQL_ERRORS["SQL_SCHEMA_CHECK_ERROR"].code,
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "successMessage": "",
@@ -322,7 +341,11 @@ class BaseSQLHandler(HandlerInterface):
                 "failureMessage": "",
             }
         except Exception as exc:
-            logger.error("Error during tables check", exc_info=True)
+            logger.error(
+                "Error during tables check",
+                error_code=SQL_ERRORS["SQL_TABLES_CHECK_ERROR"].code,
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "successMessage": "",
@@ -413,7 +436,11 @@ class BaseSQLHandler(HandlerInterface):
                 else "",
             }
         except Exception as exc:
-            logger.error(f"Error during client version check: {exc}", exc_info=True)
+            logger.error(
+                f"Error during client version check: {exc}",
+                error_code=SQL_ERRORS["SQL_CLIENT_VERSION_ERROR"].code,
+                exc_info=True,
+            )
             return {
                 "success": False,
                 "successMessage": "",

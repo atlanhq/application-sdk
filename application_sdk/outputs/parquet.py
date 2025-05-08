@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from temporalio import activity
 
+from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -95,7 +96,10 @@ class ParquetOutput(Output):
             # Upload the file to object store
             await self.upload_file(file_path)
         except Exception as e:
-            logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
+            logger.error(
+                f"Error writing pandas dataframe to parquet: {str(e)}",
+                error_code=IO_ERRORS["PARQUET_WRITE_ERROR"].code,
+            )
             raise
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
@@ -122,7 +126,10 @@ class ParquetOutput(Output):
             # Upload the file to object store
             await self.upload_file(self.output_path)
         except Exception as e:
-            logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
+            logger.error(
+                f"Error writing daft dataframe to parquet: {str(e)}",
+                error_code=IO_ERRORS["PARQUET_DAFT_WRITE_ERROR"].code,
+            )
             raise
 
     async def upload_file(self, local_file_path: str) -> None:

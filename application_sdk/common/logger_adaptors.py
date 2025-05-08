@@ -171,13 +171,18 @@ class AtlanLoggerAdapter:
             "level": record["level"].name,
         }
 
+        # Add error code if present in extra
+        if "extra" in record and "error_code" in record["extra"]:
+            attributes["error.code"] = record["extra"]["error_code"]
+
         # Add extra attributes at the same level
         if "extra" in record:
             for key, value in record["extra"].items():
-                if isinstance(value, (bool, int, float, str, bytes)):
-                    attributes[key] = value
-                else:
-                    attributes[key] = str(value)
+                if key != "error_code":  # Skip error_code as it's already handled
+                    if isinstance(value, (bool, int, float, str, bytes)):
+                        attributes[key] = value
+                    else:
+                        attributes[key] = str(value)
 
         return LogRecord(
             timestamp=int(record["time"].timestamp() * 1e9),
@@ -262,27 +267,43 @@ class AtlanLoggerAdapter:
 
         return msg, kwargs
 
-    def debug(self, msg: str, *args: Any, **kwargs: Any):
+    def debug(self, msg: str, *args: Any, error_code: str | None = None, **kwargs: Any):
+        if error_code:
+            kwargs["error_code"] = error_code
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).debug(msg, *args)
 
-    def info(self, msg: str, *args: Any, **kwargs: Any):
+    def info(self, msg: str, *args: Any, error_code: str | None = None, **kwargs: Any):
+        if error_code:
+            kwargs["error_code"] = error_code
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).info(msg, *args)
 
-    def warning(self, msg: str, *args: Any, **kwargs: Any):
+    def warning(
+        self, msg: str, *args: Any, error_code: str | None = None, **kwargs: Any
+    ):
+        if error_code:
+            kwargs["error_code"] = error_code
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).warning(msg, *args)
 
-    def error(self, msg: str, *args: Any, **kwargs: Any):
+    def error(self, msg: str, *args: Any, error_code: str | None = None, **kwargs: Any):
+        if error_code:
+            kwargs["error_code"] = error_code
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).error(msg, *args)
 
-    def critical(self, msg: str, *args: Any, **kwargs: Any):
+    def critical(
+        self, msg: str, *args: Any, error_code: str | None = None, **kwargs: Any
+    ):
+        if error_code:
+            kwargs["error_code"] = error_code
         msg, kwargs = self.process(msg, kwargs)
         self.logger.bind(**kwargs).critical(msg, *args)
 
-    def activity(self, msg: str, *args: Any, **kwargs: Any):
+    def activity(
+        self, msg: str, *args: Any, error_code: str | None = None, **kwargs: Any
+    ):
         """Log an activity-specific message with activity context.
 
         This method is specifically designed for logging activity-related information.
@@ -292,12 +313,15 @@ class AtlanLoggerAdapter:
         Args:
             msg: The message to log
             *args: Additional positional arguments
+            error_code: Optional error code to associate with the log
             **kwargs: Additional keyword arguments
         """
         # Create a copy to avoid modifying the original dict directly
         # and potentially help type checker inference.
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "activity"
+        if error_code:
+            local_kwargs["error_code"] = error_code
 
         # Process the message with context using the copied dict
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
