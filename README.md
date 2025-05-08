@@ -34,6 +34,10 @@ Install `application-sdk` as a dependency in your project:
 
 ```bash
 poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
+
+# OR
+
+poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#release-tag
 ```
 
 ## Contributing
