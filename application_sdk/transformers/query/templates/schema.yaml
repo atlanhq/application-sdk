@@ -27,6 +27,8 @@ columns:
     source_query: is_managed_access
   - name: attributes.database.typeName
     source_query: "'Database'"
+  - name: attributes.database.attributes
+    source_query: NULL
   - name: attributes.database.uniqueAttributes.qualifiedName
     source_query: concat(connection_qualified_name, '/', catalog_name)
     source_columns: [connection_qualified_name, catalog_name]
@@ -40,6 +42,8 @@ columns:
     source_query: last_sync_run_at
   - name: attributes.connectorName
     source_query: connector_name
+  - name: customAttributes
+    source_query: NULL
   - name: typeName
     source_query: "'Schema'"
   - name: status

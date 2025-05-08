@@ -158,7 +158,22 @@ class JsonOutput(Output):
         except Exception as e:
             logger.error(f"Error writing dataframe to json: {str(e)}")
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(
+        self,
+        dataframe: "daft.DataFrame",
+        preserve_fields: Optional[List[str]] = [
+            "identity_cycle",
+            "number_columns_in_part_key",
+            "columns_participating_in_part_key",
+            "engine",
+            "is_insertable_into",
+            "is_typed",
+        ],
+        null_to_empty_dict_fields: Optional[List[str]] = [
+            "attributes",
+            "customAttributes",
+        ],
+    ):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
         This method converts the daft DataFrame to pandas and writes it to JSON files.
@@ -172,12 +187,17 @@ class JsonOutput(Output):
         # Daft does not have a built in method to write the daft dataframe to json
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
-
         for row in dataframe.iter_rows():
             self.total_record_count += 1
+            # Remove null attributes from the row recursively, preserving specified fields
+            cleaned_row = self.process_null_fields(
+                row, preserve_fields, null_to_empty_dict_fields
+            )
             # Serialize the row and add it to the buffer
             buffer.append(
-                orjson.dumps(row, option=orjson.OPT_APPEND_NEWLINE).decode("utf-8")
+                orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
+                    "utf-8"
+                )
             )
 
         # If the buffer reaches the specified size, write it to the file

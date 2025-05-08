@@ -132,7 +132,12 @@ class QueryBasedTransformer(TransformerInterface):
             # E.g 2. Boolean Literal
             # - name: attributes.isPartition
             #   source_query: True
-            elif isinstance(column["source_query"], bool) or (
+            elif (
+                isinstance(column["source_query"], float)
+                or isinstance(column["source_query"], int)
+                or isinstance(column["source_query"], bool)
+                or column["source_query"] is None
+            ) or (
                 isinstance(column["source_query"], str)
                 and column["source_query"].startswith("'")
                 and column["source_query"].endswith("'")

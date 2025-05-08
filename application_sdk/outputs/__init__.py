@@ -12,6 +12,7 @@ from typing import (
     AsyncGenerator,
     Dict,
     Generator,
+    List,
     Optional,
     Union,
     cast,
@@ -82,6 +83,57 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
+
+    def process_null_fields(
+        self,
+        obj: Any,
+        preserve_fields: Optional[List[str]] = None,
+        null_to_empty_dict_fields: Optional[List[str]] = None,
+    ) -> Any:
+        """
+        By default the method removes null values from dictionaries and lists.
+        Except for the fields specified in preserve_fields.
+        And fields in null_to_empty_dict_fields are replaced with empty dict if null.
+
+        Args:
+            obj: The object to clean (dict, list, or other value)
+            preserve_fields: Optional list of field names that should be preserved even if they contain null values
+            null_to_empty_dict_fields: Optional list of field names that should be replaced with empty dict if null
+
+        Returns:
+            The cleaned object with null values removed
+        """
+        if isinstance(obj, dict):
+            return {
+                k: (
+                    {}
+                    if k in (null_to_empty_dict_fields or []) and v is None
+                    else self.process_null_fields(
+                        v, preserve_fields, null_to_empty_dict_fields
+                    )
+                )
+                for k, v in obj.items()
+                if (
+                    k in (preserve_fields or [])
+                    or (
+                        v is not None
+                        and self.process_null_fields(
+                            v, preserve_fields, null_to_empty_dict_fields
+                        )
+                        is not None
+                    )
+                    or (k in (null_to_empty_dict_fields or []) and v is None)
+                )
+            }
+        elif isinstance(obj, list):
+            return [
+                self.process_null_fields(
+                    item, preserve_fields, null_to_empty_dict_fields
+                )
+                for item in obj
+                if item is not None
+            ]
+        return obj
 
     async def write_batched_dataframe(
         self,

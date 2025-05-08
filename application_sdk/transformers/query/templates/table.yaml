@@ -55,10 +55,11 @@ columns:
   - name: attributes.isPartitioned
     source_query: |
       CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN FALSE
         WHEN table_kind = 'p' OR table_type = 'PARTITIONED TABLE' THEN TRUE
         ELSE FALSE
       END
-    source_columns: [table_kind]
+    source_columns: [table_kind, table_type]
   - name: attributes.parentTable.typeName
     source_query: |
       CASE
@@ -74,27 +75,35 @@ columns:
       END
     source_columns: [connection_qualified_name, table_catalog, table_schema, parent_table_name, is_partition]
   - name: attributes.partitionStrategy
-    source_query: COALESCE(partition_strategy, '')
+    source_query: COALESCE(partition_strategy, NULL)
     source_columns: [partition_strategy]
   - name: attributes.partitionCount
-    source_query: COALESCE(partition_count, 0)
+    source_query: COALESCE(partition_count, NULL)
     source_columns: [partition_count]
   - name: attributes.constraint
-    source_query: COALESCE(partition_constraint, '')
+    source_query: COALESCE(partition_constraint, NULL)
     source_columns: [partition_constraint]
   - name: customAttributes.is_insertable_into
-    source_query: COALESCE(is_insertable_into, False)
-    source_columns: [is_insertable_into]
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(is_insertable_into, 'NO')
+      END
+    source_columns: [is_insertable_into, table_type]
   - name: customAttributes.number_columns_in_part_key
     source_query: number_columns_in_part_key
   - name: customAttributes.columns_participating_in_part_key
     source_query: columns_participating_in_part_key
   - name: customAttributes.is_typed
-    source_query: COALESCE(is_typed, False)
-    source_columns: [is_typed]
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(is_typed, 'NO')
+      END
+    source_columns: [is_typed, table_type]
   - name: customAttributes.self_referencing_col_name
-    source_query: COALESCE(self_referencing_col_name, '')
-    source_columns: [self_referencing_col_name]
+    source_query: COALESCE(self_referencing_column_name, '')
+    source_columns: [self_referencing_column_name]
   - name: customAttributes.ref_generation
     source_query: COALESCE(ref_generation, '')
     source_columns: [ref_generation]
@@ -117,6 +126,8 @@ columns:
         ELSE NULL
       END
     source_columns: [is_partition]
+  - name: attributes.atlanSchema.attributes
+    source_query: NULL
   - name: attributes.atlanSchema.uniqueAttributes.qualifiedName
     source_query: |
       CASE
@@ -167,14 +178,26 @@ columns:
     source_query: COALESCE(auto_increment, '')
     source_columns: [auto_increment]
   - name: attributes.externalLocation
-    source_query: COALESCE(location, '')
-    source_columns: [location]
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(location, '')
+      END
+    source_columns: [location, table_type]
   - name: attributes.externalLocationFormat
-    source_query: COALESCE(file_format_type, '')
-    source_columns: [file_format_type]
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(file_format_type, '')
+      END
+    source_columns: [file_format_type, table_type]
   - name: attributes.externalLocationRegion
-    source_query: COALESCE(stage_region, '')
-    source_columns: [stage_region]
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(stage_region, '')
+      END
+    source_columns: [stage_region, table_type]
   - name: attributes.refreshMode
     source_query: COALESCE(refresh_mode, '')
     source_columns: [refresh_mode]
