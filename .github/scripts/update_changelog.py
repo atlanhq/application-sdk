@@ -35,8 +35,9 @@ def get_commits_since_last_tag(current_version):
     if tag in result.stdout:
         range_spec = f"{tag}..HEAD"
     else:
-        # If no tag exists, get commits from beginning
-        range_spec = "HEAD"
+        old_tag = "v0.1.0-rc.1"
+        # If no tag exists, get commits from beginning (as v0.1.0-rc.1)
+        range_spec = f"{old_tag}..HEAD"
 
     # Get commits with format: <hash> <subject>
     result = subprocess.run(
@@ -72,9 +73,11 @@ def categorize_commits(commits):
         commit_hash, message = parts
 
         # Categorize based on conventional commit prefixes
-        if re.match(r"^feat(\(.*\))?:", message):
+        if re.match(r"^feat(\(.*\))?:", message) or re.match(
+            r"^docs(\(.*\))?:", message
+        ):
             # Extract the message without the prefix
-            msg = re.sub(r"^feat(\(.*\))?:\s*", "", message)
+            msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message)
             categories["features"].append((commit_hash, msg))
         elif re.match(r"^fix(\(.*\))?:", message):
             msg = re.sub(r"^fix(\(.*\))?:\s*", "", message)
@@ -158,19 +161,7 @@ def format_changelog_section(categories, current_version, new_version):
             changelog += f"- {msg}\n"
         changelog += "\n"
 
-    # Add Chores section
-    if categories["chores"]:
-        changelog += "### Chores\n\n"
-        for _, msg in categories["chores"]:
-            changelog += f"- {msg}\n"
-        changelog += "\n"
-
-    # Add Other changes if any
-    if categories["other"]:
-        changelog += "### Other Changes\n\n"
-        for _, msg in categories["other"]:
-            changelog += f"- {msg}\n"
-        changelog += "\n"
+    # NOTE: Ignore chores and other changes
 
     return changelog
 
