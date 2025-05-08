@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from hypothesis import HealthCheck, given, settings
-from hypothesis.strategies import composite, dictionaries, just, lists, text
+from hypothesis.strategies import composite, text
 
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -33,10 +33,6 @@ def metadata_dict_strategy(draw):
             text(min_size=1, max_size=50).filter(lambda x: x.isprintable())
         ),
     }
-
-
-# Create a strategy for metadata list with required keys
-metadata_list_strategy = lists(metadata_dict_strategy(), min_size=1, max_size=5)
 
 
 @pytest.fixture

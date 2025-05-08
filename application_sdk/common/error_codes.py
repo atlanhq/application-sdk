@@ -16,12 +16,13 @@ Categories:
 - 600: Server/API errors
 """
 
-from enum import Enum, auto
-from typing import Dict, Optional
+from enum import Enum
+from typing import Dict
 
 
 class ErrorCategory(Enum):
     """Categories of errors in the system."""
+
     SYSTEM = "000"
     IO = "100"
     SQL = "200"
@@ -30,9 +31,10 @@ class ErrorCategory(Enum):
     STATE = "500"
     SERVER = "600"
 
- 
+
 class ErrorCode:
     """Error code with category and description."""
+
     def __init__(self, code: str, description: str):
         self.code = code
         self.description = description
@@ -44,7 +46,9 @@ class ErrorCode:
 # System/Common Errors (000)
 SYSTEM_ERRORS = {
     "OTLP_SETUP_FAILED": ErrorCode("000001", "Failed to setup OTLP logging"),
-    "OTLP_PARSE_FAILED": ErrorCode("000002", "Failed to parse OTLP resource attributes"),
+    "OTLP_PARSE_FAILED": ErrorCode(
+        "000002", "Failed to parse OTLP resource attributes"
+    ),
     "LOG_PROCESSING_ERROR": ErrorCode("000003", "Error processing log record"),
     "QUERY_PREP_ERROR": ErrorCode("000004", "Error preparing query"),
     "UNKNOWN_ERROR": ErrorCode("000999", "Unknown system error"),
@@ -54,40 +58,63 @@ SYSTEM_ERRORS = {
 IO_ERRORS = {
     # JSON related errors
     "JSON_READ_ERROR": ErrorCode("100001", "Error reading data from JSON"),
-    "JSON_BATCH_READ_ERROR": ErrorCode("100002", "Error reading batched data from JSON"),
-    "JSON_DAFT_READ_ERROR": ErrorCode("100003", "Error reading data from JSON using daft"),
+    "JSON_BATCH_READ_ERROR": ErrorCode(
+        "100002", "Error reading batched data from JSON"
+    ),
+    "JSON_DAFT_READ_ERROR": ErrorCode(
+        "100003", "Error reading data from JSON using daft"
+    ),
     "JSON_WRITE_ERROR": ErrorCode("100004", "Error writing dataframe to JSON"),
-    "JSON_BATCH_WRITE_ERROR": ErrorCode("100005", "Error writing batched dataframe to JSON"),
-    
+    "JSON_BATCH_WRITE_ERROR": ErrorCode(
+        "100005", "Error writing batched dataframe to JSON"
+    ),
     # Parquet related errors
-    "PARQUET_READ_ERROR": ErrorCode("100101", "Error reading data from parquet file(s)"),
+    "PARQUET_READ_ERROR": ErrorCode(
+        "100101", "Error reading data from parquet file(s)"
+    ),
     "PARQUET_WRITE_ERROR": ErrorCode("100102", "Error writing dataframe to parquet"),
-    "PARQUET_DAFT_WRITE_ERROR": ErrorCode("100103", "Error writing daft dataframe to parquet"),
-    
+    "PARQUET_DAFT_WRITE_ERROR": ErrorCode(
+        "100103", "Error writing daft dataframe to parquet"
+    ),
     # Iceberg related errors
     "ICEBERG_READ_ERROR": ErrorCode("100201", "Error reading data from Iceberg table"),
-    "ICEBERG_DAFT_READ_ERROR": ErrorCode("100202", "Error reading data from Iceberg table using daft"),
-    "ICEBERG_WRITE_ERROR": ErrorCode("100203", "Error writing pandas dataframe to iceberg table"),
-    "ICEBERG_DAFT_WRITE_ERROR": ErrorCode("100204", "Error writing daft dataframe to iceberg table"),
-    
+    "ICEBERG_DAFT_READ_ERROR": ErrorCode(
+        "100202", "Error reading data from Iceberg table using daft"
+    ),
+    "ICEBERG_WRITE_ERROR": ErrorCode(
+        "100203", "Error writing pandas dataframe to iceberg table"
+    ),
+    "ICEBERG_DAFT_WRITE_ERROR": ErrorCode(
+        "100204", "Error writing daft dataframe to iceberg table"
+    ),
     # Object Store related errors
     "OBJSTORE_READ_ERROR": ErrorCode("100301", "Error reading file from object store"),
     "OBJSTORE_WRITE_ERROR": ErrorCode("100302", "Error writing file to object store"),
-    "OBJSTORE_DOWNLOAD_ERROR": ErrorCode("100303", "Error downloading files from object store"),
+    "OBJSTORE_DOWNLOAD_ERROR": ErrorCode(
+        "100303", "Error downloading files from object store"
+    ),
 }
 
 # SQL/Database Errors (200)
 SQL_ERRORS = {
     "SQL_METADATA_FETCH_ERROR": ErrorCode("200001", "Failed to fetch metadata"),
     "SQL_PREFLIGHT_CHECK_ERROR": ErrorCode("200002", "Error during preflight check"),
-    "SQL_SCHEMA_CHECK_ERROR": ErrorCode("200003", "Error during schema and database check"),
+    "SQL_SCHEMA_CHECK_ERROR": ErrorCode(
+        "200003", "Error during schema and database check"
+    ),
     "SQL_TABLES_CHECK_ERROR": ErrorCode("200004", "Error during tables check"),
-    "SQL_CLIENT_VERSION_ERROR": ErrorCode("200005", "Error during client version check"),
+    "SQL_CLIENT_VERSION_ERROR": ErrorCode(
+        "200005", "Error during client version check"
+    ),
     "SQL_READ_ERROR": ErrorCode("200006", "Error reading data from SQL"),
     "SQL_BATCH_READ_ERROR": ErrorCode("200007", "Error reading batched data from SQL"),
-    "SQL_DAFT_READ_ERROR": ErrorCode("200008", "Error reading data from SQL using daft"),
+    "SQL_DAFT_READ_ERROR": ErrorCode(
+        "200008", "Error reading data from SQL using daft"
+    ),
     "SQL_QUERY_EXEC_ERROR": ErrorCode("200009", "Error executing query"),
-    "SQL_CONNECTION_ERROR": ErrorCode("200010", "Error establishing database connection"),
+    "SQL_CONNECTION_ERROR": ErrorCode(
+        "200010", "Error establishing database connection"
+    ),
     "SQL_CLIENT_LOAD_ERROR": ErrorCode("200011", "Error loading SQL client"),
     "SQL_ENGINE_NOT_SET": ErrorCode("200012", "SQL engine is not set"),
     "SQL_CLIENT_NOT_INIT": ErrorCode("200013", "SQL client or engine not initialized"),
