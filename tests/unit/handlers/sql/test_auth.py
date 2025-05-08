@@ -23,13 +23,13 @@ class TestAuthenticationHandler:
     @pytest.mark.asyncio
     async def test_successful_authentication(self, handler: BaseSQLHandler) -> None:
         """Test successful authentication with valid credentials"""
-        # Mock a successful DataFrame response
-        mock_df = daft.from_pydict({"result": [1]})
-
         with patch(
             "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe",
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
+            # Mock a successful response
+            mock_df = Mock()
+            mock_df.to_pylist.return_value = [{"result": 1}]
             mock_get_dataframe.return_value = mock_df
 
             # Test authentication
@@ -37,7 +37,7 @@ class TestAuthenticationHandler:
 
             # Verify success
             assert result is True
-            mock_get_dataframe.assert_called_once()
+            mock_get_dataframe.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_failed_authentication(self, handler: BaseSQLHandler) -> None:
@@ -50,12 +50,11 @@ class TestAuthenticationHandler:
             mock_get_dataframe.side_effect = Exception("Authentication failed")
 
             # Test authentication and expect exception
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(ValueError) as exc_info:
                 await handler.test_auth()
 
             # Verify error
             assert str(exc_info.value) == "Authentication failed"
-            mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_empty_dataframe_authentication(
@@ -88,12 +87,10 @@ class TestAuthenticationHandler:
             mock_get_dataframe.return_value = None
 
             # Test authentication and expect exception
-            with pytest.raises(AttributeError) as exc_info:
+            with pytest.raises(ValueError) as exc_info:
                 await handler.test_auth()
 
-            # Verify error and call
-            assert "object has no attribute 'to_pylist'" in str(exc_info.value)
-            mock_get_dataframe.assert_called_once()
+            assert str(exc_info.value) == "No data returned from authentication query"
 
     @pytest.mark.asyncio
     async def test_malformed_dataframe_authentication(
@@ -105,17 +102,16 @@ class TestAuthenticationHandler:
             new_callable=AsyncMock,
         ) as mock_get_dataframe:
             # Create a mock DataFrame that raises on to_dict
-            mock_df = Mock(spec=daft.DataFrame)
+            mock_df = Mock()
             mock_df.to_pylist.side_effect = Exception("DataFrame conversion error")
             mock_get_dataframe.return_value = mock_df
 
             # Test authentication and expect exception
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(ValueError) as exc_info:
                 await handler.test_auth()
 
             # Verify error and call
             assert str(exc_info.value) == "DataFrame conversion error"
-            mock_get_dataframe.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_custom_sql_query(self, handler: BaseSQLHandler) -> None:

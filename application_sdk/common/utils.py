@@ -5,6 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
+from application_sdk.common.error_codes import SYSTEM_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.outputs.statestore import StateStoreOutput
@@ -81,7 +82,10 @@ def prepare_query(
             exclude_views=exclude_views,
         )
     except Exception as e:
-        logger.error(f"Error preparing query [{query}]:  {e}")
+        logger.error(
+            f"Error preparing query [{query}]:  {e}",
+            error_code=SYSTEM_ERRORS["QUERY_PREP_ERROR"].code,
+        )
         return None
 
 

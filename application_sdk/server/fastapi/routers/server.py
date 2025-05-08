@@ -20,6 +20,7 @@ from fastapi import status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 
+from application_sdk.common.error_codes import SERVER_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -115,7 +116,11 @@ async def shutdown(force: bool = False):
             except asyncio.CancelledError:
                 logger.info("Tasks cancelled successfully")
             except Exception as e:
-                logger.error(f"Error during task cancellation: {e}")
+                logger.error(
+                    f"Error during task cancellation: {e}",
+                    error_code=SERVER_ERRORS["SERVER_TASK_CANCEL_ERROR"].code,
+                )
+                raise
 
     # TO BE IMPLEMENTED - currently graceful shutdown is dysfunctional
     # asyncio.create_task(shutdown())

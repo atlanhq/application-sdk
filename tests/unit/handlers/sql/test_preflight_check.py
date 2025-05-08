@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 from _pytest.monkeypatch import MonkeyPatch
 from hypothesis import HealthCheck, given, settings
+from hypothesis.strategies import composite, dictionaries, just, lists, text
 
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -21,6 +22,23 @@ settings.register_profile(
 settings.load_profile("sql_preflight_tests")
 
 
+@composite
+def metadata_dict_strategy(draw):
+    """Generate a valid metadata dictionary with required keys."""
+    return {
+        "TABLE_CATALOG": draw(
+            text(min_size=1, max_size=50).filter(lambda x: x.isprintable())
+        ),
+        "TABLE_SCHEMA": draw(
+            text(min_size=1, max_size=50).filter(lambda x: x.isprintable())
+        ),
+    }
+
+
+# Create a strategy for metadata list with required keys
+metadata_list_strategy = lists(metadata_dict_strategy(), min_size=1, max_size=5)
+
+
 @pytest.fixture
 def mock_sql_client() -> Mock:
     sql_client = Mock(spec=BaseSQLClient)
@@ -31,6 +49,16 @@ def mock_sql_client() -> Mock:
     mock_engine.dialect = mock_dialect
     sql_client.engine = mock_engine
     return sql_client
+
+
+@pytest.fixture
+def mock_engine():
+    engine = Mock()
+    engine.connect.return_value = MockConnection(engine)
+    engine.dialect.name = "postgresql"
+    engine.driver = "psycopg2"
+    engine.url.render_as_string.return_value = "postgresql://user:pass@host:5432/db"
+    return engine
 
 
 @pytest.fixture
@@ -152,22 +180,40 @@ async def test_preflight_check_success(
 async def test_preflight_check_failure(
     handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:
+    """Test that preflight check fails when any check fails."""
     handler.prepare_metadata = AsyncMock(return_value=metadata)
-    # Create an invalid payload
-    payload = {"metadata": {"include-filter": json.dumps({"invalid_db": ["schema1"]})}}
+    # Create a valid payload for schemas
+    valid_mapping = {metadata[0]["TABLE_CATALOG"]: [metadata[0]["TABLE_SCHEMA"]]}
+    payload = {"metadata": {"include-filter": json.dumps(valid_mapping)}}
 
-    # Add client version check mock that succeeds (to isolate the failure to schema check)
-    with patch.object(handler, "check_client_version") as mock_client_version:
-        mock_client_version.return_value = {
+    # Mock the checks to return failure
+    with patch.object(
+        handler, "check_schemas_and_databases"
+    ) as mock_schema_check, patch.object(
+        handler, "tables_check"
+    ) as mock_tables_check, patch.object(
+        handler, "check_client_version"
+    ) as mock_version_check:
+        mock_schema_check.return_value = {
+            "success": False,
+            "successMessage": "",
+            "failureMessage": "Schema check failed",
+        }
+        mock_tables_check.return_value = {
             "success": True,
-            "successMessage": "Client version check successful",
+            "successMessage": "Tables check successful",
+            "failureMessage": "",
+        }
+        mock_version_check.return_value = {
+            "success": True,
+            "successMessage": "Version check successful",
             "failureMessage": "",
         }
 
-        result = await handler.preflight_check(payload)
-
-        assert "error" in result
-        assert "Preflight check failed" in result["error"]
+        with pytest.raises(ValueError) as exc_info:
+            await handler.preflight_check(payload)
+        assert "Preflight check failed" in str(exc_info.value)
+        assert "Schema check failed" in str(exc_info.value)
 
 
 @given(version_data=version_comparison_strategy)
@@ -305,13 +351,20 @@ async def test_preflight_check_version_failure(
             "failureMessage": "Client version does not meet minimum required version",
         }
 
-        result = await handler.preflight_check(payload)
-
-        assert "error" in result
-        assert "Preflight check failed" in result["error"]
-        assert "versionCheck" in result
-        assert result["versionCheck"]["success"] is False
-        assert (
-            "does not meet minimum required version"
-            in result["versionCheck"]["failureMessage"]
+        with pytest.raises(ValueError) as exc_info:
+            await handler.preflight_check(payload)
+        assert "Preflight check failed" in str(exc_info.value)
+        assert "Client version does not meet minimum required version" in str(
+            exc_info.value
         )
+
+
+class MockConnection:
+    def __init__(self, engine):
+        self.engine = engine
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass

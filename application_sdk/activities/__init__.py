@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.common.error_codes import WORKFLOW_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
@@ -134,7 +135,11 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 await self._set_state(workflow_args)
             return self._state[workflow_id]
         except Exception as e:
-            logger.error(f"Error getting state: {str(e)}", exc_info=e)
+            logger.error(
+                f"Error getting state: {str(e)}",
+                error_code=WORKFLOW_ERRORS["ACTIVITY_STATE_ERROR"].code,
+                exc_info=e,
+            )
             await self._clean_state()
             raise
 
@@ -198,5 +203,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             return result
 
         except Exception as e:
-            logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
+            logger.error(
+                f"Preflight check failed: {str(e)}",
+                error_code=WORKFLOW_ERRORS["ACTIVITY_PREFLIGHT_ERROR"].code,
+                exc_info=True,
+            )
             raise
