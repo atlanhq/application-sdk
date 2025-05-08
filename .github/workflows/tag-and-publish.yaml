@@ -6,11 +6,16 @@ on:
     branches:
       - nishchith/release-auto
       # - main
+  # TODO: Remove this once we have a stable release branch
+  push:
+    branches:
+      - nishchith/release-auto
 
 jobs:
   release:
     # Only run when a PR with the "release" label is merged
-    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    # TODO: Remove this once we have a stable release branch
+    # if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
     name: Create release and publish to PyPI
     runs-on: ubuntu-latest
     permissions:
