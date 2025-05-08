@@ -483,7 +483,7 @@ def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
         "database": "test_db",
         "authType": "basic",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=None"
@@ -500,7 +500,7 @@ def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
         "authType": "iam_user",
         "extra": {"username": "db_user", "database": "test_db"},
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with patch.object(
         sql_client_with_db_config, "get_iam_user_token", return_value="iam_token"
@@ -523,7 +523,7 @@ def test_get_sqlalchemy_connection_string_iam_role(sql_client_with_db_config):
             "aws_external_id": "external-id",
         },
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with patch.object(
         sql_client_with_db_config, "get_iam_role_token", return_value="iam_token"
@@ -544,7 +544,7 @@ def test_get_sqlalchemy_connection_string_with_parameters(sql_client_with_db_con
         "authType": "basic",
         "ssl_mode": "require",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
@@ -563,7 +563,7 @@ def test_get_sqlalchemy_connection_string_missing_required_param(
         # Missing database
         "authType": "basic",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(ValueError, match="database is required"):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
@@ -579,7 +579,7 @@ def test_get_sqlalchemy_connection_string_invalid_auth_type(sql_client_with_db_c
         "database": "test_db",
         "authType": "invalid_auth",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(ValueError, match="Invalid auth type: invalid_auth"):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
@@ -600,7 +600,7 @@ def test_get_sqlalchemy_connection_string_iam_user_missing_username(
             "database": "test_db"
         },
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(
         ValueError, match="username is required for IAM user authentication"
@@ -623,7 +623,7 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
             "aws_external_id": "external-id",
         },
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(
         ValueError, match="aws_role_arn is required for IAM role authentication"

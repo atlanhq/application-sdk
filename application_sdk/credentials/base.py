@@ -5,13 +5,16 @@ from typing import Any, Dict, Protocol
 
 class CredentialError(Exception):
     """Base exception for credential-related errors."""
+
     pass
 
 
 class CredentialProvider(Protocol):
     """Protocol defining the interface for credential providers."""
 
-    async def get_credentials(self, source_credentials: Dict[str, Any]) -> Dict[str, Any]:
+    async def get_credentials(
+        self, source_credentials: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """
         Get the resolved credentials from the source credentials.
 
@@ -21,7 +24,7 @@ class CredentialProvider(Protocol):
 
         Returns:
             Dict[str, Any]: The resolved credentials.
-        
+
         Raises:
             CredentialError: If credentials cannot be resolved.
         """
