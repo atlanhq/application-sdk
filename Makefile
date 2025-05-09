@@ -15,10 +15,10 @@ start-dapr:
 
 install:
 	# Install the dependencies with extras
-	poetry install --all-extras
+	uv sync --all-extras
 
 	# Activate the virtual environment and install pre-commit hooks
-	poetry run pre-commit install
+	uv run pre-commit install
 
 # Start all services in detached mode
 start-all:

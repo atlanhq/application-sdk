@@ -21,21 +21,14 @@ runs:
       with:
         python-version: "3.11"
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
-      with:
-        version: 2.1.3
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        virtualenvs-path: .venv
-        installer-parallel: true
+    - uses: astral-sh/setup-uv@v5
+      run: uv sync --all-extras
 
     - name: Install dependencies
       shell: bash
       run: |
-        git config --global url."https://${{ inputs.github-token }}@github.com/".insteadOf "git@github.com:"
-        poetry install -vv
-        poetry add mkdocs mkdocs-material
+        uv sync --all-extras
+        uv add mkdocs mkdocs-material
 
     - name: Verify and Generate Docs
       shell: bash
@@ -57,4 +50,4 @@ runs:
 
         EOF
 
-        poetry run python docs.py
+        uv run python docs.py

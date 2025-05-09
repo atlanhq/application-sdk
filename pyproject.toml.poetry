@@ -1,0 +1,150 @@
+[tool.poetry]
+name = "atlan-application-sdk"
+version = "0.1.1rc1"
+description = "Python Application SDK is a Python library for developing applications on the Atlan Platform"
+license = "Apache LICENSE 2.0"
+authors = ["Atlan App Team <apps@atlan.com>"]
+readme = "README.md"
+repository = "https://github.com/atlanhq/application-sdk"
+documentation = "https://github.com/atlanhq/application-sdk/README.md"
+keywords = ["atlan", "sdk", "platform", "app", "development"]
+classifiers = [
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Development Status :: 4 - Beta",
+]
+packages = [
+    { include = "application_sdk" }
+]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+opentelemetry-exporter-otlp = "^1.27.0"
+psutil = "^7.0.0"  # Being used in fastapi-server and scalene-tests for retrieving cpu and memory usage, info on running processes.
+fastapi = {extras = ["standard"], version = "^0.115.0"}
+sqlalchemy = {extras = ["asyncio"], version = "^2.0.36", optional = true}
+pyatlan = "6.0.6"
+orjson = {version = "^3.10.18", optional = true}   # Being used in parquet.py
+pyarrow = {version = "^20.0.0", optional = true}  # Being used in parquet.py
+pyyaml = {version = "^6.0.2", optional = true}
+pandas = {version = "^2.2.3", optional = true}
+dapr = {version = "^1.14.0", optional = true}
+faker = {version = "^37.1.0", optional = true}
+numpy = {version = ">=1.23.5,<3.0.0", optional = true}
+duckdb = {version = "^1.1.3", optional = true}
+duckdb-engine = {version = "^0.17.0", optional = true}
+temporalio = {version = "^1.7.1", optional = true}
+getdaft = {extras = ["sql"], version = "^0.4.12", optional = true}
+pyiceberg = {version = "^0.8.1", optional = true} # For iceberg input and output support
+boto3 = {version = "^1.38.6", optional = true} # For iam auth support
+pydantic = "^2.10.6"
+loguru = "^0.7.3"
+uvloop = "^0.21.0" # in worker module for managing Temporal workers.
+pandera = {extras = ["io"], version = "^0.23.1", optional = true}
+pytest-order = {version = "^1.3.0", optional = true}
+python-dotenv = "^1.1.0"
+
+[tool.poetry.extras]
+workflows = [
+    "dapr",
+    "temporalio",
+    "orjson",
+]
+# daft module to be used when dealing with daft dataframes.
+daft = [
+    "getdaft"
+]
+# pyiceberg module to be used when dealing with iceberg tables.
+iceberg = [
+    "pyiceberg"
+]
+# sqlalchemy module to be used when dealing with sql clients.
+sqlalchemy = [
+    "sqlalchemy"
+]
+# Modules for iam auth support
+# contains boto3
+iam_auth = [
+    "boto3",
+]
+# Dependencies for the tests framework
+tests = [
+    "pytest-order",
+    "pandera",
+    "pandas",
+]
+# scale_data_generator module to be used when dealing with snowflake app for now
+scale_data_generator = [
+    "pyyaml",
+    "pandas",
+    "pyarrow",
+    "faker",
+    "numpy",
+    "duckdb",
+    "duckdb-engine"
+]
+
+
+[tool.poetry.group.dev.dependencies]
+pre-commit = "^4.2.0"
+isort = "^5.13.2"
+boto3-stubs = {version = "^1.38.6", optional = true} # For boto related type checking
+mkdocs = "^1.6.1"
+mkdocs-material = "^9.6.4"
+pydoctor = "^24.11.2"
+mike = "^2.1.3"
+
+[tool.poetry.group.test.dependencies]
+mock = "^5.1.0"
+pytest = "^8.3.3"
+coverage = "^7.6.1"
+pytest-asyncio = "^0.26.0"
+hypothesis = "^6.114.0"
+
+[tool.poetry.group.examples.dependencies]
+snowflake-sqlalchemy = "^1.7.0"
+psycopg = {extras = ["binary"], version = "^3.2.7"}
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "standard"
+exclude = [
+    "application_sdk/test_utils/**",
+    ".github/**",
+]
+reportUnknownMemberType = "warning"
+reportAttributeAccessIssue = "warning"
+reportPossiblyUnboundVariable = "information"
+reportFunctionMemberAccess = "warning"
+reportArgumentType = "warning"
+reportGeneralTypeIssues = "warning"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+omit = [
+    "tests/**",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "pass",
+    "raise ImportError",
+]
+fail_under = 60
