@@ -242,31 +242,32 @@ class QueryBasedTransformer(TransformerInterface):
     def get_grouped_dataframe_by_prefix(
         self, dataframe: daft.DataFrame
     ) -> daft.DataFrame:
-        """
-        Group columns with the same prefix into structs, supporting any level of nesting.
+        """Group columns with the same prefix into structs, supporting any level of nesting.
 
-        We have a flat structured dataframe with columns that have dot notation in the yaml template
-        e.g
-        - name: attributes.name
-        source_query: table_name
-        - name: attributes.qualifiedName
-        source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
-        source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
-        - name: attributes.connectionQualifiedName
-        source_query: connection_qualified_name
+        Groups columns that share prefixes into nested struct types. Takes a flat dataframe with
+        dot-notation column names from the YAML template and restructures it into nested structs.
 
-        This method will group the columns with the same prefix into structs.
-        e.g - struct(
-            name: table_name,
-            qualifiedName: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
-            connectionQualifiedName: connection_qualified_name
-        ).alias("attributes")
+        Example YAML template:
+            - name: attributes.name
+              source_query: table_name
+            - name: attributes.qualifiedName
+              source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+              source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
+            - name: attributes.connectionQualifiedName
+              source_query: connection_qualified_name
+
+        This will be transformed into a struct:
+            struct(
+                name: table_name,
+                qualifiedName: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
+                connectionQualifiedName: connection_qualified_name
+            ).alias("attributes")
 
         Args:
-            dataframe (daft.DataFrame): DataFrame to restructure
+            dataframe: DataFrame to restructure into nested structs
 
         Returns:
-            daft.DataFrame: DataFrame with columns grouped into structs
+            DataFrame with columns grouped into nested struct types
         """
         try:
             # Get all column names
