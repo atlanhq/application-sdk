@@ -104,35 +104,23 @@ class Output(ABC):
             The cleaned object with null values removed
         """
         if isinstance(obj, dict):
-            return {
-                k: (
-                    {}
-                    if k in (null_to_empty_dict_fields or []) and v is None
-                    else self.process_null_fields(
-                        v, preserve_fields, null_to_empty_dict_fields
-                    )
+            result = {}
+            for k, v in obj.items():
+                # Handle null fields that should be converted to empty dicts
+                if k in (null_to_empty_dict_fields or []) and v is None:
+                    result[k] = {}
+                    continue
+
+                # Process the value recursively
+                processed_value = self.process_null_fields(
+                    v, preserve_fields, null_to_empty_dict_fields
                 )
-                for k, v in obj.items()
-                if (
-                    k in (preserve_fields or [])
-                    or (
-                        v is not None
-                        and self.process_null_fields(
-                            v, preserve_fields, null_to_empty_dict_fields
-                        )
-                        is not None
-                    )
-                    or (k in (null_to_empty_dict_fields or []) and v is None)
-                )
-            }
-        elif isinstance(obj, list):
-            return [
-                self.process_null_fields(
-                    item, preserve_fields, null_to_empty_dict_fields
-                )
-                for item in obj
-                if item is not None
-            ]
+
+                # Keep the field if it's in preserve_fields or has a non-None processed value
+                if k in (preserve_fields or []) or processed_value is not None:
+                    result[k] = processed_value
+
+            return result
         return obj
 
     async def write_batched_dataframe(

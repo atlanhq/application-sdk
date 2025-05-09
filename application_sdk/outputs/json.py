@@ -208,6 +208,8 @@ class JsonOutput(Output):
         buffer = []
         for row in dataframe.iter_rows():
             self.total_record_count += 1
+            # Convert datetime fields to epoch timestamps before serialization
+            row = convert_datetime_to_epoch(row)
             # Remove null attributes from the row recursively, preserving specified fields
             cleaned_row = self.process_null_fields(
                 row, preserve_fields, null_to_empty_dict_fields
