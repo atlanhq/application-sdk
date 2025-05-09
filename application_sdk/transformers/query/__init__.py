@@ -20,7 +20,7 @@ class QueryBasedTransformer(TransformerInterface):
     Query based transformer that uses a YAML file to define the SQL query for each asset type.
     And uses the daft engine to execute the SQL query on the raw data(dataframe) to get the transformed data.
 
-    Execution Flow:
+    Execution Flow
     1. Initialise the transformer with the connector name and tenant id.
     2. Create a map of the asset type [DATABASE, SCHEMA, TABLE, COLUMN, etc] to each of it's yaml template path
     from the default templates dir or the custom templates dir if provided.
@@ -245,7 +245,7 @@ class QueryBasedTransformer(TransformerInterface):
         Group columns with the same prefix into structs, supporting any level of nesting.
 
         We have a flat structured dataframe with columns that have dot notation in the yaml template
-        e.g:
+        e.g
         - name: attributes.name
         source_query: table_name
         - name: attributes.qualifiedName
@@ -255,8 +255,7 @@ class QueryBasedTransformer(TransformerInterface):
         source_query: connection_qualified_name
 
         This method will group the columns with the same prefix into structs.
-        e.g:
-        struct(
+        e.g - struct(
             name: table_name,
             qualifiedName: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
             connectionQualifiedName: connection_qualified_name
