@@ -244,10 +244,11 @@ class QueryBasedTransformer(TransformerInterface):
     ) -> daft.DataFrame:
         """Group columns with the same prefix into structs, supporting any level of nesting.
 
-        Groups columns that share prefixes into nested struct types. Takes a flat dataframe with
-        dot-notation column names from the YAML template and restructures it into nested structs.
+        We have a flat structured dataframe with columns that have dot notation in the yaml template.
+        For example:
 
-        Example YAML template:
+        .. code-block:: yaml
+
             - name: attributes.name
               source_query: table_name
             - name: attributes.qualifiedName
@@ -256,18 +257,22 @@ class QueryBasedTransformer(TransformerInterface):
             - name: attributes.connectionQualifiedName
               source_query: connection_qualified_name
 
-        This will be transformed into a struct:
+        This method will group the columns with the same prefix into structs.
+        For example:
+
+        .. code-block:: python
+
             struct(
-                name: table_name,
-                qualifiedName: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
-                connectionQualifiedName: connection_qualified_name
+                name=table_name,
+                qualifiedName=concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name),
+                connectionQualifiedName=connection_qualified_name
             ).alias("attributes")
 
         Args:
-            dataframe: DataFrame to restructure into nested structs
+            dataframe (daft.DataFrame): DataFrame to restructure
 
         Returns:
-            DataFrame with columns grouped into nested struct types
+            daft.DataFrame: DataFrame with columns grouped into structs
         """
         try:
             # Get all column names
