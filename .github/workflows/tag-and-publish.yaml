@@ -64,6 +64,7 @@ jobs:
           token: ${{ secrets.ORG_PAT_GITHUB }}
 
       # TODO: Uncomment in case we need to publish to TestPyPI
+      # Available at: https://test.pypi.org/project/atlan-application-sdk/
       # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
       # - name: Build and publish to TestPyPI
       #   env:
@@ -76,6 +77,7 @@ jobs:
 
       #     poetry publish -r testpypi
 
+      # Available at: https://pypi.org/project/atlan-application-sdk/
       - name: Build and publish to PyPI
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
