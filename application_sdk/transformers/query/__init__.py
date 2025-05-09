@@ -241,7 +241,8 @@ class QueryBasedTransformer(TransformerInterface):
     def get_grouped_dataframe_by_prefix(
         self, dataframe: daft.DataFrame
     ) -> daft.DataFrame:
-        """Group columns with the same prefix into structs, supporting any level of nesting.
+        """
+        Group columns with the same prefix into structs, supporting any level of nesting.
 
         We have a flat structured dataframe with columns that have dot notation in the yaml template
         e.g:
