@@ -64,7 +64,7 @@ class JsonOutput(Output):
     """Output handler for writing data to JSON files.
 
     This class provides functionality for writing data to JSON files with support
-    for chunking large datasets, buffering, and automatic file path ge`neration.
+    for chunking large datasets, buffering, and automatic file path generation.
     It can handle both pandas and daft DataFrames as input.
 
     The output can be written to local files and optionally uploaded to an object
