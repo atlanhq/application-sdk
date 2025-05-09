@@ -1,15 +1,6 @@
 import os
 from datetime import datetime
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Callable,
-    Dict,
-    List,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
 from temporalio import activity
@@ -187,7 +178,20 @@ class JsonOutput(Output):
             logger.error(f"Error writing dataframe to json: {str(e)}")
 
     async def write_daft_dataframe(
-        self, dataframe: Union["daft.DataFrame", AsyncIterator[Dict[str, Any]]]
+        self,
+        dataframe: "daft.DataFrame",
+        preserve_fields: Optional[List[str]] = [
+            "identity_cycle",
+            "number_columns_in_part_key",
+            "columns_participating_in_part_key",
+            "engine",
+            "is_insertable_into",
+            "is_typed",
+        ],
+        null_to_empty_dict_fields: Optional[List[str]] = [
+            "attributes",
+            "customAttributes",
+        ],
     ):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 
@@ -202,26 +206,28 @@ class JsonOutput(Output):
         # Daft does not have a built in method to write the daft dataframe to json
         # So we are using orjson to write the data to json in a more memory efficient way
         buffer = []
-
-        if isinstance(dataframe, AsyncIterator):
-            async for row in dataframe:
-                self.total_record_count += 1
-                # Convert datetime fields to epoch timestamps before serialization
-                converted_row = convert_datetime_to_epoch(row)
-                # Serialize the row and add it to the buffer
-                buffer.append(
-                    orjson.dumps(
-                        converted_row, option=orjson.OPT_APPEND_NEWLINE
-                    ).decode("utf-8")
+        for row in dataframe.iter_rows():
+            self.total_record_count += 1
+            # Convert datetime fields to epoch timestamps before serialization
+            row = convert_datetime_to_epoch(row)
+            # Remove null attributes from the row recursively, preserving specified fields
+            cleaned_row = self.process_null_fields(
+                row, preserve_fields, null_to_empty_dict_fields
+            )
+            # Serialize the row and add it to the buffer
+            buffer.append(
+                orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
+                    "utf-8"
                 )
+            )
 
-            # If the buffer reaches the specified size, write it to the file
-            if self.chunk_size and len(buffer) >= self.chunk_size:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()  # Clear the buffer
+        # If the buffer reaches the specified size, write it to the file
+        if self.chunk_size and len(buffer) >= self.chunk_size:
+            self.chunk_count += 1
+            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+            with open(output_file_name, "w") as f:
+                f.writelines(buffer)
+            buffer.clear()  # Clear the buffer
 
         # Write any remaining rows in the buffer
         if buffer:
