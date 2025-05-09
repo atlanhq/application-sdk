@@ -16,26 +16,27 @@ logger = get_logger(__name__)
 
 
 class QueryBasedTransformer(TransformerInterface):
-    """
-    Query based transformer that uses a YAML file to define the SQL query for each asset type.
-    And uses the daft engine to execute the SQL query on the raw data(dataframe) to get the transformed data.
+    """Query based transformer that uses YAML files for SQL queries and daft engine for execution.
 
-    Execution Flow
-    1. Initialise the transformer with the connector name and tenant id.
-    2. Create a map of the asset type [DATABASE, SCHEMA, TABLE, COLUMN, etc] to each of it's yaml template path
-    from the default templates dir or the custom templates dir if provided.
-    3. Call the transform_metadata method with the raw assets dataframe which does the following:
-        - Load the YAML template for the given typename using the asset type to template path mapping.
-        - Prepare the default attributes and the yaml SQL template required for transformation.
-        - Generate the SQL query from the YAML template.
-        - Execute the SQL query on the daft raw dataframe to get the transformed dataframe.
-        - Convert the flat structured dataframe with dot notation column names into a nested struct dataframe.
-        - Return the transformed dataframe.
+    Uses a YAML file to define SQL queries for each asset type and executes them on raw dataframes
+    using the daft engine to get transformed data.
+
+    The execution flow is:
+        1. Initialize transformer with connector name and tenant ID
+        2. Map asset types (DATABASE, SCHEMA, TABLE, COLUMN etc) to YAML template paths
+           from default or custom template directories
+        3. Transform metadata by:
+           - Loading YAML template for the typename
+           - Preparing default attributes and SQL template
+           - Generating SQL query from template
+           - Executing query on raw daft dataframe
+           - Converting flat dataframe with dot notation to nested structure
+           - Returning transformed dataframe
 
     Args:
-        connector_name (str): The name of the connector
-        tenant_id (str): The tenant id
-        **kwargs: Any additional keyword arguments
+        connector_name: Name of the connector
+        tenant_id: ID of the tenant
+        **kwargs: Additional keyword arguments
     """
 
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
