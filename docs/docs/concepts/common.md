@@ -87,6 +87,72 @@ ENABLE_OTLP_LOGS=true
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
 ```
 
+## Metrics (`metrics_adaptor.py`)
+
+The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integration and local storage capabilities.
+
+### Key Concepts
+
+*   **`MetricRecord`**: A Pydantic model that defines the structure of metric records, including:
+    *   `timestamp`: When the metric was recorded
+    *   `name`: Name of the metric
+    *   `value`: Numeric value of the metric
+    *   `type`: Type of metric (counter, gauge, histogram)
+    *   `labels`: Key-value pairs for metric dimensions
+    *   `description`: Optional description of the metric
+    *   `unit`: Optional unit of measurement
+
+*   **`AtlanMetricsAdapter`**: The main interface for metrics within the SDK. It provides:
+    *   **OpenTelemetry Integration**: If `ENABLE_OTLP_METRICS` is true, metrics are exported via OTLP using `OTLPMetricExporter`
+    *   **Resource Attributes**: Automatically includes service attributes (`service.name`, `service.version`) and workflow node name if available
+    *   **Metric Types**: Supports counters, gauges, and histograms
+    *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
+    *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
+    *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
+
+### Usage
+
+The primary way to get a metrics instance is via the `get_metrics` function:
+
+```python
+from application_sdk.common.metrics_adaptor import get_metrics
+
+# Get the metrics instance
+metrics = get_metrics()
+
+# Record different types of metrics
+metrics.record_metric(
+    name="request_duration_seconds",
+    value=1.5,
+    metric_type="histogram",
+    labels={"endpoint": "/api/v1/users", "method": "GET"},
+    description="Request duration in seconds",
+    unit="s"
+)
+
+metrics.record_metric(
+    name="active_connections",
+    value=42,
+    metric_type="gauge",
+    labels={"database": "postgres"},
+    description="Number of active database connections"
+)
+
+metrics.record_metric(
+    name="total_requests",
+    value=1,
+    metric_type="counter",
+    labels={"status": "success"},
+    description="Total number of requests processed"
+)
+```
+
+### Metric Types
+
+1. **Counter**: A cumulative metric that only increases (e.g., total requests, errors)
+2. **Gauge**: A metric that can increase and decrease (e.g., active connections, memory usage)
+3. **Histogram**: A metric that tracks the distribution of values (e.g., request duration, response size)
+
 ## AWS Utilities (`aws_utils.py`)
 
 Provides helper functions specifically for interacting with AWS services, particularly RDS authentication.

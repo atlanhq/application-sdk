@@ -1,5 +1,6 @@
 import os
 import socket
+import time
 from typing import Any, Callable, List, Optional, Type
 
 import duckdb
@@ -17,6 +18,7 @@ from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.metrics_adaptor import get_metrics
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
@@ -25,7 +27,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
-    LOG_DIR,
+    OBSERVABILITY_DIR,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -162,14 +164,14 @@ class APIServer(ServerInterface):
             result = sock.connect_ex((host, port))
             return result == 0
 
-    def _start_duckdb_ui(self, db_path="/tmp/logs/observability.db"):
-        """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
+    def _start_duckdb_ui(self, db_path="/tmp/observability/observability.db"):
+        """Start DuckDB UI if not already running, and attach the /tmp/observability folder."""
         if not self._is_duckdb_ui_running():
-            os.makedirs(LOG_DIR, exist_ok=True)
+            os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
             con = duckdb.connect(db_path)
             # Attach all .parquet files in /tmp/logs as tables
-            for fname in os.listdir(LOG_DIR):
-                fpath = os.path.join(LOG_DIR, fname)
+            for fname in os.listdir(OBSERVABILITY_DIR):
+                fpath = os.path.join(OBSERVABILITY_DIR, fname)
                 if fname.endswith(".parquet"):
                     tbl = os.path.splitext(fname)[0]
                     con.execute(
@@ -415,65 +417,145 @@ class APIServer(ServerInterface):
                     )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
-        """Test authentication credentials.
+        """Test authentication credentials."""
+        start_time = time.time()
+        metrics = get_metrics()
 
-        Args:
-            body (TestAuthRequest): Request containing authentication credentials.
+        try:
+            if not self.handler:
+                raise Exception("Handler not initialized")
 
-        Returns:
-            TestAuthResponse: Response indicating authentication success.
+            await self.handler.load(body.model_dump())
+            await self.handler.test_auth()
 
-        Raises:
-            Exception: If handler is not initialized.
-        """
-        if not self.handler:
-            raise Exception("Handler not initialized")
+            # Record successful auth
+            metrics.record_metric(
+                name="auth_requests_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "success"},
+                description="Total number of authentication requests",
+            )
 
-        await self.handler.load(body.model_dump())
-        await self.handler.test_auth()
-        return TestAuthResponse(success=True, message="Authentication successful")
+            # Record auth duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="auth_duration_seconds",
+                value=duration,
+                metric_type="histogram",
+                labels={},
+                description="Authentication request duration in seconds",
+            )
+
+            return TestAuthResponse(success=True, message="Authentication successful")
+        except Exception as e:
+            # Record failed auth
+            metrics.record_metric(
+                name="auth_requests_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "error"},
+                description="Total number of authentication requests",
+            )
+            raise e
 
     async def fetch_metadata(self, body: FetchMetadataRequest) -> FetchMetadataResponse:
-        """Fetch metadata based on request parameters.
+        """Fetch metadata based on request parameters."""
+        start_time = time.time()
+        metrics = get_metrics()
 
-        Args:
-            body (FetchMetadataRequest): Request containing metadata fetch parameters.
+        try:
+            if not self.handler:
+                raise Exception("Handler not initialized")
 
-        Returns:
-            FetchMetadataResponse: Response containing the requested metadata.
+            await self.handler.load(body.model_dump())
+            metadata = await self.handler.fetch_metadata(
+                metadata_type=body.root["type"], database=body.root["database"]
+            )
 
-        Raises:
-            Exception: If handler is not initialized.
-        """
-        if not self.handler:
-            raise Exception("Handler not initialized")
+            # Record successful metadata fetch
+            metrics.record_metric(
+                name="metadata_requests_total",
+                value=1.0,
+                metric_type="counter",
+                labels={
+                    "status": "success",
+                    "type": body.root["type"],
+                    "database": body.root["database"],
+                },
+                description="Total number of metadata fetch requests",
+            )
 
-        await self.handler.load(body.model_dump())
-        metadata = await self.handler.fetch_metadata(
-            metadata_type=body.root["type"], database=body.root["database"]
-        )
-        return FetchMetadataResponse(success=True, data=metadata)
+            # Record metadata fetch duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="metadata_duration_seconds",
+                value=duration,
+                metric_type="histogram",
+                labels={"type": body.root["type"], "database": body.root["database"]},
+                description="Metadata fetch duration in seconds",
+            )
+
+            return FetchMetadataResponse(success=True, data=metadata)
+        except Exception as e:
+            # Record failed metadata fetch
+            metrics.record_metric(
+                name="metadata_requests_total",
+                value=1.0,
+                metric_type="counter",
+                labels={
+                    "status": "error",
+                    "type": body.root["type"],
+                    "database": body.root["database"],
+                },
+                description="Total number of metadata fetch requests",
+            )
+            raise e
 
     async def preflight_check(
         self, body: PreflightCheckRequest
     ) -> PreflightCheckResponse:
-        """Perform preflight checks with provided configuration.
+        """Perform preflight checks with provided configuration."""
+        start_time = time.time()
+        metrics = get_metrics()
 
-        Args:
-            body (PreflightCheckRequest): Request containing preflight check parameters.
+        try:
+            if not self.handler:
+                raise Exception("Handler not initialized")
 
-        Returns:
-            PreflightCheckResponse: Response containing preflight check results.
+            await self.handler.load(body.credentials)
+            preflight_check = await self.handler.preflight_check(body.model_dump())
 
-        Raises:
-            Exception: If handler is not initialized.
-        """
-        if not self.handler:
-            raise Exception("Handler not initialized")
+            # Record successful preflight check
+            metrics.record_metric(
+                name="preflight_checks_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "success"},
+                description="Total number of preflight checks",
+            )
 
-        await self.handler.load(body.credentials)
-        preflight_check = await self.handler.preflight_check(body.model_dump())
-        return PreflightCheckResponse(success=True, data=preflight_check)
+            # Record preflight check duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="preflight_duration_seconds",
+                value=duration,
+                metric_type="histogram",
+                labels={},
+                description="Preflight check duration in seconds",
+            )
+
+            return PreflightCheckResponse(success=True, data=preflight_check)
+        except Exception as e:
+            # Record failed preflight check
+            metrics.record_metric(
+                name="preflight_checks_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "error"},
+                description="Total number of preflight checks",
+            )
+            raise e
 
     def get_workflow_config(self, config_id: str) -> WorkflowConfigResponse:
         """Retrieve workflow configuration by ID.
@@ -494,35 +576,57 @@ class APIServer(ServerInterface):
     async def get_workflow_run_status(
         self, workflow_id: str, run_id: str
     ) -> JSONResponse:
-        """Get the status of a specific workflow run.
+        """Get the status of a specific workflow run."""
+        start_time = time.time()
+        metrics = get_metrics()
 
-        Args:
-            workflow_id (str): The ID of the workflow.
-            run_id (str): The ID of the specific run.
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
 
-        Returns:
-            JSONResponse: Response containing the workflow run status.
+            workflow_status = await self.workflow_client.get_workflow_run_status(
+                workflow_id,
+                run_id,
+                include_last_executed_run_id=True,
+            )
 
-        Raises:
-            Exception: If temporal client is not initialized.
-        """
-        if not self.workflow_client:
-            raise Exception("Temporal client not initialized")
+            # Record successful status check
+            metrics.record_metric(
+                name="workflow_status_checks_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "success"},
+                description="Total number of workflow status checks",
+            )
 
-        workflow_status = await self.workflow_client.get_workflow_run_status(
-            workflow_id,
-            run_id,
-            include_last_executed_run_id=True,
-        )
+            # Record status check duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="workflow_status_duration_seconds",
+                value=duration,
+                metric_type="histogram",
+                labels={},
+                description="Workflow status check duration in seconds",
+            )
 
-        return JSONResponse(
-            status_code=status.HTTP_200_OK,
-            content={
-                "success": True,
-                "message": "Workflow status fetched successfully",
-                "data": workflow_status,
-            },
-        )
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "success": True,
+                    "message": "Workflow status fetched successfully",
+                    "data": workflow_status,
+                },
+            )
+        except Exception as e:
+            # Record failed status check
+            metrics.record_metric(
+                name="workflow_status_checks_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "error"},
+                description="Total number of workflow status checks",
+            )
+            raise e
 
     def update_workflow_config(
         self, config_id: str, body: WorkflowConfigRequest
@@ -545,23 +649,48 @@ class APIServer(ServerInterface):
         )
 
     async def stop_workflow(self, workflow_id: str, run_id: str) -> JSONResponse:
-        """Stop a running workflow.
+        """Stop a running workflow."""
+        start_time = time.time()
+        metrics = get_metrics()
 
-        Args:
-            workflow_id (str): The ID of the workflow to stop.
-            run_id (str): The ID of the specific run to stop.
+        try:
+            if not self.workflow_client:
+                raise Exception("Temporal client not initialized")
 
-        Returns:
-            JSONResponse: Response indicating success of the stop operation.
+            await self.workflow_client.stop_workflow(workflow_id, run_id)
 
-        Raises:
-            Exception: If temporal client is not initialized.
-        """
-        if not self.workflow_client:
-            raise Exception("Temporal client not initialized")
+            # Record successful workflow stop
+            metrics.record_metric(
+                name="workflow_stops_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "success"},
+                description="Total number of workflow stop requests",
+            )
 
-        await self.workflow_client.stop_workflow(workflow_id, run_id)
-        return JSONResponse(status_code=status.HTTP_200_OK, content={"success": True})
+            # Record stop duration
+            duration = time.time() - start_time
+            metrics.record_metric(
+                name="workflow_stop_duration_seconds",
+                value=duration,
+                metric_type="histogram",
+                labels={},
+                description="Workflow stop duration in seconds",
+            )
+
+            return JSONResponse(
+                status_code=status.HTTP_200_OK, content={"success": True}
+            )
+        except Exception as e:
+            # Record failed workflow stop
+            metrics.record_metric(
+                name="workflow_stops_total",
+                value=1.0,
+                metric_type="counter",
+                labels={"status": "error"},
+                description="Total number of workflow stop requests",
+            )
+            raise e
 
     async def start(
         self,
