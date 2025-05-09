@@ -118,6 +118,10 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 
+# Observability Constants
+#: Directory for storing observability data
+OBSERVABILITY_DIR = os.environ.get("OBSERVABILITY_DIR", "/tmp/observability")
+
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("LOG_BATCH_SIZE", 100))
 LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("LOG_FLUSH_INTERVAL_SECONDS", 10))
@@ -127,5 +131,14 @@ LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_DIR = os.environ.get("LOG_DIR", "/tmp/logs")
 LOG_FILE_NAME = os.environ.get("LOG_FILE_NAME", "log.parquet")
+
+# Metrics Configuration
+ENABLE_OTLP_METRICS = os.getenv("ENABLE_OTLP_METRICS", "false").lower() == "true"
+METRICS_FILE_NAME = "metrics.parquet"
+METRICS_BATCH_SIZE = int(os.getenv("METRICS_BATCH_SIZE", "100"))
+METRICS_FLUSH_INTERVAL_SECONDS = int(os.getenv("METRICS_FLUSH_INTERVAL_SECONDS", "10"))
+METRICS_CLEANUP_ENABLED = (
+    os.getenv("METRICS_CLEANUP_ENABLED", "false").lower() == "true"
+)
+METRICS_RETENTION_DAYS = int(os.getenv("METRICS_RETENTION_DAYS", "30"))

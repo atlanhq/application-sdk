@@ -51,10 +51,20 @@ The Application SDK uses environment variables for configuration. These can be s
 | `LOG_BATCH_SIZE` | Number of log records to buffer before writing to parquet file | `100` |
 | `LOG_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush logs to parquet file | `5` |
 | `LOG_RETENTION_DAYS` | Number of days to retain log records before automatic cleanup | `30` |
-| `LOG_DIR` | Directory where log files are stored | `/tmp/logs` |
+| `OBSERVABILITY_DIR` | Directory where log files are stored | `/tmp/observability` |
 | `LOG_FILE_NAME` | Name of the parquet file used for log storage | `logs.parquet` |
 | `LOG_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old logs | `true` |
 
+## Metrics Configuration
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `ENABLE_OTLP_METRICS` | Whether to enable OpenTelemetry metrics export | `false` |
+| `METRICS_BATCH_SIZE` | Number of metric records to buffer before writing to parquet file | `100` |
+| `METRICS_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush metrics to parquet file | `10` |
+| `METRICS_RETENTION_DAYS` | Number of days to retain metric records before automatic cleanup | `30` |
+| `METRICS_FILE_NAME` | Name of the parquet file used for metric storage | `metrics.parquet` |
+| `METRICS_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old metrics | `true` |
 
 ## OpenTelemetry Configuration
 
