@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 import orjson
@@ -30,6 +31,24 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
         return f"{str(chunk_count)}.json"
     else:
         return f"{str(chunk_start+1)}-{str(chunk_count)}.json"
+
+
+def convert_datetime_to_epoch(data: Any) -> Any:
+    """Convert datetime objects to epoch timestamps in milliseconds.
+
+    Args:
+        data: The data to convert
+
+    Returns:
+        The converted data with datetime fields as epoch timestamps
+    """
+    if isinstance(data, datetime):
+        return int(data.timestamp() * 1000)
+    elif isinstance(data, dict):
+        return {k: convert_datetime_to_epoch(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [convert_datetime_to_epoch(item) for item in data]
+    return data
 
 
 class JsonOutput(Output):

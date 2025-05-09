@@ -61,6 +61,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         activities_class: Type[
             BaseSQLMetadataExtractionActivities
         ] = BaseSQLMetadataExtractionActivities,
+        passthrough_modules: List[str] = [],
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
@@ -69,6 +70,8 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_classes (List[Type[BaseSQLMetadataExtractionWorkflow]]): List of workflow classes to register. Defaults to [BaseSQLMetadataExtractionWorkflow].
             activities_class (Type): Activities class to use for workflow activities. Defaults to BaseSQLMetadataExtractionActivities.
             worker_daemon_mode (bool): Whether to run the worker in daemon mode. Defaults to True.
+            passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
+
         """
 
         # load the workflow client
@@ -89,6 +92,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
             workflow_activities=workflow_class.get_activities(activities),
+            passthrough_modules=passthrough_modules,
         )
 
     async def start_workflow(

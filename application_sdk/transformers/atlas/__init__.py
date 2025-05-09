@@ -4,7 +4,7 @@ This module provides the Atlas transformer implementation for converting metadat
 into Atlas entities using the pyatlan library.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Type
 
 import daft
@@ -213,7 +213,9 @@ class AtlasTransformer(TransformerInterface):
         attributes["tenant_id"] = self.tenant_id
         attributes["last_sync_workflow_name"] = workflow_id
         attributes["last_sync_run"] = workflow_run_id
-        attributes["last_sync_run_at"] = datetime.now()
+        attributes["last_sync_run_at"] = int(
+            datetime.now(timezone.utc).timestamp() * 1000
+        )
         attributes["connection_name"] = data.get("connection_name", "")
         attributes["connector_name"] = AtlanConnectorType.get_connector_name(
             data.get("connection_qualified_name", "")

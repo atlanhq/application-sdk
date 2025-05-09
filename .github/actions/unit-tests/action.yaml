@@ -47,15 +47,22 @@ runs:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
-    - name: Upload Coverage Report to S3
-      uses: atlanhq/kryptonite/upload@v1
+    - name: Setup AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
       with:
-        source: ./htmlcov
-        target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+        aws-region: ap-south-1
+        # Only usable in atlanhq repositories
+        role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+    - name: Upload Coverage Report to Kryptonite Bucket
+      shell: bash
+      run: |
+        aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete
 
     - name: Comment Coverage Report URL on PR
       uses: mshick/add-pr-comment@v2
+      if: ${{ github.event_name == 'pull_request' }}
       with:
         message-id: "coverage"
         message: |
-          Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+          🛠 Full Test Coverage Report: https://k.atlan.dev/coverage/application-sdk/pr/${{ github.event.number }}
