@@ -1,10 +1,14 @@
+import os
+import socket
 from typing import Any, Callable, List, Optional, Type
+
+import duckdb
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -21,6 +25,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    LOG_DIR,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -80,6 +85,7 @@ class APIServer(ServerInterface):
         docs_export_path (str): Path where documentation will be exported.
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
+        _duckdb_ui_con: duckdb.Connection: Store the DuckDB UI connection
 
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
@@ -101,6 +107,7 @@ class APIServer(ServerInterface):
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
+    _duckdb_ui_con = None  # Store the DuckDB UI connection
 
     def __init__(
         self,
@@ -147,6 +154,36 @@ class APIServer(ServerInterface):
 
         # Initialize parent class
         super().__init__(handler)
+
+    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
+        """Check if DuckDB UI is already running on the default port."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            result = sock.connect_ex((host, port))
+            return result == 0
+
+    def _start_duckdb_ui(self, db_path="/tmp/logs/observability.db"):
+        """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
+        if not self._is_duckdb_ui_running():
+            os.makedirs(LOG_DIR, exist_ok=True)
+            con = duckdb.connect(db_path)
+            # Attach all .parquet files in /tmp/logs as tables
+            for fname in os.listdir(LOG_DIR):
+                fpath = os.path.join(LOG_DIR, fname)
+                if fname.endswith(".parquet"):
+                    tbl = os.path.splitext(fname)[0]
+                    con.execute(
+                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
+                    )
+            # Start DuckDB UI using SQL command
+            con.execute("CALL start_ui();")
+            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
+
+    def observability(self, request: Request) -> RedirectResponse:
+        """Endpoint to launch DuckDB UI for log self-serve exploration."""
+        self._start_duckdb_ui()
+        # Redirect to the local DuckDB UI
+        return RedirectResponse(url="http://0.0.0.0:4213")
 
     def setup_atlan_docs(self):
         """Set up and serve Atlan documentation.
@@ -263,6 +300,13 @@ class APIServer(ServerInterface):
         """
         Method to register the routes for the FastAPI application
         """
+
+        self.app.add_api_route(
+            "/observability",
+            self.observability,
+            methods=["GET"],
+            response_class=RedirectResponse,
+        )
 
         self.workflow_router.add_api_route(
             "/auth",
