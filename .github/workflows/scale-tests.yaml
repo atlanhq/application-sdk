@@ -32,6 +32,7 @@ jobs:
         with:
           python-version: "3.11"
 
+      # FIXME(inishchith): pending uv support
       #----------------------------------------------
       #  -----  install & configure poetry  -----
       #----------------------------------------------

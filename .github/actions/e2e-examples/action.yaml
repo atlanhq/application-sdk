@@ -57,6 +57,7 @@ runs:
       with:
         python-version: "3.11"
 
+    # FIXME(inishchith): pending uv support
     - name: Install Poetry
       uses: snok/install-poetry@v1
       with:
