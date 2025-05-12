@@ -27,6 +27,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    LOG_USE_DATE_BASED_FILES,
     OBSERVABILITY_DIR,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
@@ -169,14 +170,59 @@ class APIServer(ServerInterface):
         if not self._is_duckdb_ui_running():
             os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
             con = duckdb.connect(db_path)
-            # Attach all .parquet files in /tmp/logs as tables
-            for fname in os.listdir(OBSERVABILITY_DIR):
-                fpath = os.path.join(OBSERVABILITY_DIR, fname)
-                if fname.endswith(".parquet"):
-                    tbl = os.path.splitext(fname)[0]
-                    con.execute(
-                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
-                    )
+
+            if LOG_USE_DATE_BASED_FILES:
+                # Function to recursively find and attach parquet files
+                def attach_parquet_files(directory):
+                    for item in os.listdir(directory):
+                        item_path = os.path.join(directory, item)
+                        if os.path.isdir(item_path):
+                            # Recursively process subdirectories
+                            attach_parquet_files(item_path)
+                        elif item.endswith(".parquet"):
+                            # Create view name based on relative path, replacing special characters
+                            rel_path = os.path.relpath(item_path, OBSERVABILITY_DIR)
+                            # Replace special characters with underscores and ensure valid identifier
+                            view_name = rel_path.replace("/", "_").replace(
+                                ".parquet", ""
+                            )
+                            view_name = view_name.replace("-", "_").replace(".", "_")
+                            # Ensure the view name starts with a letter or underscore
+                            if not view_name[0].isalpha() and view_name[0] != "_":
+                                view_name = "v_" + view_name
+
+                            try:
+                                con.execute(
+                                    f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM read_parquet('{item_path}')"
+                                )
+                            except Exception as e:
+                                logger.error(
+                                    f"Error creating view for {item_path}: {str(e)}"
+                                )
+
+                # Start with the observability directory
+                attach_parquet_files(OBSERVABILITY_DIR)
+            else:
+                # Original behavior for single file mode
+                for fname in os.listdir(OBSERVABILITY_DIR):
+                    fpath = os.path.join(OBSERVABILITY_DIR, fname)
+                    if fname.endswith(".parquet"):
+                        # Create a valid view name
+                        view_name = (
+                            fname.replace(".parquet", "")
+                            .replace("-", "_")
+                            .replace(".", "_")
+                        )
+                        if not view_name[0].isalpha() and view_name[0] != "_":
+                            view_name = "v_" + view_name
+
+                        try:
+                            con.execute(
+                                f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM read_parquet('{fpath}')"
+                            )
+                        except Exception as e:
+                            logger.error(f"Error creating view for {fpath}: {str(e)}")
+
             # Start DuckDB UI using SQL command
             con.execute("CALL start_ui();")
             self._duckdb_ui_con = con  # Store the connection, do NOT close it!
