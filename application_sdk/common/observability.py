@@ -237,3 +237,48 @@ class AtlanObservability:
 
         except Exception as e:
             logging.error(f"Error cleaning up old logs: {e}")
+
+
+class DuckDBUI:
+    """Class to handle DuckDB UI functionality."""
+
+    def __init__(self, db_path="/tmp/logs/observability.db"):
+        """Initialize the DuckDB UI handler.
+
+        Args:
+            db_path (str): Path to the DuckDB database file.
+        """
+        self.db_path = db_path
+        self._duckdb_ui_con = None
+
+    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
+        """Check if DuckDB UI is already running on the default port."""
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            result = sock.connect_ex((host, port))
+            return result == 0
+
+    def start_ui(self):
+        """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
+        import os
+
+        import duckdb
+
+        from application_sdk.constants import LOG_DIR
+
+        if not self._is_duckdb_ui_running():
+            os.makedirs(LOG_DIR, exist_ok=True)
+            con = duckdb.connect(self.db_path)
+            # Attach all .parquet files in /tmp/logs as tables
+            for fname in os.listdir(LOG_DIR):
+                fpath = os.path.join(LOG_DIR, fname)
+                if fname.endswith(".parquet"):
+                    tbl = os.path.splitext(fname)[0]
+                    con.execute(
+                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
+                    )
+            # Start DuckDB UI using SQL command
+            con.execute("CALL start_ui();")
+            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
