@@ -1,22 +1,23 @@
-import asyncio
-import logging
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Dict, Generator
+from typing import Generator
 from unittest import mock
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.common.traces_adaptor import AtlanTracesAdapter, get_traces, TraceRecord
-from application_sdk.constants import OBJECT_STORE_NAME
+from application_sdk.common.traces_adaptor import (
+    AtlanTracesAdapter,
+    TraceRecord,
+    get_traces,
+)
 
 
 @pytest.fixture
 def mock_tracer():
     """Create a mock tracer instance."""
-    with mock.patch("opentelemetry.trace.set_tracer_provider") as mock_set_tracer:
+    with mock.patch("opentelemetry.trace.set_tracer_provider"):
         with mock.patch("opentelemetry.sdk.trace.TracerProvider") as mock_provider:
             mock_tracer = mock.MagicMock()
             mock_provider.return_value.get_tracer.return_value = mock_tracer
@@ -41,12 +42,12 @@ def create_traces_adapter() -> Generator[AtlanTracesAdapter, None, None]:
     ):
         # Create mock tracer first
         mock_tracer = mock.MagicMock()
-        
+
         # Mock the tracer provider setup
-        with mock.patch("opentelemetry.trace.set_tracer_provider") as mock_set_tracer:
+        with mock.patch("opentelemetry.trace.set_tracer_provider"):
             with mock.patch("opentelemetry.sdk.trace.TracerProvider") as mock_provider:
                 mock_provider.return_value.get_tracer.return_value = mock_tracer
-                
+
                 # Create adapter after mocks are in place
                 adapter = AtlanTracesAdapter()
                 # Set the tracer directly
@@ -75,7 +76,7 @@ def test_process_record_with_trace_record():
             status_message="Success",
             attributes={"test": "attribute"},
             events=[{"name": "test_event", "attributes": {"key": "value"}}],
-            duration_ms=150.5
+            duration_ms=150.5,
         )
         processed = traces_adapter.process_record(record)
         assert processed["trace_id"] == "1234567890abcdef"
@@ -86,7 +87,9 @@ def test_process_record_with_trace_record():
         assert processed["status_code"] == "OK"
         assert processed["status_message"] == "Success"
         assert processed["attributes"] == {"test": "attribute"}
-        assert processed["events"] == [{"name": "test_event", "attributes": {"key": "value"}}]
+        assert processed["events"] == [
+            {"name": "test_event", "attributes": {"key": "value"}}
+        ]
         assert processed["duration_ms"] == 150.5
 
 
@@ -104,7 +107,7 @@ def test_process_record_with_dict():
             "status_message": "Success",
             "attributes": {"test": "attribute"},
             "events": [{"name": "test_event", "attributes": {"key": "value"}}],
-            "duration_ms": 150.5
+            "duration_ms": 150.5,
         }
         processed = traces_adapter.process_record(record)
         assert processed == record
@@ -115,14 +118,10 @@ def test_process_record_with_dict():
     st.text(min_size=16, max_size=16),
     st.text(min_size=16, max_size=16),
     st.text(min_size=1),
-    st.floats(min_value=0)
+    st.floats(min_value=0),
 )
 def test_record_trace_with_various_inputs(
-    name: str,
-    trace_id: str,
-    span_id: str,
-    kind: str,
-    duration_ms: float
+    name: str, trace_id: str, span_id: str, kind: str, duration_ms: float
 ):
     """Test record_trace() method with various inputs."""
     with create_traces_adapter() as traces_adapter:
@@ -142,7 +141,7 @@ def test_record_trace_with_various_inputs(
             parent_span_id=parent_span_id,
             status_message=status_message,
             events=events,
-            duration_ms=duration_ms
+            duration_ms=duration_ms,
         )
 
         # Verify the trace was added to the buffer
@@ -172,7 +171,7 @@ def test_export_record_with_otlp_enabled():
                 kind="SERVER",
                 status_code="OK",
                 attributes={"test": "attribute"},
-                duration_ms=150.5
+                duration_ms=150.5,
             )
             with mock.patch.object(traces_adapter, "_send_to_otel") as mock_send:
                 with mock.patch.object(traces_adapter, "_log_to_console") as mock_log:
@@ -195,7 +194,7 @@ def test_export_record_with_otlp_disabled():
                         kind="SERVER",
                         status_code="OK",
                         attributes={"test": "attribute"},
-                        duration_ms=150.5
+                        duration_ms=150.5,
                     )
                     traces_adapter.export_record(record)
                     mock_send.assert_not_called()
@@ -205,7 +204,9 @@ def test_export_record_with_otlp_disabled():
 def test_send_to_otel():
     """Test _send_to_otel() method."""
     with create_traces_adapter() as traces_adapter:
-        with mock.patch.object(traces_adapter.tracer, "start_as_current_span") as mock_span:
+        with mock.patch.object(
+            traces_adapter.tracer, "start_as_current_span"
+        ) as mock_span:
             mock_span_context = mock.MagicMock()
             mock_span.return_value.__enter__.return_value = mock_span_context
 
@@ -218,30 +219,28 @@ def test_send_to_otel():
                 status_code="OK",
                 attributes={"test": "attribute"},
                 events=[{"name": "test_event", "attributes": {"key": "value"}}],
-                duration_ms=150.5
+                duration_ms=150.5,
             )
             traces_adapter._send_to_otel(record)
 
             mock_span.assert_called_once_with(
-                name="test_span",
-                kind="SERVER",
-                attributes={"test": "attribute"}
+                name="test_span", kind="SERVER", attributes={"test": "attribute"}
             )
             mock_span_context.set_status.assert_called_once()
             mock_span_context.add_event.assert_called_once_with(
-                name="test_event",
-                attributes={"key": "value"},
-                timestamp=mock.ANY
+                name="test_event", attributes={"key": "value"}, timestamp=mock.ANY
             )
 
 
 def test_log_to_console():
     """Test _log_to_console() method."""
     with create_traces_adapter() as traces_adapter:
-        with mock.patch("application_sdk.common.traces_adaptor.get_logger") as mock_get_logger:
+        with mock.patch(
+            "application_sdk.common.traces_adaptor.get_logger"
+        ) as mock_get_logger:
             mock_logger = mock.MagicMock()
             mock_get_logger.return_value = mock_logger
-            
+
             # Create a test trace record
             trace_record = TraceRecord(
                 timestamp=datetime.now().timestamp(),
@@ -251,12 +250,12 @@ def test_log_to_console():
                 kind="SERVER",
                 status_code="OK",
                 attributes={"test": "attribute"},
-                duration_ms=150.5
+                duration_ms=150.5,
             )
-            
+
             # Call the method
             traces_adapter._log_to_console(trace_record)
-            
+
             # Verify the logger was called with the correct message
             mock_logger.info.assert_called_once()
             log_message = mock_logger.info.call_args[0][0]
@@ -275,6 +274,7 @@ def test_get_traces():
     assert traces1 is traces2
     assert isinstance(traces1, AtlanTracesAdapter)
 
+
 @pytest.mark.asyncio
 async def test_cleanup_old_records():
     """Test cleanup of old records."""
@@ -288,7 +288,7 @@ async def test_cleanup_old_records():
                 kind="SERVER",
                 status_code="OK",
                 attributes={"test": f"value_{i}"},
-                duration_ms=100.0
+                duration_ms=100.0,
             )
 
         # Force cleanup
@@ -297,4 +297,4 @@ async def test_cleanup_old_records():
         # Verify cleanup was performed
         # Note: In a real test, we would need to mock the file system operations
         # and verify the cleanup logic. This is just a basic structure.
-        assert True 
+        assert True

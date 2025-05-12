@@ -29,16 +29,24 @@ The logger implements a sophisticated storage and retention system:
    - Flushes logs based on two conditions:
      - When buffer size reaches `LOG_BATCH_SIZE`
      - When time since last flush exceeds `LOG_FLUSH_INTERVAL_SECONDS`
+   - Supports date-based file organization when `LOG_USE_DATE_BASED_FILES` is enabled
+   - Uses `LOG_DATE_FORMAT` for naming date-based files (default: `%Y-%m-%d`)
 
 2. **Log Retention**:
    - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
    - Runs cleanup once per day
    - Maintains state of last cleanup in Dapr state store
    - Handles both local parquet files and object store cleanup
+   - Supports both single-file and date-based file cleanup strategies
 
 3. **Storage Locations**:
-   - Local: `/tmp/logs/logs.parquet`
-   - Object Store: `logs/log.parquet` (via Dapr object store binding)
+   - Local:
+     - Single file: `/tmp/observability/logs.parquet`
+     - Date-based: `/tmp/observability/logs/YYYY-MM-DD.parquet`
+   - Object Store:
+     - Single file: `logs/log.parquet`
+     - Date-based: `logs/YYYY-MM-DD.parquet`
+     (via Dapr object store binding)
 
 ### Usage
 
@@ -81,6 +89,8 @@ LOG_LEVEL=INFO
 LOG_BATCH_SIZE=100  # Number of logs to buffer before writing
 LOG_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
 LOG_RETENTION_DAYS=30  # Days to keep logs before cleanup
+LOG_USE_DATE_BASED_FILES=true  # Enable date-based file organization
+LOG_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
 
 # OTLP settings (if enabled)
 ENABLE_OTLP_LOGS=true
@@ -109,6 +119,7 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
     *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
     *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
     *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
+    *   **Date-based Files**: Supports date-based file organization using `METRICS_DATE_FORMAT`
 
 ### Usage
 
@@ -152,6 +163,23 @@ metrics.record_metric(
 1. **Counter**: A cumulative metric that only increases (e.g., total requests, errors)
 2. **Gauge**: A metric that can increase and decrease (e.g., active connections, memory usage)
 3. **Histogram**: A metric that tracks the distribution of values (e.g., request duration, response size)
+
+### Configuration
+
+The metrics system can be configured using the following environment variables:
+
+```bash
+# Metrics storage settings
+METRICS_BATCH_SIZE=100  # Number of metrics to buffer before writing
+METRICS_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
+METRICS_RETENTION_DAYS=30  # Days to keep metrics before cleanup
+METRICS_USE_DATE_BASED_FILES=true  # Enable date-based file organization
+METRICS_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
+
+# OTLP settings (if enabled)
+ENABLE_OTLP_METRICS=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
 
 ## Traces (`traces_adaptor.py`)
 

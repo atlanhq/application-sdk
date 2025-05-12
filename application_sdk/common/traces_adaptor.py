@@ -1,9 +1,9 @@
 import asyncio
 import logging
 import threading
+import uuid
 from time import time
 from typing import Any, Dict, Optional
-import uuid
 
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -12,16 +12,11 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from pydantic import BaseModel
 
-from application_sdk.common.observability import AtlanObservability
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
-    TRACES_BATCH_SIZE,
-    TRACES_CLEANUP_ENABLED,
     OBSERVABILITY_DIR,
-    TRACES_FILE_NAME,
-    TRACES_FLUSH_INTERVAL_SECONDS,
-    TRACES_RETENTION_DAYS,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -29,6 +24,11 @@ from application_sdk.constants import (
     OTEL_WF_NODE_NAME,
     SERVICE_NAME,
     SERVICE_VERSION,
+    TRACES_BATCH_SIZE,
+    TRACES_CLEANUP_ENABLED,
+    TRACES_FILE_NAME,
+    TRACES_FLUSH_INTERVAL_SECONDS,
+    TRACES_RETENTION_DAYS,
 )
 
 
@@ -211,7 +211,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
 
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a trace record into a dictionary format.
-        
+
         This method ensures traces are properly formatted for storage in traces.parquet.
         It converts the TraceRecord into a dictionary with all necessary fields.
         """
@@ -228,7 +228,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 "status_message": record.status_message,
                 "attributes": record.attributes,
                 "events": record.events,
-                "duration_ms": record.duration_ms
+                "duration_ms": record.duration_ms,
             }
             return trace_dict
         return record
@@ -256,7 +256,11 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             ) as span:
                 # Set span status
                 if trace_record.status_code == "ERROR":
-                    span.set_status(trace.Status(trace.StatusCode.ERROR, trace_record.status_message))
+                    span.set_status(
+                        trace.Status(
+                            trace.StatusCode.ERROR, trace_record.status_message
+                        )
+                    )
                 else:
                     span.set_status(trace.Status(trace.StatusCode.OK))
 
@@ -266,7 +270,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                         span.add_event(
                             name=event.get("name", ""),
                             attributes=event.get("attributes", {}),
-                            timestamp=event.get("timestamp", int(time() * 1e9))
+                            timestamp=event.get("timestamp", int(time() * 1e9)),
                         )
 
         except Exception as e:
@@ -286,7 +290,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 log_message += f" Attributes: {trace_record.attributes}"
             if trace_record.duration_ms:
                 log_message += f" Duration: {trace_record.duration_ms}ms"
-            
+
             logger = get_logger()
             logger.tracing(log_message)
         except Exception as e:
@@ -306,7 +310,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         duration_ms: Optional[float] = None,
     ) -> TraceContext:
         """Create a trace context for recording traces.
-        
+
         This method returns a context manager that will automatically record the trace
         when the context is exited, including duration and any exceptions that occurred.
         """
@@ -375,7 +379,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 kind="INTERNAL",
                 status_code="ERROR",
                 status_message=str(exc_val),
-                attributes={"error_type": str(exc_type.__name__)}
+                attributes={"error_type": str(exc_type.__name__)},
             )
 
 

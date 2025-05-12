@@ -132,6 +132,10 @@ LOG_CLEANUP_ENABLED = bool(os.environ.get("LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
 LOG_FILE_NAME = os.environ.get("LOG_FILE_NAME", "log.parquet")
+LOG_USE_DATE_BASED_FILES = (
+    os.environ.get("LOG_USE_DATE_BASED_FILES", "true").lower() == "true"
+)
+LOG_DATE_FORMAT = os.environ.get("LOG_DATE_FORMAT", "%Y-%m-%d")
 
 # Metrics Configuration
 ENABLE_OTLP_METRICS = os.getenv("ENABLE_OTLP_METRICS", "false").lower() == "true"
@@ -142,6 +146,10 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("METRICS_RETENTION_DAYS", "30"))
+METRICS_USE_DATE_BASED_FILES = (
+    os.getenv("METRICS_USE_DATE_BASED_FILES", "true").lower() == "true"
+)
+METRICS_DATE_FORMAT = os.getenv("METRICS_DATE_FORMAT", "%Y-%m-%d")
 
 # Traces Configuration
 ENABLE_OTLP_TRACES = os.getenv("ENABLE_OTLP_TRACES", "true").lower() == "true"

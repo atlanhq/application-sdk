@@ -17,9 +17,11 @@ from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
+    METRICS_DATE_FORMAT,
     METRICS_FILE_NAME,
     METRICS_FLUSH_INTERVAL_SECONDS,
     METRICS_RETENTION_DAYS,
+    METRICS_USE_DATE_BASED_FILES,
     OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -58,6 +60,10 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             data_dir=OBSERVABILITY_DIR,
             file_name=METRICS_FILE_NAME,
         )
+
+        # Override the date-based file settings
+        self._use_date_based_files = METRICS_USE_DATE_BASED_FILES
+        self._date_format = METRICS_DATE_FORMAT
 
         # Initialize OpenTelemetry metrics if enabled
         if ENABLE_OTLP_METRICS:
