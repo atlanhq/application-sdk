@@ -11,16 +11,16 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel
 
-from application_sdk.common.observability import AtlanObservability
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
-    OBSERVABILITY_DIR,
     METRICS_FILE_NAME,
     METRICS_FLUSH_INTERVAL_SECONDS,
     METRICS_RETENTION_DAYS,
+    OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -154,7 +154,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
 
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a metric record into a dictionary format.
-        
+
         This method ensures metrics are properly formatted for storage in metrics.parquet.
         It converts the MetricRecord into a dictionary with all necessary fields.
         """
@@ -167,7 +167,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 "type": record.type,
                 "labels": record.labels,
                 "description": record.description,
-                "unit": record.unit
+                "unit": record.unit,
             }
             return metric_dict
         return record
@@ -270,4 +270,4 @@ def get_metrics() -> AtlanMetricsAdapter:
     global _metrics_instance
     if _metrics_instance is None:
         _metrics_instance = AtlanMetricsAdapter()
-    return _metrics_instance 
+    return _metrics_instance

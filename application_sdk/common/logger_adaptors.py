@@ -124,6 +124,7 @@ SEVERITY_MAPPING = {
     "CRITICAL": SeverityNumber.FATAL,
     "ACTIVITY": SeverityNumber.INFO,  # Using INFO severity for activity level
     "METRIC": SeverityNumber.INFO,  # Using INFO severity for metric level
+    "TRACING": SeverityNumber.INFO,  # Using INFO severity for tracing level
 }
 
 
@@ -154,6 +155,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         # Register custom log level for metrics
         if "METRIC" not in logger._core.levels:
             logger.level("METRIC", no=20, color="<yellow>", icon="📊")
+
+        # Register custom log level for tracing
+        if "TRACING" not in logger._core.levels:
+            logger.level("TRACING", no=20, color="<magenta>", icon="🔍")
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
@@ -429,6 +434,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         local_kwargs["log_type"] = "metric"
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
         self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
+
+    def tracing(self, msg: str, *args: Any, **kwargs: Any):
+        """Log a trace-specific message with trace context."""
+        local_kwargs = kwargs.copy()
+        local_kwargs["log_type"] = "trace"
+        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
+        self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
 
     async def parquet_sink(self, message: Any):
         """Process log message and store in parquet format."""
