@@ -31,8 +31,6 @@ import os
 import time
 from typing import Any, Dict
 
-from pyatlan.model.assets import Database
-
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
@@ -40,14 +38,10 @@ from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
 from application_sdk.clients.sql import BaseSQLClient
-
-# from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.transformers.common.utils import (
-    get_yaml_query_template_path_mappings,
-)
-from application_sdk.transformers.query import QueryBasedTransformer
+from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.atlas.sql import Column, Procedure, Table
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
@@ -67,7 +61,7 @@ class SQLClient(BaseSQLClient):
 
 class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
     fetch_database_sql = """
-    SELECT datname as database_name FROM pg_database WHERE datname = current_database();
+    SELECT d.*, d.datname as database_name FROM pg_database d WHERE datname = current_database();
     """
 
     fetch_schema_sql = """
@@ -107,35 +101,107 @@ class SampleSQLActivities(BaseSQLMetadataExtractionActivities):
     """
 
 
-class PostgresDatabase(Database):
+class PostgresTable(Table):
     @classmethod
     def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
-        attributes = {
-            "name": obj.get("datname", ""),
-            "connection_qualified_name": obj.get("connection_qualified_name", ""),
-        }
+        """
+        Postgres view and materialized view definitions are select queries,
+        so we need to format the view definition to be a valid SQL query.
+
+        src: https://github.com/atlanhq/marketplace-packages/blob/master/packages/atlan/postgres/transformers/view.jinja2
+        """
+        assert "table_name" in obj, "table_name cannot be None"
+        assert "table_type" in obj, "table_type cannot be None"
+
+        entity_data = super().get_attributes(obj)
+        table_attributes = entity_data.get("attributes", {})
+        table_custom_attributes = entity_data.get("custom_attributes", {})
+
+        table_attributes["constraint"] = obj.get("partition_constraint", "")
+
+        if (
+            obj.get("table_kind", "") == "p"
+            or obj.get("table_type", "") == "PARTITIONED TABLE"
+        ):
+            table_attributes["is_partitioned"] = True
+            table_attributes["partition_strategy"] = obj.get("partition_strategy", "")
+            table_attributes["partition_count"] = obj.get("partition_count", 0)
+        else:
+            table_attributes["is_partitioned"] = False
+
+        table_custom_attributes["is_insertable_into"] = obj.get(
+            "is_insertable_into", False
+        )
+        table_custom_attributes["is_typed"] = obj.get("is_typed", False)
+        table_custom_attributes["self_referencing_col_name"] = obj.get(
+            "self_referencing_col_name", ""
+        )
+        table_custom_attributes["ref_generation"] = obj.get("ref_generation", "")
+        if obj.get("table_type") == "VIEW":
+            view_definition = "CREATE OR REPLACE VIEW {view_name} AS {query}"
+            table_attributes["definition"] = view_definition.format(
+                view_name=obj.get("table_name", ""),
+                query=obj.get("view_definition", ""),
+            )
+        elif obj.get("table_type") == "MATERIALIZED VIEW":
+            view_definition = "CREATE MATERIALIZED VIEW {view_name} AS {query}"
+            table_attributes["definition"] = view_definition.format(
+                view_name=obj.get("table_name", ""),
+                query=obj.get("view_definition", ""),
+            )
+
+        entity_class = None
+        if entity_data["entity_class"] == Table:
+            entity_class = PostgresTable
+        else:
+            entity_class = entity_data["entity_class"]
+
         return {
-            "attributes": attributes,
+            **entity_data,
+            "attributes": table_attributes,
+            "custom_attributes": table_custom_attributes,
+            "entity_class": entity_class,
         }
 
 
-class CustomTransformer(QueryBasedTransformer):
+class PostgresColumn(Column):
+    @classmethod
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+        entity_data = super().get_attributes(obj)
+
+        column_attributes = entity_data.get("attributes", {})
+        column_custom_attributes = entity_data.get("custom_attributes", {})
+
+        if obj.get("numeric_precision_radix", "") != "":
+            column_custom_attributes["num_prec_radix"] = obj.get(
+                "numeric_precision_radix", ""
+            )
+        if obj.get("is_identity", "") != "":
+            column_custom_attributes["is_identity"] = obj.get("is_identity", "")
+        if obj.get("identity_cycle", "") != "":
+            column_custom_attributes["identity_cycle"] = obj.get("identity_cycle", "")
+
+        if obj.get("constraint_type", "") == "PRIMARY KEY":
+            column_attributes["is_primary"] = True
+
+        elif obj.get("constraint_type", "") == "FOREIGN KEY":
+            column_attributes["is_foreign"] = True
+
+        return {
+            **entity_data,
+            "attributes": column_attributes,
+            "custom_attributes": column_custom_attributes,
+            "entity_class": PostgresColumn,
+        }
+
+
+class SQLAtlasTransformer(AtlasTransformer):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         super().__init__(connector_name, tenant_id, **kwargs)
 
-        self.entity_class_definitions = get_yaml_query_template_path_mappings(
-            custom_templates_path=os.path.join(
-                os.path.dirname(__file__), "sql_query_templates"
-            ),
-            assets=[
-                "TABLE",
-                "COLUMN",
-                "DATABASE",  # The database template will be overridden by the custom database template specified at examples/sql_query_templates/database.yaml
-                "SCHEMA",
-                "EXTRAS-PROCEDURE",
-                "FUNCTION",
-            ],
-        )
+        self.entity_class_definitions["TABLE"] = PostgresTable
+        self.entity_class_definitions["COLUMN"] = PostgresColumn
+        self.entity_class_definitions["EXTRAS-PROCEDURE"] = Procedure
 
 
 class SampleSQLHandler(BaseSQLHandler):
@@ -157,16 +223,16 @@ class SampleSQLHandler(BaseSQLHandler):
     """
 
 
-async def application_sql_with_custom_transformer(
+async def application_sql_with_custom_pyatlan_transformer(
     daemon: bool = True,
 ) -> Dict[str, Any]:
-    logger.info("Starting application_sql_with_custom_transformer")
+    logger.info("Starting application_sql_with_custom_pyatlan_transformer")
 
     app = BaseSQLMetadataExtractionApplication(
         name=APPLICATION_NAME,
         client_class=SQLClient,
         handler_class=SampleSQLHandler,
-        transformer_class=CustomTransformer,
+        transformer_class=SQLAtlasTransformer,
     )
 
     await app.setup_workflow(
@@ -211,5 +277,5 @@ async def application_sql_with_custom_transformer(
 
 
 if __name__ == "__main__":
-    asyncio.run(application_sql_with_custom_transformer(daemon=False))
+    asyncio.run(application_sql_with_custom_pyatlan_transformer(daemon=False))
     time.sleep(1000000)

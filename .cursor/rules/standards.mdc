@@ -77,4 +77,3 @@ This document outlines the development standards for the Application SDK, includ
     - Ensure resources (files, network connections, database sessions) are properly closed/released.
     - Design tests to verify resource cleanup, especially for long-running processes or components managing external resources.
     - Be mindful of potential memory leaks in complex data structures or long-lived objects.
-

@@ -4,9 +4,10 @@ This module provides the Atlas transformer implementation for converting metadat
 into Atlas entities using the pyatlan library.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Type
 
+import daft
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -72,6 +73,42 @@ class AtlasTransformer(TransformerInterface):
         }
 
     def transform_metadata(
+        self,
+        typename: str,
+        dataframe: "daft.DataFrame",
+        workflow_id: str,
+        workflow_run_id: str,
+        entity_class_definitions: Dict[str, Type[Any]] | None = None,
+        **kwargs: Dict[str, Any],
+    ) -> "daft.DataFrame":
+        self.entity_class_definitions = (
+            entity_class_definitions or self.entity_class_definitions
+        )
+        connection_name = kwargs.get("connection", {}).get("connection_name", None)
+        connection_qualified_name = kwargs.get("connection", {}).get(
+            "connection_qualified_name", None
+        )
+        transformed_metadata_list = []
+        for row in dataframe.iter_rows():
+            try:
+                transformed_metadata = self.transform_row(
+                    typename,
+                    row,
+                    workflow_id=workflow_id,
+                    workflow_run_id=workflow_run_id,
+                    connection_name=connection_name,
+                    connection_qualified_name=connection_qualified_name,
+                )
+                if transformed_metadata:
+                    transformed_metadata_list.append(transformed_metadata)
+                else:
+                    logger.warning(f"Skipped invalid {typename} data: {row}")
+            except Exception as row_error:
+                logger.error(f"Error processing row for {typename}: {row_error}")
+
+        return daft.from_pylist(transformed_metadata_list)
+
+    def transform_row(
         self,
         typename: str,
         data: Dict[str, Any],
@@ -176,7 +213,9 @@ class AtlasTransformer(TransformerInterface):
         attributes["tenant_id"] = self.tenant_id
         attributes["last_sync_workflow_name"] = workflow_id
         attributes["last_sync_run"] = workflow_run_id
-        attributes["last_sync_run_at"] = datetime.now()
+        attributes["last_sync_run_at"] = int(
+            datetime.now(timezone.utc).timestamp() * 1000
+        )
         attributes["connection_name"] = data.get("connection_name", "")
         attributes["connector_name"] = AtlanConnectorType.get_connector_name(
             data.get("connection_qualified_name", "")

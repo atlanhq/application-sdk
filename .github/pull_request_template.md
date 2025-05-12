@@ -25,4 +25,4 @@
 - [ ] If yes, have you modified the code in the context of this project? please share additional details.
 
 
-<!-- for any questions, reach out to #pod-app-framework or apps@atlan.com -->
+<!-- for any questions, reach out to #pod-app-framework or connect@atlan.com -->

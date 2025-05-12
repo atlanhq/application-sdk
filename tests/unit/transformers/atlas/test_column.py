@@ -81,7 +81,7 @@ def test_regular_column_transformation(
 ):
     """Test the transformation of regular table columns"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["regular_columns"],
         "test_workflow_id",
@@ -120,7 +120,7 @@ def test_view_column_transformation(
 ):
     """Test the transformation of view columns"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["view_columns"],
         "test_workflow_id",
@@ -150,7 +150,7 @@ def test_materialized_view_column_transformation(
 ):
     """Test the transformation of materialized view columns"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["materialized_view_columns"],
         "test_workflow_id",
@@ -184,7 +184,7 @@ def test_column_with_view_parent(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["column_with_view_parent"],
         "test_workflow_id",
@@ -227,7 +227,7 @@ def test_column_with_materialized_view_parent(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["column_with_materialized_view_parent"],
         "test_workflow_id",
@@ -273,7 +273,7 @@ def test_column_with_foreign_table_parent(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["column_with_foreign_table_parent"],
         "test_workflow_id",
@@ -315,7 +315,7 @@ def test_column_with_partitioned_table_parent(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["column_partitioned_table"],
         "test_workflow_id",
@@ -361,7 +361,7 @@ def test_column_variation_1(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["column_variation_1"],
         "test_workflow_id",
@@ -403,7 +403,7 @@ def test_column_variation_2(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["column_variation_2"],
         "test_workflow_id",
@@ -445,7 +445,7 @@ def test_column_with_custom_attributes(
 ):
     """Test column transformation with custom attributes"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         raw_data["columns_with_custom_attrs"],
         "test_workflow_id",
@@ -479,7 +479,7 @@ def test_column_invalid_data(transformer: AtlasTransformer):
     """Test column transformation with invalid data"""
 
     invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "COLUMN",
         invalid_data,
         "test_workflow_id",

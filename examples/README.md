@@ -80,4 +80,4 @@ Once your environment is set up:
 
 - You can navigate to the Run and Debug section in the IDE to run the configurations of your choice.
 
-> **Need help?** If you encounter any issues during setup, reach out on Slack (#pod-app-framework) or email apps@atlan.com.
+> **Need help?** If you encounter any issues during setup, reach out on Slack (#pod-app-framework) or email connect@atlan.com.
