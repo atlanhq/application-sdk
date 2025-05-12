@@ -49,7 +49,7 @@ def test_regular_schema_transformation(
     expected_data: Dict[str, Any],
 ):
     """Test the transformation of regular schemas"""
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "SCHEMA",
         raw_data["regular_schema"],
         "test_workflow_id",
@@ -114,7 +114,7 @@ def test_schema_invalid_data(transformer: AtlasTransformer):
     # Test missing required fields
     invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "SCHEMA",
         invalid_data,
         workflow_id,
