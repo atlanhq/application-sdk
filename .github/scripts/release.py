@@ -33,17 +33,6 @@ def get_commits_since_last_tag() -> List[str]:
         raise e
 
 
-def get_current_version() -> str:
-    """Get the current version from poetry.
-
-    Returns:
-        str: Current version string from pyproject.toml.
-    """
-    version = subprocess.check_output(["poetry", "version", "-s"]).decode().strip()
-    logging.info(f"Current pyproject.toml version: {version}")
-    return version
-
-
 def parse_conventional_commits(commits: List[str]) -> Tuple[bool, bool, bool]:
     """Parse conventional commit messages to determine version bump type.
 
@@ -141,17 +130,28 @@ def calculate_version_bump(
 
 
 def update_pyproject_version(new_version: str) -> None:
-    """Update the version in pyproject.toml using Poetry.
+    """Update the version in pyproject.toml using uv.
 
     Args:
         new_version (str): Version string to set in pyproject.toml
 
     Raises:
-        subprocess.CalledProcessError: If Poetry fails to update the version
+        subprocess.CalledProcessError: If uv fails to update the version
     """
     logging.info(f"Updating pyproject.toml version to {new_version}")
     try:
-        subprocess.run(["poetry", "version", new_version], check=True)
+        subprocess.run(
+            [
+                "uvx",
+                "--from=toml-cli",
+                "toml",
+                "set",
+                "--toml-path=pyproject.toml",
+                "project.version",
+                new_version,
+            ],
+            check=True,
+        )
         logging.info("Successfully updated pyproject.toml version")
     except subprocess.CalledProcessError as e:
         logging.error(f"Failed to update version in pyproject.toml: {e}")
@@ -172,8 +172,8 @@ def main():
     )
     logging.info("Starting version update process")
 
-    current_version = get_current_version()
     current_branch = str(sys.argv[1])
+    current_version = str(sys.argv[2])
     commits = get_commits_since_last_tag()
 
     new_version = calculate_version_bump(

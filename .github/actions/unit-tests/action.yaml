@@ -33,14 +33,13 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
-    # FIXME(inishchith): pending uv support
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       run: |
-        poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
-        poetry run coverage xml
-        poetry run coverage html
-        poetry run coverage report --fail-under=${{ inputs.fail-under }}
+        uv run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
+        uv run coverage xml
+        uv run coverage html
+        uv run coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
       uses: orgoro/coverage@v3.2

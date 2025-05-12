@@ -30,15 +30,23 @@ To begin developing with the Application SDK:
 
 ### Installation
 
-Install `application-sdk` as a dependency in your project:
+Install `atlan-application-sdk` as a dependency in your project:
 
+- Using pip:
 ```bash
-poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#commit-hash
-
-# OR
-
-poetry add git+ssh://git@github.com/atlanhq/application-sdk.git#release-tag
+# pip install the latest version from PyPI
+pip install atlan-application-sdk
 ```
+
+- Using alternative package managers:
+```bash
+# Using uv to install the latest version from PyPI
+uv add atlan-application-sdk
+
+# using Poetry to install the latest version from PyPI
+poetry add atlan-application-sdk
+```
+
 
 ## Contributing
 

@@ -27,19 +27,13 @@ jobs:
         with:
           python-version: '3.11'
 
-      # FIXME(inishchith): pending uv support
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
-        with:
-          version: 2.1.3
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          virtualenvs-path: .venv
-          installer-parallel: true
+      - uses: astral-sh/setup-uv@v5
+        run: |
+          uv sync --all-extras
 
       - name: Get version
         id: get_version
-        run: echo "VERSION=$(poetry version -s)" >> $GITHUB_ENV
+        run: echo "VERSION=$(uv version -s)" >> $GITHUB_ENV
 
       - name: Extract changelog for this version
         run: |
@@ -70,17 +64,17 @@ jobs:
       #   env:
       #     TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
       #   run: |
-      #     poetry config repositories.testpypi https://test.pypi.org/legacy/
-      #     poetry config pypi-token.testpypi $TEST_PYPI_API_TOKEN
+      #     uv config repositories.testpypi https://test.pypi.org/legacy/
+      #     uv config pypi-token.testpypi $TEST_PYPI_API_TOKEN
 
-      #     poetry build
+      #     uv build
 
-      #     poetry publish -r testpypi
+      #     uv publish -r testpypi
 
       - name: Build and publish to PyPI
         env:
           PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          poetry config pypi-token.pypi $PYPI_API_TOKEN
-          poetry build
-          poetry publish
+          uv config pypi-token.pypi $PYPI_API_TOKEN
+          uv build
+          uv publish

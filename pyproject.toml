@@ -1,12 +1,13 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc1"
+version = "0.1.1rc2"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
+license = { file = "LICENSE" }
+authors = [
+    {name = "Atlan App Team", email = "connect@atlan.com"}
+]
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "LICENSE" }
-authors = [{ name = "Atlan App Team", email = "apps@atlan.com" }]
-keywords = ["atlan", "application","sdk", "platform"]
 classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
@@ -17,97 +18,76 @@ classifiers = [
     "Operating System :: OS Independent",
     "Development Status :: 4 - Beta",
 ]
-
+keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
-    "opentelemetry-exporter-otlp>=1.27.0,<2.0.0",
-    "psutil>=7.0.0,<8.0.0",
-    "fastapi[standard]>=0.115.0,<0.116.0",
+    "opentelemetry-exporter-otlp>=1.27.0",
+    "psutil>=7.0.0",
+    "fastapi[standard]>=0.115.0",
     "pyatlan==6.0.6",
-    "pydantic>=2.10.6,<3.0.0",
-    "loguru>=0.7.3,<0.8.0",
-    "uvloop>=0.21.0,<0.22.0",
-    "python-dotenv>=1.1.0,<2.0.0",
+    "pydantic>=2.10.6",
+    "loguru>=0.7.3",
+    "uvloop>=0.21.0",
+    "python-dotenv>=1.1.0",
 ]
 
 [project.urls]
 Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 
-
-[project.optional-dependencies]
-dapr = ["dapr>=1.14.0,<2.0.0"]
-temporalio = ["temporalio>=1.7.1,<2.0.0"]
-orjson = ["orjson>=3.10.18,<4.0.0"]
-getdaft = ["getdaft[sql]>=0.4.12,<0.5.0"]
-pyiceberg = ["pyiceberg>=0.8.1,<0.9.0"]
-sqlalchemy = ["sqlalchemy[asyncio]>=2.0.36,<3.0.0"]
-boto3 = ["boto3>=1.38.6,<2.0.0"]
-pytest-order = ["pytest-order>=1.3.0,<2.0.0"]
-pandera = ["pandera[io]>=0.23.1,<0.24.0"]
-pandas = ["pandas>=2.2.3,<3.0.0"]
-pyyaml = ["pyyaml>=6.0.2,<7.0.0"]
-pyarrow = ["pyarrow>=20.0.0,<21.0.0"]
-faker = ["faker>=37.1.0,<38.0.0"]
-numpy = ["numpy>=1.23.5,<3.0.0"]
-duckdb = ["duckdb>=1.1.3,<2.0.0"] # Corrected upper bound for ^1.1.3
-duckdb-engine = ["duckdb-engine>=0.17.0,<0.18.0"]
-
+[dependency-groups]
 workflows = [
-    "atlan-application-sdk[dapr]",
-    "atlan-application-sdk[temporalio]",
-    "atlan-application-sdk[orjson]",
+    "dapr>=1.14.0",
+    "temporalio>=1.7.1",
+    "orjson>=3.10.18",
 ]
 daft = [
-    "atlan-application-sdk[getdaft]",
+    "getdaft[sql]>=0.4.12",
 ]
 iceberg = [
-    "atlan-application-sdk[pyiceberg]",
+    "pyiceberg>=0.8.1",
+]
+sqlalchemy = [
+    "sqlalchemy[asyncio]>=2.0.36",
 ]
 iam_auth = [
-    "atlan-application-sdk[boto3]",
+    "boto3>=1.38.6",
 ]
 tests = [
-    "atlan-application-sdk[pytest-order]",
-    "atlan-application-sdk[pandera]",
-    "atlan-application-sdk[pandas]",
+    "pytest-order>=1.3.0",
+    "pandera[io]>=0.23.1",
+    "pandas>=2.2.3",
 ]
 scale_data_generator = [
-    "atlan-application-sdk[pyyaml]",
-    "atlan-application-sdk[pandas]",
-    "atlan-application-sdk[pyarrow]",
-    "atlan-application-sdk[faker]",
-    "atlan-application-sdk[numpy]",
-    "atlan-application-sdk[duckdb]",
-    "atlan-application-sdk[duckdb-engine]",
+    "pyyaml>=6.0.2",
+    "pandas>=2.2.3",
+    "pyarrow>=20.0.0",
+    "faker>=37.1.0",
+    "numpy>=1.23.5,<3.0.0",
+    "duckdb>=1.1.3",
+    "duckdb-engine>=0.17.0",
 ]
-
-[dependency-groups]
-# Development and testing groups from original [tool.poetry.group.<name>.dependencies]
 dev = [
-    "pre-commit>=4.2.0,<5.0.0",
-    "isort>=5.13.2,<6.0.0",
-    "boto3-stubs>=1.38.6,<2.0.0",
-    "mkdocs>=1.6.1,<2.0.0",
-    "mkdocs-material>=9.6.4,<10.0.0",
-    "pydoctor>=24.11.2,<25.0.0",
-    "mike>=2.1.3,<3.0.0",
-    "ruff~=0.5.0", # Example version, adjust as needed
-    "mypy>=1.0.0", # Example version
-    "uv", # uv itself for environment management
-    "hatchling", # Build backend
+    "pre-commit>=4.2.0",
+    "isort>=5.13.2",
+    "boto3-stubs>=1.38.6",
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.4",
+    "pydoctor>=24.11.2",
+    "mike>=2.1.3",
 ]
 test = [
-    "mock>=5.1.0,<6.0.0",
-    "pytest>=8.3.3,<9.0.0",
-    "coverage[toml]>=7.6.1,<8.0.0", # Ensure coverage can read pyproject.toml
-    "pytest-asyncio>=0.26.0,<0.27.0",
-    "hypothesis>=6.114.0,<7.0.0",
+    "mock>=5.1.0",
+    "pytest>=8.3.3",
+    "coverage>=7.6.1",
+    "pytest-asyncio>=0.26.0",
+    "hypothesis>=6.114.0",
 ]
 examples = [
-    "snowflake-sqlalchemy>=1.7.0,<2.0.0",
-    "psycopg[binary]>=3.2.7,<4.0.0",
+    "snowflake-sqlalchemy>=1.7.0",
+    "psycopg[binary]>=3.2.7",
 ]
 
+# Define the build system for packaging
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -118,28 +98,6 @@ packages = ["application_sdk"]
 [tool.hatch.version]
 path = "application_sdk/__init__.py"
 
-[tool.hatch.envs.default]
-# Dependencies for the default hatch environment (e.g., for `hatch shell`)
-# List core development tools here.
-dependencies = [
-    "pytest>=8.3.3,<9.0.0",
-    "pytest-asyncio>=0.26.0,<0.27.0",
-    "coverage[toml]>=7.6.1,<8.0.0",
-    "ruff~=0.5.0",
-    "mypy>=1.0.0",
-    "pre-commit>=4.2.0,<5.0.0",
-    # "mkdocs>=1.6.1,<2.0.0", # Add if docs are commonly built/served in default env
-    "uv",
-]
-[tool.hatch.envs.default.scripts]
-test = "pytest {args:tests/}" # Default to running tests in tests/ directory, pass args
-lint-check = "ruff check . && mypy ."
-lint-fix = "ruff check . --fix && ruff format ."
-# ci-checks = ["lint-check", "test"] # Example for a combined CI script
-# docs-serve = "mkdocs serve"
-# docs-build = "mkdocs build"
-
-# Existing tool configurations (to be preserved from original pyproject.toml)
 [tool.pyright]
 venvPath = "."
 venv = ".venv"
@@ -162,7 +120,7 @@ asyncio_mode = "auto"
 omit = [
     "tests/**",
 ]
-source = ["application_sdk"] # Explicitly define source for coverage
+source = ["application_sdk"]
 
 [tool.coverage.report]
 exclude_lines = [
@@ -176,16 +134,6 @@ exclude_lines = [
 ]
 fail_under = 60
 
-# Consider adding dedicated [tool.ruff] and [tool.mypy] sections
-# for more detailed configurations if needed.
-# [tool.ruff]
-# line-length = 120
-# select = ["E", "F", "W", "I", "UP", "PL", "PTH", "NPY"] # Example rule set
-# ignore = ["E501"]
-# extend-exclude = ["application_sdk/test_utils"]
-
-# [tool.mypy]
-# python_version = "3.11"
-# warn_return_any = true
-# warn_unused_configs = true
-# exclude = ["application_sdk/test_utils"]
+# Configure uv to include all packages from application_sdk directory
+[tool.uv]
+default-groups = ["dev", "test"]  # These will be installed by default with `uv sync`
