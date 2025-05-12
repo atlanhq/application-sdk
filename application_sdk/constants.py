@@ -142,3 +142,11 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("METRICS_RETENTION_DAYS", "30"))
+
+# Traces Configuration
+ENABLE_OTLP_TRACES = os.getenv("ENABLE_OTLP_TRACES", "true").lower() == "true"
+TRACES_BATCH_SIZE = int(os.getenv("TRACES_BATCH_SIZE", "100"))
+TRACES_FLUSH_INTERVAL_SECONDS = int(os.getenv("TRACES_FLUSH_INTERVAL_SECONDS", "5"))
+TRACES_RETENTION_DAYS = int(os.getenv("TRACES_RETENTION_DAYS", "30"))
+TRACES_CLEANUP_ENABLED = os.getenv("TRACES_CLEANUP_ENABLED", "true").lower() == "true"
+TRACES_FILE_NAME = "traces.parquet"

@@ -1,22 +1,23 @@
-import asyncio
-import logging
 from contextlib import contextmanager
-from datetime import datetime, time
-from typing import Dict, Generator
+from datetime import datetime
+from typing import Generator
 from unittest import mock
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.common.metrics_adaptor import AtlanMetricsAdapter, get_metrics, MetricRecord
-from application_sdk.constants import OBJECT_STORE_NAME
+from application_sdk.common.metrics_adaptor import (
+    AtlanMetricsAdapter,
+    MetricRecord,
+    get_metrics,
+)
 
 
 @pytest.fixture
 def mock_metrics():
     """Create a mock metrics instance."""
-    with mock.patch("opentelemetry.metrics.set_meter_provider") as mock_set_meter:
+    with mock.patch("opentelemetry.metrics.set_meter_provider"):
         with mock.patch("opentelemetry.sdk.metrics.MeterProvider") as mock_provider:
             mock_meter = mock.MagicMock()
             mock_provider.return_value.get_meter.return_value = mock_meter
@@ -41,12 +42,12 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
     ):
         # Create mock meter first
         mock_meter = mock.MagicMock()
-        
+
         # Mock the meter provider setup
-        with mock.patch("opentelemetry.metrics.set_meter_provider") as mock_set_meter:
+        with mock.patch("opentelemetry.metrics.set_meter_provider"):
             with mock.patch("opentelemetry.sdk.metrics.MeterProvider") as mock_provider:
                 mock_provider.return_value.get_meter.return_value = mock_meter
-                
+
                 # Create adapter after mocks are in place
                 adapter = AtlanMetricsAdapter()
                 # Set the meter directly
@@ -121,7 +122,9 @@ def test_record_metric_with_various_inputs(name: str, value: float, metric_type:
         assert buffered_metric["name"] == name
         # Handle NaN values in comparison
         if value != value:  # Check if value is NaN
-            assert buffered_metric["value"] != buffered_metric["value"]  # Both should be NaN
+            assert (
+                buffered_metric["value"] != buffered_metric["value"]
+            )  # Both should be NaN
         else:
             assert buffered_metric["value"] == value
         assert buffered_metric["type"] == metric_type
@@ -198,7 +201,9 @@ def test_send_to_otel_counter():
 def test_send_to_otel_gauge():
     """Test _send_to_otel() method with gauge metric."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(metrics_adapter.meter, "create_observable_gauge") as mock_create:
+        with mock.patch.object(
+            metrics_adapter.meter, "create_observable_gauge"
+        ) as mock_create:
             mock_gauge = mock.MagicMock()
             mock_create.return_value = mock_gauge
 
@@ -224,7 +229,9 @@ def test_send_to_otel_gauge():
 def test_send_to_otel_histogram():
     """Test _send_to_otel() method with histogram metric."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch.object(metrics_adapter.meter, "create_histogram") as mock_create:
+        with mock.patch.object(
+            metrics_adapter.meter, "create_histogram"
+        ) as mock_create:
             mock_histogram = mock.MagicMock()
             mock_create.return_value = mock_histogram
 
@@ -250,10 +257,12 @@ def test_send_to_otel_histogram():
 def test_log_to_console():
     """Test _log_to_console() method."""
     with create_metrics_adapter() as metrics_adapter:
-        with mock.patch("application_sdk.common.metrics_adaptor.get_logger") as mock_get_logger:
+        with mock.patch(
+            "application_sdk.common.metrics_adaptor.get_logger"
+        ) as mock_get_logger:
             mock_logger = mock.MagicMock()
             mock_get_logger.return_value = mock_logger
-            
+
             # Create a test metric record
             metric_record = MetricRecord(
                 timestamp=datetime.now().timestamp(),
@@ -262,12 +271,12 @@ def test_log_to_console():
                 type="gauge",
                 labels={"test": "label"},
                 description="Test metric",
-                unit="count"
+                unit="count",
             )
-            
+
             # Call the method
             metrics_adapter._log_to_console(metric_record)
-            
+
             # Verify the logger was called with the correct message
             mock_logger.metric.assert_called_once()
             log_message = mock_logger.metric.call_args[0][0]
@@ -275,6 +284,7 @@ def test_log_to_console():
             assert "Labels: {'test': 'label'}" in log_message
             assert "Description: Test metric" in log_message
             assert "Unit: count" in log_message
+
 
 def test_get_metrics():
     """Test get_metrics function creates and caches metrics instance."""

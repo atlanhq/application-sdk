@@ -66,6 +66,17 @@ The Application SDK uses environment variables for configuration. These can be s
 | `METRICS_FILE_NAME` | Name of the parquet file used for metric storage | `metrics.parquet` |
 | `METRICS_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old metrics | `true` |
 
+## Traces Configuration
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `ENABLE_OTLP_TRACES` | Whether to enable OpenTelemetry traces export | `false` |
+| `TRACES_BATCH_SIZE` | Number of trace records to buffer before writing to parquet file | `100` |
+| `TRACES_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush traces to parquet file | `1` |
+| `TRACES_RETENTION_DAYS` | Number of days to retain trace records before automatic cleanup | `7` |
+| `TRACES_FILE_NAME` | Name of the parquet file used for trace storage | `traces.parquet` |
+| `TRACES_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old traces | `true` |
+
 ## OpenTelemetry Configuration
 
 | Environment Variable | Description | Default Value |
@@ -75,6 +86,8 @@ The Application SDK uses environment variables for configuration. These can be s
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes for OpenTelemetry | `""` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint for the OpenTelemetry collector | `http://localhost:4317` |
 | `ENABLE_OTLP_LOGS` | Whether to enable OpenTelemetry log export | `false` |
+| `ENABLE_OTLP_METRICS` | Whether to enable OpenTelemetry metrics export | `false` |
+| `ENABLE_OTLP_TRACES` | Whether to enable OpenTelemetry traces export | `false` |
 | `OTEL_WF_NODE_NAME` | Node name for workflow telemetry | `""` |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | Timeout for OpenTelemetry exporters in seconds | `30` |
 | `OTEL_BATCH_DELAY_MS` | Delay between batch exports in milliseconds | `5000` |
