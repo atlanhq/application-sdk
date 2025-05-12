@@ -58,9 +58,7 @@ runs:
         python-version: "3.11"
 
     - uses: astral-sh/setup-uv@v5
-      shell: bash
-      run: |
-        uv sync --all-extras
+      run: uv sync --all-extras
 
         poe download-components
     # Start all services

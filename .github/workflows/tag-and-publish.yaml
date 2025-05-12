@@ -28,8 +28,7 @@ jobs:
           python-version: '3.11'
 
       - uses: astral-sh/setup-uv@v5
-        run: |
-          uv sync --all-extras
+        run: uv sync --all-extras
 
       - name: Get version
         id: get_version
