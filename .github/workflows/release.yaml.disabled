@@ -98,8 +98,14 @@ jobs:
           gh pr create --base develop --title "chore(release): version bump" --body "Automated PR to increment version"
           gh pr merge --squash --admin
 
+      - name: Get new version
+        id: new_version
+        run: |
+          NEW_VERSION=$(grep 'version = ' pyproject.toml | cut -d '"' -f 2)
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
-          gh release create "v$(poetry version -s)" --generate-notes
+          gh release create "v${{ env.NEW_VERSION }}" --generate-notes

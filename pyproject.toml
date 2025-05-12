@@ -89,12 +89,15 @@ examples = [
 ]
 
 [tool.poe.tasks]
+download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components"
 start-temporal = "temporal server start-dev --db-filename /tmp/temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"
 
+# API docs
+generate-apidocs.shell = "cd docs && mkdocs build && pydoctor --html-output=site/api ../application_sdk --docformat=google"
 
 # Define the build system for packaging
 [build-system]

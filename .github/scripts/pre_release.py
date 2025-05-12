@@ -53,7 +53,7 @@ def bump_release_candidate(current_version: str) -> str:
 
 
 def update_pyproject_version(new_version: str) -> None:
-    """Update the version in pyproject.toml using Poetry.
+    """Update the version in pyproject.toml using uv.
 
     Args:
         new_version (str): Version string to set in pyproject.toml

@@ -37,23 +37,12 @@ Download and install Python from the official website:
    python --version  # Should show Python 3.11.10
    ```
 
-### 2. Install Poetry 2.1.3
+### 2. Install uv 0.7.3
 
-Install Poetry using PowerShell:
+Install uv using PowerShell:
 
 ```powershell
-# Install Poetry
-(Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | python -
-
-# Add Poetry to your PATH
-$env:Path += ";$env:APPDATA\Python\Scripts"
-[Environment]::SetEnvironmentVariable("Path", $env:Path, [System.EnvironmentVariableTarget]::User)
-
-# Install specific version
-poetry self update 2.1.3
-
-# Verify installation
-poetry --version  # Should show Poetry 2.1.3
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.7.3/install.ps1 | iex"
 ```
 
 ### 3. Install Temporal CLI
@@ -107,31 +96,25 @@ git config --global url."https://github.com/".insteadOf "git@github.com:"
 
 ### 6. Install Project Dependencies
 
-Install dependencies (requires Make for Windows):
 
 ```powershell
-# Install Chocolatey if Make is not installed
-Set-ExecutionPolicy Bypass -Scope Process -Force; [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-
-# Install Make
-choco install make
-
 # Install project dependencies
-make install
-
-# Activate the virtual environment if not already activated
-.\.venv\Scripts\activate
+uv sync --all-groups
 ```
 
-### 7. Start Services
+### 7. Start the dependencies in a separate terminal:
 
 ```powershell
+# Download the components
+uv run poe download-components
+
 # Start all services in detached mode
-make start-all
+uv run poe start-deps
 ```
 
 ### 8. Run the example application
 
 ```powershell
-poetry run python examples/application_hello_world.py
+# Run the example application in the main terminal:
+uv run python examples/application_hello_world.py
 ```
