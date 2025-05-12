@@ -24,11 +24,6 @@ runs:
       with:
         python-version: "3.11"
 
-    - uses: astral-sh/setup-uv@v5
-      run: |
-        uv sync --all-extras
-        poe download-components
-
     - name: Load cached venv
       id: cached-uv-dependencies
       if: ${{ inputs.cache }} == 'true'
@@ -37,7 +32,10 @@ runs:
         path: .venv
         key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/uv.lock', '**/pyproject.toml') }}
 
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
     - name: Install dependencies
-      shell: bash
       if: steps.cached-uv-dependencies.outputs.cache-hit != 'true'
-      run: uv sync --all-extras
+      shell: bash
+      run: uv sync --all-groups

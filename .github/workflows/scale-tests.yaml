@@ -32,17 +32,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - uses: astral-sh/setup-uv@v5
-        run: uv sync --all-extras
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --all-groups
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install testcontainers psutil
 
-      - name: Install Dependencies
-        run: |
-          poe download-components
 
       # Install Dapr
       - name: Install Dapr CLI
@@ -61,7 +62,7 @@ jobs:
       # Start dapr and temporal services
       - name: Start Platform Services
         run: |
-          poe start-deps
+          uv run poe start-deps
           sleep 10  # Give services time to start up
 
       - name: Build docker image

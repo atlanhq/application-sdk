@@ -14,8 +14,8 @@ start-dapr:
 	dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components
 
 install:
-	# Install the dependencies with extras
-	uv sync --all-extras
+	# Install the dependencies with all groups
+	uv sync --all-groups
 
 	# Activate the virtual environment and install pre-commit hooks
 	uv run pre-commit install

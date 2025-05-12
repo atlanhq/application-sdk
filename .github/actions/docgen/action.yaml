@@ -21,13 +21,13 @@ runs:
       with:
         python-version: "3.11"
 
-    - uses: astral-sh/setup-uv@v5
-      run: uv sync --all-extras
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
 
     - name: Install dependencies
       shell: bash
       run: |
-        uv sync --all-extras
+        uv sync --all-groups
         uv add mkdocs mkdocs-material
 
     - name: Verify and Generate Docs

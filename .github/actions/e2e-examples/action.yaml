@@ -57,15 +57,18 @@ runs:
       with:
         python-version: "3.11"
 
-    - uses: astral-sh/setup-uv@v5
-      run: uv sync --all-extras
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
 
-        poe download-components
+    - name: Install dependencies
+      shell: bash
+      run: uv sync --all-groups
+
     # Start all services
     - name: Start Platform Services
       shell: bash
       run: |
-        poe start-deps
+        uv run poe start-deps
         sleep 10  # Give services time to start up
 
     # Make API call and capture workflow/run IDs for each example
@@ -97,5 +100,5 @@ runs:
       shell: bash
       continue-on-error: true
       run: |
-        poe stop-deps
+        uv run poe stop-deps
         sleep 10  # Give services time to stop
