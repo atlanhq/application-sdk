@@ -1,0 +1,1 @@
+{"oid":5,"datname":"postgres","datdba":10,"encoding":6,"datlocprovider":"c","datistemplate":false,"datallowconn":true,"dathasloginevt":false,"datconnlimit":-1,"datfrozenxid":"731","datminmxid":"1","dattablespace":1663,"datcollate":"en_US.utf8","datctype":"en_US.utf8","datlocale":null,"daticurules":null,"datcollversion":"2.36","datacl":null,"database_name":"postgres"}
