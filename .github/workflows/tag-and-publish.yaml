@@ -1,0 +1,87 @@
+name: Release and Publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  release:
+    # Only run when a PR with the "release" label is merged
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    name: Create release and publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Need full history for release notes
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: 2.1.3
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+          virtualenvs-path: .venv
+          installer-parallel: true
+
+      - name: Get version
+        id: get_version
+        run: echo "VERSION=$(poetry version -s)" >> $GITHUB_ENV
+
+      - name: Extract changelog for this version
+        run: |
+          python .github/scripts/extract_release_notes.py "${{ env.VERSION }}" > .github/release_notes.md
+
+      - name: Create Git tag
+        run: |
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          git tag -a "v${{ env.VERSION }}" -m "Release v${{ env.VERSION }}"
+          git push origin "v${{ env.VERSION }}"
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "v${{ env.VERSION }}"
+          name: "v${{ env.VERSION }}"
+          body_path: .github/release_notes.md
+          draft: false
+          prerelease: ${{ contains(env.VERSION, 'rc') }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # TODO: Uncomment in case we need to publish to TestPyPI
+      # Available at: https://test.pypi.org/project/atlan-application-sdk/
+      # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
+      # - name: Build and publish to TestPyPI
+      #   env:
+      #     TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      #   run: |
+      #     poetry config repositories.testpypi https://test.pypi.org/legacy/
+      #     poetry config pypi-token.testpypi $TEST_PYPI_API_TOKEN
+
+      #     poetry build
+
+      #     poetry publish -r testpypi
+
+      # Available at: https://pypi.org/project/atlan-application-sdk/
+      - name: Build and publish to PyPI
+        env:
+          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          poetry config pypi-token.pypi $PYPI_API_TOKEN
+          poetry build
+          poetry publish

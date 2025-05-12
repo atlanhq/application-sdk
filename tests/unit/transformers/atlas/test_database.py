@@ -50,7 +50,7 @@ def test_database_transformation(
 ):
     """Test the transformation of raw database metadata"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "DATABASE",
         raw_data["regular_database"],
         "test_workflow_id",
@@ -90,7 +90,7 @@ def test_database_invalid_data(transformer: AtlasTransformer):
     # Test missing required fields
     invalid_data = {"connection_qualified_name": "default/snowflake/1728518400"}
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "DATABASE",
         invalid_data,
         workflow_id,

@@ -67,7 +67,7 @@ def test_simple_procedure_transformation(
 ):
     """Test the transformation of regular table columns"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "PROCEDURE",
         raw_data["simple_procedure"],
         "test_workflow_id",
