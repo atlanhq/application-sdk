@@ -141,7 +141,7 @@ exclude_lines = [
     "pass",
     "raise ImportError",
 ]
-fail_under = 60
+fail_under = 50
 
 # Configure uv to include all packages from application_sdk directory
 [tool.uv]

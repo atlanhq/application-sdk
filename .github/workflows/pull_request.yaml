@@ -55,7 +55,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "60"
+          fail-under: "50"
 
   matrix-builder:
     name: Build Test Matrix

@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.1rc2 (May 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc1...v0.1.1rc2
+
+
 
 ## v0.1.1rc1 (May 08, 2025)
 

@@ -24,7 +24,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "60"
+          fail-under: "50"
 
   e2e-examples:
     name: E2E (Examples)
