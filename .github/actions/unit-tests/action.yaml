@@ -36,7 +36,7 @@ runs:
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       run: |
-        poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
+        poetry run coverage run -m pytest tests/ --full-trace -v --hypothesis-show-statistics
         poetry run coverage xml
         poetry run coverage html
         poetry run coverage report --fail-under=${{ inputs.fail-under }}

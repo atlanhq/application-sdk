@@ -119,7 +119,7 @@ AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("LOG_BATCH_SIZE", 100))
-LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("LOG_FLUSH_INTERVAL_SECONDS", 10))
+LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("LOG_FLUSH_INTERVAL_SECONDS", 100000))
 
 # Log Retention configuration
 LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", 30))
