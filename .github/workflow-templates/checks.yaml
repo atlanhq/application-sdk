@@ -25,6 +25,6 @@ jobs:
 
     - name: Install dependencies
       shell: bash
-      run: uv sync --all-groups
+      run: uv sync --all-extras
 
     - uses: pre-commit/action@v3.0.1

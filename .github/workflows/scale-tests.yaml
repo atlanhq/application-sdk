@@ -40,7 +40,7 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          uv sync --all-groups
+          uv sync --all-extras
           pip install testcontainers psutil
 
 

@@ -34,7 +34,7 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: uv sync --all-groups
+        run: uv sync --all-extras
 
       - name: Get version
         id: get_version
