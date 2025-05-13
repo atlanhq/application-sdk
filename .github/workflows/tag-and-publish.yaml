@@ -39,7 +39,7 @@ jobs:
       - name: Get version
         id: get_version
         run: |
-          VERSION=$(grep 'version = ' pyproject.toml | cut -d '"' -f 2)
+          VERSION=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
           echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Extract changelog for this version
