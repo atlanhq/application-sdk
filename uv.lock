@@ -127,7 +127,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "0.1.1rc4"
+version = "0.1.1rc5"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
