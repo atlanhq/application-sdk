@@ -43,8 +43,7 @@ To begin developing with the Application SDK:
 
 ## Documentation
 
-- Detailed documentation for the application-sdk is available at [k.atlan.dev/application-sdk/main](https://k.atlan.dev/application-sdk/main).
-- If you are not able to access the URL, you can check the docs in the [docs](https://github.com/atlanhq/application-sdk/blob/main/docs) folder.
+- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs) folder.
 
 
 ## Contributing

@@ -30,6 +30,5 @@ runs:
         version: "0.7.3"
 
     - name: Install dependencies
-      if: steps.cached-uv-dependencies.outputs.cache-hit != 'true'
       shell: bash
       run: uv sync --all-groups

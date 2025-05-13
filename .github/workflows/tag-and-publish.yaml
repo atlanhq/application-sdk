@@ -38,7 +38,9 @@ jobs:
 
       - name: Get version
         id: get_version
-        run: echo "VERSION=$(uv version -s)" >> $GITHUB_ENV
+        run: |
+          VERSION=$(grep 'version = ' pyproject.toml | cut -d '"' -f 2)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
 
       - name: Extract changelog for this version
         run: |
@@ -66,16 +68,13 @@ jobs:
       # TODO: Uncomment in case we need to publish to TestPyPI
       # Available at: https://test.pypi.org/project/atlan-application-sdk/
       # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
+      # testpypi config available (commented out) under pyproject.toml
       # - name: Build and publish to TestPyPI
       #   env:
-      #     TEST_PYPI_API_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
       #   run: |
-      #     uv config repositories.testpypi https://test.pypi.org/legacy/
-      #     uv config pypi-token.testpypi $TEST_PYPI_API_TOKEN
-
       #     uv build
-
-      #     uv publish -r testpypi
+      #     uv publish --index testpypi
 
       # Available at: https://pypi.org/project/atlan-application-sdk/
       - name: Build and publish to PyPI
