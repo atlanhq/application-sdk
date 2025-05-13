@@ -276,12 +276,13 @@ class AtlanObservability(Generic[T], ABC):
                 table = pq.read_table(self.parquet_path)
                 df = table.to_pandas()
 
-                # Filter out old records
-                cutoff_date = pd.Timestamp.now() - pd.Timedelta(
-                    days=self._retention_days
-                )
-                cutoff_date = cutoff_date.date()
-                filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
+            # Convert timestamp to datetime
+            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+
+            # Filter out old records
+            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=self._retention_days)
+            cutoff_date = cutoff_date.date()
+            filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
 
                 # Update records file
                 if len(filtered_df) > 0:
