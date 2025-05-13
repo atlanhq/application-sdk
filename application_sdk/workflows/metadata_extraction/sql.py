@@ -229,7 +229,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 labels={
                     "workflow_id": workflow_id,
                     "workflow_type": "sql_metadata_extraction",
-                    "status": "success" if execution_time > 0 else "error",
+                    "status": "success" if workflow_success else "error",
                 },
                 description="Total execution time of SQL metadata extraction workflow in seconds",
                 unit="s",
