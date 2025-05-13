@@ -187,6 +187,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         """
         start_time = time()
         workflow_id = workflow_config["workflow_id"]
+        workflow_success = False
 
         try:
             await super().run(workflow_config)
@@ -218,6 +219,11 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             await asyncio.gather(*fetch_and_transforms)
 
             logger.info(f"Extraction workflow completed for {workflow_id}")
+            workflow_success = True
+        except Exception as e:
+            logger.error(f"Workflow failed for {workflow_id}: {str(e)}")
+            workflow_success = False
+            raise
         finally:
             # Record workflow execution time metric
             execution_time = time() - start_time
