@@ -1,7 +1,7 @@
 name: Setup Python Dependencies for Atlan Apps
 description: |
   Sets up Python project dependencies and manages dependency caching for Atlan Apps.
-  This action handles the installation of Python 3.11, Poetry package manager, and project dependencies.
+  This action handles the installation of Python 3.11, uv package manager, and project dependencies.
   It implements efficient caching strategies to speed up workflow execution by storing and reusing
   the virtual environment.
 
@@ -24,24 +24,11 @@ runs:
       with:
         python-version: "3.11"
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
       with:
-        version: 2.1.3
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        virtualenvs-path: .venv
-        installer-parallel: true
-
-    - name: Load cached venv
-      id: cached-poetry-dependencies
-      if: ${{ inputs.cache }} == 'true'
-      uses: actions/cache@v4
-      with:
-        path: .venv
-        key: venv-${{ runner.os }}-${{ steps.setup-python.outputs.python-version }}-${{ hashFiles('**/poetry.lock', '**/pyproject.toml') }}
+        version: "0.7.3"
 
     - name: Install dependencies
       shell: bash
-      if: steps.cached-poetry-dependencies.outputs.cache-hit != 'true'
-      run: poetry install --no-interaction --no-root --all-extras
+      run: uv sync --all-groups

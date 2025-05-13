@@ -13,6 +13,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_APP_DASHBOARD_HOST` | Host address for the application's dashboard | `localhost` |
 | `ATLAN_APP_DASHBOARD_PORT` | Port number for the application's dashboard | `8000` |
 | `ATLAN_SQL_SERVER_MIN_VERSION` | Minimum required SQL Server version | `None` |
+| `ATLAN_SQL_QUERIES_PATH` | Path to the SQL queries directory | `app/sql` |
 
 ## Workflow Configuration
 
