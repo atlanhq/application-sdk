@@ -44,7 +44,10 @@ from application_sdk.clients.sql import BaseSQLClient
 # from application_sdk.clients.utils import get_workflow_client
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.common.utils import (
+    get_yaml_query_template_path_mappings,
+)
+from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionWorkflow,
 )
@@ -116,11 +119,23 @@ class PostgresDatabase(Database):
         }
 
 
-class CustomTransformer(AtlasTransformer):
+class CustomTransformer(QueryBasedTransformer):
     def __init__(self, connector_name: str, tenant_id: str, **kwargs: Any):
         super().__init__(connector_name, tenant_id, **kwargs)
 
-        self.entity_class_definitions["DATABASE"] = PostgresDatabase
+        self.entity_class_definitions = get_yaml_query_template_path_mappings(
+            custom_templates_path=os.path.join(
+                os.path.dirname(__file__), "sql_query_templates"
+            ),
+            assets=[
+                "TABLE",
+                "COLUMN",
+                "DATABASE",  # The database template will be overridden by the custom database template specified at examples/sql_query_templates/database.yaml
+                "SCHEMA",
+                "EXTRAS-PROCEDURE",
+                "FUNCTION",
+            ],
+        )
 
 
 class SampleSQLHandler(BaseSQLHandler):

@@ -1,6 +1,6 @@
 
 # Define variables
-APP_NAME := application-sdk
+APP_NAME := atlan-application-sdk
 
 # Phony targets
 .PHONY: run start-dapr start-temporal-dev start-all

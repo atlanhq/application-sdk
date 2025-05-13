@@ -1,0 +1,57 @@
+# schema.yaml
+table: Schema
+columns:
+  - name: attributes.name
+    source_query: schema_name
+  - name: attributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', catalog_name, '/', schema_name)
+    source_columns: [connection_qualified_name, catalog_name, schema_name]
+  - name: attributes.connectionQualifiedName
+    source_query: connection_qualified_name
+  - name: attributes.connectionName
+    source_query: connection_name
+  - name: attributes.description
+    source_query: |
+      CASE
+        WHEN remarks IS NOT NULL THEN
+          REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
+        ELSE
+          NULL
+      END
+    source_columns: [remarks]
+  - name: attributes.databaseName
+    source_query: catalog_name
+  - name: attributes.databaseQualifiedName
+    source_query: concat(connection_qualified_name, '/', catalog_name)
+    source_columns: [connection_qualified_name, catalog_name]
+  - name: attributes.tableCount
+    source_query: table_count
+  - name: attributes.viewsCount
+    source_query: views_count
+  - name: attributes.catalogId
+    source_query: catalog_id
+  - name: attributes.isManagedAccess
+    source_query: is_managed_access
+  - name: attributes.database.typeName
+    source_query: "'Database'"
+  - name: attributes.database.attributes
+    source_query: NULL
+  - name: attributes.database.uniqueAttributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', catalog_name)
+    source_columns: [connection_qualified_name, catalog_name]
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
+  - name: customAttributes
+    source_query: NULL
+  - name: typeName
+    source_query: "'Schema'"
+  - name: status
+    source_query: "'ACTIVE'"

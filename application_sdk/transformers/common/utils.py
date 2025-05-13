@@ -4,7 +4,10 @@ This module provides common utility functions used across different transformers
 for text processing and URI/name building.
 """
 
+import glob
+import os
 import re
+from typing import Dict, List, Optional
 
 
 def process_text(text: str, max_length: int = 100000) -> str:
@@ -70,3 +73,49 @@ def build_atlas_qualified_name(connection_qualified_name: str, *args: str) -> st
         'tenant/connector/1/db/schema'
     """
     return f"{connection_qualified_name}/{'/'.join(args)}"
+
+
+def get_yaml_query_template_path_mappings(
+    custom_templates_path: Optional[str] = None,
+    assets: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    """
+    Returns a dictionary mapping of data assets (TABLE, COLUMN, DATABASE, SCHEMA)
+    to the path of the YAML file that contains the SQL query template.
+
+    Args:
+        custom_templates_path: The path of the directory containing the YAML files. To be used for custom templates.
+
+    Returns:
+        A dictionary mapping of data assets to the path of the YAML file that contains the SQL query template.
+    """
+    default_yaml_files: List[str] = glob.glob(
+        os.path.join(
+            os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "query/templates",
+            ),
+            "**/*.yaml",
+        ),
+        recursive=True,
+    )
+
+    yaml_files: List[str] = (
+        glob.glob(
+            os.path.join(
+                custom_templates_path,
+                "**/*.yaml",
+            ),
+            recursive=True,
+        )
+        if custom_templates_path
+        else []
+    )
+
+    result: Dict[str, str] = {}
+    for file in default_yaml_files + yaml_files:
+        file_name = os.path.basename(file).upper().replace(".YAML", "")
+        if not assets or (assets and file_name in assets):
+            result[file_name] = file
+
+    return result

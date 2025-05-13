@@ -51,6 +51,6 @@ We welcome contributions! Please see our [Contributing Guide](https://github.com
 
 Get support through any of these channels:
 
-- Email: **apps@atlan.com**
+- Email: **connect@atlan.com**
 - Slack: **#pod-app-framework**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)

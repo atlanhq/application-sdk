@@ -84,7 +84,7 @@ def test_function_invalid_data(transformer: AtlasTransformer):
         "connection_qualified_name": "default/snowflake/1728518400",
     }
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "FUNCTION",
         invalid_data,
         "test_workflow_id",
