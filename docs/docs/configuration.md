@@ -51,7 +51,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | `LOG_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush logs to parquet file | `5` |
 | `LOG_RETENTION_DAYS` | Number of days to retain log records before automatic cleanup | `30` |
 | `OBSERVABILITY_DIR` | Directory where log files are stored | `/tmp/observability` |
-| `LOG_FILE_NAME` | Name of the parquet file used for log storage | `logs.parquet` |
+| `LOG_FILE_NAME` | Name of the parquet file used for log storage | `log.parquet` |
 | `LOG_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old logs | `true` |
 
 ## Metrics Configuration
