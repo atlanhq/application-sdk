@@ -2,7 +2,7 @@
 name = "atlan-application-sdk"
 version = "0.1.1rc2"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
-license = { file = "LICENSE" }
+license = "Apache-2.0"
 authors = [
     {name = "Atlan App Team", email = "connect@atlan.com"}
 ]
@@ -149,3 +149,11 @@ fail_under = 50
 # Configure uv to include all packages from application_sdk directory
 [tool.uv]
 default-groups = ["dev", "test"]  # These will be installed by default with `uv sync`
+
+
+# Uncomment the following section in case you want to publish to testpypi
+# [[tool.uv.index]]
+# name = "testpypi"
+# url = "https://test.pypi.org/simple/"
+# publish-url = "https://test.pypi.org/legacy/"
+# explicit = true

@@ -80,8 +80,7 @@ jobs:
       # Available at: https://pypi.org/project/atlan-application-sdk/
       - name: Build and publish to PyPI
         env:
-          PYPI_API_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
         run: |
-          uv config pypi-token.pypi $PYPI_API_TOKEN
           uv build
           uv publish
