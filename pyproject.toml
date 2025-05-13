@@ -33,6 +33,7 @@ dependencies = [
 [project.urls]
 Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
+"Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
 
 [dependency-groups]
 workflows = [

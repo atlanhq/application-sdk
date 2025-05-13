@@ -150,6 +150,8 @@ def update_pyproject_version(new_version: str) -> None:
                 "project.version",
                 new_version,
             ],
+            capture_output=True,
+            text=True,
             check=True,
         )
         logging.info("Successfully updated pyproject.toml version")

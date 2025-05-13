@@ -34,10 +34,8 @@ jobs:
 
       - name: Install dependencies
         shell: bash
-        run: uv sync --all-groups
-
-      - name: Install dependencies
         run: |
+          uv sync --all-groups
           pip install semver packaging
 
       - name: Get current version
