@@ -57,31 +57,20 @@ runs:
       with:
         python-version: "3.11"
 
-    - name: Install Poetry
-      uses: snok/install-poetry@v1
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
       with:
-        version: 2.1.3
-        virtualenvs-create: true
-        virtualenvs-in-project: true
-        virtualenvs-path: .venv
-        installer-parallel: true
+        version: "0.7.3"
 
-    - name: Install Dependencies
+    - name: Install dependencies
       shell: bash
-      run: |
-        git config --global url."https://${{ inputs.github-token }}@github.com/".insteadOf "git@github.com:"
-        # Configure poetry to use project-specific virtualenv
-        poetry config virtualenvs.in-project true
-
-        # Install the dependencies with extras
-        poetry install --all-extras
-        poetry update application-sdk --dry-run
+      run: uv sync --all-groups
 
     # Start all services
     - name: Start Platform Services
       shell: bash
       run: |
-        make start-all
+        uv run poe start-deps
         sleep 10  # Give services time to start up
 
     # Make API call and capture workflow/run IDs for each example
@@ -96,7 +85,7 @@ runs:
         SNOWFLAKE_PASSWORD: ${{ inputs.snowflake-password }}
       run: |
         cd examples
-        poetry run python run_examples.py
+        uv run run_examples.py
 
         echo "Workflow status:"
         cat workflow_status.md
@@ -113,5 +102,5 @@ runs:
       shell: bash
       continue-on-error: true
       run: |
-        make stop-all
+        uv run poe stop-deps
         sleep 10  # Give services time to stop

@@ -54,12 +54,12 @@ pyenv global 3.11.10
 python --version  # Should show Python 3.11.10
 ```
 
-### 3. Install Poetry 2.1.3
+### 3. Install uv 0.7.3
 
-Poetry manages Python dependencies and project environments:
+uv manages Python dependencies and project environments:
 
 ```bash
-pip install poetry==2.1.3
+curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
 ```
 
 ### 4. Install Temporal CLI
@@ -87,24 +87,37 @@ dapr init --runtime-version 1.13.6 --slim
 dapr --version
 ```
 
-### 6. Install Application SDK
+### 6. Install Project Dependencies
+
+- Install all required dependencies:
 
 ```bash
-make install
-
-# activate the environment
-source .venv/bin/activate
+uv sync --all-groups
 ```
 
-### 7. Start Services in detached mode
+- Setup pre-commit hooks
 
 ```bash
-make start-all
+uv run pre-commit install
 ```
 
-### 8. Run the example application
+### 7. Start the dependencies in a separate terminal:
+
+- Download the components
 
 ```bash
-poetry run python examples/application_hello_world.py
+uv run poe download-components
+```
+
+- Start the dependencies
+
+```bash
+uv run poe start-deps
+```
+
+### 8. Run the example application in the main terminal:
+
+```bash
+uv run examples/application_hello_world.py
 ```
 
