@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "atlan-application-sdk"
-version = "0.1.1rc2"
+version = "0.1.1rc3"
 description = "Python Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache LICENSE 2.0"
 authors = ["Atlan App Team <connect@atlan.com>"]

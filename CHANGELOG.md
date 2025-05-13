@@ -1,5 +1,20 @@
 # Changelog
 
+
+## v0.1.1rc3 (May 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc2...v0.1.1rc3
+
+### Features
+
+- Add SQL based transformer mapper (#423) (by @Onkar Ravgan in [459e806](https://github.com/atlanhq/application-sdk/commit/459e806))
+
+### Bug Fixes
+
+- dependabot issues (by @inishchith in [089d4f8](https://github.com/atlanhq/application-sdk/commit/089d4f8))
+- sql transformer diff (#511) (by @Onkar Ravgan in [5641a7a](https://github.com/atlanhq/application-sdk/commit/5641a7a))
+- date datatype in transformed output (by @Onkar Ravgan in [032bbbd](https://github.com/atlanhq/application-sdk/commit/032bbbd))
+
 ## v0.1.1rc2 (May 12, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc1...v0.1.1rc2
