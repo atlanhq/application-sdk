@@ -9,7 +9,8 @@ from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
 from application_sdk.common.logger_adaptors import get_logger
@@ -158,15 +159,72 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             # Create resource
             resource = Resource.create(resource_attributes)
 
-            # Create OTLP exporter
-            exporter = OTLPSpanExporter(
-                endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
-                timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+            # Create exporters
+            exporters = []
+
+            # Add console exporter for local development
+            console_exporter = ConsoleSpanExporter()
+            exporters.append(console_exporter)
+
+            # Add OTLP exporter if endpoint is configured
+            if OTEL_EXPORTER_OTLP_ENDPOINT:
+                try:
+                    otlp_exporter = OTLPSpanExporter(
+                        endpoint=OTEL_EXPORTER_OTLP_ENDPOINT,
+                        timeout=OTEL_EXPORTER_TIMEOUT_SECONDS,
+                    )
+                    exporters.append(otlp_exporter)
+                except Exception as e:
+                    logging.warning(
+                        f"Failed to setup OTLP exporter: {e}. Falling back to console only."
+                    )
+
+            # Create span processors for each exporter
+            span_processors = [
+                BatchSpanProcessor(
+                    exporter,
+                    schedule_delay_millis=OTEL_BATCH_DELAY_MS,
+                )
+                for exporter in exporters
+            ]
+
+            # Create tracer provider
+            self.tracer_provider = TracerProvider(
+                resource=resource,
             )
+
+            # Add all span processors
+            for processor in span_processors:
+                self.tracer_provider.add_span_processor(processor)
+
+            # Set global tracer provider
+            trace.set_tracer_provider(self.tracer_provider)
+
+            # Create tracer
+            self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
+
+        except Exception as e:
+            logging.error(f"Failed to setup OpenTelemetry traces: {e}")
+            # Fall back to console-only tracing
+            self._setup_console_only_traces()
+
+    def _setup_console_only_traces(self):
+        """Setup console-only tracing as fallback."""
+        try:
+            # Create resource with basic attributes
+            resource = Resource.create(
+                {
+                    "service.name": SERVICE_NAME,
+                    "service.version": SERVICE_VERSION,
+                }
+            )
+
+            # Create console exporter
+            console_exporter = ConsoleSpanExporter()
 
             # Create span processor
             span_processor = BatchSpanProcessor(
-                exporter,
+                console_exporter,
                 schedule_delay_millis=OTEL_BATCH_DELAY_MS,
             )
 
@@ -183,7 +241,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             self.tracer = self.tracer_provider.get_tracer(SERVICE_NAME)
 
         except Exception as e:
-            logging.error(f"Failed to setup OTLP traces: {e}")
+            logging.error(f"Failed to setup console-only tracing: {e}")
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         """Parse OpenTelemetry resource attributes from environment variable."""
@@ -245,13 +303,31 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         # Log to console
         self._log_to_console(record)
 
+    def _str_to_span_kind(self, kind: str) -> SpanKind:
+        """Convert string kind to SpanKind enum."""
+        kind_map = {
+            "INTERNAL": SpanKind.INTERNAL,
+            "SERVER": SpanKind.SERVER,
+            "CLIENT": SpanKind.CLIENT,
+            "PRODUCER": SpanKind.PRODUCER,
+            "CONSUMER": SpanKind.CONSUMER,
+        }
+        return kind_map.get(kind, SpanKind.INTERNAL)
+
+    def _timestamp_to_nanos(self, timestamp: float) -> int:
+        """Convert Unix timestamp to nanoseconds."""
+        return int(timestamp * 1_000_000_000)  # Convert seconds to nanoseconds
+
     def _send_to_otel(self, trace_record: TraceRecord):
         """Send trace to OpenTelemetry."""
         try:
+            # Convert string kind to SpanKind enum
+            span_kind = self._str_to_span_kind(trace_record.kind)
+
             # Create a span with the trace record data
             with self.tracer.start_as_current_span(
                 name=trace_record.name,
-                kind=trace_record.kind,
+                kind=span_kind,  # Use converted SpanKind enum
                 attributes=trace_record.attributes,
             ) as span:
                 # Set span status
@@ -267,10 +343,14 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 # Add events if any
                 if trace_record.events:
                     for event in trace_record.events:
+                        # Convert timestamp to nanoseconds
+                        timestamp = event.get("timestamp", time())
+                        timestamp_nanos = self._timestamp_to_nanos(timestamp)
+
                         span.add_event(
                             name=event.get("name", ""),
                             attributes=event.get("attributes", {}),
-                            timestamp=event.get("timestamp", int(time() * 1e9)),
+                            timestamp=timestamp_nanos,
                         )
 
         except Exception as e:

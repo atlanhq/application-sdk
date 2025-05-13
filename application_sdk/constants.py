@@ -152,7 +152,7 @@ METRICS_USE_DATE_BASED_FILES = (
 METRICS_DATE_FORMAT = os.getenv("METRICS_DATE_FORMAT", "%Y-%m-%d")
 
 # Traces Configuration
-ENABLE_OTLP_TRACES = os.getenv("ENABLE_OTLP_TRACES", "true").lower() == "true"
+ENABLE_OTLP_TRACES = os.getenv("ENABLE_OTLP_TRACES", "false").lower() == "true"
 TRACES_BATCH_SIZE = int(os.getenv("TRACES_BATCH_SIZE", "100"))
 TRACES_FLUSH_INTERVAL_SECONDS = int(os.getenv("TRACES_FLUSH_INTERVAL_SECONDS", "5"))
 TRACES_RETENTION_DAYS = int(os.getenv("TRACES_RETENTION_DAYS", "30"))
