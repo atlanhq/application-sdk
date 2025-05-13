@@ -18,13 +18,13 @@ pip install atlan-application-sdk
 # Using uv to install the latest version from PyPI
 uv add atlan-application-sdk
 
-# using Poetry to install the latest version from PyPI
+# OR using Poetry to install the latest version from PyPI
 poetry add atlan-application-sdk
 ```
 
-## Sample Applications
 
-- View sample apps built using application-sdk [here](https://github.com/atlanhq/atlan-sample-apps)
+> [!TIP]
+> **View sample apps built using Application SDK [here](https://github.com/atlanhq/atlan-sample-apps)**
 
 
 ## Development

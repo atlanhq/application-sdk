@@ -87,16 +87,31 @@ dapr init --runtime-version 1.13.6 --slim
 dapr --version
 ```
 
-### 6. Install Application SDK
+### 6. Install Project Dependencies
+
+- Install all required dependencies:
 
 ```bash
 uv sync --all-groups
 ```
 
+- Setup pre-commit hooks
+
+```bash
+uv run pre-commit install
+```
+
 ### 7. Start the dependencies in a separate terminal:
+
+- Download the components
 
 ```bash
 uv run poe download-components
+```
+
+- Start the dependencies
+
+```bash
 uv run poe start-deps
 ```
 

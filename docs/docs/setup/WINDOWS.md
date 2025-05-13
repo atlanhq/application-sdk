@@ -82,27 +82,21 @@ dapr init --runtime-version 1.13.6 --slim
 dapr --version
 ```
 
-### 5. Configure Git for Windows
+### 5. Install Project Dependencies
 
-Ensure Git is configured properly:
-
-```powershell
-# Install Git if not already installed
-# Download from https://git-scm.com/download/win if needed
-
-# Configure Git to use HTTPS instead of SSH
-git config --global url."https://github.com/".insteadOf "git@github.com:"
-```
-
-### 6. Install Project Dependencies
-
+- Install all required dependencies:
 
 ```powershell
-# Install project dependencies
 uv sync --all-groups
 ```
 
-### 7. Start the dependencies in a separate terminal:
+- Setup pre-commit hooks
+
+```powershell
+uv run pre-commit install
+```
+
+### 6. Start the dependencies in a separate terminal:
 
 ```powershell
 # Download the components
@@ -112,7 +106,7 @@ uv run poe download-components
 uv run poe start-deps
 ```
 
-### 8. Run the example application
+### 7. Run the example application
 
 ```powershell
 # Run the example application in the main terminal:
