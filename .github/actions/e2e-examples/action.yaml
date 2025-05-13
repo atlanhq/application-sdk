@@ -64,7 +64,7 @@ runs:
 
     - name: Install dependencies
       shell: bash
-      run: uv sync --all-groups
+      run: uv sync --all-extras --all-groups
 
     # Start all services
     - name: Start Platform Services

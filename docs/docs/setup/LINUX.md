@@ -87,12 +87,17 @@ dapr init --runtime-version 1.13.6 --slim
 dapr --version
 ```
 
+> [!NOTE]
+> Now you have your environment ready. You can now start setting up project dependencies.
+> The following steps will guide you through running the examples.
+
+
 ### 6. Install Project Dependencies
 
 - Install all required dependencies:
 
 ```bash
-uv sync --all-groups
+uv sync --all-extras --all-groups
 ```
 
 - Setup pre-commit hooks

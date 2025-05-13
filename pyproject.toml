@@ -35,7 +35,8 @@ Repository = "https://github.com/atlanhq/application-sdk"
 Documentation = "https://github.com/atlanhq/application-sdk/README.md"
 "Changelog" = "https://github.com/atlanhq/application-sdk/blob/main/CHANGELOG.md"
 
-[dependency-groups]
+# Optional dependencies for specific functionality - Install using: uv sync --extra workflows
+[project.optional-dependencies]
 workflows = [
     "dapr>=1.14.0",
     "temporalio>=1.7.1",
@@ -67,6 +68,9 @@ scale_data_generator = [
     "duckdb>=1.1.3",
     "duckdb-engine>=0.17.0",
 ]
+
+# Development dependencies - Install using: uv sync --group dev
+[dependency-groups]
 dev = [
     "pre-commit>=4.2.0",
     "isort>=5.13.2",
@@ -100,7 +104,6 @@ stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || 
 # API docs
 generate-apidocs.shell = "cd docs && mkdocs build && pydoctor --html-output=site/api ../application_sdk --docformat=google"
 
-# Define the build system for packaging
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
@@ -147,10 +150,8 @@ exclude_lines = [
 ]
 fail_under = 50
 
-# Configure uv to include all packages from application_sdk directory
 [tool.uv]
-default-groups = ["dev", "test"]  # These will be installed by default with `uv sync`
-
+default-groups = ["dev", "test"]
 
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]
