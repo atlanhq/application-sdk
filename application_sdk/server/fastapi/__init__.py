@@ -1,9 +1,5 @@
-import os
-import socket
 import time
 from typing import Any, Callable, List, Optional, Type
-
-import duckdb
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -19,6 +15,7 @@ from uvicorn import Config, Server
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.observability import DuckDBUI
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
@@ -27,7 +24,6 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
-    OBSERVABILITY_DIR,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -87,7 +83,7 @@ class APIServer(ServerInterface):
         docs_export_path (str): Path where documentation will be exported.
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
-        _duckdb_ui_con: duckdb.Connection: Store the DuckDB UI connection
+        duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
 
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
@@ -103,13 +99,13 @@ class APIServer(ServerInterface):
     events_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
+    duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
-    _duckdb_ui_con = None  # Store the DuckDB UI connection
 
     def __init__(
         self,
@@ -129,6 +125,7 @@ class APIServer(ServerInterface):
         self.handler = handler
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
+        self.duckdb_ui = DuckDBUI()
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -157,33 +154,9 @@ class APIServer(ServerInterface):
         # Initialize parent class
         super().__init__(handler)
 
-    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
-        """Check if DuckDB UI is already running on the default port."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.5)
-            result = sock.connect_ex((host, port))
-            return result == 0
-
-    def _start_duckdb_ui(self, db_path="/tmp/observability/observability.db"):
-        """Start DuckDB UI if not already running, and attach the /tmp/observability folder."""
-        if not self._is_duckdb_ui_running():
-            os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
-            con = duckdb.connect(db_path)
-            # Attach all .parquet files in /tmp/logs as tables
-            for fname in os.listdir(OBSERVABILITY_DIR):
-                fpath = os.path.join(OBSERVABILITY_DIR, fname)
-                if fname.endswith(".parquet"):
-                    tbl = os.path.splitext(fname)[0]
-                    con.execute(
-                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
-                    )
-            # Start DuckDB UI using SQL command
-            con.execute("CALL start_ui();")
-            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
-
     def observability(self, request: Request) -> RedirectResponse:
         """Endpoint to launch DuckDB UI for log self-serve exploration."""
-        self._start_duckdb_ui()
+        self.duckdb_ui.start_ui()
         # Redirect to the local DuckDB UI
         return RedirectResponse(url="http://0.0.0.0:4213")
 

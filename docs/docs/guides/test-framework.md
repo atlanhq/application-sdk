@@ -7,8 +7,6 @@ The application SDK provides a test framework to help you test your application.
 
 ## BaseTest Class
 
-- API Reference for `BaseTest` class can be found [here](https://k.atlan.dev/application-sdk/main/api/application_sdk.test_utils.e2e.base.BaseTest.html)
-
 The `BaseTest` class provides a base implementation for end-to-end testing of workflows. It includes several key test methods that run in a specific order:
 
 | Test Method            | Order | Description                                                                                                                                                                                                                                       |

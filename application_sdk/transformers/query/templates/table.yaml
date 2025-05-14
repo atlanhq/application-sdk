@@ -1,0 +1,229 @@
+# table.yaml
+table: Table
+columns:
+  - name: attributes.name
+    source_query: table_name
+  - name: attributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name]
+  - name: attributes.tableName
+    source_query: |
+      CASE
+        WHEN is_partition = TRUE THEN parent_table_name
+        ELSE NULL
+      END
+    source_columns: [parent_table_name, is_partition]
+  - name: attributes.tableQualifiedName
+    source_query: |
+      CASE
+        WHEN is_partition = TRUE THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, parent_table_name, is_partition]
+  - name: attributes.connectionQualifiedName
+    source_query: connection_qualified_name
+  - name: attributes.connectionName
+    source_query: connection_name
+  - name: attributes.description
+    source_query: |
+      CASE
+        WHEN remarks IS NOT NULL THEN
+          REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
+        ELSE
+          NULL
+      END
+    source_columns: [remarks]
+  - name: attributes.databaseName
+    source_query: table_catalog
+  - name: attributes.databaseQualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog)
+    source_columns: [connection_qualified_name, table_catalog]
+  - name: attributes.schemaName
+    source_query: table_schema
+  - name: attributes.schemaQualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
+    source_columns: [connection_qualified_name, table_catalog, table_schema]
+  - name: attributes.definition
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' THEN CONCAT('CREATE OR REPLACE VIEW ', table_name, ' AS ', view_definition)
+        WHEN table_type = 'MATERIALIZED VIEW' THEN CONCAT('CREATE MATERIALIZED VIEW ', table_name, ' AS ', view_definition)
+        ELSE view_definition
+      END
+    source_columns: [table_type, table_name, view_definition]
+  - name: attributes.columnCount
+    source_query: column_count
+  - name: attributes.rowCount
+    source_query: row_count
+  - name: attributes.sizeBytes
+    source_query: size_bytes
+  - name: customAttributes.table_type
+    source_query: table_type
+  - name: attributes.isPartitioned
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        WHEN table_kind = 'p' OR table_type = 'PARTITIONED TABLE' THEN TRUE
+        ELSE FALSE
+      END
+    source_columns: [table_kind, table_type]
+  - name: attributes.parentTable.typeName
+    source_query: |
+      CASE
+        WHEN is_partition = TRUE THEN 'Table'
+        ELSE NULL
+      END
+    source_columns: [is_partition]
+  - name: attributes.parentTable.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN is_partition = TRUE THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', parent_table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, parent_table_name, is_partition]
+  - name: attributes.partitionStrategy
+    source_query: COALESCE(partition_strategy, NULL)
+    source_columns: [partition_strategy]
+  - name: attributes.partitionCount
+    source_query: COALESCE(partition_count, NULL)
+    source_columns: [partition_count]
+  - name: attributes.constraint
+    source_query: COALESCE(partition_constraint, NULL)
+    source_columns: [partition_constraint]
+  - name: customAttributes.is_insertable_into
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(is_insertable_into, 'NO')
+      END
+    source_columns: [is_insertable_into, table_type]
+  - name: customAttributes.number_columns_in_part_key
+    source_query: |
+      CASE
+        WHEN number_columns_in_part_key IS NOT NULL THEN CAST(COALESCE(number_columns_in_part_key, 0) AS FLOAT)
+        ELSE NULL
+      END
+    source_columns: [number_columns_in_part_key]
+  - name: customAttributes.columns_participating_in_part_key
+    source_query: |
+      CASE
+        WHEN columns_participating_in_part_key IS NOT NULL THEN CAST(COALESCE(columns_participating_in_part_key, 0) AS FLOAT)
+        ELSE NULL
+      END
+    source_columns: [columns_participating_in_part_key]
+  - name: customAttributes.is_typed
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(is_typed, 'NO')
+      END
+    source_columns: [is_typed, table_type]
+  - name: customAttributes.self_referencing_col_name
+    source_query: COALESCE(self_referencing_column_name, '')
+    source_columns: [self_referencing_column_name]
+  - name: customAttributes.ref_generation
+    source_query: COALESCE(ref_generation, '')
+    source_columns: [ref_generation]
+  - name: customAttributes.engine
+    source_query: engine
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
+  - name: attributes.atlanSchema.typeName
+    source_query: |
+      CASE
+        WHEN is_partition != TRUE THEN 'Schema'
+        ELSE NULL
+      END
+    source_columns: [is_partition]
+  - name: attributes.atlanSchema.attributes
+    source_query: NULL
+  - name: attributes.atlanSchema.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN is_partition != TRUE THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, is_partition]
+  - name: typeName
+    source_query: |
+      CASE
+        WHEN is_partition = TRUE THEN 'TablePartition'
+        WHEN table_type IN ('TABLE', 'BASE TABLE', 'FOREIGN TABLE', 'PARTITIONED TABLE') THEN 'Table'
+        WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView'
+        -- WHEN table_type = 'DYNAMIC TABLE' OR COALESCE(is_dynamic) = 'YES' THEN 'SnowflakeDynamicTable'
+        ELSE 'View'
+      END
+    source_columns: [is_partition, table_type]
+  - name: status
+    source_query: "'ACTIVE'"
+  - name: customAttributes.is_transient
+    source_query: COALESCE(is_transient, '')
+    source_columns: [is_transient]
+  - name: customAttributes.catalog_id
+    source_query: COALESCE(table_catalog_id, '')
+    source_columns: [table_catalog_id]
+  - name: customAttributes.schema_id
+    source_query: COALESCE(table_schema_id, '')
+    source_columns: [table_schema_id]
+  - name: customAttributes.last_ddl
+    source_query: COALESCE(last_ddl, '')
+    source_columns: [last_ddl]
+  - name: customAttributes.last_ddl_by
+    source_query: COALESCE(last_ddl_by, '')
+    source_columns: [last_ddl_by]
+  - name: customAttributes.is_secure
+    source_query: COALESCE(is_secure, '')
+    source_columns: [is_secure]
+  - name: customAttributes.retention_time
+    source_query: COALESCE(retention_time, '')
+    source_columns: [retention_time]
+  - name: customAttributes.stage_url
+    source_query: COALESCE(stage_url, '')
+    source_columns: [stage_url]
+  - name: customAttributes.auto_clustering_on
+    source_query: COALESCE(auto_clustering_on, '')
+    source_columns: [auto_clustering_on]
+  - name: customAttributes.auto_increment
+    source_query: COALESCE(auto_increment, '')
+    source_columns: [auto_increment]
+  - name: attributes.externalLocation
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(location, '')
+      END
+    source_columns: [location, table_type]
+  - name: attributes.externalLocationFormat
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(file_format_type, '')
+      END
+    source_columns: [file_format_type, table_type]
+  - name: attributes.externalLocationRegion
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN NULL
+        ELSE COALESCE(stage_region, '')
+      END
+    source_columns: [stage_region, table_type]
+  - name: attributes.refreshMode
+    source_query: COALESCE(refresh_mode, '')
+    source_columns: [refresh_mode]
+  - name: attributes.staleness
+    source_query: COALESCE(staleness, '')
+    source_columns: [staleness]
+  - name: attributes.staleSinceDate
+    source_query: COALESCE(stale_since_date, '')
+    source_columns: [stale_since_date]
+  - name: attributes.refreshMethod
+    source_query: COALESCE(refresh_method, '')
+    source_columns: [refresh_method]

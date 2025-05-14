@@ -1,0 +1,85 @@
+name: Release and Publish
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+jobs:
+  release:
+    # Only run when a PR with the "release" label is merged
+    if: github.event.pull_request.merged == true && contains(github.event.pull_request.labels.*.name, 'release')
+    name: Create release and publish to PyPI
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Need full history for release notes
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.7.3"
+
+      - name: Install dependencies
+        shell: bash
+        run: uv sync --all-extras
+
+      - name: Get version
+        id: get_version
+        run: |
+          VERSION=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Extract changelog for this version
+        run: |
+          python .github/scripts/extract_release_notes.py "${{ env.VERSION }}" > .github/release_notes.md
+
+      - name: Create Git tag
+        run: |
+          git config --global user.name 'atlan-ci'
+          git config --global user.email 'it@atlan.com'
+
+          git tag -a "v${{ env.VERSION }}" -m "Release v${{ env.VERSION }}"
+          git push origin "v${{ env.VERSION }}"
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ env.VERSION }}"
+          name: "v${{ env.VERSION }}"
+          body_path: .github/release_notes.md
+          draft: false
+          prerelease: ${{ contains(env.VERSION, 'rc') }}
+          token: ${{ secrets.ORG_PAT_GITHUB }}
+
+      # TODO: Uncomment in case we need to publish to TestPyPI
+      # Available at: https://test.pypi.org/project/atlan-application-sdk/
+      # USAGE:  pip3 install -i https://test.pypi.org/simple/ atlan-application-sdk
+      # testpypi config available (commented out) under pyproject.toml
+      # - name: Build and publish to TestPyPI
+      #   env:
+      #     UV_PUBLISH_TOKEN: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      #   run: |
+      #     uv build
+      #     uv publish --index testpypi
+
+      # Available at: https://pypi.org/project/atlan-application-sdk/
+      - name: Build and publish to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: |
+          uv build
+          uv publish

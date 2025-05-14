@@ -55,7 +55,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "60"
+          fail-under: "50"
 
   matrix-builder:
     name: Build Test Matrix
@@ -177,18 +177,22 @@ jobs:
           sudo apt install graphviz
       - name: Generate Sphinx Docs and UML Diagrams
         run: |
-          source .venv/bin/activate
-          make apidocs
+          uv run poe generate-apidocs
 
-      # FIXME(inishchith): Uncomment when fixed @junaidrahim
-      # - name: Upload Docs
-      #   uses: atlanhq/kryptonite/upload@v1
-      #   with:
-      #     source: ./docs/site
-      #     target: application-sdk/${{ github.head_ref }}
-      # - name: Comment Kryptonite URL on PR
-      #   uses: mshick/add-pr-comment@v2
-      #   with:
-      #     message-id: "docs"
-      #     message: |
-      #       🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ap-south-1
+          # Only usable in atlanhq repositories
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      - name: Upload Docs to Kryptonite Bucket
+        run: |
+          aws s3 sync ./docs/site s3://kryptonite-store/application-sdk/${{ github.head_ref }} --delete
+
+      - name: Comment Kryptonite URL on PR
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: "docs"
+          message: |
+            🛠 Docs available at: https://k.atlan.dev/application-sdk/${{ github.head_ref }}

@@ -3,6 +3,11 @@ description:
 globs: tests/**/*.py
 alwaysApply: false
 ---
+# Testing Guidelines
+
+- Run the unit tests using the command: `uv run pytests tests/`
+
+
 - **Test Framework**
     - Write tests before fixing bugs
     - Keep tests readable and maintainable
@@ -18,29 +23,6 @@ alwaysApply: false
     - End-to-end tests: `tests/e2e/`
     - Test files should mirror the source structure
     - Test file names should start with `test_`
-
-- **Test Configuration**
-  ```toml
-  [tool.pytest.ini_options]
-  asyncio_mode = "auto"
-
-  [tool.coverage.run]
-  omit = [
-      "tests/**",
-  ]
-
-  [tool.coverage.report]
-  exclude_lines = [
-      "pragma: no cover",
-      "def __repr__",
-      "if self.debug:",
-      "raise NotImplementedError",
-      "if __name__ == .__main__.:",
-      "pass",
-      "raise ImportError",
-  ]
-  fail_under = 60
-  ```
 
 - **Example Test Structure**
   ```python

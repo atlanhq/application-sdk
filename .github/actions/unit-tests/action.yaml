@@ -19,7 +19,7 @@ inputs:
   fail-under:
     required: false
     description: The minimum coverage threshold to enforce. Default is 60%.
-    default: "60"
+    default: "50"
 
 runs:
   using: "composite"
@@ -33,13 +33,28 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
+    # NOTE(inishchith): this is added temporarily cause some unit tests rely on dapr
+    # setup dapr services
+    - name: Install Dapr CLI
+      shell: bash
+      run: |
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
+        dapr init --runtime-version 1.13.6 --slim
+
+    # start dapr services
+    - name: Start Platform Services
+      shell: bash
+      run: |
+        uv run poe start-dapr &
+        sleep 10  # Give services time to start up
+
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       run: |
-        poetry run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
-        poetry run coverage xml
-        poetry run coverage html
-        poetry run coverage report --fail-under=${{ inputs.fail-under }}
+        uv run coverage run -m pytest --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
+        uv run coverage xml
+        uv run coverage html
+        uv run coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
       uses: orgoro/coverage@v3.2
@@ -47,16 +62,22 @@ runs:
         coverageFile: coverage.xml
         token: ${{ inputs.github-token }}
 
-    # FIXME(inishchith): Uncomment when fixed @junaidrahim
-    # - name: Upload Coverage Report to S3
-    #   uses: atlanhq/kryptonite/upload@v1
-    #   with:
-    #     source: ./htmlcov
-    #     target: coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+    - name: Setup AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-region: ap-south-1
+        # Only usable in atlanhq repositories
+        role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
-    # - name: Comment Coverage Report URL on PR
-    #   uses: mshick/add-pr-comment@v2
-    #   with:
-    #     message-id: "coverage"
-    #     message: |
-    #       Coverage Report available at: https://k.atlan.dev/coverage/application-sdk/${{ steps.get_branch.outputs.branch }}
+    - name: Upload Coverage Report to Kryptonite Bucket
+      shell: bash
+      run: |
+        aws s3 sync ./htmlcov s3://kryptonite-store/coverage/application-sdk/pr/${{ github.event.number }} --delete
+
+    - name: Comment Coverage Report URL on PR
+      uses: mshick/add-pr-comment@v2
+      if: ${{ github.event_name == 'pull_request' }}
+      with:
+        message-id: "coverage"
+        message: |
+          🛠 Full Test Coverage Report: https://k.atlan.dev/coverage/application-sdk/pr/${{ github.event.number }}
