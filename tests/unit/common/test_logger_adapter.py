@@ -327,5 +327,5 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
         # Call parquet_sink - should not raise exception
         await logger_adapter.parquet_sink(test_message)
 
-        # Verify buffer is empty (error was handled)
+        # Verify buffer is empty (error was handled
         assert len(logger_adapter._buffer) == 0

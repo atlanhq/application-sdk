@@ -24,29 +24,6 @@ import sys
 from packaging.version import parse
 
 
-def get_current_version() -> str:
-    """Get the current version from poetry.
-
-    Returns:
-        str: Current version string from pyproject.toml.
-
-    Raises:
-        RuntimeError: If poetry command fails to execute
-    """
-    try:
-        version = (
-            subprocess.check_output(["poetry", "version", "-s"], stderr=subprocess.PIPE)
-            .decode()
-            .strip()
-        )
-        logging.info(f"Current pyproject.toml version: {version}")
-        return version
-    except subprocess.CalledProcessError as e:
-        error_msg = f"Failed to get current version: {e.stderr.decode() if e.stderr else str(e)}"
-        logging.error(error_msg)
-        raise RuntimeError(error_msg)
-
-
 def bump_release_candidate(current_version: str) -> str:
     """Bump the release candidate number in a PEP 440 compliant way.
 
@@ -76,18 +53,26 @@ def bump_release_candidate(current_version: str) -> str:
 
 
 def update_pyproject_version(new_version: str) -> None:
-    """Update the version in pyproject.toml using Poetry.
+    """Update the version in pyproject.toml using uv.
 
     Args:
         new_version (str): Version string to set in pyproject.toml
 
     Raises:
-        RuntimeError: If Poetry fails to update the version
+        RuntimeError: If uv fails to update the version
     """
     logging.info(f"Updating pyproject.toml version to {new_version}")
     try:
         subprocess.run(
-            ["poetry", "version", new_version],
+            [
+                "uvx",
+                "--from=toml-cli",
+                "toml",
+                "set",
+                "--toml-path=pyproject.toml",
+                "project.version",
+                new_version,
+            ],
             capture_output=True,
             text=True,
             check=True,
@@ -108,13 +93,13 @@ def main():
     logging.info("Starting version update process")
 
     current_branch = str(sys.argv[1])
+    current_version = str(sys.argv[2])
     if current_branch != enforce_on_branch:
         logging.warning(
             f"Not on {enforce_on_branch} branch (on {current_branch}). Skipping version bump."
         )
         return
 
-    current_version = get_current_version()
     new_version = bump_release_candidate(current_version)
     update_pyproject_version(new_version)
 

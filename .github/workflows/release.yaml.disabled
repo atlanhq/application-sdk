@@ -57,24 +57,28 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Poetry
-        uses: snok/install-poetry@v1
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          version: 2.1.3
-          virtualenvs-create: true
-          virtualenvs-in-project: true
-          virtualenvs-path: .venv
-          installer-parallel: true
+          version: "0.7.3"
 
-      - name: Install Poetry and dependencies
+      - name: Install dependencies
+        shell: bash
         run: |
+          uv sync --all-extras
           pip install semver
+
+      - name: Get current version
+        id: current_version
+        run: |
+          CURRENT_VERSION=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
+          echo "CURRENT_VERSION=$CURRENT_VERSION" >> $GITHUB_ENV
 
       - name: Perform Version Update
         id: version_bump
         run: |
-          python .github/scripts/release.py ${{ github.ref_name }}
-          poetry lock
+          python .github/scripts/release.py ${{ github.ref_name }} ${{ env.CURRENT_VERSION }}
+          uv lock
 
       - name: Commit version bump and changelog
         env:
@@ -85,15 +89,21 @@ jobs:
 
           git checkout -b version-update-${{ github.ref_name }}
 
-          git add pyproject.toml poetry.lock
+          git add pyproject.toml uv.lock
           git commit -m "chore(release): bump version"
 
           git push origin version-update-${{ github.ref_name }} --force
           gh pr create --base develop --title "chore(release): version bump" --body "Automated PR to increment version"
           gh pr merge --squash --admin
 
+      - name: Get new version
+        id: new_version
+        run: |
+          NEW_VERSION=$(uvx --from=toml-cli toml get --toml-path=pyproject.toml project.version)
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
-          gh release create "v$(poetry version -s)" --generate-notes
+          gh release create "v${{ env.NEW_VERSION }}" --generate-notes
