@@ -98,9 +98,19 @@ columns:
       END
     source_columns: [is_insertable_into, table_type]
   - name: customAttributes.number_columns_in_part_key
-    source_query: number_columns_in_part_key
+    source_query: |
+      CASE
+        WHEN number_columns_in_part_key IS NOT NULL THEN CAST(COALESCE(number_columns_in_part_key, 0) AS FLOAT)
+        ELSE NULL
+      END
+    source_columns: [number_columns_in_part_key]
   - name: customAttributes.columns_participating_in_part_key
-    source_query: columns_participating_in_part_key
+    source_query: |
+      CASE
+        WHEN columns_participating_in_part_key IS NOT NULL THEN CAST(COALESCE(columns_participating_in_part_key, 0) AS FLOAT)
+        ELSE NULL
+      END
+    source_columns: [columns_participating_in_part_key]
   - name: customAttributes.is_typed
     source_query: |
       CASE

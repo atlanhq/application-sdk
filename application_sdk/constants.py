@@ -42,7 +42,8 @@ APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
 #: Minimum required SQL Server version
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
-
+#: Path to the SQL queries directory
+SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -130,6 +131,7 @@ LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
+LOG_DIR = os.environ.get("LOG_DIR", "/tmp/observability")
 LOG_FILE_NAME = os.environ.get("LOG_FILE_NAME", "log.parquet")
 LOG_USE_DATE_BASED_FILES = (
     os.environ.get("LOG_USE_DATE_BASED_FILES", "true").lower() == "true"
@@ -149,3 +151,8 @@ METRICS_USE_DATE_BASED_FILES = (
     os.getenv("METRICS_USE_DATE_BASED_FILES", "true").lower() == "true"
 )
 METRICS_DATE_FORMAT = os.getenv("METRICS_DATE_FORMAT", "%Y-%m-%d")
+
+# Dapr Sink Configuration
+ENABLE_OBSERVABILITY_DAPR_SINK = bool(
+    os.environ.get("ENABLE_OBSERVABILITY_DAPR_SINK", "true")
+)

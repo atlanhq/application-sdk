@@ -1,9 +1,5 @@
-import os
-import socket
 import time
 from typing import Any, Callable, List, Optional, Type
-
-import duckdb
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -19,6 +15,7 @@ from uvicorn import Config, Server
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.observability import DuckDBUI
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
@@ -88,7 +85,7 @@ class APIServer(ServerInterface):
         docs_export_path (str): Path where documentation will be exported.
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
-        _duckdb_ui_con: duckdb.Connection: Store the DuckDB UI connection
+        duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
 
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
@@ -104,13 +101,13 @@ class APIServer(ServerInterface):
     events_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
+    duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
-    _duckdb_ui_con = None  # Store the DuckDB UI connection
 
     def __init__(
         self,
@@ -130,6 +127,7 @@ class APIServer(ServerInterface):
         self.handler = handler
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
+        self.duckdb_ui = DuckDBUI()
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -158,78 +156,9 @@ class APIServer(ServerInterface):
         # Initialize parent class
         super().__init__(handler)
 
-    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
-        """Check if DuckDB UI is already running on the default port."""
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(0.5)
-            result = sock.connect_ex((host, port))
-            return result == 0
-
-    def _start_duckdb_ui(self, db_path="/tmp/observability/observability.db"):
-        """Start DuckDB UI if not already running, and attach the /tmp/observability folder."""
-        if not self._is_duckdb_ui_running():
-            os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
-            con = duckdb.connect(db_path)
-
-            if LOG_USE_DATE_BASED_FILES:
-                # Function to recursively find and attach parquet files
-                def attach_parquet_files(directory):
-                    for item in os.listdir(directory):
-                        item_path = os.path.join(directory, item)
-                        if os.path.isdir(item_path):
-                            # Recursively process subdirectories
-                            attach_parquet_files(item_path)
-                        elif item.endswith(".parquet"):
-                            # Create view name based on relative path, replacing special characters
-                            rel_path = os.path.relpath(item_path, OBSERVABILITY_DIR)
-                            # Replace special characters with underscores and ensure valid identifier
-                            view_name = rel_path.replace("/", "_").replace(
-                                ".parquet", ""
-                            )
-                            view_name = view_name.replace("-", "_").replace(".", "_")
-                            # Ensure the view name starts with a letter or underscore
-                            if not view_name[0].isalpha() and view_name[0] != "_":
-                                view_name = "v_" + view_name
-
-                            try:
-                                con.execute(
-                                    f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM read_parquet('{item_path}')"
-                                )
-                            except Exception as e:
-                                logger.error(
-                                    f"Error creating view for {item_path}: {str(e)}"
-                                )
-
-                # Start with the observability directory
-                attach_parquet_files(OBSERVABILITY_DIR)
-            else:
-                # Original behavior for single file mode
-                for fname in os.listdir(OBSERVABILITY_DIR):
-                    fpath = os.path.join(OBSERVABILITY_DIR, fname)
-                    if fname.endswith(".parquet"):
-                        # Create a valid view name
-                        view_name = (
-                            fname.replace(".parquet", "")
-                            .replace("-", "_")
-                            .replace(".", "_")
-                        )
-                        if not view_name[0].isalpha() and view_name[0] != "_":
-                            view_name = "v_" + view_name
-
-                        try:
-                            con.execute(
-                                f"CREATE OR REPLACE VIEW {view_name} AS SELECT * FROM read_parquet('{fpath}')"
-                            )
-                        except Exception as e:
-                            logger.error(f"Error creating view for {fpath}: {str(e)}")
-
-            # Start DuckDB UI using SQL command
-            con.execute("CALL start_ui();")
-            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
-
     def observability(self, request: Request) -> RedirectResponse:
         """Endpoint to launch DuckDB UI for log self-serve exploration."""
-        self._start_duckdb_ui()
+        self.duckdb_ui.start_ui()
         # Redirect to the local DuckDB UI
         return RedirectResponse(url="http://0.0.0.0:4213")
 

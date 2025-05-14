@@ -13,8 +13,8 @@ A powerful tool for generating scale synthetic data for SQL Source testing. This
 ## Installation
 
 ```
-$ make install
-$ poetry run python -m application_sdk.test_utils.scale_data_generator.driver --config-path application_sdk/test_utils/scale_data_generator/examples/config.yaml --output-format json --output-dir application_sdk/test_utils/scale_data_generator/output
+$ uv sync --all-extras --all-groups
+$ uv run python -m application_sdk.test_utils.scale_data_generator.driver --config-path application_sdk/test_utils/scale_data_generator/examples/config.yaml --output-format json --output-dir application_sdk/test_utils/scale_data_generator/output
 ```
 
 ## Usage

@@ -3,6 +3,8 @@ description:
 globs: .cursor/rules/*.mdc
 alwaysApply: false
 ---
+# General
+
 - **Required Rule Structure:**
   ```markdown
   ---
