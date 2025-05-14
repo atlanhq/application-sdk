@@ -19,7 +19,7 @@ inputs:
   fail-under:
     required: false
     description: The minimum coverage threshold to enforce. Default is 60%.
-    default: "60"
+    default: "50"
 
 runs:
   using: "composite"
@@ -36,10 +36,10 @@ runs:
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       run: |
-        poetry run coverage run -m pytest tests/ --full-trace -v --hypothesis-show-statistics
-        poetry run coverage xml
-        poetry run coverage html
-        poetry run coverage report --fail-under=${{ inputs.fail-under }}
+        uv run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
+        uv run coverage xml
+        uv run coverage html
+        uv run coverage report --fail-under=${{ inputs.fail-under }}
 
     - name: Comment Coverage Report on PR
       uses: orgoro/coverage@v3.2

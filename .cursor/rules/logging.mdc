@@ -3,6 +3,8 @@ description:
 globs: application_sdk/**/*.py
 alwaysApply: false
 ---
+# Logging Guidelines
+
 - **Logger Configuration**
     - Use `AtlanLoggerAdapter` for all logging
     - Configure loggers using `get_logger(__name__)`
