@@ -1,12 +1,3 @@
----
-title: Windows Setup Guide for Application SDK
-description: Step-by-step instructions for setting up the Application SDK on Windows
-tags:
-  - setup
-  - windows
-  - installation
----
-
 # Windows Setup Guide
 
 This guide will help you set up the Application SDK on Windows.
@@ -14,38 +5,31 @@ This guide will help you set up the Application SDK on Windows.
 ## Prerequisites
 
 Before starting, ensure you have:
-      - PowerShell access (run as Administrator)
-      - Internet connection
-      - Windows 10 or higher
+  - Windows 10 or higher
+  - PowerShell access (run as Administrator)
+  - Internet connection
 
 ## Setup Steps
 
-### 1. Install Python 3.11.10
-
-Download and install Python from the official website:
-
-1. Go to [Python Downloads](https://www.python.org/downloads/release/python-31110/)
-2. Download the Windows installer (64-bit)
-3. Run the installer with these options:
-      - Add Python to PATH
-      - Install for all users
-      - Customize installation
-      - All optional features
-      - Install to a directory without spaces (e.g., `C:\Python311`)
-4. Verify installation by opening PowerShell and running:
-   ```powershell
-   python --version  # Should show Python 3.11.10
-   ```
-
-### 2. Install uv 0.7.3
+### 1. Install uv 0.7.3 and Python
 
 Install uv using PowerShell:
 
 ```powershell
+# Install UV
 powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/0.7.3/install.ps1 | iex"
+
+# Install Python 3.11.10
+uv venv --python 3.11.10
+
+# activate the venv
+source .venv/bin/activate
+
+# Verify installation
+python --version # Should show Python 3.11.10
 ```
 
-### 3. Install Temporal CLI
+### 2. Install Temporal CLI
 
 Download and install Temporal:
 
@@ -67,7 +51,7 @@ $env:Path += ";$env:USERPROFILE\.temporalio\bin"
 temporal --version
 ```
 
-### 4. Install DAPR CLI
+### 3. Install DAPR CLI
 
 Install DAPR using PowerShell:
 
@@ -83,36 +67,6 @@ dapr --version
 ```
 
 > [!NOTE]
-> Now you have your environment ready. You can now start setting up project dependencies.
-> The following steps will guide you through running the examples.
-
-### 5. Install Project Dependencies
-
-- Install all required dependencies:
-
-```powershell
-uv sync --all-extras --all-groups
-```
-
-- Setup pre-commit hooks
-
-```powershell
-uv run pre-commit install
-```
-
-### 6. Start the dependencies in a separate terminal:
-
-```powershell
-# Download the components
-uv run poe download-components
-
-# Start all services in detached mode
-uv run poe start-deps
-```
-
-### 7. Run the example application
-
-```powershell
-# Run the example application in the main terminal:
-uv run python examples/application_hello_world.py
-```
+> Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
+> - Install project dependencies
+> - Run example applications
