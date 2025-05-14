@@ -245,14 +245,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
-    def _start_asyncio_flush(self):
-        asyncio.run(self._periodic_flush())
-
-    async def _periodic_flush(self):
-        while True:
-            await asyncio.sleep(self._flush_interval)
-            await self._flush_buffer(force=True)
-
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a log record into a dictionary format."""
         if isinstance(record, LogRecordModel):
@@ -331,13 +323,31 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             attributes=attributes,
         )
 
-    def _send_to_otel(self, log_record: LogRecordModel):
-        """Send log to OpenTelemetry."""
+    def _start_asyncio_flush(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         try:
-            otel_record = self._create_log_record(log_record.model_dump())
-            self.logger_provider.get_logger(SERVICE_NAME).emit(otel_record)
+            AtlanLoggerAdapter._flush_task = loop.create_task(self._periodic_flush())
+            loop.run_forever()
+        finally:
+            loop.close()
+
+    async def _periodic_flush(self):
+        """Periodically flush logs to Dapr object store."""
+        try:
+            # Initial flush
+            await self._flush_buffer(force=True)
+
+            while ENABLE_OBSERVABILITY_DAPR_SINK:
+                await asyncio.sleep(self._flush_interval)
+                if not ENABLE_OBSERVABILITY_DAPR_SINK:
+                    break
+                await self._flush_buffer(force=True)
+        except asyncio.CancelledError:
+            # Handle task cancellation gracefully
+            await self._flush_buffer(force=True)
         except Exception as e:
-            logging.error(f"Error sending log to OpenTelemetry: {e}")
+            logging.error(f"Error in periodic flush: {e}")
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
@@ -447,14 +457,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context."""
-        try:
-            local_kwargs = kwargs.copy()
-            local_kwargs["log_type"] = "activity"
-            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-            self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
-        except Exception as e:
-            logging.error(f"Error in activity logging: {e}")
-            self._sync_flush()
+
+        local_kwargs = kwargs.copy()
+        local_kwargs["log_type"] = "activity"
+        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
+        self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
 
     def metric(self, msg: str, *args: Any, **kwargs: Any):
         """Log a metric-specific message with metric context."""

@@ -15,12 +15,40 @@ import pyarrow.parquet as pq
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
-from application_sdk.constants import (
-    LOG_DATE_FORMAT,
-    LOG_USE_DATE_BASED_FILES,
-    OBJECT_STORE_NAME,
-    STATE_STORE_NAME,
-)
+from application_sdk.constants import OBJECT_STORE_NAME, STATE_STORE_NAME
+
+
+class LogRecord(BaseModel):
+    """Model for log records."""
+
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    file: str
+    line: int
+    function: str
+    extra: Dict[str, Any]
+
+
+class ObservabilityDaprClient:
+    """Singleton class for DaprClient."""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = DaprClient()
+        return cls._instance
+
+    @classmethod
+    def get_client(cls):
+        """Get the singleton DaprClient instance."""
+        return cls()
+
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -202,6 +230,41 @@ class AtlanObservability(Generic[T], ABC):
                 buffer_copy = None
         if buffer_copy:
             await self._flush_records(buffer_copy)
+
+    async def parquet_sink(self, message: Any):
+        try:
+            log_record = LogRecord(
+                timestamp=message.record["time"].timestamp(),
+                level=message.record["level"].name,
+                logger_name=message.record["extra"].get("logger_name", ""),
+                message=message.record["message"],
+                file=str(message.record["file"].path),
+                line=message.record["line"],
+                function=message.record["function"],
+                extra={
+                    k: v
+                    for k, v in message.record["extra"].items()
+                    if k != "logger_name"
+                },
+            )
+
+            with self._buffer_lock:
+                self._buffer.append(log_record.model_dump())
+                now = time()
+                if (
+                    len(self._buffer) >= self._batch_size
+                    or (now - self._last_flush_time) >= self._flush_interval
+                ):
+                    self._last_flush_time = now
+                    buffer_copy = self._buffer[:]
+                    self._buffer.clear()
+                else:
+                    buffer_copy = None
+
+            if buffer_copy is not None:
+                await self._flush_records(buffer_copy)
+        except Exception as e:
+            logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to parquet file and object store."""
@@ -393,3 +456,48 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception as e:
             logging.error(f"Error adding record: {e}")
+
+
+class DuckDBUI:
+    """Class to handle DuckDB UI functionality."""
+
+    def __init__(self, db_path="/tmp/logs/observability.db"):
+        """Initialize the DuckDB UI handler.
+
+        Args:
+            db_path (str): Path to the DuckDB database file.
+        """
+        self.db_path = db_path
+        self._duckdb_ui_con = None
+
+    def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
+        """Check if DuckDB UI is already running on the default port."""
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            result = sock.connect_ex((host, port))
+            return result == 0
+
+    def start_ui(self):
+        """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
+        import os
+
+        import duckdb
+
+        from application_sdk.constants import LOG_DIR
+
+        if not self._is_duckdb_ui_running():
+            os.makedirs(LOG_DIR, exist_ok=True)
+            con = duckdb.connect(self.db_path)
+            # Attach all .parquet files in /tmp/logs as tables
+            for fname in os.listdir(LOG_DIR):
+                fpath = os.path.join(LOG_DIR, fname)
+                if fname.endswith(".parquet"):
+                    tbl = os.path.splitext(fname)[0]
+                    con.execute(
+                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
+                    )
+            # Start DuckDB UI using SQL command
+            con.execute("CALL start_ui();")
+            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
