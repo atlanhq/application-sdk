@@ -6,6 +6,7 @@ import orjson
 from temporalio import activity
 
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.metrics_adaptor import get_metrics
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -121,6 +122,7 @@ class JsonOutput(Output):
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
+        self.metrics = get_metrics()
 
         if not self.output_path:
             raise ValueError("output_path is required")
@@ -174,7 +176,24 @@ class JsonOutput(Output):
 
             await self._flush_buffer()
 
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="json_write_records",
+                value=len(dataframe),
+                metric_type="counter",
+                labels={"type": "pandas"},
+                description="Number of records written to JSON files from pandas DataFrame",
+            )
+
         except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="json_write_errors",
+                value=1,
+                metric_type="counter",
+                labels={"type": "pandas", "error": str(e)},
+                description="Number of errors while writing to JSON files",
+            )
             logger.error(f"Error writing dataframe to json: {str(e)}")
 
     async def write_daft_dataframe(
@@ -203,44 +222,81 @@ class JsonOutput(Output):
         Note:
             Daft does not have built-in JSON writing support, so we are using orjson.
         """
-        # Daft does not have a built in method to write the daft dataframe to json
-        # So we are using orjson to write the data to json in a more memory efficient way
-        buffer = []
-        for row in dataframe.iter_rows():
-            self.total_record_count += 1
-            # Convert datetime fields to epoch timestamps before serialization
-            row = convert_datetime_to_epoch(row)
-            # Remove null attributes from the row recursively, preserving specified fields
-            cleaned_row = self.process_null_fields(
-                row, preserve_fields, null_to_empty_dict_fields
-            )
-            # Serialize the row and add it to the buffer
-            buffer.append(
-                orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
-                    "utf-8"
+        try:
+            buffer = []
+            for row in dataframe.iter_rows():
+                self.total_record_count += 1
+                # Convert datetime fields to epoch timestamps before serialization
+                row = convert_datetime_to_epoch(row)
+                # Remove null attributes from the row recursively, preserving specified fields
+                cleaned_row = self.process_null_fields(
+                    row, preserve_fields, null_to_empty_dict_fields
                 )
+                # Serialize the row and add it to the buffer
+                buffer.append(
+                    orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
+                        "utf-8"
+                    )
+                )
+
+            # If the buffer reaches the specified size, write it to the file
+            if self.chunk_size and len(buffer) >= self.chunk_size:
+                self.chunk_count += 1
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                with open(output_file_name, "w") as f:
+                    f.writelines(buffer)
+                buffer.clear()  # Clear the buffer
+
+                # Record chunk metrics
+                self.metrics.record_metric(
+                    name="json_chunks_written",
+                    value=1,
+                    metric_type="counter",
+                    labels={"type": "daft"},
+                    description="Number of chunks written to JSON files",
+                )
+
+            # Write any remaining rows in the buffer
+            if buffer:
+                self.chunk_count += 1
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                with open(output_file_name, "w") as f:
+                    f.writelines(buffer)
+                buffer.clear()
+
+                # Record chunk metrics
+                self.metrics.record_metric(
+                    name="json_chunks_written",
+                    value=1,
+                    metric_type="counter",
+                    labels={"type": "daft"},
+                    description="Number of chunks written to JSON files",
+                )
+
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="json_write_records",
+                value=dataframe.count_rows(),
+                metric_type="counter",
+                labels={"type": "daft"},
+                description="Number of records written to JSON files from daft DataFrame",
             )
 
-        # If the buffer reaches the specified size, write it to the file
-        if self.chunk_size and len(buffer) >= self.chunk_size:
-            self.chunk_count += 1
-            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-            with open(output_file_name, "w") as f:
-                f.writelines(buffer)
-            buffer.clear()  # Clear the buffer
+            # Push the file to the object store
+            await ObjectStoreOutput.push_files_to_object_store(
+                self.output_prefix, self.output_path
+            )
 
-        # Write any remaining rows in the buffer
-        if buffer:
-            self.chunk_count += 1
-            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-            with open(output_file_name, "w") as f:
-                f.writelines(buffer)
-            buffer.clear()
-
-        # Push the file to the object store
-        await ObjectStoreOutput.push_files_to_object_store(
-            self.output_prefix, self.output_path
-        )
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="json_write_errors",
+                value=1,
+                metric_type="counter",
+                labels={"type": "daft", "error": str(e)},
+                description="Number of errors while writing to JSON files",
+            )
+            logger.error(f"Error writing daft dataframe to json: {str(e)}")
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
@@ -261,21 +317,45 @@ class JsonOutput(Output):
                 "_flush_buffer encountered non-list buffer. This should not happen."
             )
 
-        # Now it's safe to cast for pd.concat
-        pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
-        combined_dataframe = pd.concat(pd_buffer)
+        try:
+            # Now it's safe to cast for pd.concat
+            pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
+            combined_dataframe = pd.concat(pd_buffer)
 
-        # Write DataFrame to JSON file
-        if not combined_dataframe.empty:
-            self.chunk_count += 1
-            self.total_record_count += len(combined_dataframe)
-            output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-            combined_dataframe.to_json(output_file_name, orient="records", lines=True)
+            # Write DataFrame to JSON file
+            if not combined_dataframe.empty:
+                self.chunk_count += 1
+                self.total_record_count += len(combined_dataframe)
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                combined_dataframe.to_json(
+                    output_file_name, orient="records", lines=True
+                )
 
-            # Push the file to the object store
-            await ObjectStoreOutput.push_file_to_object_store(
-                self.output_prefix, output_file_name
+                # Record chunk metrics
+                self.metrics.record_metric(
+                    name="json_chunks_written",
+                    value=1,
+                    metric_type="counter",
+                    labels={"type": "pandas"},
+                    description="Number of chunks written to JSON files",
+                )
+
+                # Push the file to the object store
+                await ObjectStoreOutput.push_file_to_object_store(
+                    self.output_prefix, output_file_name
+                )
+
+            self.buffer.clear()
+            self.current_buffer_size = 0
+
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="json_write_errors",
+                value=1,
+                metric_type="counter",
+                labels={"type": "pandas", "error": str(e)},
+                description="Number of errors while writing to JSON files",
             )
-
-        self.buffer.clear()
-        self.current_buffer_size = 0
+            logger.error(f"Error flushing buffer to json: {str(e)}")
+            raise e
