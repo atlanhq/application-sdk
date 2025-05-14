@@ -33,6 +33,14 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
+    # Start all services
+    # NOTE(inishchith): this is added temporarily cause some unit tests rely on dapr
+    - name: Start Platform Services
+      shell: bash
+      run: |
+        uv run poe start-dapr
+        sleep 10  # Give services time to start up
+
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       run: |
