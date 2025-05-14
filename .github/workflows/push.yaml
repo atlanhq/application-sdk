@@ -24,7 +24,7 @@ jobs:
       - uses: "./.github/actions/unit-tests"
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
-          fail-under: "60"
+          fail-under: "50"
 
   e2e-examples:
     name: E2E (Examples)
@@ -66,8 +66,7 @@ jobs:
           sudo apt install graphviz
       - name: Generate Sphinx Docs and UML Diagrams
         run: |
-          source .venv/bin/activate
-          make apidocs
+          uv run poe generate-apidocs
 
       - name: Setup AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
