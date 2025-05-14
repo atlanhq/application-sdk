@@ -17,6 +17,7 @@ from temporalio import activity, workflow
 
 from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
+    ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
     LOG_LEVEL,
     OTEL_BATCH_DELAY_MS,
@@ -98,8 +99,9 @@ class AtlanLoggerAdapter(AtlanObservability):
             sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
         )
 
-        # Add sink for parquet logging
-        self.logger.add(self.parquet_sink, level=LOG_LEVEL)
+        # Add sink for parquet logging only if Dapr sink is enabled
+        if ENABLE_OBSERVABILITY_DAPR_SINK:
+            self.logger.add(self.parquet_sink, level=LOG_LEVEL)
 
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:

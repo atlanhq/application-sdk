@@ -23,6 +23,25 @@ from application_sdk.constants import (
 )
 
 
+class ObservabilityDaprClient:
+    """Singleton class for DaprClient."""
+
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls):
+        if cls._instance is None:
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = DaprClient()
+        return cls._instance
+
+    @classmethod
+    def get_client(cls):
+        """Get the singleton DaprClient instance."""
+        return cls()
+
+
 class LogRecord(BaseModel):
     """Pydantic model for log records."""
 
@@ -48,6 +67,7 @@ class AtlanObservability:
         self._batch_size = LOG_BATCH_SIZE
         self._flush_interval = LOG_FLUSH_INTERVAL_SECONDS
         self.parquet_path = os.path.join(LOG_DIR, LOG_FILE_NAME)
+        self._dapr_client = ObservabilityDaprClient.get_client()
 
         # Ensure log directory exists
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -113,13 +133,12 @@ class AtlanObservability:
                     "blobName": LOG_FILE_NAME,
                     "fileName": LOG_FILE_NAME,
                 }
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="create",
-                        data=file_content,
-                        binding_metadata=metadata,
-                    )
+                self._dapr_client.invoke_binding(
+                    binding_name=OBJECT_STORE_NAME,
+                    operation="create",
+                    data=file_content,
+                    binding_metadata=metadata,
+                )
             # Clean up old logs after flushing
             if LOG_CLEANUP_ENABLED:
                 await self._cleanup_old_logs()
@@ -130,22 +149,19 @@ class AtlanObservability:
         """Check if cleanup should run based on last purge date."""
         current_date = pd.Timestamp.now().date()
         try:
-            with DaprClient() as client:
-                state = client.get_state(
-                    store_name=STATE_STORE_NAME, key="last_log_purge"
+            state = self._dapr_client.get_state(
+                store_name=STATE_STORE_NAME, key="last_log_purge"
+            )
+            if not state.data:
+                # If no last purge date exists, set initial date and return
+                self._dapr_client.save_state(
+                    store_name=STATE_STORE_NAME,
+                    key="last_log_purge",
+                    value=json.dumps({"date": current_date.isoformat()}),
                 )
-                if not state.data:
-                    # If no last purge date exists, set initial date and return
-                    client.save_state(
-                        store_name=STATE_STORE_NAME,
-                        key="last_log_purge",
-                        value=json.dumps({"date": current_date.isoformat()}),
-                    )
-                    return False
-                last_purge_date = pd.Timestamp(
-                    json.loads(state.data).get("date")
-                ).date()
-                return last_purge_date != current_date
+                return False
+            last_purge_date = pd.Timestamp(json.loads(state.data).get("date")).date()
+            return last_purge_date != current_date
         except Exception as e:
             logging.error(f"Error checking last purge date: {e}")
             return False
@@ -153,12 +169,11 @@ class AtlanObservability:
     async def _update_last_purge_date(self, current_date: pd.Timestamp):
         """Update the last purge date in state store."""
         try:
-            with DaprClient() as client:
-                client.save_state(
-                    store_name=STATE_STORE_NAME,
-                    key="last_log_purge",
-                    value=json.dumps({"date": current_date.isoformat()}),
-                )
+            self._dapr_client.save_state(
+                store_name=STATE_STORE_NAME,
+                key="last_log_purge",
+                value=json.dumps({"date": current_date.isoformat()}),
+            )
         except Exception as e:
             logging.error(f"Error updating last purge date: {e}")
 
@@ -194,24 +209,22 @@ class AtlanObservability:
                     "blobName": LOG_FILE_NAME,
                     "fileName": LOG_FILE_NAME,
                 }
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="create",
-                        data=file_content,
-                        binding_metadata=metadata,
-                    )
+                self._dapr_client.invoke_binding(
+                    binding_name=OBJECT_STORE_NAME,
+                    operation="create",
+                    data=file_content,
+                    binding_metadata=metadata,
+                )
         else:
             # If no logs remain, delete the file
             os.remove(self.parquet_path)
             # Delete from object store
-            with DaprClient() as client:
-                client.invoke_binding(
-                    binding_name=OBJECT_STORE_NAME,
-                    operation="delete",
-                    data=b"",
-                    binding_metadata={"key": "logs/log.parquet"},
-                )
+            self._dapr_client.invoke_binding(
+                binding_name=OBJECT_STORE_NAME,
+                operation="delete",
+                data=b"",
+                binding_metadata={"key": "logs/log.parquet"},
+            )
 
     async def _cleanup_old_logs(self):
         """Clean up logs older than LOG_RETENTION_DAYS. Runs once per day."""
