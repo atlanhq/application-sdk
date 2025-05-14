@@ -37,8 +37,8 @@ The logger implements a sophisticated storage and retention system:
    - Handles both local parquet files and object store cleanup
 
 3. **Storage Locations**:
-   - Local: `/tmp/logs/log.parquet`
-   - Object Store: `logs/log.parquet` (via Dapr object store binding)
+   - Local: `/tmp/observability/log.parquet`
+   - Object Store: `observability/log.parquet` (via Dapr object store binding)
 
 ### Usage
 
@@ -236,7 +236,7 @@ The traces adapter implements a sophisticated storage and retention system:
 
 3. **Storage Locations**:
    - Local: `/tmp/observability/traces.parquet`
-   - Object Store: `traces/traces.parquet` (via Dapr object store binding)
+   - Object Store: `observability/traces.parquet` (via Dapr object store binding)
 
 ## AWS Utilities (`aws_utils.py`)
 

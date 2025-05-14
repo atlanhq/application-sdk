@@ -74,7 +74,7 @@ class ObjectStoreOutput:
             Exception: If there's an error with the Dapr client operations.
 
         Example:
-            >>> ObjectStoreOutput.push_files_to_object_store("logs", "/tmp/logs")
+            >>> ObjectStoreOutput.push_files_to_object_store("logs", "/tmp/observability")
         """
         if not os.path.isdir(input_files_path):
             raise ValueError(

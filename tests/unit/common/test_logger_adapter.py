@@ -268,9 +268,9 @@ def mock_parquet_file(tmp_path):
 @pytest.fixture(autouse=True)
 def clear_log_buffer(logger_adapter):
     """Clear the log buffer before each test."""
-    logger_adapter._log_buffer.clear()
+    logger_adapter._buffer.clear()
     yield
-    logger_adapter._log_buffer.clear()
+    logger_adapter._buffer.clear()
 
 
 @pytest.mark.asyncio
@@ -298,8 +298,8 @@ async def test_parquet_sink_buffering(mock_parquet_file):
         await logger_adapter.parquet_sink(test_message)
 
         # Verify log was added to buffer
-        assert len(logger_adapter._log_buffer) == 1
-        buffered_log = logger_adapter._log_buffer[0]
+        assert len(logger_adapter._buffer) == 1
+        buffered_log = logger_adapter._buffer[0]
         assert buffered_log["message"] == "Test message"
         assert buffered_log["level"] == "INFO"
         assert buffered_log["logger_name"] == "test_logger"
@@ -327,5 +327,5 @@ async def test_parquet_sink_error_handling(mock_parquet_file):
         # Call parquet_sink - should not raise exception
         await logger_adapter.parquet_sink(test_message)
 
-        # Verify buffer is empty (error was handled)
-        assert len(logger_adapter._log_buffer) == 0
+        # Verify buffer is empty (error was handled
+        assert len(logger_adapter._buffer) == 0

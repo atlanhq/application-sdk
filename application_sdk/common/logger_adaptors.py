@@ -4,7 +4,7 @@ import sys
 import threading
 from contextvars import ContextVar
 from time import time_ns
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 from opentelemetry._logs import SeverityNumber
@@ -13,13 +13,20 @@ from opentelemetry.sdk._logs import LoggerProvider, LogRecord
 from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
+from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
 from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
+    LOG_BATCH_SIZE,
+    LOG_CLEANUP_ENABLED,
+    LOG_FILE_NAME,
+    LOG_FLUSH_INTERVAL_SECONDS,
     LOG_LEVEL,
+    LOG_RETENTION_DAYS,
+    OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -30,6 +37,48 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+
+
+class LogExtraModel(BaseModel):
+    """Pydantic model for log extra fields."""
+
+    client_host: Optional[str] = None
+    duration_ms: Optional[int] = None
+    method: Optional[str] = None
+    path: Optional[str] = None
+    request_id: Optional[str] = None
+    status_code: Optional[int] = None
+    url: Optional[str] = None
+    # Workflow context
+    workflow_id: Optional[str] = None
+    run_id: Optional[str] = None
+    workflow_type: Optional[str] = None
+    namespace: Optional[str] = None
+    task_queue: Optional[str] = None
+    attempt: Optional[int] = None
+    # Activity context
+    activity_id: Optional[str] = None
+    activity_type: Optional[str] = None
+    schedule_to_close_timeout: Optional[str] = None
+    start_to_close_timeout: Optional[str] = None
+    schedule_to_start_timeout: Optional[str] = None
+    heartbeat_timeout: Optional[str] = None
+    # Other fields
+    log_type: Optional[str] = None
+
+
+class LogRecordModel(BaseModel):
+    """Pydantic model for log records."""
+
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    file: str
+    line: int
+    function: str
+    extra: LogExtraModel = Field(default_factory=LogExtraModel)
+
 
 # Create a context variable for request_id
 request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
@@ -75,16 +124,26 @@ SEVERITY_MAPPING = {
     "ERROR": SeverityNumber.ERROR,
     "CRITICAL": SeverityNumber.FATAL,
     "ACTIVITY": SeverityNumber.INFO,  # Using INFO severity for activity level
+    "METRIC": SeverityNumber.INFO,  # Using INFO severity for metric level
 }
 
 
-class AtlanLoggerAdapter(AtlanObservability):
+class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
+    """Logger adapter for Atlan."""
+
     _flush_task_started = False
     _flush_task = None
 
     def __init__(self, logger_name: str) -> None:
         """Create the logger adapter with enhanced configuration."""
-        super().__init__()
+        super().__init__(
+            batch_size=LOG_BATCH_SIZE,
+            flush_interval=LOG_FLUSH_INTERVAL_SECONDS,
+            retention_days=LOG_RETENTION_DAYS,
+            cleanup_enabled=LOG_CLEANUP_ENABLED,
+            data_dir=OBSERVABILITY_DIR,
+            file_name=LOG_FILE_NAME,
+        )
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
@@ -93,6 +152,10 @@ class AtlanLoggerAdapter(AtlanObservability):
         # Register custom log level for activity
         if "ACTIVITY" not in logger._core.levels:
             logger.level("ACTIVITY", no=20, color="<cyan>", icon="🔵")
+
+        # Register custom log level for metrics
+        if "METRIC" not in logger._core.levels:
+            logger.level("METRIC", no=20, color="<yellow>", icon="📊")
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
@@ -174,28 +237,69 @@ class AtlanLoggerAdapter(AtlanObservability):
                 attributes = env_var.split(",")
                 # Create a dictionary from the key-value pairs
                 return {
-                    item.split("=")[0].strip(): item.split("=")[
-                        1
-                    ].strip()  # Strip spaces around the key and value
+                    item.split("=")[0].strip(): item.split("=")[1].strip()
                     for item in attributes
-                    if "=" in item  # Ensure there's an "=" to split
+                    if "=" in item
                 }
         except Exception as e:
             logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
+    def process_record(self, record: Any) -> Dict[str, Any]:
+        """Process a log record into a dictionary format."""
+        if isinstance(record, LogRecordModel):
+            return record.model_dump()
+
+        # Handle loguru message format
+        if hasattr(record, "record"):
+            extra = LogExtraModel()
+            for k, v in record.record["extra"].items():
+                if k != "logger_name" and hasattr(extra, k):
+                    setattr(extra, k, v)
+
+            return LogRecordModel(
+                timestamp=record.record["time"].timestamp(),
+                level=record.record["level"].name,
+                logger_name=record.record["extra"].get("logger_name", ""),
+                message=record.record["message"],
+                file=str(record.record["file"].path),
+                line=record.record["line"],
+                function=record.record["function"],
+                extra=extra,
+            ).model_dump()
+
+        # Handle raw dictionary format
+        if isinstance(record, dict):
+            extra = LogExtraModel()
+            for k, v in record.get("extra", {}).items():
+                if hasattr(extra, k):
+                    setattr(extra, k, v)
+            record["extra"] = extra
+            return LogRecordModel(**record).model_dump()
+
+        raise ValueError(f"Unsupported record format: {type(record)}")
+
+    def export_record(self, record: Any) -> None:
+        """Export a log record to external systems."""
+        if not isinstance(record, LogRecordModel):
+            record = LogRecordModel(**self.process_record(record))
+
+        # Send to OpenTelemetry if enabled
+        if ENABLE_OTLP_LOGS:
+            self._send_to_otel(record)
+
     def _create_log_record(self, record: dict) -> LogRecord:
         """Create an OpenTelemetry LogRecord."""
         severity_number = SEVERITY_MAPPING.get(
-            record["level"].name, SeverityNumber.UNSPECIFIED
+            record["level"], SeverityNumber.UNSPECIFIED
         )
 
         # Start with base attributes
         attributes: Dict[str, Any] = {
-            "code.filepath": str(record["file"].path),
-            "code.function": str(record["function"]),
-            "code.lineno": int(record["line"]),
-            "level": record["level"].name,
+            "code.filepath": record["file"],
+            "code.function": record["function"],
+            "code.lineno": record["line"],
+            "level": record["level"],
         }
 
         # Add extra attributes at the same level
@@ -207,12 +311,12 @@ class AtlanLoggerAdapter(AtlanObservability):
                     attributes[key] = str(value)
 
         return LogRecord(
-            timestamp=int(record["time"].timestamp() * 1e9),
+            timestamp=int(record["timestamp"] * 1e9),
             observed_timestamp=time_ns(),
             trace_id=0,
             span_id=0,
             trace_flags=TraceFlags(0),
-            severity_text=record["level"].name,
+            severity_text=record["level"],
             severity_number=severity_number,
             body=record["message"],
             resource=self.logger_provider.resource,
@@ -244,14 +348,6 @@ class AtlanLoggerAdapter(AtlanObservability):
             await self._flush_buffer(force=True)
         except Exception as e:
             logging.error(f"Error in periodic flush: {e}")
-
-    def otlp_sink(self, message: Any):
-        """Process log message and emit to OTLP."""
-        try:
-            log_record = self._create_log_record(message.record)
-            self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
-        except Exception as e:
-            logging.error(f"Error processing log record: {e}")
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
@@ -336,25 +432,63 @@ class AtlanLoggerAdapter(AtlanObservability):
         self.logger.bind(**kwargs).critical(msg, *args)
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an activity-specific message with activity context.
-        This method is specifically designed for logging activity-related information.
-        It automatically adds activity context if available and formats the message
-        with activity-specific information.
-        Args:
-            msg: The message to log
-            *args: Additional positional arguments
-            **kwargs: Additional keyword arguments
-        """
-        # Create a copy to avoid modifying the original dict directly
-        # and potentially help type checker inference.
+        """Log an activity-specific message with activity context."""
+
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "activity"
-
-        # Process the message with context using the copied dict
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-
-        # Log with the custom ACTIVITY level using the processed dict
         self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
+
+    def metric(self, msg: str, *args: Any, **kwargs: Any):
+        """Log a metric-specific message with metric context."""
+        local_kwargs = kwargs.copy()
+        local_kwargs["log_type"] = "metric"
+        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
+        self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
+
+    async def parquet_sink(self, message: Any):
+        """Process log message and store in parquet format."""
+        try:
+            extra = LogExtraModel()
+            for k, v in message.record["extra"].items():
+                if k != "logger_name" and hasattr(extra, k):
+                    setattr(extra, k, v)
+
+            log_record = LogRecordModel(
+                timestamp=message.record["time"].timestamp(),
+                level=message.record["level"].name,
+                logger_name=message.record["extra"].get("logger_name", ""),
+                message=message.record["message"],
+                file=str(message.record["file"].path),
+                line=message.record["line"],
+                function=message.record["function"],
+                extra=extra,
+            )
+            self.add_record(log_record)
+        except Exception as e:
+            logging.error(f"Error buffering log: {e}")
+
+    def otlp_sink(self, message: Any):
+        """Process log message and emit to OTLP."""
+        try:
+            extra = LogExtraModel()
+            for k, v in message.record["extra"].items():
+                if k != "logger_name" and hasattr(extra, k):
+                    setattr(extra, k, v)
+
+            log_record = LogRecordModel(
+                timestamp=message.record["time"].timestamp(),
+                level=message.record["level"].name,
+                logger_name=message.record["extra"].get("logger_name", ""),
+                message=message.record["message"],
+                file=str(message.record["file"].path),
+                line=message.record["line"],
+                function=message.record["function"],
+                extra=extra,
+            )
+            self._send_to_otel(log_record)
+        except Exception as e:
+            logging.error(f"Error processing log record: {e}")
 
     def __del__(self):
         """Cleanup when the logger is destroyed."""
