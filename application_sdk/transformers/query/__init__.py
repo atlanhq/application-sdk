@@ -9,6 +9,7 @@ from pyatlan.model.enums import AtlanConnectorType
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import (
+    flatten_yaml_columns,
     get_yaml_query_template_path_mappings,
 )
 
@@ -171,6 +172,9 @@ class QueryBasedTransformer(TransformerInterface):
             # Load the YAML template from the path
             with open(yaml_path, "r") as f:
                 sql_template = yaml.safe_load(f)
+
+            # Flatten the columns dictionary
+            sql_template["columns"] = flatten_yaml_columns(sql_template["columns"])
 
             # Get the SQL columns expressions for the SQL query
             columns, literal_columns = self.get_sql_column_expressions(
