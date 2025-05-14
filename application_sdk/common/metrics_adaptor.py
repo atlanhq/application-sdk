@@ -44,6 +44,68 @@ class MetricRecord(BaseModel):
     description: Optional[str] = None
     unit: Optional[str] = None
 
+    class Config:
+        """Pydantic model configuration."""
+
+        @classmethod
+        def parse_obj(cls, obj):
+            if isinstance(obj, dict):
+                # Ensure labels is a dictionary with consistent structure
+                if "labels" in obj:
+                    # Create a new labels dict with only the expected fields
+                    new_labels = {}
+                    expected_fields = [
+                        "database",
+                        "status",
+                        "type",
+                        "mode",
+                        "workflow_id",
+                        "workflow_type",
+                    ]
+
+                    # Copy only the expected fields if they exist
+                    for field in expected_fields:
+                        if field in obj["labels"]:
+                            new_labels[field] = str(obj["labels"][field])
+
+                    obj["labels"] = new_labels
+
+                # Ensure value is float
+                if "value" in obj:
+                    try:
+                        obj["value"] = float(obj["value"])
+                    except (ValueError, TypeError):
+                        obj["value"] = 0.0
+
+                # Ensure timestamp is float
+                if "timestamp" in obj:
+                    try:
+                        obj["timestamp"] = float(obj["timestamp"])
+                    except (ValueError, TypeError):
+                        obj["timestamp"] = time()
+
+                # Ensure type is string
+                if "type" in obj:
+                    obj["type"] = str(obj["type"])
+
+                # Ensure name is string
+                if "name" in obj:
+                    obj["name"] = str(obj["name"])
+
+                # Ensure description is string or None
+                if "description" in obj:
+                    obj["description"] = (
+                        str(obj["description"])
+                        if obj["description"] is not None
+                        else None
+                    )
+
+                # Ensure unit is string or None
+                if "unit" in obj:
+                    obj["unit"] = str(obj["unit"]) if obj["unit"] is not None else None
+
+            return super().parse_obj(obj)
+
 
 class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     """Metrics adapter for Atlan."""
