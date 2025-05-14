@@ -15,7 +15,11 @@ import pyarrow.parquet as pq
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
-from application_sdk.constants import OBJECT_STORE_NAME, STATE_STORE_NAME
+from application_sdk.constants import (
+    OBJECT_STORE_NAME,
+    OBSERVABILITY_DIR,
+    STATE_STORE_NAME,
+)
 
 
 class LogRecord(BaseModel):
@@ -461,7 +465,7 @@ class AtlanObservability(Generic[T], ABC):
 class DuckDBUI:
     """Class to handle DuckDB UI functionality."""
 
-    def __init__(self, db_path="/tmp/logs/observability.db"):
+    def __init__(self, db_path="/tmp/observability/observability.db"):
         """Initialize the DuckDB UI handler.
 
         Args:
@@ -479,20 +483,18 @@ class DuckDBUI:
             result = sock.connect_ex((host, port))
             return result == 0
 
-    def start_ui(self):
-        """Start DuckDB UI if not already running, and attach the /tmp/logs folder."""
+    def start_ui(self, db_path=OBSERVABILITY_DIR):
+        """Start DuckDB UI if not already running, and attach the /tmp/observability folder."""
         import os
 
         import duckdb
 
-        from application_sdk.constants import LOG_DIR
-
         if not self._is_duckdb_ui_running():
-            os.makedirs(LOG_DIR, exist_ok=True)
+            os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
             con = duckdb.connect(self.db_path)
-            # Attach all .parquet files in /tmp/logs as tables
-            for fname in os.listdir(LOG_DIR):
-                fpath = os.path.join(LOG_DIR, fname)
+            # Attach all .parquet files in /tmp/observability as tables
+            for fname in os.listdir(OBSERVABILITY_DIR):
+                fpath = os.path.join(OBSERVABILITY_DIR, fname)
                 if fname.endswith(".parquet"):
                     tbl = os.path.splitext(fname)[0]
                     con.execute(

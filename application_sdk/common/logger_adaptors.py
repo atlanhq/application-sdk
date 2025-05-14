@@ -42,11 +42,11 @@ class LogExtraModel(BaseModel):
     """Pydantic model for log extra fields."""
 
     client_host: Optional[str] = None
-    duration_ms: Optional[float] = None
+    duration_ms: Optional[int] = None
     method: Optional[str] = None
     path: Optional[str] = None
     request_id: Optional[str] = None
-    status_code: Optional[float] = None
+    status_code: Optional[int] = None
     url: Optional[str] = None
     # Workflow context
     workflow_id: Optional[str] = None
@@ -54,7 +54,7 @@ class LogExtraModel(BaseModel):
     workflow_type: Optional[str] = None
     namespace: Optional[str] = None
     task_queue: Optional[str] = None
-    attempt: Optional[float] = None
+    attempt: Optional[int] = None
     # Activity context
     activity_id: Optional[str] = None
     activity_type: Optional[str] = None
