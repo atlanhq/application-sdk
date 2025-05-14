@@ -245,14 +245,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
-    def _start_asyncio_flush(self):
-        asyncio.run(self._periodic_flush())
-
-    async def _periodic_flush(self):
-        while True:
-            await asyncio.sleep(self._flush_interval)
-            await self._flush_buffer(force=True)
-
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a log record into a dictionary format."""
         if isinstance(record, LogRecordModel):
@@ -357,14 +349,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         except Exception as e:
             logging.error(f"Error in periodic flush: {e}")
 
-    def otlp_sink(self, message: Any):
-        """Process log message and emit to OTLP."""
-        try:
-            otel_record = self._create_log_record(log_record.model_dump())
-            self.logger_provider.get_logger(SERVICE_NAME).emit(otel_record)
-        except Exception as e:
-            logging.error(f"Error sending log to OpenTelemetry: {e}")
-
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
         kwargs["logger_name"] = self.logger_name
@@ -449,7 +433,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context."""
-  
+
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "activity"
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)

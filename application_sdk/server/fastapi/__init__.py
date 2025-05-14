@@ -1,9 +1,5 @@
-import os
-import socket
 import time
 from typing import Any, Callable, List, Optional, Type
-
-import duckdb
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
@@ -28,7 +24,6 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
-    OBSERVABILITY_DIR,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )

@@ -1,4 +1,3 @@
-import json
 import asyncio
 import logging
 import os
@@ -6,7 +5,7 @@ import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from time import time
-from typing import Any, Dict, Generic, List, TypeVar, Optional
+from typing import Any, Dict, Generic, List, TypeVar
 
 import pandas as pd
 import pyarrow as pa
@@ -15,6 +14,20 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import OBJECT_STORE_NAME, STATE_STORE_NAME
+
+
+class LogRecord(BaseModel):
+    """Model for log records."""
+
+    timestamp: float
+    level: str
+    logger_name: str
+    message: str
+    file: str
+    line: int
+    function: str
+    extra: Dict[str, Any]
+
 
 class ObservabilityDaprClient:
     """Singleton class for DaprClient."""
@@ -33,6 +46,7 @@ class ObservabilityDaprClient:
     def get_client(cls):
         """Get the singleton DaprClient instance."""
         return cls()
+
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -111,7 +125,7 @@ class AtlanObservability(Generic[T], ABC):
         if buffer_copy:
             await self._flush_records(buffer_copy)
 
-      async def parquet_sink(self, message: Any):
+    async def parquet_sink(self, message: Any):
         try:
             log_record = LogRecord(
                 timestamp=message.record["time"].timestamp(),
@@ -129,15 +143,15 @@ class AtlanObservability(Generic[T], ABC):
             )
 
             with self._buffer_lock:
-                self._log_buffer.append(log_record.model_dump())
+                self._buffer.append(log_record.model_dump())
                 now = time()
                 if (
-                    len(self._log_buffer) >= self._batch_size
+                    len(self._buffer) >= self._batch_size
                     or (now - self._last_flush_time) >= self._flush_interval
                 ):
                     self._last_flush_time = now
-                    buffer_copy = self._log_buffer[:]
-                    self._log_buffer.clear()
+                    buffer_copy = self._buffer[:]
+                    self._buffer.clear()
                 else:
                     buffer_copy = None
 
@@ -145,7 +159,7 @@ class AtlanObservability(Generic[T], ABC):
                 await self._flush_records(buffer_copy)
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
-    
+
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to parquet file and object store."""
         try:
@@ -156,7 +170,6 @@ class AtlanObservability(Generic[T], ABC):
                 df = pd.concat([existing_df, df], ignore_index=True)
             table = pa.Table.from_pandas(df)
             pq.write_table(table, self.parquet_path, compression="snappy")
-
 
             # Upload to object store
             with open(self.parquet_path, "rb") as f:
@@ -291,6 +304,7 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception as e:
             logging.error(f"Error adding record: {e}")
+
 
 class DuckDBUI:
     """Class to handle DuckDB UI functionality."""
