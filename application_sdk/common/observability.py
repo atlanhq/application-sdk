@@ -16,6 +16,8 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    LOG_DATE_FORMAT,
+    LOG_USE_DATE_BASED_FILES,
     OBJECT_STORE_NAME,
     OBSERVABILITY_DIR,
     STATE_STORE_NAME,
@@ -343,13 +345,15 @@ class AtlanObservability(Generic[T], ABC):
                 table = pq.read_table(self.parquet_path)
                 df = table.to_pandas()
 
-            # Convert timestamp to datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+                # Convert timestamp to datetime
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
 
-            # Filter out old records
-            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=self._retention_days)
-            cutoff_date = cutoff_date.date()
-            filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
+                # Filter out old records
+                cutoff_date = pd.Timestamp.now() - pd.Timedelta(
+                    days=self._retention_days
+                )
+                cutoff_date = cutoff_date.date()
+                filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
 
                 # Update records file
                 if len(filtered_df) > 0:
