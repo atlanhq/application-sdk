@@ -1,5 +1,7 @@
+import asyncio
 import logging
 import sys
+import threading
 from contextvars import ContextVar
 from time import time_ns
 from typing import Any, Dict, Tuple
@@ -13,7 +15,9 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from temporalio import activity, workflow
 
+from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
+    ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
     LOG_LEVEL,
     OTEL_BATCH_DELAY_MS,
@@ -74,9 +78,13 @@ SEVERITY_MAPPING = {
 }
 
 
-class AtlanLoggerAdapter:
+class AtlanLoggerAdapter(AtlanObservability):
+    _flush_task_started = False
+    _flush_task = None
+
     def __init__(self, logger_name: str) -> None:
         """Create the logger adapter with enhanced configuration."""
+        super().__init__()
         self.logger_name = logger_name
         # Bind the logger name when creating the logger instance
         self.logger = logger
@@ -91,6 +99,25 @@ class AtlanLoggerAdapter:
         self.logger.add(
             sys.stderr, format=atlan_format_str, level=LOG_LEVEL, colorize=True
         )
+
+        # Add sink for parquet logging only if Dapr sink is enabled
+        if ENABLE_OBSERVABILITY_DAPR_SINK:
+            self.logger.add(self.parquet_sink, level=LOG_LEVEL)
+            # Start flush task only if Dapr sink is enabled
+            if not AtlanLoggerAdapter._flush_task_started:
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        AtlanLoggerAdapter._flush_task = loop.create_task(
+                            self._periodic_flush()
+                        )
+                    else:
+                        threading.Thread(
+                            target=self._start_asyncio_flush, daemon=True
+                        ).start()
+                    AtlanLoggerAdapter._flush_task_started = True
+                except Exception as e:
+                    logging.error(f"Failed to start flush task: {e}")
 
         # OTLP handler setup
         if ENABLE_OTLP_LOGS:
@@ -137,7 +164,7 @@ class AtlanLoggerAdapter:
                 self.logger.add(self.otlp_sink, level=LOG_LEVEL)
 
             except Exception as e:
-                self.logger.error(f"Failed to setup OTLP logging: {str(e)}")
+                logging.error(f"Failed to setup OTLP logging: {str(e)}")
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
         try:
@@ -154,7 +181,7 @@ class AtlanLoggerAdapter:
                     if "=" in item  # Ensure there's an "=" to split
                 }
         except Exception as e:
-            self.logger.error(f"Failed to parse OTLP resource attributes: {str(e)}")
+            logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
     def _create_log_record(self, record: dict) -> LogRecord:
@@ -192,13 +219,39 @@ class AtlanLoggerAdapter:
             attributes=attributes,
         )
 
+    def _start_asyncio_flush(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            AtlanLoggerAdapter._flush_task = loop.create_task(self._periodic_flush())
+            loop.run_forever()
+        finally:
+            loop.close()
+
+    async def _periodic_flush(self):
+        """Periodically flush logs to Dapr object store."""
+        try:
+            # Initial flush
+            await self._flush_buffer(force=True)
+
+            while ENABLE_OBSERVABILITY_DAPR_SINK:
+                await asyncio.sleep(self._flush_interval)
+                if not ENABLE_OBSERVABILITY_DAPR_SINK:
+                    break
+                await self._flush_buffer(force=True)
+        except asyncio.CancelledError:
+            # Handle task cancellation gracefully
+            await self._flush_buffer(force=True)
+        except Exception as e:
+            logging.error(f"Error in periodic flush: {e}")
+
     def otlp_sink(self, message: Any):
         """Process log message and emit to OTLP."""
         try:
             log_record = self._create_log_record(message.record)
             self.logger_provider.get_logger(SERVICE_NAME).emit(log_record)
         except Exception as e:
-            self.logger.error(f"Error processing log record: {e}")
+            logging.error(f"Error processing log record: {e}")
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process the log message with temporal context."""
@@ -284,11 +337,9 @@ class AtlanLoggerAdapter:
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context.
-
         This method is specifically designed for logging activity-related information.
         It automatically adds activity context if available and formats the message
         with activity-specific information.
-
         Args:
             msg: The message to log
             *args: Additional positional arguments
@@ -305,6 +356,11 @@ class AtlanLoggerAdapter:
         # Log with the custom ACTIVITY level using the processed dict
         self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
 
+    def __del__(self):
+        """Cleanup when the logger is destroyed."""
+        if AtlanLoggerAdapter._flush_task and not AtlanLoggerAdapter._flush_task.done():
+            AtlanLoggerAdapter._flush_task.cancel()
+
 
 # Create a singleton instance of the logger
 _logger_instances: Dict[str, AtlanLoggerAdapter] = {}
@@ -312,10 +368,8 @@ _logger_instances: Dict[str, AtlanLoggerAdapter] = {}
 
 def get_logger(name: str | None = None) -> AtlanLoggerAdapter:
     """Get or create an instance of AtlanLoggerAdapter.
-
     Args:
         name (str, optional): Logger name. If None, uses the caller's module name.
-
     Returns:
         AtlanLoggerAdapter: Logger instance for the specified name
     """

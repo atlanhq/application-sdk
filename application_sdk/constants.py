@@ -117,3 +117,20 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 # AWS Constants
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
+
+# Log batching configuration
+LOG_BATCH_SIZE = int(os.environ.get("LOG_BATCH_SIZE", 100))
+LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("LOG_FLUSH_INTERVAL_SECONDS", 10))
+
+# Log Retention configuration
+LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", 30))
+LOG_CLEANUP_ENABLED = bool(os.environ.get("LOG_CLEANUP_ENABLED", False))
+
+# Log Location configuration
+LOG_DIR = os.environ.get("LOG_DIR", "/tmp/logs")
+LOG_FILE_NAME = os.environ.get("LOG_FILE_NAME", "log.parquet")
+
+# Dapr Sink Configuration
+ENABLE_OBSERVABILITY_DAPR_SINK = bool(
+    os.environ.get("ENABLE_OBSERVABILITY_DAPR_SINK", "false")
+)
