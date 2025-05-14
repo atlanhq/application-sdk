@@ -1,6 +1,8 @@
 import asyncio
 import logging
 import os
+import signal
+import sys
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
@@ -14,6 +16,9 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    LOG_DATE_FORMAT,
+    LOG_USE_DATE_BASED_FILES,
+    METRICS_USE_DATE_BASED_FILES,
     OBJECT_STORE_NAME,
     OBSERVABILITY_DIR,
     STATE_STORE_NAME,
@@ -61,6 +66,7 @@ class AtlanObservability(Generic[T], ABC):
     _last_cleanup_key = (
         "last_cleanup_time"  # Class variable for shared cleanup tracking
     )
+    _instances = []  # Class variable to track all instances
 
     def __init__(
         self,
@@ -91,11 +97,116 @@ class AtlanObservability(Generic[T], ABC):
         self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
+        self._use_date_based_files = LOG_USE_DATE_BASED_FILES
+        self._date_format = LOG_DATE_FORMAT
+        self._current_date = datetime.now().strftime(self._date_format)
+        self._update_parquet_path()
         self.parquet_path = os.path.join(data_dir, file_name)
         self._dapr_client = ObservabilityDaprClient.get_client()
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
+
+        # Register this instance
+        AtlanObservability._instances.append(self)
+
+        # Set up signal handlers and exception hook if not already set
+        if not hasattr(AtlanObservability, "_handlers_setup"):
+            self._setup_error_handlers()
+            AtlanObservability._handlers_setup = True
+
+    def _setup_error_handlers(self):
+        """Set up signal handlers and exception hook."""
+        # Set up signal handlers
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            signal.signal(sig, self._signal_handler)
+
+        # Set up exception hook
+        sys.excepthook = self._exception_hook
+
+    def _signal_handler(self, signum, frame):
+        """Handle system signals by flushing logs."""
+        logging.warning(f"Received signal {signum}, flushing logs...")
+        try:
+            # Try to get the current event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're in an async context, create a task
+                    asyncio.create_task(self._flush_all_instances())
+                else:
+                    # If we have a loop but it's not running, run the flush
+                    loop.run_until_complete(self._flush_all_instances())
+            except RuntimeError:
+                # If no event loop exists, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self._flush_all_instances())
+                finally:
+                    loop.close()
+        except Exception as e:
+            logging.error(f"Error during signal handler flush: {e}")
+        sys.exit(0)
+
+    def _exception_hook(self, exc_type, exc_value, exc_traceback):
+        """Handle unhandled exceptions by flushing logs."""
+        logging.error(
+            "Unhandled exception occurred, flushing logs...",
+            exc_info=(exc_type, exc_value, exc_traceback),
+        )
+        try:
+            # Try to get the current event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're in an async context, create a task
+                    asyncio.create_task(self._flush_all_instances())
+                else:
+                    # If we have a loop but it's not running, run the flush
+                    loop.run_until_complete(self._flush_all_instances())
+            except RuntimeError:
+                # If no event loop exists, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self._flush_all_instances())
+                finally:
+                    loop.close()
+        except Exception as e:
+            logging.error(f"Error during exception hook flush: {e}")
+        # Call the original exception hook
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+
+    @classmethod
+    async def _flush_all_instances(cls):
+        """Flush all instances of AtlanObservability."""
+        for instance in cls._instances:
+            try:
+                await instance._flush_buffer(force=True)
+            except Exception as e:
+                logging.error(f"Error flushing instance: {e}")
+
+    def _update_parquet_path(self):
+        """Update the parquet file path based on current date if using date-based files."""
+        if self._use_date_based_files:
+            # Create appropriate subdirectory based on file type
+            if self.file_name == "log.parquet":
+                subdir = "logs"
+            elif self.file_name == "metrics.parquet":
+                subdir = "metrics"
+            else:
+                subdir = "other"  # Fallback for any other file types
+
+            # Create the subdirectory
+            data_subdir = os.path.join(self.data_dir, subdir)
+            os.makedirs(data_subdir, exist_ok=True)
+
+            # Use date-based filename
+            date_str = datetime.now().strftime(self._date_format)
+            self.parquet_path = os.path.join(data_subdir, f"{date_str}.parquet")
+        else:
+            self.parquet_path = os.path.join(self.data_dir, self.file_name)
 
     @abstractmethod
     def process_record(self, record: Any) -> Dict[str, Any]:
@@ -167,6 +278,9 @@ class AtlanObservability(Generic[T], ABC):
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to parquet file and object store."""
         try:
+            # Update parquet path in case date has changed
+            self._update_parquet_path()
+
             df = pd.DataFrame(records)
             if os.path.exists(self.parquet_path):
                 existing_table = pq.read_table(self.parquet_path)
@@ -179,9 +293,9 @@ class AtlanObservability(Generic[T], ABC):
             with open(self.parquet_path, "rb") as f:
                 file_content = f.read()
                 metadata = {
-                    "key": self.file_name,
-                    "blobName": self.file_name,
-                    "fileName": self.file_name,
+                    "key": os.path.basename(self.parquet_path),
+                    "blobName": os.path.basename(self.parquet_path),
+                    "fileName": os.path.basename(self.parquet_path),
                 }
                 with DaprClient() as client:
                     client.invoke_binding(
@@ -225,52 +339,97 @@ class AtlanObservability(Generic[T], ABC):
     async def _cleanup_old_records(self):
         """Clean up records older than retention_days."""
         try:
-            if not os.path.exists(self.parquet_path):
-                return
+            if not self._use_date_based_files:
+                # Handle single file case
+                if not os.path.exists(self.parquet_path):
+                    return
 
-            # Read existing records
-            table = pq.read_table(self.parquet_path)
-            df = table.to_pandas()
+                # Read existing records
+                table = pq.read_table(self.parquet_path)
+                df = table.to_pandas()
 
-            # Convert timestamp to datetime
-            df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
+                # Convert timestamp to datetime
+                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
 
-            # Filter out old records
-            cutoff_date = pd.Timestamp.now() - pd.Timedelta(days=self._retention_days)
-            cutoff_date = cutoff_date.date()
-            filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
+                # Filter out old records
+                cutoff_date = pd.Timestamp.now() - pd.Timedelta(
+                    days=self._retention_days
+                )
+                cutoff_date = cutoff_date.date()
+                filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
 
-            # Update records file
-            if len(filtered_df) > 0:
-                table = pa.Table.from_pandas(filtered_df)
-                pq.write_table(table, self.parquet_path, compression="snappy")
+                # Update records file
+                if len(filtered_df) > 0:
+                    table = pa.Table.from_pandas(filtered_df)
+                    pq.write_table(table, self.parquet_path, compression="snappy")
 
-                # Update in object store
-                with open(self.parquet_path, "rb") as f:
-                    file_content = f.read()
-                    metadata = {
-                        "key": self.file_name,
-                        "blobName": self.file_name,
-                        "fileName": self.file_name,
-                    }
+                    # Update in object store
+                    with open(self.parquet_path, "rb") as f:
+                        file_content = f.read()
+                        metadata = {
+                            "key": os.path.basename(self.parquet_path),
+                            "blobName": os.path.basename(self.parquet_path),
+                            "fileName": os.path.basename(self.parquet_path),
+                        }
+                        with DaprClient() as client:
+                            client.invoke_binding(
+                                binding_name=OBJECT_STORE_NAME,
+                                operation="create",
+                                data=file_content,
+                                binding_metadata=metadata,
+                            )
+                else:
+                    # If no records remain, delete the file
+                    os.remove(self.parquet_path)
+                    # Delete from object store
                     with DaprClient() as client:
                         client.invoke_binding(
                             binding_name=OBJECT_STORE_NAME,
-                            operation="create",
-                            data=file_content,
-                            binding_metadata=metadata,
+                            operation="delete",
+                            data=b"",
+                            binding_metadata={
+                                "key": os.path.basename(self.parquet_path)
+                            },
                         )
             else:
-                # If no records remain, delete the file
-                os.remove(self.parquet_path)
-                # Delete from object store
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="delete",
-                        data=b"",
-                        binding_metadata={"key": self.file_name},
-                    )
+                # Handle date-based files
+                # Determine the appropriate subdirectory
+                if self.file_name == "log.parquet":
+                    subdir = "logs"
+                elif self.file_name == "metrics.parquet":
+                    subdir = "metrics"
+                else:
+                    subdir = "other"
+
+                data_subdir = os.path.join(self.data_dir, subdir)
+                if not os.path.exists(data_subdir):
+                    return
+
+                cutoff_date = datetime.now() - timedelta(days=self._retention_days)
+
+                # List all parquet files in the subdirectory
+                for filename in os.listdir(data_subdir):
+                    if filename.endswith(".parquet"):
+                        file_date_str = filename.replace(".parquet", "")
+                        try:
+                            file_date = datetime.strptime(
+                                file_date_str, self._date_format
+                            )
+                            if file_date.date() < cutoff_date.date():
+                                # Delete old file
+                                file_path = os.path.join(data_subdir, filename)
+                                os.remove(file_path)
+                                # Delete from object store
+                                with DaprClient() as client:
+                                    client.invoke_binding(
+                                        binding_name=OBJECT_STORE_NAME,
+                                        operation="delete",
+                                        data=b"",
+                                        binding_metadata={"key": filename},
+                                    )
+                        except ValueError:
+                            # Skip files that don't match the date format
+                            continue
 
         except Exception as e:
             logging.error(f"Error cleaning up old records: {e}")
@@ -340,14 +499,37 @@ class DuckDBUI:
         if not self._is_duckdb_ui_running():
             os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
             con = duckdb.connect(self.db_path)
-            # Attach all .parquet files in /tmp/observability as tables
-            for fname in os.listdir(OBSERVABILITY_DIR):
-                fpath = os.path.join(OBSERVABILITY_DIR, fname)
-                if fname.endswith(".parquet"):
-                    tbl = os.path.splitext(fname)[0]
-                    con.execute(
-                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
-                    )
+
+            # Function to process parquet files and create views
+            def process_parquet_files(directory, prefix=""):
+                for fname in os.listdir(directory):
+                    fpath = os.path.join(directory, fname)
+                    if fname.endswith(".parquet"):
+                        # For date-based files, use the date as part of the table name
+                        # Replace hyphens with underscores to make it DuckDB compatible
+                        base_name = os.path.splitext(fname)[0].replace("-", "_")
+                        if prefix:
+                            tbl = f"{prefix}_{base_name}"
+                        else:
+                            tbl = base_name
+                        con.execute(
+                            f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
+                        )
+
+            # Process files in the main directory (non-date-based case)
+            process_parquet_files(OBSERVABILITY_DIR)
+
+            # Process date-based files if enabled
+            if LOG_USE_DATE_BASED_FILES:
+                logs_dir = os.path.join(OBSERVABILITY_DIR, "logs")
+                if os.path.exists(logs_dir):
+                    process_parquet_files(logs_dir, "logs")
+
+            if METRICS_USE_DATE_BASED_FILES:
+                metrics_dir = os.path.join(OBSERVABILITY_DIR, "metrics")
+                if os.path.exists(metrics_dir):
+                    process_parquet_files(metrics_dir, "metrics")
+
             # Start DuckDB UI using SQL command
             con.execute("CALL start_ui();")
             self._duckdb_ui_con = con  # Store the connection, do NOT close it!

@@ -66,6 +66,48 @@ class LogExtraModel(BaseModel):
     # Other fields
     log_type: Optional[str] = None
 
+    class Config:
+        """Pydantic model configuration."""
+
+        @classmethod
+        def parse_obj(cls, obj):
+            if isinstance(obj, dict):
+                # Define type mappings for each field
+                type_mappings = {
+                    # Integer fields
+                    "attempt": int,
+                    "duration_ms": int,
+                    "status_code": int,
+                    # String fields
+                    "client_host": str,
+                    "method": str,
+                    "path": str,
+                    "request_id": str,
+                    "url": str,
+                    "workflow_id": str,
+                    "run_id": str,
+                    "workflow_type": str,
+                    "namespace": str,
+                    "task_queue": str,
+                    "activity_id": str,
+                    "activity_type": str,
+                    "schedule_to_close_timeout": str,
+                    "start_to_close_timeout": str,
+                    "schedule_to_start_timeout": str,
+                    "heartbeat_timeout": str,
+                    "log_type": str,
+                }
+
+                # Process each field with its type conversion
+                for field, type_func in type_mappings.items():
+                    if field in obj and obj[field] is not None:
+                        try:
+                            obj[field] = type_func(obj[field])
+                        except (ValueError, TypeError):
+                            obj[field] = None
+
+            return super().parse_obj(obj)
+
 
 class LogRecordModel(BaseModel):
     """Pydantic model for log records."""
@@ -412,39 +454,93 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         return msg, kwargs
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
-        self.logger.bind(**kwargs).debug(msg, *args)
+        try:
+            msg, kwargs = self.process(msg, kwargs)
+            self.logger.bind(**kwargs).debug(msg, *args)
+        except Exception as e:
+            logging.error(f"Error in debug logging: {e}")
+            self._sync_flush()
 
     def info(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
-        self.logger.bind(**kwargs).info(msg, *args)
+        try:
+            msg, kwargs = self.process(msg, kwargs)
+            self.logger.bind(**kwargs).info(msg, *args)
+        except Exception as e:
+            logging.error(f"Error in info logging: {e}")
+            self._sync_flush()
 
     def warning(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
-        self.logger.bind(**kwargs).warning(msg, *args)
+        try:
+            msg, kwargs = self.process(msg, kwargs)
+            self.logger.bind(**kwargs).warning(msg, *args)
+        except Exception as e:
+            logging.error(f"Error in warning logging: {e}")
+            self._sync_flush()
 
     def error(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
-        self.logger.bind(**kwargs).error(msg, *args)
+        try:
+            msg, kwargs = self.process(msg, kwargs)
+            self.logger.bind(**kwargs).error(msg, *args)
+            # Force flush on error logs
+            self._sync_flush()
+        except Exception as e:
+            logging.error(f"Error in error logging: {e}")
+            self._sync_flush()
 
     def critical(self, msg: str, *args: Any, **kwargs: Any):
-        msg, kwargs = self.process(msg, kwargs)
-        self.logger.bind(**kwargs).critical(msg, *args)
+        try:
+            msg, kwargs = self.process(msg, kwargs)
+            self.logger.bind(**kwargs).critical(msg, *args)
+            # Force flush on critical logs
+            self._sync_flush()
+        except Exception as e:
+            logging.error(f"Error in critical logging: {e}")
+            self._sync_flush()
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
         """Log an activity-specific message with activity context."""
-
-        local_kwargs = kwargs.copy()
-        local_kwargs["log_type"] = "activity"
-        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-        self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
+        try:
+            local_kwargs = kwargs.copy()
+            local_kwargs["log_type"] = "activity"
+            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
+            self.logger.bind(**processed_kwargs).log("ACTIVITY", processed_msg, *args)
+        except Exception as e:
+            logging.error(f"Error in activity logging: {e}")
+            self._sync_flush()
 
     def metric(self, msg: str, *args: Any, **kwargs: Any):
         """Log a metric-specific message with metric context."""
-        local_kwargs = kwargs.copy()
-        local_kwargs["log_type"] = "metric"
-        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
-        self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
+        try:
+            local_kwargs = kwargs.copy()
+            local_kwargs["log_type"] = "metric"
+            processed_msg, processed_kwargs = self.process(msg, local_kwargs)
+            self.logger.bind(**processed_kwargs).log("METRIC", processed_msg, *args)
+        except Exception as e:
+            logging.error(f"Error in metric logging: {e}")
+            self._sync_flush()
+
+    def _sync_flush(self):
+        """Synchronously flush the buffer."""
+        try:
+            # Try to get the current event loop
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If we're in an async context, create a task
+                    asyncio.create_task(self._flush_buffer(force=True))
+                else:
+                    # If we have a loop but it's not running, run the flush
+                    loop.run_until_complete(self._flush_buffer(force=True))
+            except RuntimeError:
+                # If no event loop exists, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(self._flush_buffer(force=True))
+                finally:
+                    loop.close()
+        except Exception as e:
+            logging.error(f"Error during sync flush: {e}")
 
     async def parquet_sink(self, message: Any):
         """Process log message and store in parquet format."""
