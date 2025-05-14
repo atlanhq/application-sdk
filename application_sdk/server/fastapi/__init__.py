@@ -4,7 +4,7 @@ from typing import Any, Callable, List, Optional, Type
 from fastapi import status
 from fastapi.applications import FastAPI
 from fastapi.requests import Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -13,6 +13,7 @@ from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.observability import DuckDBUI
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
@@ -80,11 +81,7 @@ class APIServer(ServerInterface):
         docs_export_path (str): Path where documentation will be exported.
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
-
-    Args:
-        lifespan: Optional lifespan manager for the FastAPI application.
-        handler (Optional[HandlerInterface]): Handler for processing application operations.
-        workflow_client (Optional[WorkflowClient]): Client for Temporal workflow operations.
+        duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
     """
 
     # Declare class attributes with proper typing
@@ -95,6 +92,7 @@ class APIServer(ServerInterface):
     events_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
+    duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
@@ -120,6 +118,7 @@ class APIServer(ServerInterface):
         self.handler = handler
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
+        self.duckdb_ui = DuckDBUI()
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -147,6 +146,12 @@ class APIServer(ServerInterface):
 
         # Initialize parent class
         super().__init__(handler)
+
+    def observability(self, request: Request) -> RedirectResponse:
+        """Endpoint to launch DuckDB UI for log self-serve exploration."""
+        self.duckdb_ui.start_ui()
+        # Redirect to the local DuckDB UI
+        return RedirectResponse(url="http://0.0.0.0:4213")
 
     def setup_atlan_docs(self):
         """Set up and serve Atlan documentation.
@@ -263,6 +268,13 @@ class APIServer(ServerInterface):
         """
         Method to register the routes for the FastAPI application
         """
+
+        self.app.add_api_route(
+            "/observability",
+            self.observability,
+            methods=["GET"],
+            response_class=RedirectResponse,
+        )
 
         self.workflow_router.add_api_route(
             "/auth",

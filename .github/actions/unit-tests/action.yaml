@@ -33,10 +33,25 @@ runs:
       run: echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> $GITHUB_OUTPUT
       id: get_branch
 
+    # NOTE(inishchith): this is added temporarily cause some unit tests rely on dapr
+    # setup dapr services
+    - name: Install Dapr CLI
+      shell: bash
+      run: |
+        wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
+        dapr init --runtime-version 1.13.6 --slim
+
+    # start dapr services
+    - name: Start Platform Services
+      shell: bash
+      run: |
+        uv run poe start-dapr &
+        sleep 10  # Give services time to start up
+
     - name: Run Unit and Integration Tests with Coverage
       shell: bash
       run: |
-        uv run coverage run -m pytest tests/ --full-trace --hypothesis-show-statistics
+        uv run coverage run -m pytest --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
         uv run coverage xml
         uv run coverage html
         uv run coverage report --fail-under=${{ inputs.fail-under }}
