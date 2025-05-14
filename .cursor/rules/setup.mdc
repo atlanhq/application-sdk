@@ -21,6 +21,8 @@ Please follow the appropriate guide for your operating system:
 - [LINUX.md](mdc:docs/docs/setup/LINUX.md)
 - [WINDOWS.md](mdc:docs/docs/setup/WINDOWS.md)
 
+Once the development environment is setup follow the [getting-started.md](mdc:docs/docs/guides/getting-started.md) to setup project dependencies and run an example
+
 ## Need Help?
 
 If you encounter any issues during setup, please reach out to us on the Slack channel #pod-app-framework or email connect@atlan.com.

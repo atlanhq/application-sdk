@@ -22,33 +22,17 @@ uv add atlan-application-sdk
 poetry add atlan-application-sdk
 ```
 
-
 > [!TIP]
 > **View sample apps built using Application SDK [here](https://github.com/atlanhq/atlan-sample-apps)**
 
+## Getting Started
 
-## Development
-
-To begin developing with the Application SDK:
-
-1. Clone the repository
-2. Follow the setup instructions for your platform:
-   - [Windows](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/WINDOWS.md)
-   - [Mac](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/MAC.md)
-   - [Linux](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/LINUX.md)
-3. Run the example application:
-   - [Hello World](https://github.com/atlanhq/application-sdk/blob/main/examples/application_hello_world.py)
-   - [SQL](https://github.com/atlanhq/application-sdk/blob/main/examples/application_sql.py)
-
-
-## Documentation
-
-- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs) folder.
-
+- Want to develop locally or run examples from this repository? Check out our [Getting Started Guide](docs/docs/guides/getting-started.md) for a step-by-step walkthrough!
+- Detailed documentation for the application-sdk is available at [docs](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/) folder.
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.
+- We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.
 
 ## Need Help?
 
@@ -60,11 +44,9 @@ Get support through any of these channels:
 
 ## Security
 
-Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/main/SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
-
+- Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/main/SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
 
 ## License and Attribution
 
-This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/main/LICENSE) file for details.
-
-This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/main/NOTICE) file for third-party attributions.
+- This project is licensed under the Apache License 2.0 - see the [LICENSE](https://github.com/atlanhq/application-sdk/blob/main/LICENSE) file for details.
+- This project includes dependencies with various open-source licenses. See the [NOTICE](https://github.com/atlanhq/application-sdk/blob/main/NOTICE) file for third-party attributions.
