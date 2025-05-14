@@ -65,6 +65,48 @@ class LogExtraModel(BaseModel):
     # Other fields
     log_type: Optional[str] = None
 
+    class Config:
+        """Pydantic model configuration."""
+
+        @classmethod
+        def parse_obj(cls, obj):
+            if isinstance(obj, dict):
+                # Define type mappings for each field
+                type_mappings = {
+                    # Integer fields
+                    "attempt": int,
+                    "duration_ms": int,
+                    "status_code": int,
+                    # String fields
+                    "client_host": str,
+                    "method": str,
+                    "path": str,
+                    "request_id": str,
+                    "url": str,
+                    "workflow_id": str,
+                    "run_id": str,
+                    "workflow_type": str,
+                    "namespace": str,
+                    "task_queue": str,
+                    "activity_id": str,
+                    "activity_type": str,
+                    "schedule_to_close_timeout": str,
+                    "start_to_close_timeout": str,
+                    "schedule_to_start_timeout": str,
+                    "heartbeat_timeout": str,
+                    "log_type": str,
+                }
+
+                # Process each field with its type conversion
+                for field, type_func in type_mappings.items():
+                    if field in obj and obj[field] is not None:
+                        try:
+                            obj[field] = type_func(obj[field])
+                        except (ValueError, TypeError):
+                            obj[field] = None
+
+            return super().parse_obj(obj)
+
 
 class LogRecordModel(BaseModel):
     """Pydantic model for log records."""

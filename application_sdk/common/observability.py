@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from application_sdk.constants import (
     LOG_DATE_FORMAT,
     LOG_USE_DATE_BASED_FILES,
+    METRICS_USE_DATE_BASED_FILES,
     OBJECT_STORE_NAME,
     OBSERVABILITY_DIR,
     STATE_STORE_NAME,
@@ -496,14 +497,37 @@ class DuckDBUI:
         if not self._is_duckdb_ui_running():
             os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
             con = duckdb.connect(self.db_path)
-            # Attach all .parquet files in /tmp/observability as tables
-            for fname in os.listdir(OBSERVABILITY_DIR):
-                fpath = os.path.join(OBSERVABILITY_DIR, fname)
-                if fname.endswith(".parquet"):
-                    tbl = os.path.splitext(fname)[0]
-                    con.execute(
-                        f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
-                    )
+
+            # Function to process parquet files and create views
+            def process_parquet_files(directory, prefix=""):
+                for fname in os.listdir(directory):
+                    fpath = os.path.join(directory, fname)
+                    if fname.endswith(".parquet"):
+                        # For date-based files, use the date as part of the table name
+                        # Replace hyphens with underscores to make it DuckDB compatible
+                        base_name = os.path.splitext(fname)[0].replace("-", "_")
+                        if prefix:
+                            tbl = f"{prefix}_{base_name}"
+                        else:
+                            tbl = base_name
+                        con.execute(
+                            f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
+                        )
+
+            # Process files in the main directory (non-date-based case)
+            process_parquet_files(OBSERVABILITY_DIR)
+
+            # Process date-based files if enabled
+            if LOG_USE_DATE_BASED_FILES:
+                logs_dir = os.path.join(OBSERVABILITY_DIR, "logs")
+                if os.path.exists(logs_dir):
+                    process_parquet_files(logs_dir, "logs")
+
+            if METRICS_USE_DATE_BASED_FILES:
+                metrics_dir = os.path.join(OBSERVABILITY_DIR, "metrics")
+                if os.path.exists(metrics_dir):
+                    process_parquet_files(metrics_dir, "metrics")
+
             # Start DuckDB UI using SQL command
             con.execute("CALL start_ui();")
             self._duckdb_ui_con = con  # Store the connection, do NOT close it!
