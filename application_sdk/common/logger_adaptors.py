@@ -218,9 +218,11 @@ class AtlanLoggerAdapter(AtlanObservability):
         asyncio.run(self._periodic_flush())
 
     async def _periodic_flush(self):
+        await self._flush_buffer(force=True)
         while True:
             await asyncio.sleep(self._flush_interval)
             await self._flush_buffer(force=True)
+            print("Flushing buffer")
 
     def otlp_sink(self, message: Any):
         """Process log message and emit to OTLP."""
