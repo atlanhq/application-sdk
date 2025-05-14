@@ -83,19 +83,19 @@ async def test_check_schemas_and_databases_success(
     assert result["failureMessage"] == ""
 
 
-# @given(metadata=metadata_list_strategy)
-# async def test_check_schemas_and_databases_failure(
-#     handler: BaseSQLHandler, metadata: List[Dict[str, str]]
-# ) -> None:
-#     handler.prepare_metadata = AsyncMock(return_value=metadata)
-#     # Create an invalid mapping that doesn't exist in metadata
-#     invalid_mapping = {"invalid_db": ["invalid_schema"]}
-#     payload = {"metadata": {"include-filter": json.dumps(invalid_mapping)}}
+@given(metadata=metadata_list_strategy)
+async def test_check_schemas_and_databases_failure(
+    handler: BaseSQLHandler, metadata: List[Dict[str, str]]
+) -> None:
+    handler.prepare_metadata = AsyncMock(return_value=metadata)
+    # Create an invalid mapping that doesn't exist in metadata
+    invalid_mapping = {"invalid_db": ["invalid_schema"]}
+    payload = {"metadata": {"include-filter": json.dumps(invalid_mapping)}}
 
-#     result = await handler.check_schemas_and_databases(payload)
+    result = await handler.check_schemas_and_databases(payload)
 
-#     assert result["success"] is False
-#     assert "invalid_db database" in result["failureMessage"]
+    assert result["success"] is False
+    assert "invalid_db database" in result["failureMessage"]
 
 
 @pytest.mark.skip(reason="Failing due to IndexError: list index out of range")
