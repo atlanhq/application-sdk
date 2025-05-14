@@ -131,7 +131,7 @@ LOG_RETENTION_DAYS = int(os.environ.get("LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_DIR = os.environ.get("LOG_DIR", "/tmp/logs")
+LOG_DIR = os.environ.get("LOG_DIR", "/tmp/observability")
 LOG_FILE_NAME = os.environ.get("LOG_FILE_NAME", "log.parquet")
 
 # Metrics Configuration
@@ -146,5 +146,5 @@ METRICS_RETENTION_DAYS = int(os.getenv("METRICS_RETENTION_DAYS", "30"))
 
 # Dapr Sink Configuration
 ENABLE_OBSERVABILITY_DAPR_SINK = bool(
-    os.environ.get("ENABLE_OBSERVABILITY_DAPR_SINK", "false")
+    os.environ.get("ENABLE_OBSERVABILITY_DAPR_SINK", "true")
 )
