@@ -27,10 +27,14 @@ columns:
   - name: attributes.description
     source_query: |
       CASE
-        WHEN remarks IS NOT NULL THEN
-          REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
-        ELSE
-          NULL
+        WHEN remarks IS NOT NULL THEN REGEXP_REPLACE(
+          REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''),
+            '\s+', ' '),
+          '^ ', ''),
+          ' $', '')
+        ELSE NULL
       END
     source_columns: [remarks]
   - name: attributes.databaseName
@@ -46,9 +50,9 @@ columns:
   - name: attributes.definition
     source_query: |
       CASE
-        WHEN table_type = 'VIEW' THEN CONCAT('CREATE OR REPLACE VIEW ', table_name, ' AS ', view_definition)
-        WHEN table_type = 'MATERIALIZED VIEW' THEN CONCAT('CREATE MATERIALIZED VIEW ', table_name, ' AS ', view_definition)
-        ELSE view_definition
+        WHEN table_type = 'VIEW' THEN CONCAT('CREATE OR REPLACE VIEW ', table_name, ' AS ', COALESCE(view_definition, 'None'))
+        WHEN table_type = 'MATERIALIZED VIEW' THEN CONCAT('CREATE MATERIALIZED VIEW ', table_name, ' AS ', COALESCE(view_definition, 'None'))
+        ELSE COALESCE(view_definition, 'None')
       END
     source_columns: [table_type, table_name, view_definition]
   - name: attributes.columnCount
@@ -91,12 +95,7 @@ columns:
     source_query: COALESCE(partition_constraint, NULL)
     source_columns: [partition_constraint]
   - name: customAttributes.is_insertable_into
-    source_query: |
-      CASE
-        WHEN table_type = 'MATERIALIZED VIEW' THEN NULL
-        ELSE COALESCE(is_insertable_into, 'NO')
-      END
-    source_columns: [is_insertable_into, table_type]
+    source_query: is_insertable_into
   - name: customAttributes.number_columns_in_part_key
     source_query: |
       CASE
@@ -112,12 +111,7 @@ columns:
       END
     source_columns: [columns_participating_in_part_key]
   - name: customAttributes.is_typed
-    source_query: |
-      CASE
-        WHEN table_type = 'MATERIALIZED VIEW' THEN NULL
-        ELSE COALESCE(is_typed, 'NO')
-      END
-    source_columns: [is_typed, table_type]
+    source_query: is_typed
   - name: customAttributes.self_referencing_col_name
     source_query: COALESCE(self_referencing_column_name, '')
     source_columns: [self_referencing_column_name]
