@@ -52,7 +52,7 @@ columns:
       CASE
         WHEN table_type = 'VIEW' THEN CONCAT('CREATE OR REPLACE VIEW ', table_name, ' AS ', COALESCE(view_definition, 'None'))
         WHEN table_type = 'MATERIALIZED VIEW' THEN CONCAT('CREATE MATERIALIZED VIEW ', table_name, ' AS ', COALESCE(view_definition, 'None'))
-        ELSE COALESCE(view_definition, 'None')
+        ELSE view_definition
       END
     source_columns: [table_type, table_name, view_definition]
   - name: attributes.columnCount
