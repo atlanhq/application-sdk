@@ -256,9 +256,9 @@ class JsonOutput(Output):
         if not self.buffer or not self.current_buffer_size:
             return
 
-        if not isinstance(self.buffer, List["pd.DataFrame"]):
+        if not all(isinstance(df, pd.DataFrame) for df in self.buffer):
             raise TypeError(
-                "_flush_buffer encountered non-list buffer. This should not happen."
+                "_flush_buffer encountered non-DataFrame elements in buffer. This should not happen."
             )
 
         # Now it's safe to cast for pd.concat
