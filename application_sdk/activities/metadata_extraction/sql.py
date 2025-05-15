@@ -1,7 +1,6 @@
 import os
-from typing import Any, AsyncIterator, Dict, Optional, Tuple, Type, cast
+from typing import Any, Dict, Optional, Tuple, Type, cast
 
-import daft
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -10,7 +9,7 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -18,12 +17,12 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
-from application_sdk.transformers.atlas import AtlasTransformer
+from application_sdk.transformers.query import QueryBasedTransformer
 
 logger = get_logger(__name__)
 activity.logger = logger
 
-queries = read_sql_files(queries_prefix="app/sql")
+queries = read_sql_files(queries_prefix=SQL_QUERIES_PATH)
 
 
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
@@ -77,7 +76,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     sql_client_class: Type[BaseSQLClient] = BaseSQLClient
     handler_class: Type[BaseSQLHandler] = BaseSQLHandler
-    transformer_class: Type[TransformerInterface] = AtlasTransformer
+    transformer_class: Type[TransformerInterface] = QueryBasedTransformer
 
     def __init__(
         self,
@@ -93,7 +92,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             handler_class (Type[BaseSQLHandler], optional): Class for SQL handling operations.
                 Defaults to BaseSQLHandler.
             transformer_class (Type[TransformerInterface], optional): Class for metadata transformation.
-                Defaults to AtlasTransformer.
+                Defaults to QueryBasedTransformer.
         """
         if sql_client_class:
             self.sql_client_class = sql_client_class
@@ -169,41 +168,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             logger.warning("Failed to close SQL client", exc_info=e)
 
         await super()._clean_state()
-
-    async def _transform_batch(
-        self,
-        results: "daft.DataFrame",
-        typename: str,
-        state: BaseSQLMetadataExtractionActivitiesState,
-        workflow_id: str,
-        workflow_run_id: str,
-        workflow_args: Dict[str, Any],
-    ) -> AsyncIterator[Dict[str, Any]]:
-        connection_name = workflow_args.get("connection", {}).get(
-            "connection_name", None
-        )
-        connection_qualified_name = workflow_args.get("connection", {}).get(
-            "connection_qualified_name", None
-        )
-        if not state.transformer:
-            raise ValueError("Transformer is not set")
-
-        for row in results.iter_rows():
-            try:
-                transformed_metadata = state.transformer.transform_metadata(
-                    typename,
-                    row,
-                    workflow_id=workflow_id,
-                    workflow_run_id=workflow_run_id,
-                    connection_name=connection_name,
-                    connection_qualified_name=connection_qualified_name,
-                )
-                if transformed_metadata:
-                    yield transformed_metadata
-                else:
-                    logger.warning(f"Skipped invalid {typename} data: {row}")
-            except Exception as row_error:
-                logger.error(f"Error processing row for {typename}: {row_error}")
 
     def _validate_output_args(
         self, workflow_args: Dict[str, Any]
@@ -523,15 +487,16 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_size=None,
         )
         raw_input = await raw_input.get_daft_dataframe()
-
-        transformed_chunk = self._transform_batch(
-            raw_input,
-            typename,
-            state,
-            workflow_id,
-            workflow_run_id,
-            workflow_args,
-        )
+        if state.transformer:
+            workflow_args["connection_name"] = workflow_args.get("connection", {}).get(
+                "connection_name", None
+            )
+            workflow_args["connection_qualified_name"] = workflow_args.get(
+                "connection", {}
+            ).get("connection_qualified_name", None)
+            transform_metadata = state.transformer.transform_metadata(
+                dataframe=raw_input, **workflow_args
+            )
 
         transformed_output = JsonOutput(
             output_prefix=output_prefix,
@@ -539,5 +504,5 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_suffix="transformed",
             typename=typename,
         )
-        await transformed_output.write_daft_dataframe(transformed_chunk)
+        await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()

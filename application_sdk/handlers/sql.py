@@ -10,14 +10,14 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import SQL_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import SQL_SERVER_MIN_VERSION
+from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.server.fastapi.models import MetadataType
 
 logger = get_logger(__name__)
 
-queries = read_sql_files(queries_prefix="app/sql")
+queries = read_sql_files(queries_prefix=SQL_QUERIES_PATH)
 
 
 class SQLConstants(Enum):

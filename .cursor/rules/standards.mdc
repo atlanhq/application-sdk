@@ -24,7 +24,7 @@ This document outlines the development standards for the Application SDK, includ
     - Use Google-style docstrings
     - Include type information in docstrings
     - Document all public APIs
-    - Build docs using `source .venv/bin/activate && make apidocs`
+    - Build docs using `uv sync --all-groups && uv run poe generate-apidocs`
     - Docs must go under ./docs/docs
 
 - **Single Responsibility**
@@ -77,4 +77,3 @@ This document outlines the development standards for the Application SDK, includ
     - Ensure resources (files, network connections, database sessions) are properly closed/released.
     - Design tests to verify resource cleanup, especially for long-running processes or components managing external resources.
     - Be mindful of potential memory leaks in complex data structures or long-lived objects.
-

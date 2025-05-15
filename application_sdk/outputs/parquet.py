@@ -5,6 +5,7 @@ from temporalio import activity
 
 from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.metrics_adaptor import get_metrics
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -64,6 +65,7 @@ class ParquetOutput(Output):
         self.chunk_size = chunk_size
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
+        self.metrics = get_metrics()
 
         # Create output directory
         self.output_path = os.path.join(self.output_path, self.output_suffix)
@@ -93,6 +95,24 @@ class ParquetOutput(Output):
                 compression="snappy",  # Using snappy compression by default
             )
 
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="parquet_write_records",
+                value=len(dataframe),
+                metric_type="counter",
+                labels={"type": "pandas", "mode": self.write_mode},
+                description="Number of records written to Parquet files from pandas DataFrame",
+            )
+
+            # Record chunk metrics
+            self.metrics.record_metric(
+                name="parquet_chunks_written",
+                value=1,
+                metric_type="counter",
+                labels={"type": "pandas", "mode": self.write_mode},
+                description="Number of chunks written to Parquet files",
+            )
+
             # Upload the file to object store
             await self.upload_file(file_path)
         except Exception as e:
@@ -100,6 +120,15 @@ class ParquetOutput(Output):
                 f"Error writing pandas dataframe to parquet: {str(e)}",
                 error_code=IO_ERRORS["PARQUET_WRITE_ERROR"].code,
             )
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="parquet_write_errors",
+                value=1,
+                metric_type="counter",
+                labels={"type": "pandas", "mode": self.write_mode, "error": str(e)},
+                description="Number of errors while writing to Parquet files",
+            )
+            logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
             raise
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
@@ -123,6 +152,24 @@ class ParquetOutput(Output):
                 write_mode=self.write_mode,
             )
 
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="parquet_write_records",
+                value=row_count,
+                metric_type="counter",
+                labels={"type": "daft", "mode": self.write_mode},
+                description="Number of records written to Parquet files from daft DataFrame",
+            )
+
+            # Record chunk metrics
+            self.metrics.record_metric(
+                name="parquet_chunks_written",
+                value=1,
+                metric_type="counter",
+                labels={"type": "daft", "mode": self.write_mode},
+                description="Number of chunks written to Parquet files",
+            )
+
             # Upload the file to object store
             await self.upload_file(self.output_path)
         except Exception as e:
@@ -130,6 +177,15 @@ class ParquetOutput(Output):
                 f"Error writing daft dataframe to parquet: {str(e)}",
                 error_code=IO_ERRORS["PARQUET_DAFT_WRITE_ERROR"].code,
             )
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="parquet_write_errors",
+                value=1,
+                metric_type="counter",
+                labels={"type": "daft", "mode": self.write_mode, "error": str(e)},
+                description="Number of errors while writing to Parquet files",
+            )
+            logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
             raise
 
     async def upload_file(self, local_file_path: str) -> None:
@@ -138,10 +194,22 @@ class ParquetOutput(Output):
         Args:
             local_file_path (str): Path to the local file to upload.
         """
-        logger.info(f"Uploading file: {local_file_path} to {self.output_prefix}")
-        await ObjectStoreOutput.push_files_to_object_store(
-            self.output_prefix, local_file_path
-        )
+        try:
+            logger.info(f"Uploading file: {local_file_path} to {self.output_prefix}")
+            await ObjectStoreOutput.push_files_to_object_store(
+                self.output_prefix, local_file_path
+            )
+        except Exception as e:
+            # Record metrics for failed upload
+            self.metrics.record_metric(
+                name="parquet_upload_errors",
+                value=1,
+                metric_type="counter",
+                labels={"error": str(e)},
+                description="Number of errors while uploading Parquet files to object store",
+            )
+            logger.error(f"Error uploading file to object store: {str(e)}")
+            raise e
 
     def get_full_path(self) -> str:
         """Get the full path of the output file.

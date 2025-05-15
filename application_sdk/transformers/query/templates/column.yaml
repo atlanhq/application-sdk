@@ -1,0 +1,207 @@
+# column.yaml
+table: Column
+columns:
+  - name: attributes.name
+    source_query: column_name
+  - name: attributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name, '/', column_name)
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, column_name]
+  - name: attributes.connectionQualifiedName
+    source_query: connection_qualified_name
+  - name: attributes.connectionName
+    source_query: connection_name
+  - name: attributes.description
+    source_query: |
+      CASE
+        WHEN remarks IS NOT NULL THEN
+          REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
+        ELSE
+          NULL
+      END
+    source_columns: [remarks]
+  - name: attributes.databaseName
+    source_query: table_catalog
+  - name: attributes.databaseQualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog)
+    source_columns: [connection_qualified_name, table_catalog]
+  - name: attributes.schemaName
+    source_query: table_schema
+  - name: attributes.schemaQualifiedName
+    source_query: concat(connection_qualified_name, '/', table_catalog, '/', table_schema)
+    source_columns: [connection_qualified_name, table_catalog, table_schema]
+  - name: attributes.tableName
+    source_query: |
+      CASE
+        WHEN table_type != 'MATERIALIZED VIEW' AND table_type != 'VIEW' THEN table_name
+        ELSE NULL
+      END
+    source_columns: [table_name, table_type]
+  - name: attributes.tableQualifiedName
+    source_query: |
+      CASE
+        WHEN table_type != 'MATERIALIZED VIEW' AND table_type != 'VIEW' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type]
+  - name: attributes.dataType
+    source_query: data_type
+  - name: attributes.isNullable
+    source_query: |
+      CASE
+        WHEN COALESCE(is_nullable, 'YES') = 'YES' THEN TRUE
+        ELSE FALSE
+      END
+    source_columns: [is_nullable]
+  - name: attributes.isPartition
+    source_query: |
+      CASE
+        WHEN COALESCE(is_partition, 'NO') = 'YES' THEN TRUE
+        ELSE FALSE
+      END
+    source_columns: [is_partition]
+  - name: attributes.partitionOrder
+    source_query: COALESCE(partition_order, NULL)
+    source_columns: [partition_order]
+  - name: attributes.isPrimary
+    source_query: |
+      CASE
+        WHEN COALESCE(constraint_type, '') = 'PRIMARY KEY' THEN TRUE
+        ELSE FALSE
+      END
+    source_columns: [constraint_type]
+  - name: attributes.isForeign
+    source_query: |
+      CASE
+        WHEN COALESCE(constraint_type, '') = 'FOREIGN KEY' THEN TRUE
+        ELSE FALSE
+      END
+    source_columns: [constraint_type]
+  - name: attributes.precision
+    source_query: decimal_digits
+  - name: attributes.viewName
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN table_name
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  - name: attributes.viewQualifiedName
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' OR table_type = 'MATERIALIZED VIEW' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  # For table
+  - name: attributes.table.typeName
+    source_query: |
+      CASE
+        WHEN belongs_to_partition != 'YES' AND (table_type = 'TABLE' OR table_type = 'BASE TABLE' OR table_type = 'FOREIGN TABLE' OR table_type = 'PARTITIONED TABLE') THEN 'Table'
+        ELSE NULL
+      END
+    source_columns: [table_type, belongs_to_partition]
+  - name: attributes.table.attributes
+    source_query: NULL
+  - name: attributes.table.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN belongs_to_partition != 'YES' AND (table_type = 'TABLE' OR table_type = 'BASE TABLE' OR table_type = 'FOREIGN TABLE' OR table_type = 'PARTITIONED TABLE') THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type, belongs_to_partition]
+  # For views
+  - name: attributes.view.typeName
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' THEN 'View'
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  - name: attributes.view.attributes
+    source_query: NULL
+  - name: attributes.view.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN table_type = 'VIEW' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type]
+  # For materialisedView
+  - name: attributes.materialisedView.typeName
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN 'MaterialisedView'
+        ELSE NULL
+      END
+    source_columns: [table_type]
+  - name: attributes.materialisedView.attributes
+    source_query: NULL
+  - name: attributes.materialisedView.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN table_type = 'MATERIALIZED VIEW' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, table_catalog, table_schema, table_name, table_type]
+  - name: attributes.tablePartition.typeName
+    source_query: |
+      CASE
+        WHEN belongs_to_partition = 'YES' THEN 'TablePartition'
+        ELSE NULL
+      END
+    source_columns: [belongs_to_partition]
+  - name: attributes.tablePartition.attributes
+    source_query: NULL
+  - name: attributes.tablePartition.uniqueAttributes.qualifiedName
+    source_query: |
+      CASE
+        WHEN belongs_to_partition = 'YES' THEN concat(connection_qualified_name, '/', table_catalog, '/', table_schema, '/', table_name)
+        ELSE NULL
+      END
+    source_columns: [belongs_to_partition, connection_qualified_name, table_catalog, table_schema, table_name]
+  - name: attributes.numericScale
+    source_query: COALESCE(numeric_scale, 0.0)
+    source_columns: [numeric_scale]
+  - name: attributes.maxLength
+    source_query: max_length
+  - name: attributes.order
+    source_query: ordinal_position
+  - name: customAttributes.ordinal_position
+    source_query: ordinal_position
+  - name: customAttributes.is_self_referencing
+    source_query: COALESCE(is_self_referencing, 'NO')
+    source_columns: [is_self_referencing]
+  - name: customAttributes.type_name
+    source_query: data_type
+  - name: customAttributes.numeric_precision
+    source_query: numeric_precision
+  - name: customAttributes.character_octet_length
+    source_query: character_octet_length
+  - name: customAttributes.is_auto_increment
+    source_query: is_auto_increment
+  - name: customAttributes.is_generated
+    source_query: is_generated
+  - name: customAttributes.extra_info
+    source_query: extra_info
+  - name: customAttributes.buffer_length
+    source_query: buffer_length
+  - name: customAttributes.column_size
+    source_query: column_size
+  - name: customAttributes.is_identity
+    source_query: is_identity
+  - name: customAttributes.identity_cycle
+    source_query: identity_cycle
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
+  - name: typeName
+    source_query: "'Column'"
+  - name: status
+    source_query: "'ACTIVE'"

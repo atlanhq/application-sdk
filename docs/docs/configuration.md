@@ -13,6 +13,7 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_APP_DASHBOARD_HOST` | Host address for the application's dashboard | `localhost` |
 | `ATLAN_APP_DASHBOARD_PORT` | Port number for the application's dashboard | `8000` |
 | `ATLAN_SQL_SERVER_MIN_VERSION` | Minimum required SQL Server version | `None` |
+| `ATLAN_SQL_QUERIES_PATH` | Path to the SQL queries directory | `app/sql` |
 
 ## Workflow Configuration
 
@@ -47,6 +48,35 @@ The Application SDK uses environment variables for configuration. These can be s
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
 | `LOG_LEVEL` | Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO` |
+| `LOG_BATCH_SIZE` | Number of log records to buffer before writing to parquet file | `100` |
+| `LOG_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush logs to parquet file | `5` |
+| `LOG_RETENTION_DAYS` | Number of days to retain log records before automatic cleanup | `30` |
+| `OBSERVABILITY_DIR` | Directory where log files are stored | `/tmp/observability` |
+| `LOG_DIR` | Directory where log files are stored | `/tmp/observability` |
+| `LOG_FILE_NAME` | Name of the parquet file used for log storage | `logs.parquet` |
+| `LOG_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old logs | `true` |
+
+## Metrics Configuration
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `ENABLE_OTLP_METRICS` | Whether to enable OpenTelemetry metrics export | `false` |
+| `METRICS_BATCH_SIZE` | Number of metric records to buffer before writing to parquet file | `100` |
+| `METRICS_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush metrics to parquet file | `10` |
+| `METRICS_RETENTION_DAYS` | Number of days to retain metric records before automatic cleanup | `30` |
+| `METRICS_FILE_NAME` | Name of the parquet file used for metric storage | `metrics.parquet` |
+| `METRICS_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old metrics | `true` |
+
+## Traces Configuration
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `ENABLE_OTLP_TRACES` | Whether to enable OpenTelemetry traces export | `false` |
+| `TRACES_BATCH_SIZE` | Number of trace records to buffer before writing to parquet file | `100` |
+| `TRACES_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush traces to parquet file | `1` |
+| `TRACES_RETENTION_DAYS` | Number of days to retain trace records before automatic cleanup | `7` |
+| `TRACES_FILE_NAME` | Name of the parquet file used for trace storage | `traces.parquet` |
+| `TRACES_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old traces | `true` |
 
 ## OpenTelemetry Configuration
 
@@ -57,6 +87,8 @@ The Application SDK uses environment variables for configuration. These can be s
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes for OpenTelemetry | `""` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint for the OpenTelemetry collector | `http://localhost:4317` |
 | `ENABLE_OTLP_LOGS` | Whether to enable OpenTelemetry log export | `false` |
+| `ENABLE_OTLP_METRICS` | Whether to enable OpenTelemetry metrics export | `false` |
+| `ENABLE_OTLP_TRACES` | Whether to enable OpenTelemetry traces export | `false` |
 | `OTEL_WF_NODE_NAME` | Node name for workflow telemetry | `""` |
 | `OTEL_EXPORTER_TIMEOUT_SECONDS` | Timeout for OpenTelemetry exporters in seconds | `30` |
 | `OTEL_BATCH_DELAY_MS` | Delay between batch exports in milliseconds | `5000` |

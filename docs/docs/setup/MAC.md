@@ -1,12 +1,3 @@
----
-title: macOS Setup Guide for Application SDK
-description: Step-by-step instructions for setting up the Application SDK on macOS
-tags:
-  - setup
-  - macos
-  - installation
----
-
 # macOS Setup Guide
 
 This guide will help you set up the Application SDK on macOS.
@@ -14,9 +5,9 @@ This guide will help you set up the Application SDK on macOS.
 ## Prerequisites
 
 Before starting, ensure you have:
-    - Terminal access
-    - Admin privileges (for installing software)
-    - Internet connection
+  - Terminal access
+  - Admin privileges (for installing software)
+  - Internet connection
 
 ## Setup Steps
 
@@ -30,43 +21,25 @@ Homebrew is a package manager for macOS that simplifies software installation:
 
 Follow any post-installation instructions shown in the terminal.
 
-### 2. Install Python 3.11
+### 2. Install uv 0.7.3 and Python
 
-We'll use pyenv to manage Python versions:
-
-- Install pyenv
-```bash
-brew install pyenv
-```
-
-- Set up shell environment
-```bash
-echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.zshrc
-echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.zshrc
-echo 'eval "$(pyenv init -)"' >> ~/.zshrc
-source ~/.zshrc
-```
-
-- Install and set Python 3.11.10
-```bash
-pyenv install 3.11.10
-pyenv global 3.11.10
-```
-
-- Verify installation
-```bash
-python --version  # Should show Python 3.11.10
-```
-
-### 3. Install Poetry 2.1.3
-
-Poetry manages Python dependencies and project environments:
+uv manages both Python environments and dependencies:
 
 ```bash
-pip install poetry==2.1.3
+# Install UV
+curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
+
+# Install Python 3.11.10
+uv venv --python 3.11.10
+
+# activate the venv
+source .venv/bin/activate
+
+# Verify installation
+python --version # Should show Python 3.11.10
 ```
 
-### 4. Install Temporal CLI
+### 3. Install Temporal CLI
 
 Temporal is the workflow orchestration platform:
 
@@ -74,7 +47,7 @@ Temporal is the workflow orchestration platform:
 brew install temporal
 ```
 
-### 5. Install DAPR CLI
+### 4. Install DAPR CLI
 
 DAPR (Distributed Application Runtime) simplifies microservice development:
 
@@ -83,25 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/dapr/cli/master/install/install.sh 
 dapr init --runtime-version 1.13.6 --slim
 ```
 
-### 6. Install Project Dependencies
-
-Install all required dependencies:
-
-```bash
-make install
-
-# Activate the virtual environment if not already activated
-source .venv/bin/activate
-```
-
-### 7. Start Services in detached mode
-
-```bash
-make start-all
-```
-
-### 8. Run the example application
-
-```bash
-poetry run python examples/application_hello_world.py
-```
+> [!NOTE]
+> Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
+> - Install project dependencies
+> - Run example applications

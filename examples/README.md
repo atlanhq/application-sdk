@@ -31,10 +31,8 @@ Before running any examples, you must set up your development environment. Pleas
 
 Once your environment is set up:
 
-1. Configure poetry to use the virtual environment: `poetry config virtualenvs.in-project true`
-2. Activate the virtual environment: `source .venv/bin/activate`
-3. Run `make start-all` to start the Dapr runtime and Temporal server
-4. Run the example using `python <example_script.py>` or use the VSCode launch configuration provided below.
+1. Run `uv run poe start-deps` to start the Dapr runtime and Temporal server
+2. Run the example using `uv run <example_script.py>` or use the VSCode launch configuration provided below.
 
 > **Warning:**
 > Example scripts use default credentials (e.g., `password`, `postgres`). **Never use these defaults in production.** Always set secure environment variables for real deployments.
@@ -80,4 +78,4 @@ Once your environment is set up:
 
 - You can navigate to the Run and Debug section in the IDE to run the configurations of your choice.
 
-> **Need help?** If you encounter any issues during setup, reach out on Slack (#pod-app-framework) or email apps@atlan.com.
+> **Need help?** If you encounter any issues during setup, reach out on Slack (#pod-app-framework) or email connect@atlan.com.

@@ -8,7 +8,7 @@ alwaysApply: false
 The Atlan Python Application SDK requires the following components regardless of operating system:
 
 1. Python 3.11.10
-2. Poetry 2.1.3
+2. uv 0.7.3
 3. Temporal CLI
 4. DAPR CLI 1.14.1
 5. Project dependencies
@@ -21,7 +21,9 @@ Please follow the appropriate guide for your operating system:
 - [LINUX.md](mdc:docs/docs/setup/LINUX.md)
 - [WINDOWS.md](mdc:docs/docs/setup/WINDOWS.md)
 
+Once the development environment is setup follow the [getting-started.md](mdc:docs/docs/guides/getting-started.md) to setup project dependencies and run an example
+
 ## Need Help?
 
-If you encounter any issues during setup, please reach out to us on the Slack channel #pod-app-framework or email apps@atlan.com.
+If you encounter any issues during setup, please reach out to us on the Slack channel #pod-app-framework or email connect@atlan.com.
 

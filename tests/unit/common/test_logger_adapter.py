@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Dict, Generator
 from unittest import mock
 
@@ -255,3 +256,76 @@ def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter, mock_log
     finally:
         # Restore the original logger
         logger_adapter.logger = original_logger
+
+
+@pytest.fixture
+def mock_parquet_file(tmp_path):
+    """Create a temporary parquet file for testing."""
+    parquet_path = tmp_path / "logs.parquet"
+    return parquet_path
+
+
+@pytest.fixture(autouse=True)
+def clear_log_buffer(logger_adapter):
+    """Clear the log buffer before each test."""
+    logger_adapter._buffer.clear()
+    yield
+    logger_adapter._buffer.clear()
+
+
+@pytest.mark.asyncio
+async def test_parquet_sink_buffering(mock_parquet_file):
+    """Test that parquet_sink properly buffers logs."""
+    with create_logger_adapter() as logger_adapter:
+        # Set the parquet file path directly on the instance
+        logger_adapter.parquet_path = str(mock_parquet_file)
+
+        # Create a test message
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"  # Set the name attribute directly
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "test_logger"},
+            "message": "Test message",
+            "file": mock.MagicMock(path="test.py"),
+            "line": 1,
+            "function": "test_function",
+        }
+
+        # Call parquet_sink
+        await logger_adapter.parquet_sink(test_message)
+
+        # Verify log was added to buffer
+        assert len(logger_adapter._buffer) == 1
+        buffered_log = logger_adapter._buffer[0]
+        assert buffered_log["message"] == "Test message"
+        assert buffered_log["level"] == "INFO"
+        assert buffered_log["logger_name"] == "test_logger"
+
+
+@pytest.mark.asyncio
+async def test_parquet_sink_error_handling(mock_parquet_file):
+    """Test that parquet_sink handles errors gracefully."""
+    with create_logger_adapter() as logger_adapter:
+        # Set the parquet file path directly on the instance
+        logger_adapter.parquet_path = str(mock_parquet_file)
+
+        # Create a test message with invalid data
+        test_message = mock.MagicMock()
+        test_message.record = {
+            "time": datetime.now(),
+            "level": mock.MagicMock(name="INFO"),
+            "extra": {"logger_name": "test_logger"},
+            "message": "Test message",
+            "file": None,  # This will cause an error
+            "line": 1,
+            "function": "test_function",
+        }
+
+        # Call parquet_sink - should not raise exception
+        await logger_adapter.parquet_sink(test_message)
+
+        # Verify buffer is empty (error was handled
+        assert len(logger_adapter._buffer) == 0

@@ -1,0 +1,67 @@
+# tag_attachment.yaml
+table: TagAttachment
+columns:
+  - name: attributes.name
+    source_query: tag_name
+  - name: attributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', tag_database, '/', tag_schema, '/', tag_name)
+    source_columns: [connection_qualified_name, tag_database, tag_schema, tag_name]
+  - name: attributes.connectionQualifiedName
+    source_query: connection_qualified_name
+  - name: attributes.connectionName
+    source_query: connection_name
+  - name: attributes.databaseName
+    source_query: tag_database
+  - name: attributes.databaseQualifiedName
+    source_query: concat(connection_qualified_name, '/', tag_database)
+    source_columns: [connection_qualified_name, tag_database]
+  - name: attributes.schemaName
+    source_query: tag_schema
+  - name: attributes.schemaQualifiedName
+    source_query: concat(connection_qualified_name, '/', tag_database, '/', tag_schema)
+    source_columns: [connection_qualified_name, tag_database, tag_schema]
+  - name: attributes.objectDatabaseName
+    source_query: object_database
+  - name: attributes.objectDatabaseQualifiedName
+    source_query: concat(connection_qualified_name, '/', object_database)
+    source_columns: [connection_qualified_name, object_database]
+  - name: attributes.objectSchemaName
+    source_query: object_schema
+  - name: attributes.objectSchemaQualifiedName
+    source_query: concat(connection_qualified_name, '/', object_database, '/', object_schema)
+    source_columns: [connection_qualified_name, object_database, object_schema]
+  - name: attributes.objectDomain
+    source_query: domain
+  - name: attributes.objectName
+    source_query: object_name
+  - name: attributes.objectQualifiedName
+    source_query: |
+      CASE
+        WHEN domain = 'DATABASE' THEN concat(connection_qualified_name, '/', object_database, '/', object_name)
+        WHEN domain = 'SCHEMA' THEN concat(connection_qualified_name, '/', object_database, '/', object_schema, '/', object_name)
+        WHEN domain IN ('TABLE', 'STREAM', 'PIPE') THEN concat(connection_qualified_name, '/', object_database, '/', object_schema, '/', object_name)
+        WHEN domain = 'COLUMN' THEN concat(connection_qualified_name, '/', object_database, '/', object_schema, '/', object_name, '/', column_name)
+        ELSE NULL
+      END
+    source_columns: [connection_qualified_name, object_database, object_schema, object_name, column_name, domain]
+  - name: attributes.sourceTagId
+    source_query: tag_id
+  - name: attributes.tagAttachmentStringValue
+    source_query: tag_value
+  - name: attributes.mappedClassificationName.name
+    source_query: COALESCE(mappedClassificationName, tag_name)
+    source_columns: [mappedClassificationName, tag_name]
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
+  - name: typeName
+    source_query: "'TagAttachment'"
+  - name: status
+    source_query: "'ACTIVE'"

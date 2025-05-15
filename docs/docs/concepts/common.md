@@ -9,12 +9,44 @@ The SDK uses the `loguru` library for enhanced logging capabilities, combined wi
 ### Key Concepts
 
 *   **`InterceptHandler`**: A standard `logging.Handler` that intercepts logs from standard Python logging (including libraries like `boto3`) and redirects them through `loguru`, ensuring consistent formatting and handling.
+*   **`AtlanObservability`**: A superclass responsible for managing log retention, logs batching and parquet sink operations.
 *   **`AtlanLoggerAdapter`**: The main interface for logging within the SDK. It wraps `loguru`, configures standard output format (including colors), handles OTLP exporter setup, and automatically enriches log messages with context.
     *   **Context Enrichment**: Automatically includes details from the current Temporal Workflow or Activity context (like `workflow_id`, `run_id`, `activity_id`, `attempt`, etc.) and FastAPI request context (`request_id`) if available.
     *   **OTLP Integration**: If `ENABLE_OTLP_LOGS` is true, logs are exported via the OpenTelemetry Protocol (OTLP) using `OTLPLogExporter`. Resource attributes (`service.name`, `service.version`, `k8s.workflow.node.name`, etc.) are automatically added based on environment variables (`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_WF_NODE_NAME`, `SERVICE_NAME`, `SERVICE_VERSION`).
     *   **Custom Level**: Includes a custom `"ACTIVITY"` log level.
+    *   **Parquet Sink**: Logs are automatically written to a parquet file for efficient storage and querying. The sink implements buffering and periodic flushing based on batch size and time interval.
+    *   **Log Retention**: Implements automatic cleanup of old logs based on the configured retention period. Logs older than `LOG_RETENTION_DAYS` are automatically removed.
 *   **Severity Mapping**: Maps standard log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) and the custom ACTIVITY level to OpenTelemetry `SeverityNumber`.
 *   **Configuration**: Log level (`LOG_LEVEL`), OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`), batching (`OTEL_BATCH_DELAY_MS`, `OTEL_BATCH_SIZE`), etc., are configured via environment variables defined in `application_sdk.constants`.
+
+### Log Storage and Retention
+
+The logger implements a sophisticated storage and retention system:
+
+1. **Parquet Storage**:
+   - Logs are stored in parquet format for efficient storage and querying
+   - Implements buffering to reduce I/O operations
+   - Flushes logs based on two conditions:
+     - When buffer size reaches `LOG_BATCH_SIZE`
+     - When time since last flush exceeds `LOG_FLUSH_INTERVAL_SECONDS`
+   - Supports date-based file organization when `LOG_USE_DATE_BASED_FILES` is enabled
+   - Uses `LOG_DATE_FORMAT` for naming date-based files (default: `%Y-%m-%d`)
+
+2. **Log Retention**:
+   - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
+   - Runs cleanup once per day
+   - Maintains state of last cleanup in Dapr state store
+   - Handles both local parquet files and object store cleanup
+   - Supports both single-file and date-based file cleanup strategies
+
+3. **Storage Locations**:
+   - Local:
+     - Single file: `/tmp/observability/log.parquet`
+     - Date-based: `/tmp/observability/logs/YYYY-MM-DD.parquet`
+   - Object Store:
+     - Single file: `logs/log.parquet`
+     - Date-based: `logs/YYYY-MM-DD.parquet`
+     (via Dapr object store binding)
 
 ### Usage
 
@@ -44,6 +76,195 @@ async def my_activity():
     logger.info("Starting my activity...")
     # Logger automatically includes workflow/activity context
 ```
+
+### Configuration
+
+The logger can be configured using the following environment variables:
+
+```bash
+# Log level and format
+LOG_LEVEL=INFO
+
+# Parquet storage settings
+LOG_BATCH_SIZE=100  # Number of logs to buffer before writing
+LOG_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
+LOG_RETENTION_DAYS=30  # Days to keep logs before cleanup
+LOG_USE_DATE_BASED_FILES=true  # Enable date-based file organization
+LOG_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
+
+# OTLP settings (if enabled)
+ENABLE_OTLP_LOGS=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+## Metrics (`metrics_adaptor.py`)
+
+The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integration and local storage capabilities.
+
+### Key Concepts
+
+*   **`MetricRecord`**: A Pydantic model that defines the structure of metric records, including:
+    *   `timestamp`: When the metric was recorded
+    *   `name`: Name of the metric
+    *   `value`: Numeric value of the metric
+    *   `type`: Type of metric (counter, gauge, histogram)
+    *   `labels`: Key-value pairs for metric dimensions
+    *   `description`: Optional description of the metric
+    *   `unit`: Optional unit of measurement
+
+*   **`AtlanMetricsAdapter`**: The main interface for metrics within the SDK. It provides:
+    *   **OpenTelemetry Integration**: If `ENABLE_OTLP_METRICS` is true, metrics are exported via OTLP using `OTLPMetricExporter`
+    *   **Resource Attributes**: Automatically includes service attributes (`service.name`, `service.version`) and workflow node name if available
+    *   **Metric Types**: Supports counters, gauges, and histograms
+    *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
+    *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
+    *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
+    *   **Date-based Files**: Supports date-based file organization using `METRICS_DATE_FORMAT`
+
+### Usage
+
+The primary way to get a metrics instance is via the `get_metrics` function:
+
+```python
+from application_sdk.common.metrics_adaptor import get_metrics
+
+# Get the metrics instance
+metrics = get_metrics()
+
+# Record different types of metrics
+metrics.record_metric(
+    name="request_duration_seconds",
+    value=1.5,
+    metric_type="histogram",
+    labels={"endpoint": "/api/v1/users", "method": "GET"},
+    description="Request duration in seconds",
+    unit="s"
+)
+
+metrics.record_metric(
+    name="active_connections",
+    value=42,
+    metric_type="gauge",
+    labels={"database": "postgres"},
+    description="Number of active database connections"
+)
+
+metrics.record_metric(
+    name="total_requests",
+    value=1,
+    metric_type="counter",
+    labels={"status": "success"},
+    description="Total number of requests processed"
+)
+```
+
+### Metric Types
+
+1. **Counter**: A cumulative metric that only increases (e.g., total requests, errors)
+2. **Gauge**: A metric that can increase and decrease (e.g., active connections, memory usage)
+3. **Histogram**: A metric that tracks the distribution of values (e.g., request duration, response size)
+
+### Configuration
+
+The metrics system can be configured using the following environment variables:
+
+```bash
+# Metrics storage settings
+METRICS_BATCH_SIZE=100  # Number of metrics to buffer before writing
+METRICS_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
+METRICS_RETENTION_DAYS=30  # Days to keep metrics before cleanup
+METRICS_USE_DATE_BASED_FILES=true  # Enable date-based file organization
+METRICS_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
+
+# OTLP settings (if enabled)
+ENABLE_OTLP_METRICS=true
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+```
+
+## Traces (`traces_adaptor.py`)
+
+The SDK provides a comprehensive tracing system using OpenTelemetry (OTLP) integration and local storage capabilities.
+
+### Key Concepts
+
+*   **`TraceRecord`**: A Pydantic model that defines the structure of trace records, including:
+    *   `timestamp`: When the trace was recorded
+    *   `trace_id`: Unique identifier for the trace
+    *   `span_id`: Unique identifier for the span
+    *   `parent_span_id`: Optional identifier for the parent span
+    *   `name`: Name of the span
+    *   `kind`: Type of span (SERVER, CLIENT, INTERNAL, etc.)
+    *   `status_code`: Status of the span (OK, ERROR, etc.)
+    *   `status_message`: Optional message describing the status
+    *   `attributes`: Key-value pairs for span attributes
+    *   `events`: Optional list of events that occurred during the span
+    *   `duration_ms`: Duration of the span in milliseconds
+
+*   **`AtlanTracesAdapter`**: The main interface for traces within the SDK. It provides:
+    *   **OpenTelemetry Integration**: If `ENABLE_OTLP_TRACES` is true, traces are exported via OTLP using `OTLPSpanExporter`
+    *   **Resource Attributes**: Automatically includes service attributes (`service.name`, `service.version`) and workflow node name if available
+    *   **Span Types**: Supports various span kinds (SERVER, CLIENT, INTERNAL)
+    *   **Parquet Storage**: Traces are stored in parquet format for efficient storage and querying
+    *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
+    *   **Log Integration**: Traces are also logged with INFO level for visibility
+    *   **Automatic Cleanup**: Implements automatic cleanup of old traces based on retention period
+
+### Usage
+
+The primary way to get a traces instance is via the `get_traces` function:
+
+```python
+from application_sdk.common.traces_adaptor import get_traces
+
+# Get the traces instance
+traces = get_traces()
+
+# Record a trace
+traces.record_trace(
+    name="process_request",
+    trace_id="1234567890abcdef",
+    span_id="abcdef1234567890",
+    kind="SERVER",
+    status_code="OK",
+    attributes={
+        "endpoint": "/api/v1/users",
+        "method": "GET",
+        "user_id": "123"
+    },
+    duration_ms=150.5,
+    events=[{
+        "name": "request_processed",
+        "attributes": {"status": "success"}
+    }]
+)
+```
+
+### Trace Types
+
+1. **SERVER**: Represents a server-side operation (e.g., handling an HTTP request)
+2. **CLIENT**: Represents a client-side operation (e.g., making an HTTP request)
+3. **INTERNAL**: Represents an internal operation (e.g., processing data)
+
+### Storage and Retention
+
+The traces adapter implements a sophisticated storage and retention system:
+
+1. **Parquet Storage**:
+   - Traces are stored in parquet format for efficient storage and querying
+   - Implements buffering to reduce I/O operations
+   - Flushes traces based on two conditions:
+     - When buffer size reaches `TRACES_BATCH_SIZE`
+     - When time since last flush exceeds `TRACES_FLUSH_INTERVAL_SECONDS`
+
+2. **Trace Retention**:
+   - Automatically cleans up traces older than `TRACES_RETENTION_DAYS`
+   - Runs cleanup once per day
+   - Maintains state of last cleanup in Dapr state store
+   - Handles both local parquet files and object store cleanup
+
+3. **Storage Locations**:
+   - Local: `/tmp/observability/traces.parquet`
+   - Object Store: `observability/traces.parquet` (via Dapr object store binding)
 
 ## AWS Utilities (`aws_utils.py`)
 

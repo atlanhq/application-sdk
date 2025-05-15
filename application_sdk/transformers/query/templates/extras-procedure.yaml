@@ -1,0 +1,62 @@
+# procedure.yaml
+table: Procedure
+columns:
+  - name: attributes.name
+    source_query: procedure_name
+  - name: attributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', procedure_catalog, '/', procedure_schema, '/', '_procedures_', '/', procedure_name)
+    source_columns: [connection_qualified_name, procedure_catalog, procedure_schema, procedure_name]
+  - name: attributes.connectionQualifiedName
+    source_query: connection_qualified_name
+  - name: attributes.connectionName
+    source_query: connection_name
+  - name: attributes.description
+    source_query: |
+      CASE
+        WHEN remarks IS NOT NULL THEN
+          REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
+        ELSE
+          NULL
+      END
+    source_columns: [remarks]
+  - name: attributes.databaseName
+    source_query: procedure_catalog
+  - name: attributes.databaseQualifiedName
+    source_query: concat(connection_qualified_name, '/', procedure_catalog)
+    source_columns: [connection_qualified_name, procedure_catalog]
+  - name: attributes.schemaName
+    source_query: procedure_schema
+  - name: attributes.schemaQualifiedName
+    source_query: concat(connection_qualified_name, '/', procedure_catalog, '/', procedure_schema)
+    source_columns: [connection_qualified_name, procedure_catalog, procedure_schema]
+  - name: attributes.definition
+    source_query: procedure_definition
+  - name: attributes.subType
+    source_query: COALESCE(procedure_type, '-1')
+    source_columns: [procedure_type]
+  - name: attributes.sourceCreatedBy
+    source_query: COALESCE(source_owner, NULL)
+    source_columns: [source_owner]
+  - name: attributes.tenantId
+    source_query: tenant_id
+  - name: attributes.lastSyncWorkflowName
+    source_query: last_sync_workflow_name
+  - name: attributes.lastSyncRun
+    source_query: last_sync_run
+  - name: attributes.lastSyncRunAt
+    source_query: last_sync_run_at
+  - name: attributes.connectorName
+    source_query: connector_name
+  - name: customAttributes
+    source_query: NULL
+  - name: attributes.atlanSchema.typeName
+    source_query: "'Schema'"
+  - name: attributes.atlanSchema.attributes
+    source_query: NULL
+  - name: attributes.atlanSchema.uniqueAttributes.qualifiedName
+    source_query: concat(connection_qualified_name, '/', procedure_catalog, '/', procedure_schema)
+    source_columns: [connection_qualified_name, procedure_catalog, procedure_schema]
+  - name: typeName
+    source_query: "'Procedure'"
+  - name: status
+    source_query: "'ACTIVE'"

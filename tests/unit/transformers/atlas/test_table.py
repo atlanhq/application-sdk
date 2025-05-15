@@ -85,7 +85,7 @@ def test_table_transformation(
 ):
     """Test the transformation of regular tables"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "TABLE",
         raw_data["regular_table"],
         "test_workflow_id",
@@ -138,7 +138,7 @@ def test_view_transformation(
 ):
     """Test the transformation of views"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "VIEW",
         raw_data["regular_view"],
         "test_workflow_id",
@@ -161,7 +161,7 @@ def test_materialized_view_transformation(
 ):
     """Test the transformation of materialized views"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "TABLE",
         raw_data["regular_materialized_view"],
         "test_workflow_id",
@@ -184,7 +184,7 @@ def test_table_variation_1_transformation(
 ):
     """Test the transformation of regular tables"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "TABLE",
         raw_data["table_variation_1"],
         "test_workflow_id",
@@ -223,7 +223,7 @@ def test_view_variation_1_transformation(
 ):
     """Test the transformation of regular tables"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "TABLE",
         raw_data["view_variation_1"],
         "test_workflow_id",
@@ -262,7 +262,7 @@ def test_materialized_view_variation_1_transformation(
 ):
     """Test the transformation of regular tables"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "TABLE",
         raw_data["materialized_view_variation_1"],
         "test_workflow_id",
@@ -301,7 +301,7 @@ def test_table_partition_transformation(
 ):
     """Test the transformation of regular tables"""
 
-    transformed_data = transformer.transform_metadata(
+    transformed_data = transformer.transform_row(
         "TABLE",
         raw_data["partitioned_table"],
         "test_workflow_id",

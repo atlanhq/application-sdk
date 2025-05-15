@@ -1,12 +1,3 @@
----
-title: Linux Setup Guide for Application SDK
-description: Step-by-step instructions for setting up the Application SDK on Linux
-tags:
-  - setup
-  - linux
-  - installation
----
-
 # Linux Setup Guide
 
 This guide will help you set up the Application SDK on Linux (Ubuntu/Debian based systems).
@@ -14,9 +5,9 @@ This guide will help you set up the Application SDK on Linux (Ubuntu/Debian base
 ## Prerequisites
 
 Before starting, ensure you have:
-    - Terminal access
-    - Sudo privileges (for installing software)
-    - Internet connection
+  - Terminal access
+  - Sudo privileges (for installing software)
+  - Internet connection
 
 ## Setup Steps
 
@@ -32,37 +23,25 @@ libncurses5-dev libncursesw5-dev xz-utils tk-dev libffi-dev \
 liblzma-dev
 ```
 
-### 2. Install Python 3.11 with pyenv
+### 2. Install uv 0.7.3 and Python
 
-We'll use pyenv to manage Python versions:
+uv manages both Python environments and dependencies:
 
 ```bash
-# Install pyenv
-curl https://pyenv.run | bash
+# Install UV
+curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sh
 
-# Add pyenv to your path
-echo 'export PYENV_ROOT="$HOME/.pyenv"' >> ~/.bashrc
-echo 'command -v pyenv >/dev/null || export PATH="$PYENV_ROOT/bin:$PATH"' >> ~/.bashrc
-echo 'eval "$(pyenv init -)"' >> ~/.bashrc
-source ~/.bashrc
+# Install Python 3.11.10
+uv venv --python 3.11.10
 
-# Install and set Python 3.11.10
-pyenv install 3.11.10
-pyenv global 3.11.10
+# activate the venv
+source .venv/bin/activate
 
 # Verify installation
-python --version  # Should show Python 3.11.10
+python --version # Should show Python 3.11.10
 ```
 
-### 3. Install Poetry 2.1.3
-
-Poetry manages Python dependencies and project environments:
-
-```bash
-pip install poetry==2.1.3
-```
-
-### 4. Install Temporal CLI
+### 3. Install Temporal CLI
 
 Temporal is used for workflow orchestration:
 
@@ -72,7 +51,7 @@ export PATH="$HOME/.temporalio/bin:$PATH"
 echo 'export PATH="$HOME/.temporalio/bin:$PATH"' >> ~/.bashrc
 ```
 
-### 5. Install DAPR CLI
+### 4. Install DAPR CLI
 
 Install DAPR using the following commands:
 
@@ -87,24 +66,7 @@ dapr init --runtime-version 1.13.6 --slim
 dapr --version
 ```
 
-### 6. Install Application SDK
-
-```bash
-make install
-
-# activate the environment
-source .venv/bin/activate
-```
-
-### 7. Start Services in detached mode
-
-```bash
-make start-all
-```
-
-### 8. Run the example application
-
-```bash
-poetry run python examples/application_hello_world.py
-```
-
+> [!NOTE]
+> Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
+> - Install project dependencies
+> - Run example applications
