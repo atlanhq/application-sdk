@@ -529,10 +529,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         try:
             # Create OpenTelemetry LogRecord
             otel_record = self._create_log_record(record.model_dump())
-            
+
             # Get the logger from the provider
             logger = self.logger_provider.get_logger(SERVICE_NAME)
-            
+
             # Emit the log record
             logger.emit(otel_record)
         except Exception as e:
