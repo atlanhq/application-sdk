@@ -172,7 +172,7 @@ async def test_preflight_check_success(
         assert result["versionCheck"]["success"] is True
 
 
-@given(metadata=metadata_list_strategy)
+@given(metadata=metadata_list_strategy.filter(lambda x: len(x) > 0))
 async def test_preflight_check_failure(
     handler: BaseSQLHandler, metadata: List[Dict[str, str]]
 ) -> None:

@@ -38,7 +38,7 @@ class ErrorCategory(Enum):
 ```python
 CATEGORY_ERRORS = {
     "ERROR_NAME": ErrorCode(
-        "category_code + sequential_number", 
+        "category_code + sequential_number",
         "Description of the error"
     ),
 }
@@ -169,4 +169,4 @@ except Exception as e:
         f"Failed to execute query: {str(e)}",
         error_code=SQL_ERRORS["SQL_QUERY_EXEC_ERROR"].code
     )
-``` 
+```
