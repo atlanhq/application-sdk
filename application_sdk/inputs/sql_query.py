@@ -140,6 +140,8 @@ class SQLQueryInput(Input):
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
+                    import pandas as pd
+
                     result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
@@ -187,6 +189,8 @@ class SQLQueryInput(Input):
                     result = await asyncio.get_event_loop().run_in_executor(
                         executor, self._execute_query
                     )
+                    import pandas as pd
+
                     if isinstance(result, pd.DataFrame):
                         return result
                     raise
