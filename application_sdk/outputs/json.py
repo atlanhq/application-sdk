@@ -7,7 +7,7 @@ from temporalio import activity
 
 from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -181,7 +181,7 @@ class JsonOutput(Output):
             self.metrics.record_metric(
                 name="json_write_records",
                 value=len(dataframe),
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "pandas"},
                 description="Number of records written to JSON files from pandas DataFrame",
             )
@@ -191,7 +191,7 @@ class JsonOutput(Output):
             self.metrics.record_metric(
                 name="json_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
@@ -255,7 +255,7 @@ class JsonOutput(Output):
                 self.metrics.record_metric(
                     name="json_chunks_written",
                     value=1,
-                    metric_type="counter",
+                    metric_type=MetricType.COUNTER,
                     labels={"type": "daft"},
                     description="Number of chunks written to JSON files",
                 )
@@ -272,7 +272,7 @@ class JsonOutput(Output):
                 self.metrics.record_metric(
                     name="json_chunks_written",
                     value=1,
-                    metric_type="counter",
+                    metric_type=MetricType.COUNTER,
                     labels={"type": "daft"},
                     description="Number of chunks written to JSON files",
                 )
@@ -281,7 +281,7 @@ class JsonOutput(Output):
             self.metrics.record_metric(
                 name="json_write_records",
                 value=dataframe.count_rows(),
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "daft"},
                 description="Number of records written to JSON files from daft DataFrame",
             )
@@ -296,7 +296,7 @@ class JsonOutput(Output):
             self.metrics.record_metric(
                 name="json_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "daft", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
@@ -342,7 +342,7 @@ class JsonOutput(Output):
                 self.metrics.record_metric(
                     name="json_chunks_written",
                     value=1,
-                    metric_type="counter",
+                    metric_type=MetricType.COUNTER,
                     labels={"type": "pandas"},
                     description="Number of chunks written to JSON files",
                 )
@@ -360,7 +360,7 @@ class JsonOutput(Output):
             self.metrics.record_metric(
                 name="json_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )

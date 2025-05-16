@@ -197,11 +197,19 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 
 ### Key Concepts
 
+*   **`MetricType`**: An enum that defines the different types of metrics:
+    ```python
+    class MetricType(Enum):
+        COUNTER = "counter"    # Cumulative metric that only increases
+        GAUGE = "gauge"       # Metric that can increase and decrease
+        HISTOGRAM = "histogram" # Metric that tracks value distribution
+    ```
+
 *   **`MetricRecord`**: A Pydantic model that defines the structure of metric records, including:
     *   `timestamp`: When the metric was recorded
     *   `name`: Name of the metric
     *   `value`: Numeric value of the metric
-    *   `type`: Type of metric (counter, gauge, histogram)
+    *   `type`: Type of metric (using `MetricType` enum)
     *   `labels`: Key-value pairs for metric dimensions
     *   `description`: Optional description of the metric
     *   `unit`: Optional unit of measurement
@@ -209,7 +217,7 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 *   **`AtlanMetricsAdapter`**: The main interface for metrics within the SDK. It provides:
     *   **OpenTelemetry Integration**: If `ENABLE_OTLP_METRICS` is true, metrics are exported via OTLP using `OTLPMetricExporter`
     *   **Resource Attributes**: Automatically includes service attributes (`service.name`, `service.version`) and workflow node name if available
-    *   **Metric Types**: Supports counters, gauges, and histograms
+    *   **Metric Types**: Supports counters, gauges, and histograms via the `MetricType` enum
     *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
     *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
     *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
@@ -220,7 +228,7 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 The primary way to get a metrics instance is via the `get_metrics` function:
 
 ```python
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import get_metrics, MetricType
 
 # Get the metrics instance
 metrics = get_metrics()
@@ -229,7 +237,7 @@ metrics = get_metrics()
 metrics.record_metric(
     name="request_duration_seconds",
     value=1.5,
-    metric_type="histogram",
+    metric_type=MetricType.HISTOGRAM,
     labels={"endpoint": "/api/v1/users", "method": "GET"},
     description="Request duration in seconds",
     unit="s"
@@ -238,7 +246,7 @@ metrics.record_metric(
 metrics.record_metric(
     name="active_connections",
     value=42,
-    metric_type="gauge",
+    metric_type=MetricType.GAUGE,
     labels={"database": "postgres"},
     description="Number of active database connections"
 )
@@ -246,7 +254,7 @@ metrics.record_metric(
 metrics.record_metric(
     name="total_requests",
     value=1,
-    metric_type="counter",
+    metric_type=MetricType.COUNTER,
     labels={"status": "success"},
     description="Total number of requests processed"
 )
@@ -254,9 +262,9 @@ metrics.record_metric(
 
 ### Metric Types
 
-1. **Counter**: A cumulative metric that only increases (e.g., total requests, errors)
-2. **Gauge**: A metric that can increase and decrease (e.g., active connections, memory usage)
-3. **Histogram**: A metric that tracks the distribution of values (e.g., request duration, response size)
+1. **Counter** (`MetricType.COUNTER`): A cumulative metric that only increases (e.g., total requests, errors)
+2. **Gauge** (`MetricType.GAUGE`): A metric that can increase and decrease (e.g., active connections, memory usage)
+3. **Histogram** (`MetricType.HISTOGRAM`): A metric that tracks the distribution of values (e.g., request duration, response size)
 
 ### Configuration
 

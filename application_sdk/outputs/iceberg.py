@@ -6,7 +6,7 @@ from temporalio import activity
 
 from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
 
 logger = get_logger(__name__)
@@ -66,7 +66,7 @@ class IcebergOutput(Output):
             self.metrics.record_metric(
                 name="iceberg_write_records",
                 value=len(dataframe),
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"mode": self.mode, "type": "pandas"},
                 description="Number of records written to Iceberg table from pandas DataFrame",
             )
@@ -79,7 +79,7 @@ class IcebergOutput(Output):
             self.metrics.record_metric(
                 name="iceberg_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"mode": self.mode, "type": "pandas", "error": str(e)},
                 description="Number of errors while writing to Iceberg table",
             )
@@ -114,7 +114,7 @@ class IcebergOutput(Output):
             self.metrics.record_metric(
                 name="iceberg_write_records",
                 value=dataframe.count_rows(),
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"mode": self.mode, "type": "daft"},
                 description="Number of records written to Iceberg table from daft DataFrame",
             )
@@ -123,7 +123,7 @@ class IcebergOutput(Output):
             self.metrics.record_metric(
                 name="iceberg_chunks_written",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"mode": self.mode},
                 description="Number of chunks written to Iceberg table",
             )
@@ -136,7 +136,7 @@ class IcebergOutput(Output):
             self.metrics.record_metric(
                 name="iceberg_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"mode": self.mode, "type": "daft", "error": str(e)},
                 description="Number of errors while writing to Iceberg table",
             )

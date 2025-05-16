@@ -5,7 +5,7 @@ from temporalio import activity
 
 from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -99,7 +99,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_write_records",
                 value=len(dataframe),
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "mode": self.write_mode},
                 description="Number of records written to Parquet files from pandas DataFrame",
             )
@@ -108,7 +108,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_chunks_written",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "mode": self.write_mode},
                 description="Number of chunks written to Parquet files",
             )
@@ -124,7 +124,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "mode": self.write_mode, "error": str(e)},
                 description="Number of errors while writing to Parquet files",
             )
@@ -156,7 +156,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_write_records",
                 value=row_count,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "daft", "mode": self.write_mode},
                 description="Number of records written to Parquet files from daft DataFrame",
             )
@@ -165,7 +165,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_chunks_written",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "daft", "mode": self.write_mode},
                 description="Number of chunks written to Parquet files",
             )
@@ -181,7 +181,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_write_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"type": "daft", "mode": self.write_mode, "error": str(e)},
                 description="Number of errors while writing to Parquet files",
             )
@@ -204,7 +204,7 @@ class ParquetOutput(Output):
             self.metrics.record_metric(
                 name="parquet_upload_errors",
                 value=1,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"error": str(e)},
                 description="Number of errors while uploading Parquet files to object store",
             )

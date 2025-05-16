@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import threading
+from enum import Enum
 from time import time
 from typing import Any, Dict, Optional
 
@@ -33,13 +34,21 @@ from application_sdk.constants import (
 )
 
 
+class MetricType(Enum):
+    """Enum for metric types."""
+
+    COUNTER = "counter"
+    GAUGE = "gauge"
+    HISTOGRAM = "histogram"
+
+
 class MetricRecord(BaseModel):
     """Pydantic model for metric records."""
 
     timestamp: float
     name: str
     value: float
-    type: str  # counter, gauge, histogram
+    type: MetricType  # Using MetricType enum instead of str
     labels: Dict[str, str]
     description: Optional[str] = None
     unit: Optional[str] = None
@@ -84,9 +93,14 @@ class MetricRecord(BaseModel):
                     except (ValueError, TypeError):
                         obj["timestamp"] = time()
 
-                # Ensure type is string
+                # Ensure type is MetricType
                 if "type" in obj:
-                    obj["type"] = str(obj["type"])
+                    try:
+                        obj["type"] = MetricType(obj["type"])
+                    except ValueError:
+                        obj["type"] = (
+                            MetricType.COUNTER
+                        )  # Default to counter if invalid
 
                 # Ensure name is string
                 if "name" in obj:
@@ -255,21 +269,21 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
     def _send_to_otel(self, metric_record: MetricRecord):
         """Send metric to OpenTelemetry."""
         try:
-            if metric_record.type == "counter":
+            if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
                 counter.add(metric_record.value, metric_record.labels)
-            elif metric_record.type == "gauge":
+            elif metric_record.type == MetricType.GAUGE:
                 gauge = self.meter.create_observable_gauge(
                     name=metric_record.name,
                     description=metric_record.description,
                     unit=metric_record.unit,
                 )
                 gauge.add(metric_record.value, metric_record.labels)
-            elif metric_record.type == "histogram":
+            elif metric_record.type == MetricType.HISTOGRAM:
                 histogram = self.meter.create_histogram(
                     name=metric_record.name,
                     description=metric_record.description,
@@ -284,7 +298,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         try:
             log_message = (
                 f"{metric_record.name} = {metric_record.value} "
-                f"({metric_record.type})"
+                f"({metric_record.type.value})"
             )
             if metric_record.labels:
                 log_message += f" Labels: {metric_record.labels}"
@@ -301,7 +315,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         self,
         name: str,
         value: float,
-        metric_type: str,
+        metric_type: MetricType,  # Changed from str to MetricType
         labels: Dict[str, str],
         description: Optional[str] = None,
         unit: Optional[str] = None,
