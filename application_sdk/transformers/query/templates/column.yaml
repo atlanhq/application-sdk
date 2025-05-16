@@ -14,10 +14,14 @@ columns:
     description:
       source_query: |
         CASE
-          WHEN remarks IS NOT NULL THEN
-            REGEXP_REPLACE(REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''), '\s+', ' ')
-          ELSE
-            NULL
+          WHEN remarks IS NOT NULL THEN REGEXP_REPLACE(
+            REGEXP_REPLACE(
+              REGEXP_REPLACE(
+                REGEXP_REPLACE(SUBSTRING(COALESCE(remarks, ''), 1, 100000), '<[^>]+>', ''),
+              '\s+', ' '),
+            '^ ', ''),
+            ' $', '')
+          ELSE NULL
         END
       source_columns: [remarks]
     databaseName:
@@ -193,7 +197,12 @@ columns:
     numeric_precision:
       source_query: numeric_precision
     character_octet_length:
-      source_query: character_octet_length
+      source_query: |
+        CASE
+          WHEN character_octet_length IS NOT NULL THEN CAST(COALESCE(character_octet_length, 0) AS FLOAT)
+          ELSE NULL
+        END
+      source_columns: [character_octet_length]
     is_auto_increment:
       source_query: is_auto_increment
     is_generated:
