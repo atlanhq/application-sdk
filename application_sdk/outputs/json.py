@@ -9,6 +9,7 @@ from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.metrics_adaptor import get_metrics
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.common.error_codes import IO_ERRORS
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -194,7 +195,10 @@ class JsonOutput(Output):
                 labels={"type": "pandas", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
-            logger.error(f"Error writing dataframe to json: {str(e)}")
+            logger.error(
+                f"Error writing dataframe to json: {str(e)}",
+                error_code=IO_ERRORS["JSON_WRITE_ERROR"].code,
+            )
 
     async def write_daft_dataframe(
         self,
@@ -296,7 +300,10 @@ class JsonOutput(Output):
                 labels={"type": "daft", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
-            logger.error(f"Error writing daft dataframe to json: {str(e)}")
+            logger.error(
+                f"Error writing daft dataframe to json: {str(e)}",
+                error_code=IO_ERRORS["JSON_DAFT_WRITE_ERROR"].code,
+            )
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
@@ -357,5 +364,8 @@ class JsonOutput(Output):
                 labels={"type": "pandas", "error": str(e)},
                 description="Number of errors while writing to JSON files",
             )
-            logger.error(f"Error flushing buffer to json: {str(e)}")
+            logger.error(
+                f"Error flushing buffer to json: {str(e)}",
+                error_code=IO_ERRORS["JSON_WRITE_ERROR"].code,
+            )
             raise e

@@ -19,7 +19,10 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.error_codes import WORKFLOW_ERRORS
+from application_sdk.common.error_codes import (
+    TEMPORAL_WORKFLOW_ERRORS,
+    TEMPORAL_ERRORS,
+)
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -327,7 +330,7 @@ class TemporalWorkflowClient(WorkflowClient):
         except WorkflowFailureError as e:
             logger.error(
                 f"Workflow failure: {e}",
-                error_code=WORKFLOW_ERRORS["WORKFLOW_EXEC_ERROR"].code,
+                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_EXECUTION_ERROR"].code,
             )
             raise e
 
@@ -351,7 +354,7 @@ class TemporalWorkflowClient(WorkflowClient):
         except Exception as e:
             logger.error(
                 f"Error terminating workflow {workflow_id} {run_id}: {e}",
-                error_code=WORKFLOW_ERRORS["WORKFLOW_TERMINATE_ERROR"].code,
+                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_CLIENT_STOP_ERROR"].code,
             )
             raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
 
@@ -452,7 +455,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             logger.error(
                 f"Error getting workflow status: {e}",
-                error_code=WORKFLOW_ERRORS["WORKFLOW_STATUS_ERROR"].code,
+                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_CLIENT_STATUS_ERROR"].code,
             )
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"

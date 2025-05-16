@@ -6,7 +6,7 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.common.error_codes import STATE_ERRORS
+from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import STATE_STORE_NAME
 
@@ -38,7 +38,7 @@ class StateStoreInput:
         except Exception as e:
             logger.error(
                 f"Failed to extract state: {str(e)}",
-                error_code=STATE_ERRORS["STATE_EXTRACT_ERROR"].code,
+                error_code=IO_ERRORS["STATE_STORE_EXTRACT_ERROR"].code,
             )
             raise e
 

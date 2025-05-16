@@ -59,7 +59,7 @@ class JsonInput(Input):
             except Exception as e:
                 logger.error(
                     f"Error downloading file {file_name}: {str(e)}",
-                    error_code=IO_ERRORS["OBJSTORE_DOWNLOAD_ERROR"].code,
+                    error_code=IO_ERRORS["OBJECT_STORE_DOWNLOAD_ERROR"].code,
                 )
                 raise
 

@@ -208,7 +208,10 @@ class ParquetOutput(Output):
                 labels={"error": str(e)},
                 description="Number of errors while uploading Parquet files to object store",
             )
-            logger.error(f"Error uploading file to object store: {str(e)}")
+            logger.error(
+                f"Error uploading file to object store: {str(e)}",
+                error_code=IO_ERRORS["OBJECT_STORE_WRITE_ERROR"].code,
+            )
             raise e
 
     def get_full_path(self) -> str:

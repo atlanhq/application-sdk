@@ -2,6 +2,100 @@
 
 This section describes various utility functions and classes found within the `application_sdk.common` package. These utilities provide foundational functionalities used across different parts of the SDK, such as logging, configuration management, interacting with AWS, and general helper functions.
 
+## Error Codes (`error_codes.py`)
+
+The SDK provides a structured way to handle and log errors using standardized error codes. Error codes follow the format: `Atlan-{Component}-{HTTP_Code}-{Unique_ID}`
+
+### Key Concepts
+
+*   **`ErrorComponent`**: An enum that defines the different components that can generate errors:
+    ```python
+    class ErrorComponent(Enum):
+        CLIENT = "Client"      # Client-side errors (400 series)
+        INTERNAL = "Internal"  # Internal server errors (500 series)
+        TEMPORAL = "Temporal"  # Workflow and activity errors
+        IO = "IO"             # Input/Output related errors
+        COMMON = "Common"     # Common utility errors
+        DOCGEN = "DocGen"     # Documentation generation errors
+        ACTIVITY = "Activity" # Activity-specific errors
+    ```
+
+*   **`ErrorCode`**: A class that represents an error code with its components:
+    ```python
+    class ErrorCode:
+        def __init__(
+            self,
+            component: str,
+            http_code: str,
+            unique_id: str,
+            description: str
+        ):
+            self.component = component
+            self.http_code = http_code
+            self.unique_id = unique_id
+            self.description = description
+
+        @property
+        def code(self) -> str:
+            return f"Atlan-{self.component}-{self.http_code}-{self.unique_id}"
+    ```
+
+*   **Error Code Dictionaries**: Predefined dictionaries for each component containing error codes:
+    ```python
+    CLIENT_ERRORS = {
+        "REQUEST_VALIDATION_ERROR": ErrorCode(
+            "Client",
+            "403",
+            "00",
+            "Request validation failed"
+        ),
+        # ... more error codes
+    }
+
+    INTERNAL_ERRORS = {
+        "INTERNAL_ERROR": ErrorCode(
+            "Internal",
+            "500",
+            "00",
+            "Internal server error"
+        ),
+        # ... more error codes
+    }
+    # ... more component error dictionaries
+    ```
+
+### Usage
+
+Error codes are typically used with the logger:
+
+```python
+from application_sdk.common.error_codes import CLIENT_ERRORS
+from application_sdk.common.logger_adaptors import get_logger
+
+logger = get_logger(__name__)
+
+try:
+    # Some operation
+    result = process_request(request)
+except Exception as e:
+    logger.error(
+        f"Request validation failed: {str(e)}",
+        error_code=CLIENT_ERRORS["REQUEST_VALIDATION_ERROR"].code
+    )
+```
+
+### Configuration
+
+Error code behavior can be configured using environment variables:
+
+```bash
+# Error Code Configuration
+ATLAN_ERROR_CODE_PREFIX=Atlan
+ATLAN_ERROR_CODE_SEPARATOR=-
+ATLAN_ERROR_CODE_HTTP_MAP={"Client": "403", "Internal": "500", "Temporal": "500", "IO": "500", "Common": "500", "DocGen": "500", "Activity": "500"}
+ATLAN_ERROR_CODE_UNIQUE_ID_LENGTH=2
+```
+
 ## Logging (`logger_adaptors.py`)
 
 The SDK uses the `loguru` library for enhanced logging capabilities, combined with standard Python logging and OpenTelemetry (OTLP) integration for structured, observable logs.
@@ -342,4 +436,4 @@ include_pattern, exclude_pattern = prepare_filters(
 
 ## Summary
 
-The `common` utilities provide essential services for logging, AWS integration, configuration management, and various helper tasks, forming a core part of the SDK's functionality and promoting consistent practices across different modules.
+The `common` utilities provide essential services for error handling, logging, AWS integration, configuration management, and various helper tasks, forming a core part of the SDK's functionality and promoting consistent practices across different modules.

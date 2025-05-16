@@ -15,6 +15,15 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_SQL_SERVER_MIN_VERSION` | Minimum required SQL Server version | `None` |
 | `ATLAN_SQL_QUERIES_PATH` | Path to the SQL queries directory | `app/sql` |
 
+## Error Code Configuration
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `ATLAN_ERROR_CODE_PREFIX` | Prefix for all error codes | `Atlan` |
+| `ATLAN_ERROR_CODE_SEPARATOR` | Separator used in error codes | `-` |
+| `ATLAN_ERROR_CODE_HTTP_MAP` | JSON mapping of components to HTTP status codes | `{"Client": "403", "Internal": "500", "Temporal": "500", "IO": "500", "Common": "500", "DocGen": "500", "Activity": "500"}` |
+| `ATLAN_ERROR_CODE_UNIQUE_ID_LENGTH` | Length of unique ID in error codes | `2` |
+
 ## Workflow Configuration
 
 | Environment Variable | Description | Default Value |
@@ -98,3 +107,12 @@ The Application SDK uses environment variables for configuration. These can be s
 ## Note
 
 Most configuration options have sensible defaults, but can be overridden by setting the corresponding environment variables. You can set these variables either in your environment or by creating a `.env` file in your project root.
+
+Example `.env` file with error code configuration:
+```bash
+# Error Code Configuration
+ATLAN_ERROR_CODE_PREFIX=Atlan
+ATLAN_ERROR_CODE_SEPARATOR=-
+ATLAN_ERROR_CODE_HTTP_MAP={"Client": "403", "Internal": "500", "Temporal": "500", "IO": "500", "Common": "500", "DocGen": "500", "Activity": "500"}
+ATLAN_ERROR_CODE_UNIQUE_ID_LENGTH=2
+```
