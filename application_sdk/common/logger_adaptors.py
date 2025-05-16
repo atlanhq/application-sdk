@@ -167,6 +167,7 @@ SEVERITY_MAPPING = {
     "CRITICAL": SeverityNumber.FATAL,
     "ACTIVITY": SeverityNumber.INFO,  # Using INFO severity for activity level
     "METRIC": SeverityNumber.INFO,  # Using INFO severity for metric level
+    "TRACING": SeverityNumber.INFO,  # Using INFO severity for tracing level
 }
 
 
@@ -198,6 +199,10 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         # Register custom log level for metrics
         if "METRIC" not in logger._core.levels:
             logger.level("METRIC", no=20, color="<yellow>", icon="📊")
+
+        # Register custom log level for tracing
+        if "TRACING" not in logger._core.levels:
+            logger.level("TRACING", no=20, color="<magenta>", icon="🔍")
 
         # Update format string to use the bound logger_name
         atlan_format_str = "<green>{time:YYYY-MM-DD HH:mm:ss}</green> <blue>[{level}]</blue> <cyan>{extra[logger_name]}</cyan> - <level>{message}</level>"
@@ -519,6 +524,20 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error in metric logging: {e}")
             self._sync_flush()
 
+    def _send_to_otel(self, record: LogRecordModel):
+        """Send log record to OpenTelemetry."""
+        try:
+            # Create OpenTelemetry LogRecord
+            otel_record = self._create_log_record(record.model_dump())
+
+            # Get the logger from the provider
+            logger = self.logger_provider.get_logger(SERVICE_NAME)
+
+            # Emit the log record
+            logger.emit(otel_record)
+        except Exception as e:
+            logging.error(f"Error sending log to OpenTelemetry: {e}")
+
     def _sync_flush(self):
         """Synchronously flush the buffer."""
         try:
@@ -541,6 +560,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                     loop.close()
         except Exception as e:
             logging.error(f"Error during sync flush: {e}")
+
+    def tracing(self, msg: str, *args: Any, **kwargs: Any):
+        """Log a trace-specific message with trace context."""
+        local_kwargs = kwargs.copy()
+        local_kwargs["log_type"] = "trace"
+        processed_msg, processed_kwargs = self.process(msg, local_kwargs)
+        self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
 
     async def parquet_sink(self, message: Any):
         """Process log message and store in parquet format."""
