@@ -13,7 +13,7 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.error_codes import SERVER_ERRORS
+from application_sdk.common.error_codes import FASTAPI_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -139,6 +139,6 @@ class Worker:
         except Exception as e:
             logger.error(
                 f"Error starting worker: {e}",
-                error_code=SERVER_ERRORS["SERVER_WORKER_ERROR"].code,
+                error_code=FASTAPI_ERRORS["SERVER_START_ERROR"].code,
             )
             raise e

@@ -5,9 +5,9 @@ import os
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.error_codes import IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import OBJECT_STORE_NAME
-from application_sdk.common.error_codes import IO_ERRORS
 
 logger = get_logger(__name__)
 activity.logger = logger

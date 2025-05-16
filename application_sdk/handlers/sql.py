@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.error_codes import SQL_ERRORS
+from application_sdk.common.error_codes import CLIENT_ERRORS, IO_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
@@ -87,7 +87,7 @@ class BaseSQLHandler(HandlerInterface):
         except Exception as exc:
             logger.error(
                 f"Failed to fetch metadata: {str(exc)}",
-                error_code=SQL_ERRORS["SQL_METADATA_FETCH_ERROR"].code,
+                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
             )
             raise exc
         return result
@@ -112,7 +112,7 @@ class BaseSQLHandler(HandlerInterface):
             error_msg = str(exc)
             logger.error(
                 f"Failed to authenticate with the given credentials: {error_msg}",
-                error_code=SQL_ERRORS["SQL_AUTH_ERROR"].code,
+                error_code=CLIENT_ERRORS["SQL_CLIENT_AUTH_ERROR"].code,
             )
             raise ValueError(error_msg) from exc
 
@@ -155,7 +155,7 @@ class BaseSQLHandler(HandlerInterface):
             except Exception as e:
                 logger.error(
                     f"Failed to fetch metadata: {str(e)}",
-                    error_code=SQL_ERRORS["SQL_METADATA_FETCH_ERROR"].code,
+                    error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
                 )
                 raise
 
@@ -225,7 +225,7 @@ class BaseSQLHandler(HandlerInterface):
         except Exception as exc:
             logger.error(
                 f"Error during preflight check {exc}",
-                error_code=SQL_ERRORS["SQL_PREFLIGHT_CHECK_ERROR"].code,
+                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
                 exc_info=True,
             )
             raise
@@ -262,7 +262,7 @@ class BaseSQLHandler(HandlerInterface):
         except Exception as exc:
             logger.error(
                 "Error during schema and database check",
-                error_code=SQL_ERRORS["SQL_SCHEMA_CHECK_ERROR"].code,
+                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
                 exc_info=True,
             )
             return {
@@ -343,7 +343,7 @@ class BaseSQLHandler(HandlerInterface):
         except Exception as exc:
             logger.error(
                 "Error during tables check",
-                error_code=SQL_ERRORS["SQL_TABLES_CHECK_ERROR"].code,
+                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
                 exc_info=True,
             )
             return {
@@ -438,7 +438,7 @@ class BaseSQLHandler(HandlerInterface):
         except Exception as exc:
             logger.error(
                 f"Error during client version check: {exc}",
-                error_code=SQL_ERRORS["SQL_CLIENT_VERSION_ERROR"].code,
+                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
                 exc_info=True,
             )
             return {

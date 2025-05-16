@@ -19,10 +19,7 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.error_codes import (
-    TEMPORAL_WORKFLOW_ERRORS,
-    TEMPORAL_ERRORS,
-)
+from application_sdk.common.error_codes import TEMPORAL_WORKFLOW_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -455,7 +452,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             logger.error(
                 f"Error getting workflow status: {e}",
-                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_CLIENT_STATUS_ERROR"].code,
+                error_code=TEMPORAL_WORKFLOW_ERRORS[
+                    "WORKFLOW_CLIENT_STATUS_ERROR"
+                ].code,
             )
             raise Exception(
                 f"Error getting workflow status for {workflow_id} {run_id}: {e}"

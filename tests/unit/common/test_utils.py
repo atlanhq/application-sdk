@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import Mock, mock_open, patch
 
-from application_sdk.common.error_codes import SYSTEM_ERRORS
+from application_sdk.common.error_codes import COMMON_ERRORS
 from application_sdk.common.utils import (
     get_workflow_config,
     normalize_filters,
@@ -77,7 +77,7 @@ class TestPrepareQuery:
             result = prepare_query(query, workflow_args)
             mock_logger.error.assert_called_once_with(
                 "Error preparing query [SELECT * FROM {normalized_include_regex}]:  Expecting value: line 1 column 1 (char 0)",
-                error_code=SYSTEM_ERRORS["QUERY_PREP_ERROR"].code,
+                error_code=COMMON_ERRORS["QUERY_PREPARATION_ERROR"].code,
             )
             assert result is None
 

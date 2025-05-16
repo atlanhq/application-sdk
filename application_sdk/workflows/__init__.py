@@ -12,7 +12,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.common.error_codes import WORKFLOW_ERRORS
+from application_sdk.common.error_codes import TEMPORAL_WORKFLOW_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT
 from application_sdk.inputs.statestore import StateStoreInput
@@ -101,7 +101,7 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         except Exception as e:
             logger.error(
                 f"Workflow execution failed: {str(e)}",
-                error_code=WORKFLOW_ERRORS["WORKFLOW_EXEC_ERROR"].code,
+                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_EXECUTION_ERROR"].code,
                 exc_info=True,
             )
             raise

@@ -20,7 +20,7 @@ from fastapi import status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 
-from application_sdk.common.error_codes import SERVER_ERRORS
+from application_sdk.common.error_codes import FASTAPI_ERRORS
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -118,7 +118,7 @@ async def shutdown(force: bool = False):
             except Exception as e:
                 logger.error(
                     f"Error during task cancellation: {e}",
-                    error_code=SERVER_ERRORS["SERVER_TASK_CANCEL_ERROR"].code,
+                    error_code=FASTAPI_ERRORS["SERVER_SHUTDOWN_ERROR"].code,
                 )
                 raise
 
