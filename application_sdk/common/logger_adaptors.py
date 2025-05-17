@@ -385,10 +385,8 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             # Initial flush
             await self._flush_buffer(force=True)
 
-            while ENABLE_OBSERVABILITY_DAPR_SINK:
+            while True:
                 await asyncio.sleep(self._flush_interval)
-                if not ENABLE_OBSERVABILITY_DAPR_SINK:
-                    break
                 await self._flush_buffer(force=True)
         except asyncio.CancelledError:
             # Handle task cancellation gracefully
