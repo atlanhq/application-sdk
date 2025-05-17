@@ -16,7 +16,7 @@ from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -231,7 +231,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             metrics.record_metric(
                 name="workflow_execution_time_seconds",
                 value=execution_time,
-                metric_type="gauge",
+                metric_type=MetricType.GAUGE,
                 labels={
                     "workflow_id": workflow_id,
                     "workflow_type": "sql_metadata_extraction",

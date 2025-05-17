@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 from application_sdk.common.metrics_adaptor import (
     AtlanMetricsAdapter,
     MetricRecord,
+    MetricType,
     get_metrics,
 )
 
@@ -69,7 +70,7 @@ def test_process_record_with_metric_record():
             timestamp=datetime.now().timestamp(),
             name="test_metric",
             value=42.0,
-            type="counter",
+            type=MetricType.COUNTER,
             labels={"test": "label"},
             description="Test metric",
             unit="count",
@@ -77,7 +78,7 @@ def test_process_record_with_metric_record():
         processed = metrics_adapter.process_record(record)
         assert processed["name"] == "test_metric"
         assert processed["value"] == 42.0
-        assert processed["type"] == "counter"
+        assert processed["type"] == MetricType.COUNTER
         assert processed["labels"] == {"test": "label"}
         assert processed["description"] == "Test metric"
         assert processed["unit"] == "count"
@@ -90,7 +91,7 @@ def test_process_record_with_dict():
             "timestamp": datetime.now().timestamp(),
             "name": "test_metric",
             "value": 42.0,
-            "type": "counter",
+            "type": MetricType.COUNTER,
             "labels": {"test": "label"},
             "description": "Test metric",
             "unit": "count",
@@ -99,8 +100,14 @@ def test_process_record_with_dict():
         assert processed == record
 
 
-@given(st.text(min_size=1), st.floats(), st.text(min_size=1))
-def test_record_metric_with_various_inputs(name: str, value: float, metric_type: str):
+@given(
+    st.text(min_size=1),
+    st.floats(),
+    st.sampled_from([MetricType.COUNTER, MetricType.GAUGE, MetricType.HISTOGRAM]),
+)
+def test_record_metric_with_various_inputs(
+    name: str, value: float, metric_type: MetricType
+):
     """Test record_metric() method with various inputs."""
     with create_metrics_adapter() as metrics_adapter:
         labels = {"test": "label"}
@@ -141,7 +148,7 @@ def test_export_record_with_otlp_enabled():
                 timestamp=datetime.now().timestamp(),
                 name="test_metric",
                 value=42.0,
-                type="counter",
+                type=MetricType.COUNTER,
                 labels={"test": "label"},
                 description="Test metric",
                 unit="count",
@@ -183,7 +190,7 @@ def test_send_to_otel_counter():
                 timestamp=datetime.now().timestamp(),
                 name="test_counter",
                 value=42.0,
-                type="counter",
+                type=MetricType.COUNTER,
                 labels={"test": "label"},
                 description="Test counter",
                 unit="count",
@@ -211,7 +218,7 @@ def test_send_to_otel_gauge():
                 timestamp=datetime.now().timestamp(),
                 name="test_gauge",
                 value=42.0,
-                type="gauge",
+                type=MetricType.GAUGE,
                 labels={"test": "label"},
                 description="Test gauge",
                 unit="count",
@@ -239,7 +246,7 @@ def test_send_to_otel_histogram():
                 timestamp=datetime.now().timestamp(),
                 name="test_histogram",
                 value=42.0,
-                type="histogram",
+                type=MetricType.HISTOGRAM,
                 labels={"test": "label"},
                 description="Test histogram",
                 unit="count",
@@ -268,7 +275,7 @@ def test_log_to_console():
                 timestamp=datetime.now().timestamp(),
                 name="test_metric",
                 value=42.0,
-                type="gauge",
+                type=MetricType.GAUGE,
                 labels={"test": "label"},
                 description="Test metric",
                 unit="count",

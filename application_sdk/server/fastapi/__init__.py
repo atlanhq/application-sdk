@@ -14,7 +14,7 @@ from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.common.observability import DuckDBUI
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
@@ -405,7 +405,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="auth_requests_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "success"},
                 description="Total number of authentication requests",
             )
@@ -415,7 +415,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="auth_duration_seconds",
                 value=duration,
-                metric_type="histogram",
+                metric_type=MetricType.HISTOGRAM,
                 labels={},
                 description="Authentication request duration in seconds",
             )
@@ -426,7 +426,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="auth_requests_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of authentication requests",
             )

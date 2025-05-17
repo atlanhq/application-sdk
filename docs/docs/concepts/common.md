@@ -2,6 +2,100 @@
 
 This section describes various utility functions and classes found within the `application_sdk.common` package. These utilities provide foundational functionalities used across different parts of the SDK, such as logging, configuration management, interacting with AWS, and general helper functions.
 
+## Error Codes (`error_codes.py`)
+
+The SDK provides a structured way to handle and log errors using standardized error codes. Error codes follow the format: `Atlan-{Component}-{HTTP_Code}-{Unique_ID}`
+
+### Key Concepts
+
+*   **`ErrorComponent`**: An enum that defines the different components that can generate errors:
+    ```python
+    class ErrorComponent(Enum):
+        CLIENT = "Client"      # Client-side errors (400 series)
+        INTERNAL = "Internal"  # Internal server errors (500 series)
+        TEMPORAL = "Temporal"  # Workflow and activity errors
+        IO = "IO"             # Input/Output related errors
+        COMMON = "Common"     # Common utility errors
+        DOCGEN = "DocGen"     # Documentation generation errors
+        ACTIVITY = "Activity" # Activity-specific errors
+    ```
+
+*   **`ErrorCode`**: A class that represents an error code with its components:
+    ```python
+    class ErrorCode:
+        def __init__(
+            self,
+            component: str,
+            http_code: str,
+            unique_id: str,
+            description: str
+        ):
+            self.component = component
+            self.http_code = http_code
+            self.unique_id = unique_id
+            self.description = description
+
+        @property
+        def code(self) -> str:
+            return f"Atlan-{self.component}-{self.http_code}-{self.unique_id}"
+    ```
+
+*   **Error Code Dictionaries**: Predefined dictionaries for each component containing error codes:
+    ```python
+    CLIENT_ERRORS = {
+        "REQUEST_VALIDATION_ERROR": ErrorCode(
+            "Client",
+            "403",
+            "00",
+            "Request validation failed"
+        ),
+        # ... more error codes
+    }
+
+    INTERNAL_ERRORS = {
+        "INTERNAL_ERROR": ErrorCode(
+            "Internal",
+            "500",
+            "00",
+            "Internal server error"
+        ),
+        # ... more error codes
+    }
+    # ... more component error dictionaries
+    ```
+
+### Usage
+
+Error codes are typically used with the logger:
+
+```python
+from application_sdk.common.error_codes import CLIENT_ERRORS
+from application_sdk.common.logger_adaptors import get_logger
+
+logger = get_logger(__name__)
+
+try:
+    # Some operation
+    result = process_request(request)
+except Exception as e:
+    logger.error(
+        f"Request validation failed: {str(e)}",
+        error_code=CLIENT_ERRORS["REQUEST_VALIDATION_ERROR"].code
+    )
+```
+
+### Configuration
+
+Error code behavior can be configured using environment variables:
+
+```bash
+# Error Code Configuration
+ATLAN_ERROR_CODE_PREFIX=Atlan
+ATLAN_ERROR_CODE_SEPARATOR=-
+ATLAN_ERROR_CODE_HTTP_MAP={"Client": "403", "Internal": "500", "Temporal": "500", "IO": "500", "Common": "500", "DocGen": "500", "Activity": "500"}
+ATLAN_ERROR_CODE_UNIQUE_ID_LENGTH=2
+```
+
 ## Logging (`logger_adaptors.py`)
 
 The SDK uses the `loguru` library for enhanced logging capabilities, combined with standard Python logging and OpenTelemetry (OTLP) integration for structured, observable logs.
@@ -103,11 +197,19 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 
 ### Key Concepts
 
+*   **`MetricType`**: An enum that defines the different types of metrics:
+    ```python
+    class MetricType(Enum):
+        COUNTER = "counter"    # Cumulative metric that only increases
+        GAUGE = "gauge"       # Metric that can increase and decrease
+        HISTOGRAM = "histogram" # Metric that tracks value distribution
+    ```
+
 *   **`MetricRecord`**: A Pydantic model that defines the structure of metric records, including:
     *   `timestamp`: When the metric was recorded
     *   `name`: Name of the metric
     *   `value`: Numeric value of the metric
-    *   `type`: Type of metric (counter, gauge, histogram)
+    *   `type`: Type of metric (using `MetricType` enum)
     *   `labels`: Key-value pairs for metric dimensions
     *   `description`: Optional description of the metric
     *   `unit`: Optional unit of measurement
@@ -115,7 +217,7 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 *   **`AtlanMetricsAdapter`**: The main interface for metrics within the SDK. It provides:
     *   **OpenTelemetry Integration**: If `ENABLE_OTLP_METRICS` is true, metrics are exported via OTLP using `OTLPMetricExporter`
     *   **Resource Attributes**: Automatically includes service attributes (`service.name`, `service.version`) and workflow node name if available
-    *   **Metric Types**: Supports counters, gauges, and histograms
+    *   **Metric Types**: Supports counters, gauges, and histograms via the `MetricType` enum
     *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
     *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
     *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
@@ -126,7 +228,7 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 The primary way to get a metrics instance is via the `get_metrics` function:
 
 ```python
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import get_metrics, MetricType
 
 # Get the metrics instance
 metrics = get_metrics()
@@ -135,7 +237,7 @@ metrics = get_metrics()
 metrics.record_metric(
     name="request_duration_seconds",
     value=1.5,
-    metric_type="histogram",
+    metric_type=MetricType.HISTOGRAM,
     labels={"endpoint": "/api/v1/users", "method": "GET"},
     description="Request duration in seconds",
     unit="s"
@@ -144,7 +246,7 @@ metrics.record_metric(
 metrics.record_metric(
     name="active_connections",
     value=42,
-    metric_type="gauge",
+    metric_type=MetricType.GAUGE,
     labels={"database": "postgres"},
     description="Number of active database connections"
 )
@@ -152,7 +254,7 @@ metrics.record_metric(
 metrics.record_metric(
     name="total_requests",
     value=1,
-    metric_type="counter",
+    metric_type=MetricType.COUNTER,
     labels={"status": "success"},
     description="Total number of requests processed"
 )
@@ -160,9 +262,9 @@ metrics.record_metric(
 
 ### Metric Types
 
-1. **Counter**: A cumulative metric that only increases (e.g., total requests, errors)
-2. **Gauge**: A metric that can increase and decrease (e.g., active connections, memory usage)
-3. **Histogram**: A metric that tracks the distribution of values (e.g., request duration, response size)
+1. **Counter** (`MetricType.COUNTER`): A cumulative metric that only increases (e.g., total requests, errors)
+2. **Gauge** (`MetricType.GAUGE`): A metric that can increase and decrease (e.g., active connections, memory usage)
+3. **Histogram** (`MetricType.HISTOGRAM`): A metric that tracks the distribution of values (e.g., request duration, response size)
 
 ### Configuration
 
@@ -342,4 +444,4 @@ include_pattern, exclude_pattern = prepare_filters(
 
 ## Summary
 
-The `common` utilities provide essential services for logging, AWS integration, configuration management, and various helper tasks, forming a core part of the SDK's functionality and promoting consistent practices across different modules.
+The `common` utilities provide essential services for error handling, logging, AWS integration, configuration management, and various helper tasks, forming a core part of the SDK's functionality and promoting consistent practices across different modules.
