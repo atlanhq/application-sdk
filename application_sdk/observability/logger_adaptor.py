@@ -16,7 +16,7 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.common.observability import AtlanObservability
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,

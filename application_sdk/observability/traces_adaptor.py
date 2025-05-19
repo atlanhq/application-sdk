@@ -13,8 +13,8 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
-from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.observability import AtlanObservability
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
     OBSERVABILITY_DIR,

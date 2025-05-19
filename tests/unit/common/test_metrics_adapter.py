@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.common.metrics_adaptor import (
+from application_sdk.observability.metrics_adaptor import (
     AtlanMetricsAdapter,
     MetricRecord,
     get_metrics,
