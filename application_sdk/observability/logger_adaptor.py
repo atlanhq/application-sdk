@@ -16,7 +16,6 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.observability.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
@@ -37,6 +36,7 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+from application_sdk.observability.observability import AtlanObservability
 
 
 class LogExtraModel(BaseModel):
@@ -128,6 +128,12 @@ request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", defa
 
 # Add a Loguru handler for the Python logging system
 class InterceptHandler(logging.Handler):
+    """A custom logging handler that intercepts Python's standard logging and forwards it to Loguru.
+
+    This handler ensures that all Python standard library logging calls are properly formatted
+    and processed through Loguru's logging system, maintaining consistent logging across the application.
+    """
+
     def emit(self, record):
         # Get corresponding Loguru level if it exists
         try:
@@ -178,7 +184,17 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
     _flush_task = None
 
     def __init__(self, logger_name: str) -> None:
-        """Create the logger adapter with enhanced configuration."""
+        """Initialize the AtlanLoggerAdapter with enhanced configuration.
+
+        Args:
+            logger_name (str): The name of the logger instance.
+
+        This initialization:
+        - Sets up the base observability configuration
+        - Configures Loguru with custom log levels and formatting
+        - Initializes OTLP logging if enabled
+        - Sets up parquet logging if Dapr sink is enabled
+        """
         super().__init__(
             batch_size=LOG_BATCH_SIZE,
             flush_interval=LOG_FLUSH_INTERVAL_SECONDS,
@@ -236,11 +252,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 workflow_node_name = OTEL_WF_NODE_NAME
 
                 # First try to get attributes from OTEL_RESOURCE_ATTRIBUTES
-                resource_attributes = {}
-                if OTEL_RESOURCE_ATTRIBUTES:
-                    resource_attributes = self._parse_otel_resource_attributes(
-                        OTEL_RESOURCE_ATTRIBUTES
-                    )
+                resource_attributes = self._parse_otel_resource_attributes(
+                    OTEL_RESOURCE_ATTRIBUTES
+                )
 
                 # Only add default service attributes if they're not already present
                 if "service.name" not in resource_attributes:
@@ -277,6 +291,18 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 logging.error(f"Failed to setup OTLP logging: {str(e)}")
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
+        """Parse OpenTelemetry resource attributes from environment variable.
+
+        Args:
+            env_var (str): Comma-separated string of key-value pairs in format 'key1=value1,key2=value2'
+
+        Returns:
+            dict[str, str]: Dictionary of parsed resource attributes
+
+        Example:
+            >>> _parse_otel_resource_attributes("service.name=myapp,service.version=1.0.0")
+            {'service.name': 'myapp', 'service.version': '1.0.0'}
+        """
         try:
             # Check if the environment variable is not empty
             if env_var:
@@ -292,8 +318,52 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Failed to parse OTLP resource attributes: {str(e)}")
         return {}
 
+    def _process_message_to_record(self, message: Any) -> Dict[str, Any]:
+        """Process a log message into a standardized record format.
+
+        Args:
+            message (Any): The log message to process, typically a Loguru message object
+
+        Returns:
+            Dict[str, Any]: Processed log record in dictionary format
+
+        Raises:
+            Exception: If message processing fails
+        """
+        try:
+            log_record = LogRecordModel(
+                timestamp=message.record["time"].timestamp(),
+                level=message.record["level"].name,
+                logger_name=message.record["extra"].get("logger_name", ""),
+                message=message.record["message"],
+                file=str(message.record["file"].path),
+                line=message.record["line"],
+                function=message.record["function"],
+                extra=LogExtraModel(
+                    **{
+                        k: v
+                        for k, v in message.record["extra"].items()
+                        if k != "logger_name"
+                    }
+                ),
+            )
+            return log_record.model_dump()
+        except Exception as e:
+            logging.error(f"Error processing log message: {e}")
+            return {}
+
     def process_record(self, record: Any) -> Dict[str, Any]:
-        """Process a log record into a dictionary format."""
+        """Process a log record into a standardized dictionary format.
+
+        Args:
+            record (Any): The log record to process. Can be LogRecordModel, Loguru message, or dict
+
+        Returns:
+            Dict[str, Any]: Processed log record in dictionary format
+
+        Raises:
+            ValueError: If record format is not supported
+        """
         if isinstance(record, LogRecordModel):
             return record.model_dump()
 
@@ -327,7 +397,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         raise ValueError(f"Unsupported record format: {type(record)}")
 
     def export_record(self, record: Any) -> None:
-        """Export a log record to external systems."""
+        """Export a log record to external systems.
+
+        Args:
+            record (Any): The log record to export
+
+        This method handles exporting logs to configured external systems like OpenTelemetry.
+        """
         if not isinstance(record, LogRecordModel):
             record = LogRecordModel(**self.process_record(record))
 
@@ -336,7 +412,16 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._send_to_otel(record)
 
     def _create_log_record(self, record: dict) -> LogRecord:
-        """Create an OpenTelemetry LogRecord."""
+        """Create an OpenTelemetry LogRecord from a dictionary record.
+
+        Args:
+            record (dict): Dictionary containing log record data
+
+        Returns:
+            LogRecord: OpenTelemetry LogRecord object
+
+        This method converts internal log records to OpenTelemetry format for export.
+        """
         severity_number = SEVERITY_MAPPING.get(
             record["level"], SeverityNumber.UNSPECIFIED
         )
@@ -371,6 +456,11 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         )
 
     def _start_asyncio_flush(self):
+        """Start an asyncio event loop for periodic log flushing.
+
+        This method creates a new event loop and starts the periodic flush task
+        in a separate thread. Used when no existing event loop is available.
+        """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -395,7 +485,20 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error in periodic flush: {e}")
 
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
-        """Process the log message with temporal context."""
+        """Process log message with temporal and request context.
+
+        Args:
+            msg (Any): The log message to process
+            kwargs (Dict[str, Any]): Additional keyword arguments for the log
+
+        Returns:
+            Tuple[Any, Dict[str, Any]]: Processed message and updated kwargs
+
+        This method enriches log messages with:
+        - Request context (request_id)
+        - Workflow context (if in workflow)
+        - Activity context (if in activity)
+        """
         kwargs["logger_name"] = self.logger_name
 
         # Get request context
@@ -457,6 +560,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         return msg, kwargs
 
     def debug(self, msg: str, *args: Any, **kwargs: Any):
+        """Log a debug level message.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+        """
         try:
             msg, kwargs = self.process(msg, kwargs)
             self.logger.bind(**kwargs).debug(msg, *args)
@@ -465,6 +575,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def info(self, msg: str, *args: Any, **kwargs: Any):
+        """Log an info level message.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+        """
         try:
             msg, kwargs = self.process(msg, kwargs)
             self.logger.bind(**kwargs).info(msg, *args)
@@ -473,6 +590,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def warning(self, msg: str, *args: Any, **kwargs: Any):
+        """Log a warning level message.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+        """
         try:
             msg, kwargs = self.process(msg, kwargs)
             self.logger.bind(**kwargs).warning(msg, *args)
@@ -481,6 +605,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def error(self, msg: str, *args: Any, **kwargs: Any):
+        """Log an error level message.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+
+        Note: Forces an immediate flush of logs when called.
+        """
         try:
             msg, kwargs = self.process(msg, kwargs)
             self.logger.bind(**kwargs).error(msg, *args)
@@ -491,6 +624,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def critical(self, msg: str, *args: Any, **kwargs: Any):
+        """Log a critical level message.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+
+        Note: Forces an immediate flush of logs when called.
+        """
         try:
             msg, kwargs = self.process(msg, kwargs)
             self.logger.bind(**kwargs).critical(msg, *args)
@@ -501,7 +643,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def activity(self, msg: str, *args: Any, **kwargs: Any):
-        """Log an activity-specific message with activity context."""
+        """Log an activity-specific message with activity context.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+
+        This method adds activity-specific context to the log message.
+        """
         try:
             local_kwargs = kwargs.copy()
             local_kwargs["log_type"] = "activity"
@@ -512,7 +662,15 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def metric(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a metric-specific message with metric context."""
+        """Log a metric-specific message with metric context.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+
+        This method adds metric-specific context to the log message.
+        """
         try:
             local_kwargs = kwargs.copy()
             local_kwargs["log_type"] = "metric"
@@ -523,7 +681,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             self._sync_flush()
 
     def _send_to_otel(self, record: LogRecordModel):
-        """Send log record to OpenTelemetry."""
+        """Send log record to OpenTelemetry.
+
+        Args:
+            record (LogRecordModel): The log record to send
+
+        This method converts the internal log record to OpenTelemetry format
+        and emits it through the configured OpenTelemetry logger.
+        """
         try:
             # Create OpenTelemetry LogRecord
             otel_record = self._create_log_record(record.model_dump())
@@ -560,14 +725,29 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error during sync flush: {e}")
 
     def tracing(self, msg: str, *args: Any, **kwargs: Any):
-        """Log a trace-specific message with trace context."""
+        """Log a trace-specific message with trace context.
+
+        Args:
+            msg (str): The message to log
+            *args: Variable length argument list
+            **kwargs: Arbitrary keyword arguments for context
+
+        This method adds trace-specific context to the log message.
+        """
         local_kwargs = kwargs.copy()
         local_kwargs["log_type"] = "trace"
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
         self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
 
     async def parquet_sink(self, message: Any):
-        """Process log message and store in parquet format."""
+        """Process log message and store in parquet format.
+
+        Args:
+            message (Any): The log message to process
+
+        This method converts the log message to a LogRecordModel and adds it
+        to the buffer for parquet storage.
+        """
         try:
             extra = LogExtraModel()
             for k, v in message.record["extra"].items():
@@ -589,7 +769,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             logging.error(f"Error buffering log: {e}")
 
     def otlp_sink(self, message: Any):
-        """Process log message and emit to OTLP."""
+        """Process log message and emit to OTLP.
+
+        Args:
+            message (Any): The log message to process
+
+        This method converts the log message to a LogRecordModel and sends it
+        to OpenTelemetry through the OTLP exporter.
+        """
         try:
             extra = LogExtraModel()
             for k, v in message.record["extra"].items():

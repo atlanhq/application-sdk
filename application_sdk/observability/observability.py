@@ -241,24 +241,13 @@ class AtlanObservability(Generic[T], ABC):
             await self._flush_records(buffer_copy)
 
     async def parquet_sink(self, message: Any):
+        """Process message and store in parquet format."""
         try:
-            log_record = LogRecord(
-                timestamp=message.record["time"].timestamp(),
-                level=message.record["level"].name,
-                logger_name=message.record["extra"].get("logger_name", ""),
-                message=message.record["message"],
-                file=str(message.record["file"].path),
-                line=message.record["line"],
-                function=message.record["function"],
-                extra={
-                    k: v
-                    for k, v in message.record["extra"].items()
-                    if k != "logger_name"
-                },
-            )
+            # Process the message into a record
+            record = self._process_message_to_record(message)
 
             with self._buffer_lock:
-                self._buffer.append(log_record.model_dump())
+                self._buffer.append(record)
                 now = time()
                 if (
                     len(self._buffer) >= self._batch_size
@@ -273,7 +262,16 @@ class AtlanObservability(Generic[T], ABC):
             if buffer_copy is not None:
                 await self._flush_records(buffer_copy)
         except Exception as e:
-            logging.error(f"Error buffering log: {e}")
+            logging.error(f"Error buffering record: {e}")
+
+    def _process_message_to_record(self, message: Any) -> Dict[str, Any]:
+        """Process a message into a record format.
+
+        This method should be implemented by subclasses to handle their specific message types.
+        """
+        raise NotImplementedError(
+            "Subclasses must implement _process_message_to_record"
+        )
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to parquet file and object store."""
@@ -469,6 +467,35 @@ class AtlanObservability(Generic[T], ABC):
 
         except Exception as e:
             logging.error(f"Error adding record: {e}")
+
+    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
+        """Parse OpenTelemetry resource attributes from environment variable."""
+        try:
+            if env_var:
+                attributes = env_var.split(",")
+                return {
+                    item.split("=")[0].strip(): item.split("=")[1].strip()
+                    for item in attributes
+                    if "=" in item
+                }
+        except Exception as e:
+            logging.error(f"Failed to parse OTLP resource attributes: {e}")
+        return {}
+
+    async def _periodic_flush(self):
+        """Periodically flush buffer."""
+        try:
+            # Initial flush
+            await self._flush_buffer(force=True)
+
+            while True:
+                await asyncio.sleep(self._flush_interval)
+                await self._flush_buffer(force=True)
+        except asyncio.CancelledError:
+            # Handle task cancellation gracefully
+            await self._flush_buffer(force=True)
+        except Exception as e:
+            logging.error(f"Error in periodic flush: {e}")
 
 
 class DuckDBUI:
