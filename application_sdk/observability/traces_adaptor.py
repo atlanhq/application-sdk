@@ -372,7 +372,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         - Console logging
         """
         if not isinstance(record, TraceRecord):
-            return
+            record = TraceRecord(**self.process_record(record))
 
         # Send to OpenTelemetry if enabled
         if ENABLE_OTLP_TRACES:

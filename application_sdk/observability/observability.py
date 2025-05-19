@@ -4,7 +4,7 @@ import os
 import signal
 import sys
 import threading
-from abc import ABC, abstractmethod
+from abc import ABC
 from datetime import datetime, timedelta
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
@@ -62,7 +62,12 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class AtlanObservability(Generic[T], ABC):
-    """Base class for Atlan observability."""
+    """Base class for Atlan observability.
+
+    This class provides common functionality for handling observability records
+    across different types (logs, metrics, traces). It uses Pydantic models for
+    consistent record handling and validation.
+    """
 
     _last_cleanup_key = (
         "last_cleanup_time"  # Class variable for shared cleanup tracking
@@ -208,46 +213,73 @@ class AtlanObservability(Generic[T], ABC):
         else:
             self.parquet_path = os.path.join(self.data_dir, self.file_name)
 
-    @abstractmethod
     def process_record(self, record: Any) -> Dict[str, Any]:
-        """Process a record into a dictionary format.
+        """Process a record into a standardized dictionary format.
 
         Args:
-            record: The record to process
+            record: The record to process, can be a Pydantic model or dict
 
         Returns:
-            Dictionary representation of the record
-        """
-        pass
+            Dict[str, Any]: Processed record in dictionary format
 
-    @abstractmethod
-    def export_record(self, record: Any) -> None:
-        """Export a record to external systems.
+        This method handles different record types:
+        - Pydantic models: Uses model_dump() for conversion
+        - Dictionaries: Validates and converts to model
+        - Other types: Uses _process_message_to_record for conversion
+        """
+        try:
+            # If it's already a Pydantic model of type T
+            if isinstance(record, T):
+                return record.model_dump()
+
+            # If it's a dictionary, try to convert to model
+            if isinstance(record, dict):
+                # Get the actual model class from the instance
+                model_class = self.__orig_bases__[0].__args__[0]
+                return model_class(**record).model_dump()
+
+            # For other types, use the specific processor
+            return self._process_message_to_record(record)
+        except Exception as e:
+            logging.error(f"Error processing record: {e}")
+            return {}
+
+    def _process_message_to_record(self, message: Any) -> Dict[str, Any]:
+        """Process a message into a record format.
 
         Args:
-            record: The record to export
+            message: The message to process
+
+        Returns:
+            Dict[str, Any]: Processed record in dictionary format
+
+        This method should be implemented by subclasses to handle their specific message types.
+        The implementation should convert the message into a format that can be used to create
+        an instance of the record type T.
         """
-        pass
+        raise NotImplementedError(
+            "Subclasses must implement _process_message_to_record"
+        )
 
-    async def _flush_buffer(self, force=False):
-        """Flush the buffer."""
-        with self._buffer_lock:
-            if self._buffer:
-                buffer_copy = self._buffer[:]
-                self._buffer.clear()
-            else:
-                buffer_copy = None
-        if buffer_copy:
-            await self._flush_records(buffer_copy)
+    def add_record(self, record: Any):
+        """Add a record to the buffer and process it.
 
-    async def parquet_sink(self, message: Any):
-        """Process message and store in parquet format."""
+        Args:
+            record: The record to add, can be a Pydantic model or dict
+
+        This method:
+        1. Processes the record into a standardized format
+        2. Adds it to the buffer
+        3. Flushes if buffer size or time threshold is reached
+        4. Exports the record to external systems
+        """
         try:
-            # Process the message into a record
-            record = self._process_message_to_record(message)
+            # Process the record
+            processed_record = self.process_record(record)
 
+            # Add to buffer
             with self._buffer_lock:
-                self._buffer.append(record)
+                self._buffer.append(processed_record)
                 now = time()
                 if (
                     len(self._buffer) >= self._batch_size
@@ -259,19 +291,55 @@ class AtlanObservability(Generic[T], ABC):
                 else:
                     buffer_copy = None
 
+            # Flush if needed
             if buffer_copy is not None:
-                await self._flush_records(buffer_copy)
+                asyncio.create_task(self._flush_records(buffer_copy))
+
+            # Export the record
+            self.export_record(record)
+
         except Exception as e:
-            logging.error(f"Error buffering record: {e}")
+            logging.error(f"Error adding record: {e}")
 
-    def _process_message_to_record(self, message: Any) -> Dict[str, Any]:
-        """Process a message into a record format.
+    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
+        """Parse OpenTelemetry resource attributes from environment variable."""
+        try:
+            if env_var:
+                attributes = env_var.split(",")
+                return {
+                    item.split("=")[0].strip(): item.split("=")[1].strip()
+                    for item in attributes
+                    if "=" in item
+                }
+        except Exception as e:
+            logging.error(f"Failed to parse OTLP resource attributes: {e}")
+        return {}
 
-        This method should be implemented by subclasses to handle their specific message types.
-        """
-        raise NotImplementedError(
-            "Subclasses must implement _process_message_to_record"
-        )
+    async def _periodic_flush(self):
+        """Periodically flush buffer."""
+        try:
+            # Initial flush
+            await self._flush_buffer(force=True)
+
+            while True:
+                await asyncio.sleep(self._flush_interval)
+                await self._flush_buffer(force=True)
+        except asyncio.CancelledError:
+            # Handle task cancellation gracefully
+            await self._flush_buffer(force=True)
+        except Exception as e:
+            logging.error(f"Error in periodic flush: {e}")
+
+    async def _flush_buffer(self, force=False):
+        """Flush the buffer."""
+        with self._buffer_lock:
+            if self._buffer:
+                buffer_copy = self._buffer[:]
+                self._buffer.clear()
+            else:
+                buffer_copy = None
+        if buffer_copy:
+            await self._flush_records(buffer_copy)
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to parquet file and object store."""
@@ -434,68 +502,13 @@ class AtlanObservability(Generic[T], ABC):
         except Exception as e:
             logging.error(f"Error cleaning up old records: {e}")
 
-    def add_record(self, record: Any):
-        """Add a record to the buffer and process it.
+    def export_record(self, record: Any) -> None:
+        """Export a record to external systems.
 
         Args:
-            record: The record to add
+            record: The record to export
         """
-        try:
-            # Process the record
-            processed_record = self.process_record(record)
-
-            # Add to buffer
-            with self._buffer_lock:
-                self._buffer.append(processed_record)
-                now = time()
-                if (
-                    len(self._buffer) >= self._batch_size
-                    or (now - self._last_flush_time) >= self._flush_interval
-                ):
-                    self._last_flush_time = now
-                    buffer_copy = self._buffer[:]
-                    self._buffer.clear()
-                else:
-                    buffer_copy = None
-
-            # Flush if needed
-            if buffer_copy is not None:
-                asyncio.create_task(self._flush_records(buffer_copy))
-
-            # Export the record
-            self.export_record(record)
-
-        except Exception as e:
-            logging.error(f"Error adding record: {e}")
-
-    def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable."""
-        try:
-            if env_var:
-                attributes = env_var.split(",")
-                return {
-                    item.split("=")[0].strip(): item.split("=")[1].strip()
-                    for item in attributes
-                    if "=" in item
-                }
-        except Exception as e:
-            logging.error(f"Failed to parse OTLP resource attributes: {e}")
-        return {}
-
-    async def _periodic_flush(self):
-        """Periodically flush buffer."""
-        try:
-            # Initial flush
-            await self._flush_buffer(force=True)
-
-            while True:
-                await asyncio.sleep(self._flush_interval)
-                await self._flush_buffer(force=True)
-        except asyncio.CancelledError:
-            # Handle task cancellation gracefully
-            await self._flush_buffer(force=True)
-        except Exception as e:
-            logging.error(f"Error in periodic flush: {e}")
+        pass
 
 
 class DuckDBUI:

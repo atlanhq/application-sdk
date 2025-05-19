@@ -178,7 +178,11 @@ SEVERITY_MAPPING = {
 
 
 class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
-    """Logger adapter for Atlan."""
+    """Logger adapter for Atlan.
+
+    This adapter provides functionality for recording and exporting logs,
+    supporting both OpenTelemetry integration and local storage.
+    """
 
     _flush_task_started = False
     _flush_task = None
@@ -749,22 +753,8 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         to the buffer for parquet storage.
         """
         try:
-            extra = LogExtraModel()
-            for k, v in message.record["extra"].items():
-                if k != "logger_name" and hasattr(extra, k):
-                    setattr(extra, k, v)
-
-            log_record = LogRecordModel(
-                timestamp=message.record["time"].timestamp(),
-                level=message.record["level"].name,
-                logger_name=message.record["extra"].get("logger_name", ""),
-                message=message.record["message"],
-                file=str(message.record["file"].path),
-                line=message.record["line"],
-                function=message.record["function"],
-                extra=extra,
-            )
-            self.add_record(log_record)
+            record = self._process_message_to_record(message)
+            self.add_record(record)
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
 
@@ -778,22 +768,8 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         to OpenTelemetry through the OTLP exporter.
         """
         try:
-            extra = LogExtraModel()
-            for k, v in message.record["extra"].items():
-                if k != "logger_name" and hasattr(extra, k):
-                    setattr(extra, k, v)
-
-            log_record = LogRecordModel(
-                timestamp=message.record["time"].timestamp(),
-                level=message.record["level"].name,
-                logger_name=message.record["extra"].get("logger_name", ""),
-                message=message.record["message"],
-                file=str(message.record["file"].path),
-                line=message.record["line"],
-                function=message.record["function"],
-                extra=extra,
-            )
-            self._send_to_otel(log_record)
+            record = self._process_message_to_record(message)
+            self._send_to_otel(LogRecordModel(**record))
         except Exception as e:
             logging.error(f"Error processing log record: {e}")
 

@@ -136,12 +136,22 @@ class MetricRecord(BaseModel):
 
 
 class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
-    """Metrics adapter for Atlan."""
+    """Metrics adapter for Atlan.
+
+    This adapter provides functionality for recording and exporting metrics,
+    supporting both OpenTelemetry integration and local storage.
+    """
 
     _flush_task_started = False
 
     def __init__(self):
-        """Initialize the metrics adapter."""
+        """Initialize the metrics adapter.
+
+        This initialization:
+        - Sets up the base observability configuration
+        - Initializes OpenTelemetry metrics if enabled
+        - Starts the periodic flush task for metric buffering
+        """
         super().__init__(
             batch_size=METRICS_BATCH_SIZE,
             flush_interval=METRICS_FLUSH_INTERVAL_SECONDS,
@@ -326,7 +336,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         - Console logging
         """
         if not isinstance(record, MetricRecord):
-            return
+            record = MetricRecord(**self.process_record(record))
 
         # Send to OpenTelemetry if enabled
         if ENABLE_OTLP_METRICS:
