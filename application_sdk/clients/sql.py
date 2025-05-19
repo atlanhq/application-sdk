@@ -18,6 +18,11 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
+from application_sdk.common.error_codes import (
+    CLIENT_ERRORS,
+    IO_ERRORS,
+    COMMON_ERRORS,
+)
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
@@ -87,11 +92,11 @@ class BaseSQLClient(ClientInterface):
             )
             self.connection = self.engine.connect()
         except Exception as e:
-            logger.error(f"Error loading SQL client: {str(e)}")
+            logger.error(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: Error loading SQL client: {str(e)}")
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e))
+            raise ValueError(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: {str(e)}")
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -292,7 +297,7 @@ class BaseSQLClient(ClientInterface):
             Exception: If query execution fails.
         """
         if not self.connection:
-            raise ValueError("Connection is not established")
+            raise ValueError(f"{IO_ERRORS['SQL_QUERY_ERROR']}: Connection is not established")
         loop = asyncio.get_running_loop()
 
         if self.use_server_side_cursor:
@@ -308,7 +313,7 @@ class BaseSQLClient(ClientInterface):
                     pool, self.connection.execute, text(query)
                 )
                 if not cursor or not cursor.cursor:
-                    raise ValueError("Cursor is not supported")
+                    raise ValueError(f"{IO_ERRORS['SQL_QUERY_ERROR']}: Cursor is not supported")
                 column_names: List[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
@@ -324,8 +329,8 @@ class BaseSQLClient(ClientInterface):
                     results = [dict(zip(column_names, row)) for row in rows]
                     yield results
             except Exception as e:
-                logger.error("Error running query in batch: {error}", error=str(e))
-                raise e
+                logger.error(f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: Error running query in batch: {str(e)}")
+                raise ValueError(f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: {str(e)}")
 
         logger.info("Query execution completed")
 
@@ -371,14 +376,14 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 pool_pre_ping=True,
             )
             if not self.engine:
-                raise ValueError("Failed to create async engine")
+                raise ValueError(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: Failed to create async engine")
             self.connection = await self.engine.connect()
         except Exception as e:
-            logger.error(f"Error establishing database connection: {str(e)}")
+            logger.error(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: Error establishing database connection: {str(e)}")
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e))
+            raise ValueError(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: {str(e)}")
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """Execute a SQL query asynchronously and return results in batches.
@@ -399,7 +404,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             Exception: If query execution fails.
         """
         if not self.connection:
-            raise ValueError("Connection is not established")
+            raise ValueError(f"{IO_ERRORS['SQL_QUERY_ERROR']}: Connection is not established")
 
         logger.info(f"Running query: {query}")
         use_server_side_cursor = self.use_server_side_cursor
@@ -431,7 +436,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 yield [dict(zip(column_names, row)) for row in rows]
 
         except Exception as e:
-            logger.error(f"Error executing query: {str(e)}")
-            raise
+            logger.error(f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: Error executing query: {str(e)}")
+            raise ValueError(f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: {str(e)}")
 
         logger.info("Query execution completed")

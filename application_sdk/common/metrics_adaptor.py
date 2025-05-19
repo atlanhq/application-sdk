@@ -246,7 +246,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 "timestamp": record.timestamp,
                 "name": record.name,
                 "value": record.value,
-                "type": record.type,
+                "type": record.type.value,  # Convert enum to string value
                 "labels": record.labels,
                 "description": record.description,
                 "unit": record.unit,
