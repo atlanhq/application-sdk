@@ -13,7 +13,7 @@ from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.common.metrics_adaptor import get_metrics
 from application_sdk.common.observability import DuckDBUI
 from application_sdk.common.utils import get_workflow_config, update_workflow_config

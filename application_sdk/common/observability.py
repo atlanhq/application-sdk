@@ -27,7 +27,21 @@ from application_sdk.constants import (
 
 
 class LogRecord(BaseModel):
-    """Model for log records."""
+    """A Pydantic model representing a log record in the system.
+
+    This model defines the structure for log data with fields for timestamp,
+    level, logger name, message, and source location information.
+
+    Attributes:
+        timestamp (float): Unix timestamp when the log was recorded
+        level (str): Log level (DEBUG, INFO, WARNING, ERROR, etc.)
+        logger_name (str): Name of the logger that created the record
+        message (str): The actual log message
+        file (str): Source file where the log was created
+        line (int): Line number in the source file
+        function (str): Function name where the log was created
+        extra (Dict[str, Any]): Additional context data for the log
+    """
 
     timestamp: float
     level: str
@@ -40,12 +54,25 @@ class LogRecord(BaseModel):
 
 
 class ObservabilityDaprClient:
-    """Singleton class for DaprClient."""
+    """A singleton class for managing DaprClient instances.
+
+    This class ensures only one DaprClient instance exists throughout the application,
+    providing thread-safe access to Dapr functionality.
+
+    Attributes:
+        _instance: The singleton DaprClient instance
+        _lock: Thread lock for safe instance creation
+    """
 
     _instance = None
     _lock = threading.Lock()
 
     def __new__(cls):
+        """Create or return the singleton DaprClient instance.
+
+        Returns:
+            DaprClient: The singleton DaprClient instance
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -54,7 +81,11 @@ class ObservabilityDaprClient:
 
     @classmethod
     def get_client(cls):
-        """Get the singleton DaprClient instance."""
+        """Get the singleton DaprClient instance.
+
+        Returns:
+            DaprClient: The singleton DaprClient instance
+        """
         return cls()
 
 
@@ -62,12 +93,26 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class AtlanObservability(Generic[T], ABC):
-    """Base class for Atlan observability."""
+    """Base class for Atlan observability functionality.
 
-    _last_cleanup_key = (
-        "last_cleanup_time"  # Class variable for shared cleanup tracking
-    )
-    _instances = []  # Class variable to track all instances
+    This abstract base class provides core functionality for observability features
+    including buffering, flushing, and cleanup of observability data.
+
+    Features:
+    - Buffered record storage
+    - Periodic flushing to storage
+    - Data retention management
+    - Error handling and signal management
+    - Parquet file storage
+    - Dapr object store integration
+
+    Attributes:
+        _last_cleanup_key: Key for tracking last cleanup time
+        _instances: List of all active instances
+    """
+
+    _last_cleanup_key = "last_cleanup_time"
+    _instances = []
 
     def __init__(
         self,
@@ -81,12 +126,12 @@ class AtlanObservability(Generic[T], ABC):
         """Initialize the observability base class.
 
         Args:
-            batch_size: Number of records to batch before flushing
-            flush_interval: Interval in seconds between forced flushes
-            retention_days: Number of days to retain records
-            cleanup_enabled: Whether to enable cleanup of old records
-            data_dir: Directory to store data files
-            file_name: Name of the data file
+            batch_size (int): Number of records to batch before flushing
+            flush_interval (int): Interval in seconds between forced flushes
+            retention_days (int): Number of days to retain records
+            cleanup_enabled (bool): Whether to enable cleanup of old records
+            data_dir (str): Directory to store data files
+            file_name (str): Name of the data file
         """
         # Initialize instance variables
         self._buffer: List[Dict[str, Any]] = []
@@ -116,7 +161,13 @@ class AtlanObservability(Generic[T], ABC):
             AtlanObservability._handlers_setup = True
 
     def _setup_error_handlers(self):
-        """Set up signal handlers and exception hook."""
+        """Set up signal handlers and exception hook.
+
+        This method configures:
+        - Signal handlers for SIGTERM and SIGINT
+        - Global exception hook for unhandled exceptions
+        Both handlers ensure data is flushed before termination.
+        """
         # Set up signal handlers
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, self._signal_handler)
@@ -125,7 +176,17 @@ class AtlanObservability(Generic[T], ABC):
         sys.excepthook = self._exception_hook
 
     def _signal_handler(self, signum, frame):
-        """Handle system signals by flushing logs."""
+        """Handle system signals by flushing logs.
+
+        Args:
+            signum: Signal number
+            frame: Current stack frame
+
+        This method:
+        - Logs the received signal
+        - Attempts to flush all instances
+        - Exits the process
+        """
         logging.warning(f"Received signal {signum}, flushing logs...")
         try:
             # Try to get the current event loop
@@ -150,7 +211,18 @@ class AtlanObservability(Generic[T], ABC):
         sys.exit(0)
 
     def _exception_hook(self, exc_type, exc_value, exc_traceback):
-        """Handle unhandled exceptions by flushing logs."""
+        """Handle unhandled exceptions by flushing logs.
+
+        Args:
+            exc_type: Type of the exception
+            exc_value: Exception value
+            exc_traceback: Exception traceback
+
+        This method:
+        - Logs the unhandled exception
+        - Attempts to flush all instances
+        - Calls the original exception hook
+        """
         logging.error(
             "Unhandled exception occurred, flushing logs...",
             exc_info=(exc_type, exc_value, exc_traceback),
@@ -180,7 +252,11 @@ class AtlanObservability(Generic[T], ABC):
 
     @classmethod
     async def _flush_all_instances(cls):
-        """Flush all instances of AtlanObservability."""
+        """Flush all instances of AtlanObservability.
+
+        This method attempts to flush all registered instances,
+        logging any errors that occur during flushing.
+        """
         for instance in cls._instances:
             try:
                 await instance._flush_buffer(force=True)
@@ -188,7 +264,13 @@ class AtlanObservability(Generic[T], ABC):
                 logging.error(f"Error flushing instance: {e}")
 
     def _update_parquet_path(self):
-        """Update the parquet file path based on current date if using date-based files."""
+        """Update the parquet file path based on current date if using date-based files.
+
+        This method:
+        - Creates appropriate subdirectories for different file types
+        - Updates the parquet path based on current date if using date-based files
+        - Maintains the original path if not using date-based files
+        """
         if self._use_date_based_files:
             # Create appropriate subdirectory based on file type
             if self.file_name == "log.parquet":
@@ -216,7 +298,9 @@ class AtlanObservability(Generic[T], ABC):
             record: The record to process
 
         Returns:
-            Dictionary representation of the record
+            Dict[str, Any]: Dictionary representation of the record
+
+        This is an abstract method that must be implemented by subclasses.
         """
         pass
 
@@ -226,11 +310,21 @@ class AtlanObservability(Generic[T], ABC):
 
         Args:
             record: The record to export
+
+        This is an abstract method that must be implemented by subclasses.
         """
         pass
 
     async def _flush_buffer(self, force=False):
-        """Flush the buffer."""
+        """Flush the buffer to storage.
+
+        Args:
+            force (bool): Whether to force flush regardless of buffer size
+
+        This method:
+        - Safely copies and clears the buffer
+        - Flushes records if buffer is not empty
+        """
         with self._buffer_lock:
             if self._buffer:
                 buffer_copy = self._buffer[:]
@@ -241,6 +335,16 @@ class AtlanObservability(Generic[T], ABC):
             await self._flush_records(buffer_copy)
 
     async def parquet_sink(self, message: Any):
+        """Process and buffer a log message for parquet storage.
+
+        Args:
+            message: The log message to process
+
+        This method:
+        - Creates a LogRecord from the message
+        - Adds it to the buffer
+        - Triggers flush if buffer size or time threshold is reached
+        """
         try:
             log_record = LogRecord(
                 timestamp=message.record["time"].timestamp(),
@@ -276,7 +380,17 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error buffering log: {e}")
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
-        """Flush records to parquet file and object store."""
+        """Flush records to parquet file and object store.
+
+        Args:
+            records: List of records to flush
+
+        This method:
+        - Updates parquet path for date-based files
+        - Writes records to parquet file
+        - Uploads to object store if enabled
+        - Triggers cleanup if needed
+        """
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
             return
         try:
@@ -315,7 +429,13 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error flushing records batch: {e}")
 
     async def _check_and_cleanup(self):
-        """Check if cleanup is needed and perform it if necessary."""
+        """Check if cleanup is needed and perform it if necessary.
+
+        This method:
+        - Checks last cleanup time from state store
+        - Performs cleanup if more than a day has passed
+        - Updates last cleanup time after successful cleanup
+        """
         try:
             with DaprClient() as client:
                 # Get last cleanup time from state store
@@ -339,7 +459,14 @@ class AtlanObservability(Generic[T], ABC):
             logging.error(f"Error checking cleanup status: {e}")
 
     async def _cleanup_old_records(self):
-        """Clean up records older than retention_days."""
+        """Clean up records older than retention_days.
+
+        This method:
+        - Handles both single file and date-based file cases
+        - Removes records older than retention period
+        - Updates or deletes files as needed
+        - Syncs changes with object store
+        """
         try:
             if not self._use_date_based_files:
                 # Handle single file case
@@ -441,6 +568,12 @@ class AtlanObservability(Generic[T], ABC):
 
         Args:
             record: The record to add
+
+        This method:
+        - Processes the record
+        - Adds it to the buffer
+        - Triggers flush if needed
+        - Exports the record
         """
         try:
             # Process the record
@@ -472,19 +605,35 @@ class AtlanObservability(Generic[T], ABC):
 
 
 class DuckDBUI:
-    """Class to handle DuckDB UI functionality."""
+    """Class to handle DuckDB UI functionality.
+
+    This class provides functionality to start and manage the DuckDB UI,
+    including automatic view creation for parquet files.
+
+    Attributes:
+        db_path (str): Path to the DuckDB database file
+        _duckdb_ui_con: DuckDB connection object
+    """
 
     def __init__(self, db_path="/tmp/observability/observability.db"):
         """Initialize the DuckDB UI handler.
 
         Args:
-            db_path (str): Path to the DuckDB database file.
+            db_path (str): Path to the DuckDB database file
         """
         self.db_path = db_path
         self._duckdb_ui_con = None
 
     def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
-        """Check if DuckDB UI is already running on the default port."""
+        """Check if DuckDB UI is already running on the default port.
+
+        Args:
+            host (str): Host to check
+            port (int): Port to check
+
+        Returns:
+            bool: True if DuckDB UI is running, False otherwise
+        """
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -493,7 +642,17 @@ class DuckDBUI:
             return result == 0
 
     def start_ui(self, db_path=OBSERVABILITY_DIR):
-        """Start DuckDB UI if not already running, and attach the /tmp/observability folder."""
+        """Start DuckDB UI if not already running, and attach the observability folder.
+
+        Args:
+            db_path (str): Path to the observability directory
+
+        This method:
+        - Creates necessary directories
+        - Connects to DuckDB
+        - Creates views for parquet files
+        - Starts the DuckDB UI
+        """
         import os
 
         import duckdb

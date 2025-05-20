@@ -19,7 +19,7 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.constants import (
     APPLICATION_NAME,
     MAX_CONCURRENT_ACTIVITIES,

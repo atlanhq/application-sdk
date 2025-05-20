@@ -2,7 +2,7 @@ import asyncio
 import concurrent
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.inputs import Input
 
 logger = get_logger(__name__)

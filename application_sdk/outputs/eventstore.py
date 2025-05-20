@@ -12,7 +12,7 @@ from dapr import clients
 from pydantic import BaseModel, Field
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 activity.logger = logger

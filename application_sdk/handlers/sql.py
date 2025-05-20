@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface

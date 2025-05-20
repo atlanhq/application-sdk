@@ -3,7 +3,7 @@ import os
 from datetime import datetime
 from typing import List
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.docgen.exporters.mkdocs import MkDocsExporter
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.parsers.directory import DirectoryParser

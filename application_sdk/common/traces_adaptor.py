@@ -13,7 +13,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExport
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
@@ -34,7 +34,24 @@ from application_sdk.constants import (
 
 
 class TraceRecord(BaseModel):
-    """Pydantic model for trace records."""
+    """A Pydantic model representing a trace record in the system.
+
+    This model defines the structure for distributed tracing data with fields for
+    trace identification, timing, status, and additional context.
+
+    Attributes:
+        timestamp (float): Unix timestamp when the trace was recorded
+        trace_id (str): Unique identifier for the trace
+        span_id (str): Unique identifier for this span
+        parent_span_id (Optional[str]): ID of the parent span, if any
+        name (str): Name of the trace/span
+        kind (str): Type of span (SERVER, CLIENT, INTERNAL, etc.)
+        status_code (str): Status of the trace (OK, ERROR, etc.)
+        status_message (Optional[str]): Additional status information
+        attributes (Dict[str, Any]): Key-value pairs for trace context
+        events (Optional[list[Dict[str, Any]]]): List of events in the trace
+        duration_ms (float): Duration of the trace in milliseconds
+    """
 
     timestamp: float
     trace_id: str
@@ -50,7 +67,24 @@ class TraceRecord(BaseModel):
 
 
 class TraceContext:
-    """Context manager for trace recording."""
+    """Context manager for trace recording.
+
+    This class provides a context manager interface for recording traces,
+    automatically handling timing, status updates, and error recording.
+
+    Attributes:
+        adapter (AtlanTracesAdapter): The traces adapter instance
+        name (str): Name of the trace
+        trace_id (str): Unique identifier for the trace
+        span_id (str): Unique identifier for this span
+        kind (str): Type of span
+        status_code (str): Initial status code
+        attributes (Dict[str, Any]): Trace attributes
+        parent_span_id (Optional[str]): Parent span ID
+        status_message (Optional[str]): Status message
+        events (Optional[list[Dict[str, Any]]]): Trace events
+        start_time (float): When the trace started
+    """
 
     def __init__(
         self,
@@ -65,6 +99,20 @@ class TraceContext:
         status_message: Optional[str] = None,
         events: Optional[list[Dict[str, Any]]] = None,
     ):
+        """Initialize the trace context.
+
+        Args:
+            adapter: The traces adapter instance
+            name: Name of the trace
+            trace_id: Unique identifier for the trace
+            span_id: Unique identifier for this span
+            kind: Type of span
+            status_code: Initial status code
+            attributes: Trace attributes
+            parent_span_id: Optional parent span ID
+            status_message: Optional status message
+            events: Optional list of trace events
+        """
         self.adapter = adapter
         self.name = name
         self.trace_id = trace_id
@@ -78,11 +126,26 @@ class TraceContext:
         self.start_time = time()
 
     def __enter__(self) -> "TraceContext":
-        """Enter the context."""
+        """Enter the trace context.
+
+        Returns:
+            TraceContext: The trace context instance
+        """
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit the context and record the trace."""
+        """Exit the trace context and record the trace.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+
+        This method:
+        - Calculates trace duration
+        - Updates status based on any exceptions
+        - Records the trace with final status
+        """
         duration_ms = (time() - self.start_time) * 1000
         status_code = "ERROR" if exc_type is not None else self.status_code
         status_message = str(exc_val) if exc_type is not None else self.status_message
@@ -102,12 +165,30 @@ class TraceContext:
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
-    """Traces adapter for Atlan."""
+    """A traces adapter for Atlan that extends AtlanObservability.
+
+    This adapter provides functionality for recording, processing, and exporting
+    distributed traces to various backends including OpenTelemetry and parquet files.
+
+    Features:
+    - Distributed tracing with spans and events
+    - OpenTelemetry integration
+    - Periodic trace flushing
+    - Console logging
+    - Parquet file storage
+    - Context manager support
+    """
 
     _flush_task_started = False
 
     def __init__(self):
-        """Initialize the traces adapter."""
+        """Initialize the traces adapter with configuration and setup.
+
+        This initialization:
+        - Sets up base observability configuration
+        - Initializes OpenTelemetry traces if enabled
+        - Starts periodic flush task for trace buffering
+        """
         super().__init__(
             batch_size=TRACES_BATCH_SIZE,
             flush_interval=TRACES_FLUSH_INTERVAL_SECONDS,
@@ -136,7 +217,17 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 logging.error(f"Failed to start traces flush task: {e}")
 
     def _setup_otel_traces(self):
-        """Setup OpenTelemetry traces exporter."""
+        """Set up OpenTelemetry traces exporter and configuration.
+
+        This method:
+        - Configures resource attributes
+        - Creates console and OTLP exporters
+        - Sets up span processors
+        - Initializes tracer provider
+        - Creates tracer for the service
+
+        Falls back to console-only tracing if setup fails.
+        """
         try:
             # Get workflow node name for Argo environment
             workflow_node_name = OTEL_WF_NODE_NAME
@@ -209,7 +300,15 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             self._setup_console_only_traces()
 
     def _setup_console_only_traces(self):
-        """Setup console-only tracing as fallback."""
+        """Set up console-only tracing as fallback.
+
+        This method:
+        - Creates basic resource attributes
+        - Sets up console exporter
+        - Configures span processor
+        - Initializes tracer provider
+        - Creates tracer for the service
+        """
         try:
             # Create resource with basic attributes
             resource = Resource.create(
@@ -244,7 +343,18 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             logging.error(f"Failed to setup console-only tracing: {e}")
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable."""
+        """Parse OpenTelemetry resource attributes from environment variable.
+
+        Args:
+            env_var (str): Comma-separated string of key-value pairs
+
+        Returns:
+            dict[str, str]: Dictionary of parsed resource attributes
+
+        Example:
+            Input: "service.name=myapp,service.version=1.0"
+            Output: {"service.name": "myapp", "service.version": "1.0"}
+        """
         try:
             if env_var:
                 attributes = env_var.split(",")
@@ -258,17 +368,33 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         return {}
 
     def _start_asyncio_flush(self):
-        """Start the asyncio flush task."""
+        """Start an asyncio event loop for periodic trace flushing.
+
+        Creates a new event loop and runs the periodic flush task in the background.
+        This is used when no existing event loop is available.
+        """
         asyncio.run(self._periodic_flush())
 
     async def _periodic_flush(self):
-        """Periodically flush traces buffer."""
+        """Periodically flush traces buffer to storage.
+
+        This coroutine:
+        - Runs in an infinite loop
+        - Sleeps for the configured flush interval
+        - Forces a flush of the traces buffer
+        """
         while True:
             await asyncio.sleep(self._flush_interval)
             await self._flush_buffer(force=True)
 
     def process_record(self, record: Any) -> Dict[str, Any]:
-        """Process a trace record into a dictionary format.
+        """Process a trace record into a standardized dictionary format.
+
+        Args:
+            record (Any): Input trace record, can be TraceRecord or dict
+
+        Returns:
+            Dict[str, Any]: Standardized dictionary representation of the trace
 
         This method ensures traces are properly formatted for storage in traces.parquet.
         It converts the TraceRecord into a dictionary with all necessary fields.
@@ -292,7 +418,16 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         return record
 
     def export_record(self, record: Any) -> None:
-        """Export a trace record to external systems."""
+        """Export a trace record to external systems.
+
+        Args:
+            record (Any): Trace record to export
+
+        This method:
+        - Validates the record is a TraceRecord
+        - Sends to OpenTelemetry if enabled
+        - Logs to console
+        """
         if not isinstance(record, TraceRecord):
             return
 
@@ -304,7 +439,16 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         self._log_to_console(record)
 
     def _str_to_span_kind(self, kind: str) -> SpanKind:
-        """Convert string kind to SpanKind enum."""
+        """Convert string kind to OpenTelemetry SpanKind enum.
+
+        Args:
+            kind (str): String representation of span kind
+
+        Returns:
+            SpanKind: OpenTelemetry SpanKind enum value
+
+        Defaults to INTERNAL if kind is not recognized.
+        """
         kind_map = {
             "INTERNAL": SpanKind.INTERNAL,
             "SERVER": SpanKind.SERVER,
@@ -315,11 +459,31 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         return kind_map.get(kind, SpanKind.INTERNAL)
 
     def _timestamp_to_nanos(self, timestamp: float) -> int:
-        """Convert Unix timestamp to nanoseconds."""
+        """Convert Unix timestamp to nanoseconds.
+
+        Args:
+            timestamp (float): Unix timestamp in seconds
+
+        Returns:
+            int: Timestamp in nanoseconds
+        """
         return int(timestamp * 1_000_000_000)  # Convert seconds to nanoseconds
 
     def _send_to_otel(self, trace_record: TraceRecord):
-        """Send trace to OpenTelemetry."""
+        """Send trace to OpenTelemetry.
+
+        Args:
+            trace_record (TraceRecord): Trace record to send
+
+        This method:
+        - Creates a span with trace data
+        - Sets span status and attributes
+        - Adds events if present
+        - Handles errors gracefully
+
+        Raises:
+            Exception: If sending fails, logs error and continues
+        """
         try:
             # Convert string kind to SpanKind enum
             span_kind = self._str_to_span_kind(trace_record.kind)
@@ -357,7 +521,19 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             logging.error(f"Error sending trace to OpenTelemetry: {e}")
 
     def _log_to_console(self, trace_record: TraceRecord):
-        """Log trace to console."""
+        """Log trace to console using the logger.
+
+        Args:
+            trace_record (TraceRecord): Trace record to log
+
+        This method:
+        - Formats trace information into a readable string
+        - Includes trace ID, span ID, status, and duration
+        - Uses the tracing-specific logger level
+
+        Raises:
+            Exception: If logging fails, logs error and continues
+        """
         try:
             log_message = (
                 f"Trace: {trace_record.name} "
@@ -391,6 +567,21 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     ) -> TraceContext:
         """Create a trace context for recording traces.
 
+        Args:
+            name (str): Name of the trace
+            trace_id (str): Unique identifier for the trace
+            span_id (str): Unique identifier for this span
+            kind (str): Type of span
+            status_code (str): Initial status code
+            attributes (Dict[str, Any]): Trace attributes
+            parent_span_id (Optional[str]): Parent span ID
+            status_message (Optional[str]): Status message
+            events (Optional[list[Dict[str, Any]]]): Trace events
+            duration_ms (Optional[float]): Duration in milliseconds
+
+        Returns:
+            TraceContext: Context manager for recording the trace
+
         This method returns a context manager that will automatically record the trace
         when the context is exited, including duration and any exceptions that occurred.
         """
@@ -420,7 +611,23 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         events: Optional[list[Dict[str, Any]]] = None,
         duration_ms: Optional[float] = None,
     ) -> None:
-        """Internal method to record a trace."""
+        """Internal method to record a trace.
+
+        Args:
+            name (str): Name of the trace
+            trace_id (str): Unique identifier for the trace
+            span_id (str): Unique identifier for this span
+            kind (str): Type of span
+            status_code (str): Status code
+            attributes (Dict[str, Any]): Trace attributes
+            parent_span_id (Optional[str]): Parent span ID
+            status_message (Optional[str]): Status message
+            events (Optional[list[Dict[str, Any]]]): Trace events
+            duration_ms (Optional[float]): Duration in milliseconds
+
+        Raises:
+            Exception: If recording fails, logs error and re-raises
+        """
         try:
             # Create trace record
             trace_record = TraceRecord(
@@ -445,11 +652,23 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             raise
 
     def __enter__(self):
-        """Context manager entry."""
+        """Context manager entry.
+
+        Returns:
+            AtlanTracesAdapter: The traces adapter instance
+        """
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit."""
+        """Context manager exit.
+
+        Args:
+            exc_type: Exception type if an exception occurred
+            exc_val: Exception value if an exception occurred
+            exc_tb: Exception traceback if an exception occurred
+
+        If an exception occurred, records an error trace with the exception details.
+        """
         if exc_type is not None:
             # If there was an exception, record it
             self._record_trace(
@@ -468,9 +687,13 @@ _traces_instance: Optional[AtlanTracesAdapter] = None
 
 
 def get_traces() -> AtlanTracesAdapter:
-    """Get or create an instance of AtlanTracesAdapter.
+    """Get or create a singleton instance of AtlanTracesAdapter.
+
     Returns:
-        AtlanTracesAdapter: Traces adapter instance
+        AtlanTracesAdapter: Singleton instance of the traces adapter
+
+    This function ensures only one instance of the traces adapter exists
+    throughout the application lifecycle.
     """
     global _traces_instance
     if _traces_instance is None:
