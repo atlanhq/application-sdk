@@ -67,7 +67,7 @@ dapr init --runtime-version 1.13.6 --slim
 Common issues (click to expand):
 
 <details>
-  <summary>permission issuesv</summary>
+  <summary>permission issues</summary>
     If you are facing permission issues while installing uv, you can try installing uv with sudo:
 
     ```bash
