@@ -67,7 +67,7 @@ Once your environment is set up:
       "request": "launch",
       "program": "${workspaceFolder}/.venv/bin/pytest",
       "args": ["-v"],
-      "cwd": "${workspaceFolder}/tests/unit/paas",
+      "cwd": "${workspaceFolder}/tests/unit/",
       "env": {
         "PYTHONPATH": "${workspaceFolder}"
       }
