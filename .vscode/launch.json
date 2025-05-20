@@ -1,0 +1,37 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+      {
+        "name": "Python: Run Example SQL Application",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/examples/application_sql.py",
+        "cwd": "${workspaceFolder}",
+        "justMyCode": false,
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}/.venv/bin/python",
+          "POSTGRES_HOST": "host",
+          "POSTGRES_PORT": "5432",
+          "POSTGRES_USER": "postgres",
+          "POSTGRES_PASSWORD": "password",
+          "POSTGRES_DATABASE": "database"
+        }
+      },
+      {
+        "name": "Python: Run Unit Tests",
+        "type": "debugpy",
+        "request": "launch",
+        "program": "${workspaceFolder}/.venv/bin/pytest",
+        "args": [
+          "--capture=no",
+          "--log-cli-level=INFO",
+          "tests/unit",
+          "-v"
+        ],
+        "cwd": "${workspaceFolder}",
+        "env": {
+          "PYTHONPATH": "${workspaceFolder}"
+        }
+      }
+    ]
+}
