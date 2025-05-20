@@ -60,3 +60,18 @@ dapr init --runtime-version 1.13.6 --slim
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
 > - Install project dependencies
 > - Run example applications
+
+
+## Common setup issues
+
+Common issues (click to expand):
+
+<details>
+  <summary>permission issuesv</summary>
+    If you are facing permission issues while installing uv, you can try installing uv with sudo:
+
+    ```bash
+    curl -LsSf https://astral.sh/uv/0.7.3/install.sh | sudo sh
+    ```
+
+</details>
