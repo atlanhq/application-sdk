@@ -111,17 +111,26 @@ Once testing is complete and everything looks good:
 Want co-marketing? Let’s plan it together 🎯
 
 
-### ✅ I’m in! What’s the checklist?
-Here’s your quick-start guide:
+### 📬 Ready to get started?
+Fill out this intake [form](https://docs.google.com/forms/d/e/1FAIpQLScuAIhCm2GS7YFstrOjawbP8J7PUmOynQo7wI2yGCcCyEcVSw/viewform?usp=sharing&ouid=100133263215396641529) and we’ll take it from there.
 
-- Grant your GitHub access to connect@atlan.com
-- Collaborate on the atlan-main branch
-- Review and merge changes when ready
-- Test functionality in your local environment
-- Provide product documentation
-- Go live via Atlan's deployment flow
-- Handle ongoing support collaboratively
-- Optional: Plan go-to-market with Atlan team for all customers
+Once you’re in:
+
+- Explore this SDK repository and the [sample-applications](https://github.com/atlanhq/atlan-sample-apps) repository
+- Meet with the Atlan team to align on scope, process, and timelines
+- Create a private GitHub repo for your application.
+- Push your application code to the main branch.
+- Grant write access to Atlan’s collaboration account:
+📧 connect@atlan.com
+- Collaborate via the atlan-main branch — we’ll contribute changes there.
+- Review and merge changes into your main branch on your schedule.
+- Test functionality locally to ensure everything works in your environment.
+- Share product documentation, including an overview and setup guide.
+- Go live through Atlan’s deployment process.
+- Collaborate on support — you’ll handle user-side issues; we’re here for integration help.
+- Coordinate a go-to-market plan with the Atlan team to reach customers.
+
+Let’s build something great together.
 
 
 ### 🆘 How do I get help?
