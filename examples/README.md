@@ -47,10 +47,10 @@ Once your environment is set up:
   "configurations": [
     {
       "name": "Run SQL Connector",
-      "type": "debugpy",
+      "type": "python",
       "request": "launch",
-      "program": "${workspaceFolder}/examples/application_sql.py",
-      "cwd": "${workspaceFolder}",
+      "module": "uv",
+      "args": ["run", "python", "/examples/application_sql.py"],
       "justMyCode": false,
       "env": {
         "PYTHONPATH": "${workspaceFolder}",
