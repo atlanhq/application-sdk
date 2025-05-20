@@ -2,12 +2,12 @@
 
 ## 📚 Table of Contents
 
-- [👩‍💻 How do we manage code changes?](#-how-do-we-manage-code-changes)
-- [🧪 How do we test?](#-how-do-we-test)
-- [📞 How do we handle support?](#-how-do-we-handle-support)
-- [📚 What about documentation?](#-what-about-documentation)
-- [📣 How do we go-to-market?](#-how-do-we-go-to-market)
-- [📬 Contact](#-contact)
+- [How do we manage code changes?](#-how-do-we-manage-code-changes)
+- [How do we test?](#-how-do-we-test)
+- [How do we handle support?](#-how-do-we-handle-support)
+- [What about documentation?](#-what-about-documentation)
+- [How do we go-to-market?](#-how-do-we-go-to-market)
+- [Contact](#-contact)
 
 
 Welcome! If you're here, you're probably building something awesome. This guide walks you through how we collaborate on app development and integrations — from GitHub access to go-live, support, and everything in between.
@@ -17,23 +17,18 @@ We believe in a transparent, low-friction workflow that keeps you in full contro
 
 Here's how it works:
 
-- You grant our team access to your private GitHub repository by adding our dedicated collaboration account:
+- Grant our team access to your private GitHub repository by adding our dedicated collaboration account:
    - 📧 Email: connect@atlan.com
    - 🔑 Permission level: Write access
+- Once access is granted:
+   - All contributions from Atlan are made to a dedicated branch called atlan-main.
+   - We never push directly to your main.
+   - You can review, test, and merge changes on your own timeline.
 
 > [!NOTE]
-> This account is used solely for code contributions and sync — no changes are made to your main branch.
-
-
-Once access is granted:
-- All contributions from Atlan are made to a dedicated branch called atlan-main.
-- We never push directly to your main.
-- You can review, test, and merge changes on your own timeline.
+> The collaboration account is used solely for code contributions and sync — no changes are made to your main branch.
 
 > Questions about a PR? Drop a comment directly on GitHub or reach out to your Atlan integration contact email.
-
-We're here to make collaboration smooth, secure, and efficient.
-
 
 ## 🧪 How do we test?
 We make sure everything we contribute works smoothly — both in your world and ours. Here's how testing responsibilities are typically shared:
@@ -96,7 +91,7 @@ Fill out this intake [form](https://docs.google.com/forms/d/e/1FAIpQLScuAIhCm2GS
 
 Once you're in:
 
-- Explore this SDK repository and our [sample applications](https://github.com/atlanhq/atlan-sample-apps) repository for examples.
+- Explore this repository (SDK) and our [sample applications](https://github.com/atlanhq/atlan-sample-apps) repository for examples.
 - Meet with the Atlan team to align on scope, process, and timelines
 - Create a private GitHub repo for your application.
 - Push your application code to the main branch.
