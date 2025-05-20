@@ -87,6 +87,7 @@ Post-deployment, our partner (you!) takes point on customer-facing support. Here
 
 💡 We recommend sharing your support SLAs or contact info with us to keep the loop tight.
 
+
 ### 📚 What about documentation?
 To ensure customers know how to use your app, please provide:
 
@@ -94,6 +95,7 @@ To ensure customers know how to use your app, please provide:
 - A Setup Guide (How to install, configure, and connect with Atlan)
 
 Don’t worry — our team will review and edit for clarity and style, and host this on Atlan’s documentation hub.
+
 
 ### 📣 How do we go-to-market?
 Once testing is complete and everything looks good:
@@ -108,6 +110,7 @@ Once testing is complete and everything looks good:
 
 Want co-marketing? Let’s plan it together 🎯
 
+
 ### ✅ I’m in! What’s the checklist?
 Here’s your quick-start guide:
 
@@ -119,6 +122,7 @@ Here’s your quick-start guide:
 - Go live via Atlan's deployment flow
 - Handle ongoing support collaboratively
 - Optional: Plan go-to-market with Atlan team for all customers
+
 
 ### 🆘 How do I get help?
 We’re here whenever you need us:
