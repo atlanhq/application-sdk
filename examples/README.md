@@ -50,7 +50,7 @@ Once your environment is set up:
       "type": "python",
       "request": "launch",
       "module": "uv",
-      "args": ["run", "python", "/examples/application_sql.py"],
+      "args": ["run", "python", "${workspaceFolder}/examples/application_sql.py"],
       "justMyCode": false,
       "env": {
         "PYTHONPATH": "${workspaceFolder}",
