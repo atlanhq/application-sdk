@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1rc6 (May 20, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc5...v0.1.1rc6
+
+### Features
+
+- add common setup issues (#542) (by @Nishchith Shetty in [dd18a31](https://github.com/atlanhq/application-sdk/commit/dd18a31))
+
+
 
 ## v0.1.1rc5 (May 13, 2025)
 
