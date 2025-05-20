@@ -20,7 +20,7 @@ from fastapi import status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 
-from application_sdk.common.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 

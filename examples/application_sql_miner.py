@@ -26,8 +26,8 @@ from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 logger = get_logger(__name__)

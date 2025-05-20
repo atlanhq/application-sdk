@@ -40,10 +40,10 @@ from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.handlers.sql import BaseSQLHandler
 
 # from application_sdk.clients.utils import get_workflow_client
-from application_sdk.common.logger_adaptor import get_logger
-from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers.common.utils import (
     get_yaml_query_template_path_mappings,
 )

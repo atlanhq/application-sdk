@@ -11,8 +11,6 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel
 
-from application_sdk.common.logger_adaptor import get_logger
-from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
@@ -31,6 +29,8 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.observability import AtlanObservability
 
 
 class MetricRecord(BaseModel):

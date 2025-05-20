@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 import daft
 import pytest
 
-from application_sdk.common.logger_adaptor import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers.query import QueryBasedTransformer
 
 logger = get_logger(__name__)

@@ -4,8 +4,8 @@ from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
 
-from application_sdk.common.logger_adaptor import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.outputs import Output
 
 logger = get_logger(__name__)

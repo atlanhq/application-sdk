@@ -5,8 +5,8 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
-from application_sdk.common.logger_adaptor import get_logger
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.statestore import StateStoreOutput
 
 logger = get_logger(__name__)

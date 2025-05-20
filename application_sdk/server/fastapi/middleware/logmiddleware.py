@@ -6,7 +6,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from application_sdk.common.logger_adaptor import get_logger, request_context
+from application_sdk.observability.logger_adaptor import get_logger, request_context
 
 logger = get_logger(__name__)
 

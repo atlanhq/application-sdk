@@ -3,8 +3,8 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from temporalio import activity
 
-from application_sdk.common.logger_adaptor import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import get_metrics
 from application_sdk.outputs import Output
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
