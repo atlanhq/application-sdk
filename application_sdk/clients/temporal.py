@@ -289,6 +289,7 @@ class TemporalWorkflowClient(WorkflowClient):
             del workflow_args["credentials"]
 
         workflow_id = workflow_args.get("workflow_id")
+        output_prefix = workflow_args.get("output_prefix", "/tmp/output")
         if not workflow_id:
             # if workflow_id is not provided, create a new one
             workflow_id = workflow_args.get("argo_workflow_name", str(uuid.uuid4()))
@@ -297,7 +298,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 {
                     "application_name": self.application_name,
                     "workflow_id": workflow_id,
-                    "output_prefix": "/tmp/output",
+                    "output_prefix": output_prefix,
                 }
             )
 

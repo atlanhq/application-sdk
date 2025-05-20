@@ -16,6 +16,7 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_DATE_FORMAT,
     LOG_USE_DATE_BASED_FILES,
     METRICS_USE_DATE_BASED_FILES,
@@ -102,7 +103,6 @@ class AtlanObservability(Generic[T], ABC):
         self._current_date = datetime.now().strftime(self._date_format)
         self._update_parquet_path()
         self.parquet_path = os.path.join(data_dir, file_name)
-        self._dapr_client = ObservabilityDaprClient.get_client()
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -277,6 +277,8 @@ class AtlanObservability(Generic[T], ABC):
 
     async def _flush_records(self, records: List[Dict[str, Any]]):
         """Flush records to parquet file and object store."""
+        if not ENABLE_OBSERVABILITY_DAPR_SINK:
+            return
         try:
             # Update parquet path in case date has changed
             self._update_parquet_path()

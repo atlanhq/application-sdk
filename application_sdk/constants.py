@@ -161,6 +161,6 @@ METRICS_USE_DATE_BASED_FILES = (
 METRICS_DATE_FORMAT = os.getenv("METRICS_DATE_FORMAT", "%Y-%m-%d")
 
 # Dapr Sink Configuration
-ENABLE_OBSERVABILITY_DAPR_SINK = bool(
-    os.environ.get("ENABLE_OBSERVABILITY_DAPR_SINK", "true")
+ENABLE_OBSERVABILITY_DAPR_SINK = (
+    os.getenv("ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
 )

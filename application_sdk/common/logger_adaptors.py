@@ -390,10 +390,8 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             # Initial flush
             await self._flush_buffer(force=True)
 
-            while ENABLE_OBSERVABILITY_DAPR_SINK:
+            while True:
                 await asyncio.sleep(self._flush_interval)
-                if not ENABLE_OBSERVABILITY_DAPR_SINK:
-                    break
                 await self._flush_buffer(force=True)
         except asyncio.CancelledError:
             # Handle task cancellation gracefully
@@ -427,7 +425,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 kwargs.update(workflow_context)
 
                 # Only append workflow context if we have workflow info
-                workflow_msg = " Workflow Context: Workflow ID: {workflow_id} Run ID: {run_id} Type: {workflow_type}"
+                workflow_msg = f" Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
                 msg = f"{msg}{workflow_msg}"
         except Exception:
             pass
@@ -456,7 +454,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 kwargs.update(activity_context)
 
                 # Only append activity context if we have activity info
-                activity_msg = " Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
+                activity_msg = f" Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
                 msg = f"{msg}{activity_msg}"
         except Exception:
             pass
