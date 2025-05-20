@@ -315,6 +315,28 @@ class AtlanObservability(Generic[T], ABC):
         """
         pass
 
+    async def _periodic_flush(self):
+        """Periodically flush the buffer to storage.
+
+        This coroutine:
+        - Performs initial flush
+        - Runs periodic flushes at configured intervals
+        - Handles task cancellation gracefully
+        - Ensures final flush on cancellation
+        """
+        try:
+            # Initial flush
+            await self._flush_buffer(force=True)
+
+            while True:
+                await asyncio.sleep(self._flush_interval)
+                await self._flush_buffer(force=True)
+        except asyncio.CancelledError:
+            # Handle task cancellation gracefully
+            await self._flush_buffer(force=True)
+        except Exception as e:
+            logging.error(f"Error in periodic flush: {e}")
+
     async def _flush_buffer(self, force=False):
         """Flush the buffer to storage.
 

@@ -16,7 +16,6 @@ from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.observability.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
     ENABLE_OTLP_LOGS,
@@ -37,6 +36,7 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+from application_sdk.observability.observability import AtlanObservability
 
 
 class LogExtraModel(BaseModel):
@@ -124,6 +124,38 @@ class LogRecordModel(BaseModel):
     line: int
     function: str
     extra: LogExtraModel = Field(default_factory=LogExtraModel)
+
+    @classmethod
+    def from_loguru_message(cls, message: Any) -> "LogRecordModel":
+        """Create a LogRecordModel from a loguru message.
+
+        Args:
+            message: Loguru message object
+
+        Returns:
+            LogRecordModel: Parsed log record model
+        """
+        # Create LogExtraModel for structured extra fields
+        extra = LogExtraModel()
+        for k, v in message.record["extra"].items():
+            if k != "logger_name" and hasattr(extra, k):
+                setattr(extra, k, v)
+
+        return cls(
+            timestamp=message.record["time"].timestamp(),
+            level=message.record["level"].name,
+            logger_name=message.record["extra"].get("logger_name", ""),
+            message=message.record["message"],
+            file=str(message.record["file"].path),
+            line=message.record["line"],
+            function=message.record["function"],
+            extra=extra,
+        )
+
+    class Config:
+        """Pydantic model configuration for LogRecordModel."""
+
+        arbitrary_types_allowed = True
 
 
 # Create a context variable for request_id
@@ -450,28 +482,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         finally:
             loop.close()
 
-    async def _periodic_flush(self):
-        """Periodically flush logs to Dapr object store.
-
-        This coroutine:
-        - Performs initial flush
-        - Runs periodic flushes at configured intervals
-        - Handles task cancellation gracefully
-        - Ensures final flush on cancellation
-        """
-        try:
-            # Initial flush
-            await self._flush_buffer(force=True)
-
-            while True:
-                await asyncio.sleep(self._flush_interval)
-                await self._flush_buffer(force=True)
-        except asyncio.CancelledError:
-            # Handle task cancellation gracefully
-            await self._flush_buffer(force=True)
-        except Exception as e:
-            logging.error(f"Error in periodic flush: {e}")
-
     def process(self, msg: Any, kwargs: Dict[str, Any]) -> Tuple[Any, Dict[str, Any]]:
         """Process log message with temporal and request context.
 
@@ -742,26 +752,14 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             message (Any): Log message to process and store
 
         This method:
-        - Extracts extra fields from the message
-        - Creates a LogRecordModel
+        - Creates a LogRecordModel from the message
         - Adds the record to the buffer for parquet storage
         """
         try:
-            extra = LogExtraModel()
-            for k, v in message.record["extra"].items():
-                if k != "logger_name" and hasattr(extra, k):
-                    setattr(extra, k, v)
+            # Create LogRecordModel using the class method
+            log_record = LogRecordModel.from_loguru_message(message)
 
-            log_record = LogRecordModel(
-                timestamp=message.record["time"].timestamp(),
-                level=message.record["level"].name,
-                logger_name=message.record["extra"].get("logger_name", ""),
-                message=message.record["message"],
-                file=str(message.record["file"].path),
-                line=message.record["line"],
-                function=message.record["function"],
-                extra=extra,
-            )
+            # Use base class's add_record method which handles buffering and flushing
             self.add_record(log_record)
         except Exception as e:
             logging.error(f"Error buffering log: {e}")
@@ -773,26 +771,12 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             message (Any): Log message to process and emit
 
         This method:
-        - Extracts extra fields from the message
-        - Creates a LogRecordModel
+        - Creates a LogRecordModel from the message
         - Sends the record to OpenTelemetry
         """
         try:
-            extra = LogExtraModel()
-            for k, v in message.record["extra"].items():
-                if k != "logger_name" and hasattr(extra, k):
-                    setattr(extra, k, v)
-
-            log_record = LogRecordModel(
-                timestamp=message.record["time"].timestamp(),
-                level=message.record["level"].name,
-                logger_name=message.record["extra"].get("logger_name", ""),
-                message=message.record["message"],
-                file=str(message.record["file"].path),
-                line=message.record["line"],
-                function=message.record["function"],
-                extra=extra,
-            )
+            # Create LogRecordModel using the class method
+            log_record = LogRecordModel.from_loguru_message(message)
             self._send_to_otel(log_record)
         except Exception as e:
             logging.error(f"Error processing log record: {e}")

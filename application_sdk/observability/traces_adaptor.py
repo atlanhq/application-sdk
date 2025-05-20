@@ -375,18 +375,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         """
         asyncio.run(self._periodic_flush())
 
-    async def _periodic_flush(self):
-        """Periodically flush traces buffer to storage.
-
-        This coroutine:
-        - Runs in an infinite loop
-        - Sleeps for the configured flush interval
-        - Forces a flush of the traces buffer
-        """
-        while True:
-            await asyncio.sleep(self._flush_interval)
-            await self._flush_buffer(force=True)
-
     def process_record(self, record: Any) -> Dict[str, Any]:
         """Process a trace record into a standardized dictionary format.
 
