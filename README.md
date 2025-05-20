@@ -61,6 +61,7 @@ Questions about a PR? Drop a comment directly on GitHub or reach out to your Atl
 
 We’re here to make collaboration smooth, secure, and efficient.
 
+
 ### 🧪 How do we test?
 We make sure everything we contribute works smoothly — both in your world and ours. Here’s how testing responsibilities are typically shared:
 
@@ -77,7 +78,6 @@ We make sure everything we contribute works smoothly — both in your world and 
 Need help setting up a test environment or writing test cases? Just reach out to your Atlan integration contact — we’ve got your back.
 
 
-
 ### 📞 How do we handle support?
 Post-deployment, our partner (you!) takes point on customer-facing support. Here's how we keep it clean:
 
@@ -87,7 +87,6 @@ Post-deployment, our partner (you!) takes point on customer-facing support. Here
 
 💡 We recommend sharing your support SLAs or contact info with us to keep the loop tight.
 
-
 ### 📚 What about documentation?
 To ensure customers know how to use your app, please provide:
 
@@ -95,7 +94,6 @@ To ensure customers know how to use your app, please provide:
 - A Setup Guide (How to install, configure, and connect with Atlan)
 
 Don’t worry — our team will review and edit for clarity and style, and host this on Atlan’s documentation hub.
-
 
 ### 📣 How do we go-to-market?
 Once testing is complete and everything looks good:
@@ -109,7 +107,6 @@ Once testing is complete and everything looks good:
     - Feature highlights across our marketing channels
 
 Want co-marketing? Let’s plan it together 🎯
-
 
 ### ✅ I’m in! What’s the checklist?
 Here’s your quick-start guide:
@@ -129,7 +126,6 @@ We’re here whenever you need us:
 - Email: **connect@atlan.com**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
 - We’ll set up a shared Slack channel for real-time collaboration
-
 
 Ready to build something great? Let’s go 💪
 
