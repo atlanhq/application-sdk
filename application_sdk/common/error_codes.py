@@ -15,7 +15,6 @@ Components:
 """
 
 from enum import Enum
-from typing import Dict
 
 
 class ErrorComponent(Enum):
@@ -38,14 +37,20 @@ class ErrorCode:
     def __init__(
         self, component: str, http_code: str, unique_id: str, description: str
     ):
-        self.code = f"Atlan-{component}-{http_code}-{unique_id}"
+        self.code = f"Atlan-{component}-{http_code}-{unique_id}".upper()
         self.description = description
 
     def __str__(self) -> str:
         return f"{self.code}: {self.description}"
 
 
-class ClientError(Enum):
+class AtlanError(Exception):
+    """Base exception for all Atlan errors."""
+
+    pass
+
+
+class ClientError(AtlanError):
     """Client-related error codes."""
 
     REQUEST_VALIDATION_ERROR = ErrorCode(
@@ -61,7 +66,7 @@ class ClientError(Enum):
     )
 
 
-class FastApiError(Enum):
+class FastApiError(AtlanError):
     """FastApi/Server error codes."""
 
     SERVER_START_ERROR = ErrorCode("FastApi", "503", "00", "Server failed to start")
@@ -87,7 +92,7 @@ class FastApiError(Enum):
     LOG_MIDDLEWARE_ERROR = ErrorCode("FastApi", "500", "12", "Log middleware error")
 
 
-class TemporalError(Enum):
+class TemporalError(AtlanError):
     """Temporal error codes."""
 
     TEMPORAL_CLIENT_CONNECTION_ERROR = ErrorCode(
@@ -101,7 +106,7 @@ class TemporalError(Enum):
     )
 
 
-class TemporalWorkflowError(Enum):
+class TemporalWorkflowError(AtlanError):
     """Temporal workflow error codes."""
 
     WORKFLOW_EXECUTION_ERROR = ErrorCode(
@@ -130,7 +135,7 @@ class TemporalWorkflowError(Enum):
     )
 
 
-class IOError(Enum):
+class IOError(AtlanError):
     """Input/Output error codes."""
 
     INPUT_ERROR = ErrorCode("IO", "400", "00", "Input error")
@@ -179,7 +184,7 @@ class IOError(Enum):
     STATE_STORE_WRITE_ERROR = ErrorCode("IO", "500", "34", "State store write error")
 
 
-class CommonError(Enum):
+class CommonError(AtlanError):
     """Common utility error codes."""
 
     AWS_REGION_ERROR = ErrorCode("AWS", "400", "00", "AWS region error")
@@ -195,7 +200,7 @@ class CommonError(Enum):
     )
 
 
-class DocGenError(Enum):
+class DocGenError(AtlanError):
     """Documentation generation error codes."""
 
     DOCGEN_ERROR = ErrorCode("Docgen", "500", "00", "Documentation generation error")
@@ -223,7 +228,7 @@ class DocGenError(Enum):
     MKDOCS_BUILD_ERROR = ErrorCode("Docgen", "500", "08", "MkDocs build error")
 
 
-class ActivityError(Enum):
+class ActivityError(AtlanError):
     """Activity error codes."""
 
     ACTIVITY_START_ERROR = ErrorCode(
@@ -259,16 +264,3 @@ class ActivityError(Enum):
     METADATA_EXTRACTION_VALIDATION_ERROR = ErrorCode(
         "TemporalActivity", "422", "01", "Metadata extraction validation error"
     )
-
-
-# For backward compatibility, maintain the ERROR_CODES dictionary
-ERROR_CODES: Dict[str, ErrorCode] = {
-    **{error.name: error.value for error in ClientError},
-    **{error.name: error.value for error in FastApiError},
-    **{error.name: error.value for error in TemporalError},
-    **{error.name: error.value for error in TemporalWorkflowError},
-    **{error.name: error.value for error in IOError},
-    **{error.name: error.value for error in CommonError},
-    **{error.name: error.value for error in DocGenError},
-    **{error.name: error.value for error in ActivityError},
-}

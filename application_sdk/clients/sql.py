@@ -18,7 +18,7 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
-from application_sdk.common.error_codes import CLIENT_ERRORS, IO_ERRORS
+from application_sdk.common.error_codes import ClientError, CommonError, IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
@@ -75,7 +75,7 @@ class BaseSQLClient(ClientInterface):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            ValueError: If connection fails due to authentication or connection issues
+            ClientError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
         try:
@@ -89,12 +89,12 @@ class BaseSQLClient(ClientInterface):
             self.connection = self.engine.connect()
         except Exception as e:
             logger.error(
-                f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: Error loading SQL client: {str(e)}"
+                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Error loading SQL client: {str(e)}"
             )
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ValueError(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: {str(e)}")
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -112,7 +112,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            ValueError: If required credentials (username or database) are missing.
+            CommonError: If required credentials (username or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials["username"]
@@ -121,9 +121,13 @@ class BaseSQLClient(ClientInterface):
         user = extra.get("username")
         database = extra.get("database")
         if not user:
-            raise ValueError("username is required for IAM user authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: username is required for IAM user authentication"
+            )
         if not database:
-            raise ValueError("database is required for IAM user authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM user authentication"
+            )
 
         port = self.credentials["port"]
         region = self.credentials.get("region", None)
@@ -149,7 +153,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            ValueError: If required credentials (aws_role_arn or database) are missing.
+            CommonError: If required credentials (aws_role_arn or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -157,9 +161,13 @@ class BaseSQLClient(ClientInterface):
         external_id = extra.get("aws_external_id")
 
         if not aws_role_arn:
-            raise ValueError("aws_role_arn is required for IAM role authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: aws_role_arn is required for IAM role authentication"
+            )
         if not database:
-            raise ValueError("database is required for IAM role authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM role authentication"
+            )
 
         session_name = AWS_SESSION_NAME
         username = self.credentials["username"]
@@ -188,7 +196,7 @@ class BaseSQLClient(ClientInterface):
             str: URL-encoded authentication token.
 
         Raises:
-            ValueError: If an invalid authentication type is specified.
+            CommonError: If an invalid authentication type is specified.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -201,7 +209,9 @@ class BaseSQLClient(ClientInterface):
             case "basic":
                 token = self.credentials["password"]
             case _:
-                raise ValueError(f"Invalid auth type: {authType}")
+                raise CommonError(
+                    f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid auth type: {authType}"
+                )
 
         encoded_token = quote_plus(token)
         return encoded_token
@@ -291,13 +301,10 @@ class BaseSQLClient(ClientInterface):
                 a dictionary mapping column names to values.
 
         Raises:
-            ValueError: If database connection is not established.
-            Exception: If query execution fails.
+            IOError: If database connection is not established or query execution fails.
         """
         if not self.connection:
-            raise ValueError(
-                f"{IO_ERRORS['SQL_QUERY_ERROR']}: Connection is not established"
-            )
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: Connection is not established")
         loop = asyncio.get_running_loop()
 
         if self.use_server_side_cursor:
@@ -313,9 +320,7 @@ class BaseSQLClient(ClientInterface):
                     pool, self.connection.execute, text(query)
                 )
                 if not cursor or not cursor.cursor:
-                    raise ValueError(
-                        f"{IO_ERRORS['SQL_QUERY_ERROR']}: Cursor is not supported"
-                    )
+                    raise IOError(f"{IOError.SQL_QUERY_ERROR}: Cursor is not supported")
                 column_names: List[str] = [
                     description.name.lower()
                     for description in cursor.cursor.description
@@ -332,9 +337,9 @@ class BaseSQLClient(ClientInterface):
                     yield results
             except Exception as e:
                 logger.error(
-                    f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: Error running query in batch: {str(e)}"
+                    f"{IOError.SQL_QUERY_BATCH_ERROR}: Error running query in batch: {str(e)}"
                 )
-                raise ValueError(f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: {str(e)}")
+                raise IOError(f"{IOError.SQL_QUERY_BATCH_ERROR}: {str(e)}")
 
         logger.info("Query execution completed")
 
@@ -381,17 +386,17 @@ class AsyncBaseSQLClient(BaseSQLClient):
             )
             if not self.engine:
                 raise ValueError(
-                    f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: Failed to create async engine"
+                    f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Failed to create async engine"
                 )
             self.connection = await self.engine.connect()
         except Exception as e:
             logger.error(
-                f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: Error establishing database connection: {str(e)}"
+                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Error establishing database connection: {str(e)}"
             )
             if self.engine:
                 await self.engine.dispose()
                 self.engine = None
-            raise ValueError(f"{CLIENT_ERRORS['SQL_CLIENT_AUTH_ERROR']}: {str(e)}")
+            raise ValueError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
 
     async def run_query(self, query: str, batch_size: int = 100000):
         """Execute a SQL query asynchronously and return results in batches.
@@ -413,7 +418,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         """
         if not self.connection:
             raise ValueError(
-                f"{IO_ERRORS['SQL_QUERY_ERROR']}: Connection is not established"
+                f"{IOError.SQL_QUERY_ERROR}: Connection is not established"
             )
 
         logger.info(f"Running query: {query}")
@@ -447,8 +452,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
         except Exception as e:
             logger.error(
-                f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: Error executing query: {str(e)}"
+                f"{IOError.SQL_QUERY_BATCH_ERROR}: Error executing query: {str(e)}"
             )
-            raise ValueError(f"{IO_ERRORS['SQL_QUERY_BATCH_ERROR']}: {str(e)}")
+            raise ValueError(f"{IOError.SQL_QUERY_BATCH_ERROR}: {str(e)}")
 
         logger.info("Query execution completed")

@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.common.error_codes import TEMPORAL_WORKFLOW_ERRORS
+from application_sdk.common.error_codes import TemporalError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
@@ -134,10 +134,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if workflow_id not in self._state:
                 await self._set_state(workflow_args)
             return self._state[workflow_id]
-        except Exception as e:
+        except TemporalError as e:
             logger.error(
                 f"Error getting state: {str(e)}",
-                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_EXECUTION_ERROR"].code,
+                error_code=TemporalError.TEMPORAL_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
             await self._clean_state()
@@ -202,10 +202,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             logger.info("Preflight check completed successfully")
             return result
 
-        except Exception as e:
+        except TemporalError as e:
             logger.error(
                 f"Preflight check failed: {str(e)}",
-                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_EXECUTION_ERROR"].code,
+                error_code=TemporalError.TEMPORAL_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=True,
             )
             raise

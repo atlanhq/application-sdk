@@ -19,7 +19,7 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.error_codes import TEMPORAL_WORKFLOW_ERRORS
+from application_sdk.common.error_codes import ClientError, TemporalWorkflowError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -279,7 +279,7 @@ class TemporalWorkflowClient(WorkflowClient):
 
         Raises:
             WorkflowFailureError: If the workflow fails to start.
-            ValueError: If the client is not loaded.
+            ClientError: If the client is not loaded.
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
@@ -309,7 +309,9 @@ class TemporalWorkflowClient(WorkflowClient):
         try:
             # Pass the full workflow_args to the workflow
             if not self.client:
-                raise ValueError("Client is not loaded")
+                raise ClientError(
+                    f"{ClientError.CLIENT_AUTH_ERROR}: Client is not loaded"
+                )
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
                 args=[{"workflow_id": workflow_id}],
@@ -328,9 +330,11 @@ class TemporalWorkflowClient(WorkflowClient):
         except WorkflowFailureError as e:
             logger.error(
                 f"Workflow failure: {e}",
-                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_EXECUTION_ERROR"].code,
+                error_code=TemporalWorkflowError.WORKFLOW_EXECUTION_ERROR.code,
             )
-            raise e
+            raise TemporalWorkflowError(
+                f"{TemporalWorkflowError.WORKFLOW_EXECUTION_ERROR}: {str(e)}"
+            )
 
     async def stop_workflow(self, workflow_id: str, run_id: str) -> None:
         """Stop a workflow execution.
@@ -340,10 +344,11 @@ class TemporalWorkflowClient(WorkflowClient):
             run_id (str): The run ID of the workflow.
 
         Raises:
-            ValueError: If the client is not loaded.
+            ClientError: If the client is not loaded.
+            TemporalWorkflowError: If there's an error stopping the workflow.
         """
         if not self.client:
-            raise ValueError("Client is not loaded")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: Client is not loaded")
         try:
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
@@ -352,9 +357,11 @@ class TemporalWorkflowClient(WorkflowClient):
         except Exception as e:
             logger.error(
                 f"Error terminating workflow {workflow_id} {run_id}: {e}",
-                error_code=TEMPORAL_WORKFLOW_ERRORS["WORKFLOW_CLIENT_STOP_ERROR"].code,
+                error_code=TemporalWorkflowError.WORKFLOW_CLIENT_STOP_ERROR.code,
             )
-            raise Exception(f"Error terminating workflow {workflow_id} {run_id}: {e}")
+            raise TemporalWorkflowError(
+                f"{TemporalWorkflowError.WORKFLOW_CLIENT_STOP_ERROR}: {str(e)}"
+            )
 
     def create_worker(
         self,
@@ -374,10 +381,10 @@ class TemporalWorkflowClient(WorkflowClient):
             Worker: The created worker instance.
 
         Raises:
-            ValueError: If the client is not loaded.
+            ClientError: If the client is not loaded.
         """
         if not self.client:
-            raise ValueError("Client is not loaded")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: Client is not loaded")
 
         return Worker(
             self.client,
@@ -415,11 +422,11 @@ class TemporalWorkflowClient(WorkflowClient):
                 - execution_duration_seconds (int): Duration in seconds
 
         Raises:
-            ValueError: If the client is not loaded.
-            Exception: If there's an error getting the workflow status.
+            ClientError: If the client is not loaded.
+            TemporalWorkflowError: If there's an error getting the workflow status.
         """
         if not self.client:
-            raise ValueError("Client is not loaded")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: Client is not loaded")
 
         try:
             workflow_handle = self.client.get_workflow_handle(
@@ -453,10 +460,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             logger.error(
                 f"Error getting workflow status: {e}",
-                error_code=TEMPORAL_WORKFLOW_ERRORS[
-                    "WORKFLOW_CLIENT_STATUS_ERROR"
-                ].code,
+                error_code=TemporalWorkflowError.WORKFLOW_CLIENT_STATUS_ERROR.code,
             )
-            raise Exception(
-                f"Error getting workflow status for {workflow_id} {run_id}: {e}"
+            raise TemporalWorkflowError(
+                f"{TemporalWorkflowError.WORKFLOW_CLIENT_STATUS_ERROR}: {str(e)}"
             )

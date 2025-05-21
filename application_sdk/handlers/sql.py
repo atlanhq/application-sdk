@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.error_codes import CLIENT_ERRORS, IO_ERRORS
+from application_sdk.common.error_codes import ClientError, IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
@@ -69,7 +69,7 @@ class BaseSQLHandler(HandlerInterface):
         Method to fetch and prepare the databases and schemas metadata
         """
         if self.metadata_sql is None:
-            raise ValueError("metadata_sql is not defined")
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: metadata_sql is not defined")
 
         sql_input = SQLQueryInput(
             engine=self.sql_client.engine, query=self.metadata_sql
@@ -84,12 +84,12 @@ class BaseSQLHandler(HandlerInterface):
                         self.schema_result_key: row[self.schema_alias_key],
                     }
                 )
-        except Exception as exc:
+        except IOError as exc:
             logger.error(
                 f"Failed to fetch metadata: {str(exc)}",
-                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
+                error_code=IOError.SQL_QUERY_ERROR.code,
             )
-            raise exc
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: {str(exc)}")
         return result
 
     async def test_auth(self) -> bool:
@@ -97,7 +97,7 @@ class BaseSQLHandler(HandlerInterface):
         Test the authentication credentials.
 
         :return: True if the credentials are valid, False otherwise.
-        :raises Exception: If the credentials are invalid.
+        :raises ClientError: If the credentials are invalid.
         """
         try:
             sql_input = SQLQueryInput(
@@ -105,16 +105,20 @@ class BaseSQLHandler(HandlerInterface):
             )
             df = await sql_input.get_daft_dataframe()
             if df is None:
-                raise ValueError("No data returned from authentication query")
+                raise ClientError(
+                    f"{ClientError.SQL_CLIENT_AUTH_ERROR}: No data returned from authentication query"
+                )
             df.to_pylist()
             return True
-        except Exception as exc:
+        except ClientError as exc:
             error_msg = str(exc)
             logger.error(
                 f"Failed to authenticate with the given credentials: {error_msg}",
-                error_code=CLIENT_ERRORS["SQL_CLIENT_AUTH_ERROR"].code,
+                error_code=ClientError.SQL_CLIENT_AUTH_ERROR.code,
             )
-            raise ValueError(error_msg) from exc
+            raise ClientError(
+                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {error_msg}"
+            ) from exc
 
     async def fetch_metadata(
         self,
@@ -129,11 +133,11 @@ class BaseSQLHandler(HandlerInterface):
         Returns:
             List of metadata dictionaries
         Raises:
-            ValueError: If metadata_type is invalid or if database is required but not provided
+            IOError: If metadata_type is invalid or if database is required but not provided
         """
 
         if not self.sql_client:
-            raise ValueError("SQL client is not defined")
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: SQL client is not defined")
 
         if metadata_type == MetadataType.ALL:
             # Use flat mode for backward compatibility
@@ -146,25 +150,29 @@ class BaseSQLHandler(HandlerInterface):
                     return await self.fetch_databases()
                 elif metadata_type == MetadataType.SCHEMA:
                     if not database:
-                        raise ValueError(
-                            "Database must be specified when fetching schemas"
+                        raise IOError(
+                            f"{IOError.SQL_QUERY_ERROR}: Database must be specified when fetching schemas"
                         )
                     return await self.fetch_schemas(database)
                 else:
-                    raise ValueError(f"Invalid metadata type: {metadata_type}")
-            except Exception as e:
+                    raise IOError(
+                        f"{IOError.SQL_QUERY_ERROR}: Invalid metadata type: {metadata_type}"
+                    )
+            except IOError as e:
                 logger.error(
                     f"Failed to fetch metadata: {str(e)}",
-                    error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
+                    error_code=IOError.SQL_QUERY_ERROR.code,
                 )
-                raise
+                raise IOError(f"{IOError.SQL_QUERY_ERROR}: {str(e)}")
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
         """Fetch only database information."""
         if not self.sql_client:
-            raise ValueError("SQL Client not defined")
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: SQL Client not defined")
         if self.fetch_databases_sql is None:
-            raise ValueError("fetch_databases_sql is not defined")
+            raise IOError(
+                f"{IOError.SQL_QUERY_ERROR}: fetch_databases_sql is not defined"
+            )
 
         databases = []
         async for batch in self.sql_client.run_query(self.fetch_databases_sql):
@@ -177,10 +185,12 @@ class BaseSQLHandler(HandlerInterface):
     async def fetch_schemas(self, database: str) -> List[Dict[str, str]]:
         """Fetch schemas for a specific database."""
         if not self.sql_client:
-            raise ValueError("SQL Client not defined")
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: SQL Client not defined")
         schemas = []
         if self.fetch_schemas_sql is None:
-            raise ValueError("fetch_schemas_sql is not defined")
+            raise IOError(
+                f"{IOError.SQL_QUERY_ERROR}: fetch_schemas_sql is not defined"
+            )
         schema_query = self.fetch_schemas_sql.format(database_name=database)
         async for batch in self.sql_client.run_query(schema_query):
             for row in batch:
@@ -214,21 +224,21 @@ class BaseSQLHandler(HandlerInterface):
                 or not results["tablesCheck"]["success"]
                 or not results["versionCheck"]["success"]
             ):
-                raise ValueError(
-                    f"Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, "
+                raise IOError(
+                    f"{IOError.SQL_QUERY_ERROR}: Preflight check failed, databaseSchemaCheck: {results['databaseSchemaCheck']}, "
                     f"tablesCheck: {results['tablesCheck']}, "
                     f"versionCheck: {results['versionCheck']}"
                 )
 
             logger.info("Preflight check completed successfully")
             return results
-        except Exception as exc:
+        except IOError as exc:
             logger.error(
                 f"Error during preflight check {exc}",
-                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
+                error_code=IOError.SQL_QUERY_ERROR.code,
                 exc_info=True,
             )
-            raise
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: {str(exc)}")
 
     async def check_schemas_and_databases(
         self, payload: Dict[str, Any]
@@ -259,10 +269,10 @@ class BaseSQLHandler(HandlerInterface):
                 if not check_success
                 else "",
             }
-        except Exception as exc:
+        except IOError as exc:
             logger.error(
                 "Error during schema and database check",
-                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
+                error_code=IOError.SQL_QUERY_ERROR.code,
                 exc_info=True,
             )
             return {
@@ -328,7 +338,7 @@ class BaseSQLHandler(HandlerInterface):
             temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
         )
         if not query:
-            raise ValueError("tables_check_sql is not defined")
+            raise IOError(f"{IOError.SQL_QUERY_ERROR}: tables_check_sql is not defined")
         sql_input = SQLQueryInput(engine=self.sql_client.engine, query=query)
         sql_input = await sql_input.get_daft_dataframe()
         try:
@@ -340,10 +350,10 @@ class BaseSQLHandler(HandlerInterface):
                 "successMessage": f"Tables check successful. Table count: {result}",
                 "failureMessage": "",
             }
-        except Exception as exc:
+        except IOError as exc:
             logger.error(
                 "Error during tables check",
-                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
+                error_code=IOError.SQL_QUERY_ERROR.code,
                 exc_info=True,
             )
             return {
@@ -435,10 +445,10 @@ class BaseSQLHandler(HandlerInterface):
                 if not is_valid
                 else "",
             }
-        except Exception as exc:
+        except IOError as exc:
             logger.error(
                 f"Error during client version check: {exc}",
-                error_code=IO_ERRORS["SQL_QUERY_ERROR"].code,
+                error_code=IOError.SQL_QUERY_ERROR.code,
                 exc_info=True,
             )
             return {
