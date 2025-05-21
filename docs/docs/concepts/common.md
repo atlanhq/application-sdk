@@ -2,7 +2,7 @@
 
 This section describes various utility functions and classes found within the `application_sdk.common` package. These utilities provide foundational functionalities used across different parts of the SDK, such as logging, configuration management, interacting with AWS, and general helper functions.
 
-## Logging (`logger_adaptors.py`)
+## Logging (`logger_adaptor.py`)
 
 The SDK uses the `loguru` library for enhanced logging capabilities, combined with standard Python logging and OpenTelemetry (OTLP) integration for structured, observable logs.
 
