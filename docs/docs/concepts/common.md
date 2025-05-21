@@ -29,23 +29,28 @@ The logger implements a sophisticated storage and retention system:
    - Flushes logs based on two conditions:
      - When buffer size reaches `LOG_BATCH_SIZE`
      - When time since last flush exceeds `LOG_FLUSH_INTERVAL_SECONDS`
-   - Supports date-based file organization when `LOG_USE_DATE_BASED_FILES` is enabled
-   - Uses `LOG_DATE_FORMAT` for naming date-based files (default: `%Y-%m-%d`)
+   - Uses Hive partitioning for efficient data organization:
+     - Partitioned by year/month/day
+     - Single file per partition for better performance
+     - Uses day-level partitioning for all observability data (logs, metrics, traces)
+   - Handles type consistency for partition columns (year, month, day) as integers
 
 2. **Log Retention**:
    - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
    - Runs cleanup once per day
    - Maintains state of last cleanup in Dapr state store
    - Handles both local parquet files and object store cleanup
-   - Supports both single-file and date-based file cleanup strategies
+   - Efficiently deletes entire partition directories
 
 3. **Storage Locations**:
    - Local:
-     - Single file: `/tmp/observability/log.parquet`
-     - Date-based: `/tmp/observability/logs/YYYY-MM-DD.parquet`
+     - Hive partitioned: `/tmp/observability/logs/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `/tmp/observability/metrics/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `/tmp/observability/traces/year=YYYY/month=MM/day=DD/data.parquet`
    - Object Store:
-     - Single file: `logs/log.parquet`
-     - Date-based: `logs/YYYY-MM-DD.parquet`
+     - Hive partitioned: `logs/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `metrics/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `traces/year=YYYY/month=MM/day=DD/data.parquet`
      (via Dapr object store binding)
 
 ### Usage
@@ -89,8 +94,11 @@ LOG_LEVEL=INFO
 LOG_BATCH_SIZE=100  # Number of logs to buffer before writing
 LOG_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
 LOG_RETENTION_DAYS=30  # Days to keep logs before cleanup
-LOG_USE_DATE_BASED_FILES=true  # Enable date-based file organization
-LOG_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
+LOG_CLEANUP_ENABLED=true  # Enable automatic cleanup
+
+# Hive partitioning configuration
+ENABLE_HIVE_PARTITIONING=true  # Enable Hive partitioning
+# Partitioning is fixed at day level for all observability data
 
 # OTLP settings (if enabled)
 ENABLE_OTLP_LOGS=true
@@ -119,7 +127,6 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
     *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
     *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
     *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
-    *   **Date-based Files**: Supports date-based file organization using `METRICS_DATE_FORMAT`
 
 ### Usage
 
@@ -173,8 +180,6 @@ The metrics system can be configured using the following environment variables:
 METRICS_BATCH_SIZE=100  # Number of metrics to buffer before writing
 METRICS_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
 METRICS_RETENTION_DAYS=30  # Days to keep metrics before cleanup
-METRICS_USE_DATE_BASED_FILES=true  # Enable date-based file organization
-METRICS_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
 
 # OTLP settings (if enabled)
 ENABLE_OTLP_METRICS=true
@@ -255,6 +260,10 @@ The traces adapter implements a sophisticated storage and retention system:
    - Flushes traces based on two conditions:
      - When buffer size reaches `TRACES_BATCH_SIZE`
      - When time since last flush exceeds `TRACES_FLUSH_INTERVAL_SECONDS`
+   - Uses Hive partitioning for efficient data organization:
+     - Partitioned by year/month/day
+     - Single file per partition for better performance
+     - Uses day-level partitioning for all observability data
 
 2. **Trace Retention**:
    - Automatically cleans up traces older than `TRACES_RETENTION_DAYS`
@@ -263,8 +272,8 @@ The traces adapter implements a sophisticated storage and retention system:
    - Handles both local parquet files and object store cleanup
 
 3. **Storage Locations**:
-   - Local: `/tmp/observability/traces.parquet`
-   - Object Store: `observability/traces.parquet` (via Dapr object store binding)
+   - Local: `/tmp/observability/traces/year=YYYY/month=MM/day=DD/data.parquet`
+   - Object Store: `traces/year=YYYY/month=MM/day=DD/data.parquet` (via Dapr object store binding)
 
 ## AWS Utilities (`aws_utils.py`)
 

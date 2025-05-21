@@ -133,10 +133,10 @@ LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 # Log Location configuration
 LOG_DIR = os.environ.get("ATLAN_LOG_DIR", "/tmp/observability")
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
-LOG_USE_DATE_BASED_FILES = (
-    os.environ.get("ATLAN_LOG_USE_DATE_BASED_FILES", "true").lower() == "true"
+# Hive Partitioning Configuration
+ENABLE_HIVE_PARTITIONING = (
+    os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
 )
-LOG_DATE_FORMAT = os.environ.get("ATLAN_LOG_DATE_FORMAT", "%Y-%m-%d")
 
 # Metrics Configuration
 ENABLE_OTLP_METRICS = os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
@@ -149,11 +149,6 @@ METRICS_CLEANUP_ENABLED = (
     os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
 )
 METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
-METRICS_USE_DATE_BASED_FILES = (
-    os.getenv("ATLAN_METRICS_USE_DATE_BASED_FILES", "true").lower() == "true"
-)
-METRICS_DATE_FORMAT = os.getenv("ATLAN_METRICS_DATE_FORMAT", "%Y-%m-%d")
-
 
 # Traces Configuration
 ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"

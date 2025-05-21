@@ -43,18 +43,24 @@ The Application SDK uses environment variables for configuration. These can be s
 | `SECRET_STORE_NAME` | Name of the secret store component in DAPR | `secretstore` |
 | `OBJECT_STORE_NAME` | Name of the object store component in DAPR | `objectstore` |
 
+## Observability Configuration
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `ATLAN_OBSERVABILITY_DIR` | Base directory for storing observability data | `/tmp/observability` |
+| `ATLAN_ENABLE_HIVE_PARTITIONING` | Whether to enable Hive partitioning for observability data | `true` |
+| `ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK` | Whether to enable Dapr sink for observability data | `true` |
+
 ## Logging Configuration
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
 | `LOG_LEVEL` | Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL) | `INFO` |
 | `LOG_BATCH_SIZE` | Number of log records to buffer before writing to parquet file | `100` |
-| `LOG_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush logs to parquet file | `5` |
+| `LOG_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush logs to parquet file | `10` |
 | `LOG_RETENTION_DAYS` | Number of days to retain log records before automatic cleanup | `30` |
-| `OBSERVABILITY_DIR` | Directory where log files are stored | `/tmp/observability` |
-| `LOG_DIR` | Directory where log files are stored | `/tmp/observability` |
-| `LOG_FILE_NAME` | Name of the parquet file used for log storage | `logs.parquet` |
-| `LOG_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old logs | `true` |
+| `LOG_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old logs | `false` |
+| `LOG_FILE_NAME` | Name of the parquet file used for log storage | `log.parquet` |
 
 ## Metrics Configuration
 
@@ -64,8 +70,8 @@ The Application SDK uses environment variables for configuration. These can be s
 | `METRICS_BATCH_SIZE` | Number of metric records to buffer before writing to parquet file | `100` |
 | `METRICS_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush metrics to parquet file | `10` |
 | `METRICS_RETENTION_DAYS` | Number of days to retain metric records before automatic cleanup | `30` |
+| `METRICS_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old metrics | `false` |
 | `METRICS_FILE_NAME` | Name of the parquet file used for metric storage | `metrics.parquet` |
-| `METRICS_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old metrics | `true` |
 
 ## Traces Configuration
 
@@ -73,16 +79,16 @@ The Application SDK uses environment variables for configuration. These can be s
 |---------------------|-------------|---------------|
 | `ENABLE_OTLP_TRACES` | Whether to enable OpenTelemetry traces export | `false` |
 | `TRACES_BATCH_SIZE` | Number of trace records to buffer before writing to parquet file | `100` |
-| `TRACES_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush traces to parquet file | `1` |
-| `TRACES_RETENTION_DAYS` | Number of days to retain trace records before automatic cleanup | `7` |
-| `TRACES_FILE_NAME` | Name of the parquet file used for trace storage | `traces.parquet` |
+| `TRACES_FLUSH_INTERVAL_SECONDS` | Time interval (in seconds) to flush traces to parquet file | `5` |
+| `TRACES_RETENTION_DAYS` | Number of days to retain trace records before automatic cleanup | `30` |
 | `TRACES_CLEANUP_ENABLED` | Whether to enable automatic cleanup of old traces | `true` |
+| `TRACES_FILE_NAME` | Name of the parquet file used for trace storage | `traces.parquet` |
 
 ## OpenTelemetry Configuration
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
-| `OTEL_SERVICE_NAME` | Service name for OpenTelemetry | `application-sdk` |
+| `OTEL_SERVICE_NAME` | Service name for OpenTelemetry | `atlan-application-sdk` |
 | `OTEL_SERVICE_VERSION` | Service version for OpenTelemetry | `0.1.0` |
 | `OTEL_RESOURCE_ATTRIBUTES` | Additional resource attributes for OpenTelemetry | `""` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | Endpoint for the OpenTelemetry collector | `http://localhost:4317` |

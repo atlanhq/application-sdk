@@ -9,17 +9,13 @@ from datetime import datetime, timedelta
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
+import duckdb
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
-    LOG_DATE_FORMAT,
-    LOG_USE_DATE_BASED_FILES,
-    METRICS_USE_DATE_BASED_FILES,
     OBJECT_STORE_NAME,
     OBSERVABILITY_DIR,
     STATE_STORE_NAME,
@@ -87,16 +83,7 @@ class AtlanObservability(Generic[T], ABC):
         data_dir: str,
         file_name: str,
     ):
-        """Initialize the observability base class.
-
-        Args:
-            batch_size (int): Number of records to batch before flushing
-            flush_interval (int): Interval in seconds between forced flushes
-            retention_days (int): Number of days to retain records
-            cleanup_enabled (bool): Whether to enable cleanup of old records
-            data_dir (str): Directory to store data files
-            file_name (str): Name of the data file
-        """
+        """Initialize the observability base class."""
         # Initialize instance variables
         self._buffer: List[Dict[str, Any]] = []
         self._buffer_lock = threading.Lock()
@@ -107,11 +94,7 @@ class AtlanObservability(Generic[T], ABC):
         self._cleanup_enabled = cleanup_enabled
         self.data_dir = data_dir
         self.file_name = file_name
-        self._use_date_based_files = LOG_USE_DATE_BASED_FILES
-        self._date_format = LOG_DATE_FORMAT
-        self._current_date = datetime.now().strftime(self._date_format)
         self._update_parquet_path()
-        self.parquet_path = os.path.join(data_dir, file_name)
 
         # Ensure data directory exists
         os.makedirs(data_dir, exist_ok=True)
@@ -227,32 +210,42 @@ class AtlanObservability(Generic[T], ABC):
             except Exception as e:
                 logging.error(f"Error flushing instance: {e}")
 
-    def _update_parquet_path(self):
-        """Update the parquet file path based on current date if using date-based files.
+    def _get_partition_path(self, timestamp: datetime) -> str:
+        """Generate Hive partition path based on timestamp.
 
-        This method:
-        - Creates appropriate subdirectories for different file types
-        - Updates the parquet path based on current date if using date-based files
-        - Maintains the original path if not using date-based files
+        Args:
+            timestamp: The timestamp to generate partition path for
+
+        Returns:
+            str: The partition path
         """
-        if self._use_date_based_files:
-            # Create appropriate subdirectory based on file type
-            if self.file_name == "log.parquet":
-                subdir = "logs"
-            elif self.file_name == "metrics.parquet":
-                subdir = "metrics"
-            else:
-                subdir = "other"  # Fallback for any other file types
-
-            # Create the subdirectory
-            data_subdir = os.path.join(self.data_dir, subdir)
-            os.makedirs(data_subdir, exist_ok=True)
-
-            # Use date-based filename
-            date_str = datetime.now().strftime(self._date_format)
-            self.parquet_path = os.path.join(data_subdir, f"{date_str}.parquet")
+        # Determine the base directory based on file type
+        if self.file_name == "log.parquet":
+            base_dir = "logs"
+        elif self.file_name == "metrics.parquet":
+            base_dir = "metrics"
+        elif self.file_name == "traces.parquet":
+            base_dir = "traces"
         else:
-            self.parquet_path = os.path.join(self.data_dir, self.file_name)
+            base_dir = "other"
+
+        # Create partition path components
+        partition_path = os.path.join(
+            self.data_dir,
+            base_dir,
+            f"year={timestamp.year}",
+            f"month={timestamp.month:02d}",
+            f"day={timestamp.day:02d}",
+        )
+
+        return partition_path
+
+    def _update_parquet_path(self):
+        """Update the parquet file path based on current timestamp."""
+        current_time = datetime.now()
+        partition_path = self._get_partition_path(current_time)
+        os.makedirs(partition_path, exist_ok=True)
+        self.parquet_path = os.path.join(partition_path, "data.parquet")
 
     @abstractmethod
     def process_record(self, record: Any) -> Dict[str, Any]:
@@ -372,42 +365,90 @@ class AtlanObservability(Generic[T], ABC):
             records: List of records to flush
 
         This method:
-        - Updates parquet path for date-based files
-        - Writes records to parquet file
+        - Groups records by partition
+        - Writes records to each partition
         - Uploads to object store if enabled
-        - Triggers cleanup if needed
+        - Cleans up old records if enabled
         """
         if not ENABLE_OBSERVABILITY_DAPR_SINK:
             return
         try:
-            # Update parquet path in case date has changed
-            self._update_parquet_path()
+            # Group records by partition
+            partition_records = {}
+            for record in records:
+                # Convert timestamp to datetime
+                record_time = datetime.fromtimestamp(record["timestamp"])
+                partition_path = self._get_partition_path(record_time)
 
-            df = pd.DataFrame(records)
-            if os.path.exists(self.parquet_path):
-                existing_table = pq.read_table(self.parquet_path)
-                existing_df = existing_table.to_pandas()
-                df = pd.concat([existing_df, df], ignore_index=True)
-            table = pa.Table.from_pandas(df)
-            pq.write_table(table, self.parquet_path, compression="snappy")
+                if partition_path not in partition_records:
+                    partition_records[partition_path] = []
+                partition_records[partition_path].append(record)
 
-            # Upload to object store
-            with open(self.parquet_path, "rb") as f:
-                file_content = f.read()
-                metadata = {
-                    "key": os.path.basename(self.parquet_path),
-                    "blobName": os.path.basename(self.parquet_path),
-                    "fileName": os.path.basename(self.parquet_path),
-                }
-                with DaprClient() as client:
-                    client.invoke_binding(
-                        binding_name=OBJECT_STORE_NAME,
-                        operation="create",
-                        data=file_content,
-                        binding_metadata=metadata,
-                    )
+            # Write records to each partition
+            for partition_path, partition_data in partition_records.items():
+                os.makedirs(partition_path, exist_ok=True)
+                # Use a consistent file name for each partition
+                parquet_path = os.path.join(partition_path, "data.parquet")
 
-            # Clean up old records if enabled and it's been a day since last cleanup
+                # Read existing data if any
+                existing_df = None
+                if os.path.exists(parquet_path):
+                    try:
+                        # Read the entire parquet file without excluding any columns
+                        existing_df = pd.read_parquet(parquet_path)
+                    except Exception as e:
+                        logging.error(f"Error reading existing parquet file: {e}")
+                        # If there's an error reading the existing file, we'll overwrite it
+                        existing_df = None
+
+                # Create new dataframe from current records
+                new_df = pd.DataFrame(partition_data)
+
+                # Extract partition values from path
+                partition_parts = os.path.basename(os.path.dirname(parquet_path)).split(
+                    os.sep
+                )
+                for part in partition_parts:
+                    if part.startswith("year="):
+                        new_df["year"] = int(part.split("=")[1])
+                    elif part.startswith("month="):
+                        new_df["month"] = int(part.split("=")[1])
+                    elif part.startswith("day="):
+                        new_df["day"] = int(part.split("=")[1])
+
+                # Merge with existing data if any
+                if existing_df is not None:
+                    df = pd.concat([existing_df, new_df], ignore_index=True)
+                else:
+                    df = new_df
+
+                # Sort by timestamp to maintain order
+                df = df.sort_values("timestamp")
+
+                # Write to parquet file
+                df.to_parquet(
+                    parquet_path,
+                    compression="snappy",
+                    index=False,
+                )
+
+                # Upload to object store
+                with open(parquet_path, "rb") as f:
+                    file_content = f.read()
+                    metadata = {
+                        "key": os.path.relpath(parquet_path, self.data_dir),
+                        "blobName": os.path.relpath(parquet_path, self.data_dir),
+                        "fileName": os.path.basename(parquet_path),
+                    }
+                    with DaprClient() as client:
+                        client.invoke_binding(
+                            binding_name=OBJECT_STORE_NAME,
+                            operation="create",
+                            data=file_content,
+                            binding_metadata=metadata,
+                        )
+
+            # Clean up old records if enabled
             if self._cleanup_enabled:
                 await self._check_and_cleanup()
 
@@ -448,103 +489,79 @@ class AtlanObservability(Generic[T], ABC):
         """Clean up records older than retention_days.
 
         This method:
-        - Handles both single file and date-based file cases
+        - Determines the base directory
+        - Walks through the partition directories
         - Removes records older than retention period
         - Updates or deletes files as needed
         - Syncs changes with object store
         """
         try:
-            if not self._use_date_based_files:
-                # Handle single file case
-                if not os.path.exists(self.parquet_path):
-                    return
-
-                # Read existing records
-                table = pq.read_table(self.parquet_path)
-                df = table.to_pandas()
-
-                # Convert timestamp to datetime
-                df["timestamp"] = pd.to_datetime(df["timestamp"], unit="s")
-
-                # Filter out old records
-                cutoff_date = pd.Timestamp.now() - pd.Timedelta(
-                    days=self._retention_days
-                )
-                cutoff_date = cutoff_date.date()
-                filtered_df = df.loc[df["timestamp"].dt.date >= cutoff_date].copy()
-
-                # Update records file
-                if len(filtered_df) > 0:
-                    table = pa.Table.from_pandas(filtered_df)
-                    pq.write_table(table, self.parquet_path, compression="snappy")
-
-                    # Update in object store
-                    with open(self.parquet_path, "rb") as f:
-                        file_content = f.read()
-                        metadata = {
-                            "key": os.path.basename(self.parquet_path),
-                            "blobName": os.path.basename(self.parquet_path),
-                            "fileName": os.path.basename(self.parquet_path),
-                        }
-                        with DaprClient() as client:
-                            client.invoke_binding(
-                                binding_name=OBJECT_STORE_NAME,
-                                operation="create",
-                                data=file_content,
-                                binding_metadata=metadata,
-                            )
-                else:
-                    # If no records remain, delete the file
-                    os.remove(self.parquet_path)
-                    # Delete from object store
-                    with DaprClient() as client:
-                        client.invoke_binding(
-                            binding_name=OBJECT_STORE_NAME,
-                            operation="delete",
-                            data=b"",
-                            binding_metadata={
-                                "key": os.path.basename(self.parquet_path)
-                            },
-                        )
+            # Determine the base directory
+            if self.file_name == "log.parquet":
+                base_dir = "logs"
+            elif self.file_name == "metrics.parquet":
+                base_dir = "metrics"
+            elif self.file_name == "traces.parquet":
+                base_dir = "traces"
             else:
-                # Handle date-based files
-                # Determine the appropriate subdirectory
-                if self.file_name == "log.parquet":
-                    subdir = "logs"
-                elif self.file_name == "metrics.parquet":
-                    subdir = "metrics"
-                else:
-                    subdir = "other"
+                base_dir = "other"
 
-                data_subdir = os.path.join(self.data_dir, subdir)
-                if not os.path.exists(data_subdir):
-                    return
+            data_dir = os.path.join(self.data_dir, base_dir)
+            if not os.path.exists(data_dir):
+                return
 
-                cutoff_date = datetime.now() - timedelta(days=self._retention_days)
+            cutoff_date = datetime.now() - timedelta(days=self._retention_days)
 
-                # List all parquet files in the subdirectory
-                for filename in os.listdir(data_subdir):
-                    if filename.endswith(".parquet"):
-                        file_date_str = filename.replace(".parquet", "")
-                        try:
-                            file_date = datetime.strptime(
-                                file_date_str, self._date_format
-                            )
-                            if file_date.date() < cutoff_date.date():
-                                # Delete old file
-                                file_path = os.path.join(data_subdir, filename)
-                                os.remove(file_path)
-                                # Delete from object store
-                                with DaprClient() as client:
-                                    client.invoke_binding(
-                                        binding_name=OBJECT_STORE_NAME,
-                                        operation="delete",
-                                        data=b"",
-                                        binding_metadata={"key": filename},
-                                    )
-                        except ValueError:
-                            # Skip files that don't match the date format
+            # Walk through the partition directories
+            for year_dir in os.listdir(data_dir):
+                year_path = os.path.join(data_dir, year_dir)
+                if not os.path.isdir(year_path) or not year_dir.startswith("year="):
+                    continue
+
+                year = int(year_dir.split("=")[1])
+                if year < cutoff_date.year:
+                    # Delete entire year directory
+                    import shutil
+
+                    shutil.rmtree(year_path)
+                    continue
+
+                for month_dir in os.listdir(year_path):
+                    month_path = os.path.join(year_path, month_dir)
+                    if not os.path.isdir(month_path) or not month_dir.startswith(
+                        "month="
+                    ):
+                        continue
+
+                    month = int(month_dir.split("=")[1])
+                    if year == cutoff_date.year and month < cutoff_date.month:
+                        shutil.rmtree(month_path)
+                        continue
+
+                    for day_dir in os.listdir(month_path):
+                        day_path = os.path.join(month_path, day_dir)
+                        if not os.path.isdir(day_path) or not day_dir.startswith(
+                            "day="
+                        ):
                             continue
+
+                        day = int(day_dir.split("=")[1])
+                        partition_date = datetime(year, month, day)
+
+                        if partition_date.date() < cutoff_date.date():
+                            # Delete entire partition directory
+                            shutil.rmtree(day_path)
+
+                            # Delete from object store
+                            with DaprClient() as client:
+                                client.invoke_binding(
+                                    binding_name=OBJECT_STORE_NAME,
+                                    operation="delete",
+                                    data=b"",
+                                    binding_metadata={
+                                        "key": os.path.relpath(day_path, self.data_dir)
+                                    },
+                                )
 
         except Exception as e:
             logging.error(f"Error cleaning up old records: {e}")
@@ -591,35 +608,15 @@ class AtlanObservability(Generic[T], ABC):
 
 
 class DuckDBUI:
-    """Class to handle DuckDB UI functionality.
-
-    This class provides functionality to start and manage the DuckDB UI,
-    including automatic view creation for parquet files.
-
-    Attributes:
-        db_path (str): Path to the DuckDB database file
-        _duckdb_ui_con: DuckDB connection object
-    """
+    """Class to handle DuckDB UI functionality."""
 
     def __init__(self, db_path="/tmp/observability/observability.db"):
-        """Initialize the DuckDB UI handler.
-
-        Args:
-            db_path (str): Path to the DuckDB database file
-        """
+        """Initialize the DuckDB UI handler."""
         self.db_path = db_path
         self._duckdb_ui_con = None
 
     def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
-        """Check if DuckDB UI is already running on the default port.
-
-        Args:
-            host (str): Host to check
-            port (int): Port to check
-
-        Returns:
-            bool: True if DuckDB UI is running, False otherwise
-        """
+        """Check if DuckDB UI is already running on the default port."""
         import socket
 
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -628,55 +625,33 @@ class DuckDBUI:
             return result == 0
 
     def start_ui(self, db_path=OBSERVABILITY_DIR):
-        """Start DuckDB UI if not already running, and attach the observability folder.
-
-        Args:
-            db_path (str): Path to the observability directory
-
-        This method:
-        - Creates necessary directories
-        - Connects to DuckDB
-        - Creates views for parquet files
-        - Starts the DuckDB UI
-        """
-        import os
-
-        import duckdb
-
+        """Start DuckDB UI and create views for Hive partitioned parquet files."""
         if not self._is_duckdb_ui_running():
             os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
             con = duckdb.connect(self.db_path)
 
-            # Function to process parquet files and create views
-            def process_parquet_files(directory, prefix=""):
-                for fname in os.listdir(directory):
-                    fpath = os.path.join(directory, fname)
-                    if fname.endswith(".parquet"):
-                        # For date-based files, use the date as part of the table name
-                        # Replace hyphens with underscores to make it DuckDB compatible
-                        base_name = os.path.splitext(fname)[0].replace("-", "_")
-                        if prefix:
-                            tbl = f"{prefix}_{base_name}"
-                        else:
-                            tbl = base_name
-                        con.execute(
-                            f"CREATE OR REPLACE VIEW {tbl} AS SELECT * FROM read_parquet('{fpath}')"
-                        )
+            def process_partitioned_files(directory, prefix=""):
+                """Process Hive partitioned parquet files and create views."""
+                # Create view name based on data type
+                view_name = prefix if prefix else "data"
 
-            # Process files in the main directory (non-date-based case)
-            process_parquet_files(OBSERVABILITY_DIR)
+                # Create a view that reads all parquet files in the directory
+                # using DuckDB's native Hive partitioning support
+                view_query = f"""
+                CREATE OR REPLACE VIEW {view_name} AS
+                SELECT *
+                FROM read_parquet('{directory}/**/*.parquet',
+                                hive_partitioning = true,
+                                hive_types = {{'year': INTEGER, 'month': INTEGER, 'day': INTEGER}})
+                """
+                con.execute(view_query)
 
-            # Process date-based files if enabled
-            if LOG_USE_DATE_BASED_FILES:
-                logs_dir = os.path.join(OBSERVABILITY_DIR, "logs")
-                if os.path.exists(logs_dir):
-                    process_parquet_files(logs_dir, "logs")
+            # Process each type of data
+            for data_type in ["logs", "metrics", "traces"]:
+                data_dir = os.path.join(OBSERVABILITY_DIR, data_type)
+                if os.path.exists(data_dir):
+                    process_partitioned_files(data_dir, data_type)
 
-            if METRICS_USE_DATE_BASED_FILES:
-                metrics_dir = os.path.join(OBSERVABILITY_DIR, "metrics")
-                if os.path.exists(metrics_dir):
-                    process_parquet_files(metrics_dir, "metrics")
-
-            # Start DuckDB UI using SQL command
+            # Start DuckDB UI
             con.execute("CALL start_ui();")
-            self._duckdb_ui_con = con  # Store the connection, do NOT close it!
+            self._duckdb_ui_con = con
