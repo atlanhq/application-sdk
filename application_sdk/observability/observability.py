@@ -53,42 +53,6 @@ class LogRecord(BaseModel):
     extra: Dict[str, Any]
 
 
-class ObservabilityDaprClient:
-    """A singleton class for managing DaprClient instances.
-
-    This class ensures only one DaprClient instance exists throughout the application,
-    providing thread-safe access to Dapr functionality.
-
-    Attributes:
-        _instance: The singleton DaprClient instance
-        _lock: Thread lock for safe instance creation
-    """
-
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        """Create or return the singleton DaprClient instance.
-
-        Returns:
-            DaprClient: The singleton DaprClient instance
-        """
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = DaprClient()
-        return cls._instance
-
-    @classmethod
-    def get_client(cls):
-        """Get the singleton DaprClient instance.
-
-        Returns:
-            DaprClient: The singleton DaprClient instance
-        """
-        return cls()
-
-
 T = TypeVar("T", bound=BaseModel)
 
 
