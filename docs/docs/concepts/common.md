@@ -2,6 +2,127 @@
 
 This section describes various utility functions and classes found within the `application_sdk.common` package. These utilities provide foundational functionalities used across different parts of the SDK, such as logging, configuration management, interacting with AWS, and general helper functions.
 
+## Error Handling (`error_codes.py`)
+
+The SDK provides a comprehensive error handling system with standardized error codes and categories.
+
+### Key Concepts
+
+*   **`ErrorComponent`**: Enum defining the components that can generate errors in the system:
+    *   `CLIENT`: Client-related errors
+    *   `FASTAPI`: Server and API errors
+    *   `TEMPORAL`: Workflow and activity errors
+    *   `TEMPORAL_WORKFLOW`: Workflow-specific errors
+    *   `IO`: Input/Output errors
+    *   `COMMON`: Common utility errors
+    *   `DOCGEN`: Documentation generation errors
+    *   `TEMPORAL_ACTIVITY`: Activity-specific errors
+    *   `ATLAS_TRANSFORMER`: Atlas transformer errors
+
+*   **`ErrorCode`**: Class representing an error code with component, HTTP code, and description:
+    ```python
+    class ErrorCode:
+        def __init__(self, component: str, http_code: str, unique_id: str, description: str):
+            self.code = f"Atlan-{component}-{http_code}-{unique_id}".upper()
+            self.description = description
+    ```
+
+*   **`AtlanError`**: Base exception class for all Atlan errors.
+
+*   **Error Categories**:
+    *   `ClientError`: Client-related errors (400-499)
+    *   `FastApiError`: Server and API errors (500-599)
+    *   `TemporalError`: Workflow and activity errors
+    *   `TemporalWorkflowError`: Workflow-specific errors
+    *   `IOError`: Input/Output errors
+    *   `CommonError`: Common utility errors
+    *   `DocGenError`: Documentation generation errors
+    *   `ActivityError`: Activity-specific errors
+
+### Usage
+
+```python
+from application_sdk.common.error_codes import ClientError, FastApiError, ActivityError
+
+# Client errors
+try:
+    # Some operation
+    pass
+except Exception as e:
+    raise ClientError.REQUEST_VALIDATION_ERROR
+
+# Server errors
+try:
+    # Server operation
+    pass
+except Exception as e:
+    raise FastApiError.SERVER_START_ERROR
+
+# Activity errors
+try:
+    # Activity operation
+    pass
+except Exception as e:
+    raise ActivityError.ACTIVITY_START_ERROR
+```
+
+### Error Code Format
+
+Error codes follow the format: `Atlan-{Component}-{HTTP_Code}-{Unique_ID}`
+
+Example: `ATLAN-CLIENT-403-00` for a request validation error
+
+### Error Categories and HTTP Codes
+
+1. **Client Errors (400-499)**:
+    *   `REQUEST_VALIDATION_ERROR` (403-00)
+    *   `INPUT_VALIDATION_ERROR` (403-01)
+    *   `CLIENT_AUTH_ERROR` (401-00)
+    *   `HANDLER_AUTH_ERROR` (401-01)
+    *   `SQL_CLIENT_AUTH_ERROR` (401-02)
+
+2. **Server Errors (500-599)**:
+    *   `SERVER_START_ERROR` (503-00)
+    *   `SERVER_SHUTDOWN_ERROR` (503-01)
+    *   `SERVER_CONFIG_ERROR` (500-00)
+    *   `CONFIGURATION_ERROR` (500-01)
+    *   `LOGGER_SETUP_ERROR` (500-02)
+    *   And many more...
+
+3. **Activity Errors**:
+    *   `ACTIVITY_START_ERROR` (503-00)
+    *   `ACTIVITY_END_ERROR` (500-00)
+    *   `QUERY_EXTRACTION_ERROR` (500-01)
+    *   And more...
+
+### Best Practices
+
+1. **Error Handling**:
+    *   Use appropriate error categories for different types of errors
+    *   Include error codes in logs for better tracking
+    *   Map error codes to appropriate HTTP status codes
+    *   Include stack traces for debugging
+    *   Mask sensitive data in error messages
+
+2. **Logging Errors**:
+    ```python
+    from application_sdk.common.logger_adaptors import get_logger
+    from application_sdk.common.error_codes import ClientError
+
+    logger = get_logger(__name__)
+
+    try:
+        # Some operation
+        pass
+    except Exception as e:
+        logger.error(
+            f"Operation failed: {ClientError.REQUEST_VALIDATION_ERROR}",
+            exc_info=True,
+            extra={"error_code": ClientError.REQUEST_VALIDATION_ERROR.code}
+        )
+        raise ClientError.REQUEST_VALIDATION_ERROR
+    ```
+
 ## Logging (`logger_adaptors.py`)
 
 The SDK uses the `loguru` library for enhanced logging capabilities, combined with standard Python logging and OpenTelemetry (OTLP) integration for structured, observable logs.

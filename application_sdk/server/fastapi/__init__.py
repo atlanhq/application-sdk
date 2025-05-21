@@ -14,7 +14,7 @@ from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.common.observability import DuckDBUI
 from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
@@ -405,7 +405,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="auth_requests_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "success"},
                 description="Total number of authentication requests",
             )
@@ -415,7 +415,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="auth_duration_seconds",
                 value=duration,
-                metric_type="histogram",
+                metric_type=MetricType.HISTOGRAM,
                 labels={},
                 description="Authentication request duration in seconds",
             )
@@ -426,7 +426,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="auth_requests_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of authentication requests",
             )
@@ -450,7 +450,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="metadata_requests_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={
                     "status": "success",
                     "type": body.root["type"],
@@ -464,7 +464,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="metadata_duration_seconds",
                 value=duration,
-                metric_type="histogram",
+                metric_type=MetricType.HISTOGRAM,
                 labels={"type": body.root["type"], "database": body.root["database"]},
                 description="Metadata fetch duration in seconds",
             )
@@ -475,7 +475,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="metadata_requests_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={
                     "status": "error",
                     "type": body.root["type"],
@@ -503,7 +503,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="preflight_checks_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "success"},
                 description="Total number of preflight checks",
             )
@@ -513,7 +513,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="preflight_duration_seconds",
                 value=duration,
-                metric_type="histogram",
+                metric_type=MetricType.HISTOGRAM,
                 labels={},
                 description="Preflight check duration in seconds",
             )
@@ -524,7 +524,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="preflight_checks_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of preflight checks",
             )
@@ -567,7 +567,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="workflow_status_checks_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "success"},
                 description="Total number of workflow status checks",
             )
@@ -577,7 +577,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="workflow_status_duration_seconds",
                 value=duration,
-                metric_type="histogram",
+                metric_type=MetricType.HISTOGRAM,
                 labels={},
                 description="Workflow status check duration in seconds",
             )
@@ -595,7 +595,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="workflow_status_checks_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of workflow status checks",
             )
@@ -636,7 +636,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="workflow_stops_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "success"},
                 description="Total number of workflow stop requests",
             )
@@ -646,7 +646,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="workflow_stop_duration_seconds",
                 value=duration,
-                metric_type="histogram",
+                metric_type=MetricType.HISTOGRAM,
                 labels={},
                 description="Workflow stop duration in seconds",
             )
@@ -659,7 +659,7 @@ class APIServer(ServerInterface):
             metrics.record_metric(
                 name="workflow_stops_total",
                 value=1.0,
-                metric_type="counter",
+                metric_type=MetricType.COUNTER,
                 labels={"status": "error"},
                 description="Total number of workflow stop requests",
             )

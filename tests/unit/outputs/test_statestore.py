@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.common.error_codes import IOError
 from application_sdk.constants import STATE_STORE_NAME
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.statestore import StateStoreInput
@@ -127,7 +128,7 @@ def test_extract_configuration_not_found(
     mock_state.data = None
     mock_dapr_input_client.get_state.return_value = mock_state
 
-    with pytest.raises(ValueError):
+    with pytest.raises(IOError):
         StateStoreInput.extract_configuration(uuid)
 
 

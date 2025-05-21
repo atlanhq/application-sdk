@@ -349,13 +349,20 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             "level": record["level"],
         }
 
+        # Add error code if present in extra
+        if "extra" in record and "error_code" in record["extra"]:
+            attributes["error.code"] = record["extra"]["error_code"]
+
+        # Add extra attributes at the same level
+
         # Add extra attributes at the same level
         if "extra" in record:
             for key, value in record["extra"].items():
-                if isinstance(value, (bool, int, float, str, bytes)):
-                    attributes[key] = value
-                else:
-                    attributes[key] = str(value)
+                if key != "error_code":  # Skip error_code as it's already handled
+                    if isinstance(value, (bool, int, float, str, bytes)):
+                        attributes[key] = value
+                    else:
+                        attributes[key] = str(value)
 
         return LogRecord(
             timestamp=int(record["timestamp"] * 1e9),

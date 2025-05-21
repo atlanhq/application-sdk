@@ -6,6 +6,7 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.common.error_codes import IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import STATE_STORE_NAME
 
@@ -26,17 +27,22 @@ class StateStoreInput:
 
         Raises:
             ValueError: If no state is found for the given key.
-            Exception: If there's an error with the Dapr client operations.
+            IOError: If there's an error with the Dapr client operations.
         """
         try:
             with DaprClient() as client:
                 state = client.get_state(store_name=STATE_STORE_NAME, key=key)
                 if not state.data:
-                    raise ValueError(f"State not found for key: {key}")
+                    raise IOError(
+                        f"{IOError.STATE_STORE_ERROR}: State not found for key: {key}"
+                    )
                 return json.loads(state.data)
-        except Exception as e:
-            logger.error(f"Failed to extract state: {str(e)}")
-            raise e
+        except IOError as e:
+            logger.error(
+                f"{IOError.STATE_STORE_ERROR}: Failed to extract state: {str(e)}",
+                error_code=IOError.STATE_STORE_ERROR.code,
+            )
+            raise  # Re-raise the exception after logging
 
     @classmethod
     def extract_configuration(cls, config_id: str) -> Dict[str, Any]:
@@ -50,9 +56,11 @@ class StateStoreInput:
 
         Raises:
             ValueError: If the config_id is invalid or configuration is not found.
-            Exception: If there's an error with the Dapr client operations.
+            IOError: If there's an error with the Dapr client operations.
         """
         if not config_id:
-            raise ValueError("Invalid configuration ID provided.")
+            raise IOError(
+                f"{IOError.STATE_STORE_ERROR}: Invalid configuration ID provided."
+            )
         config = cls.get_state(f"config_{config_id}")
         return config
