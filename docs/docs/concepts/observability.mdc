@@ -74,7 +74,7 @@ The logging system provides structured logging with context enrichment and multi
 ### Usage
 
 ```python
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
@@ -101,7 +101,7 @@ The metrics system supports various metric types and provides both local storage
 ### Usage
 
 ```python
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.observability.metrics_adaptor import get_metrics
 
 metrics = get_metrics()
 
@@ -137,7 +137,7 @@ The tracing system provides detailed request flow tracking with span attributes 
 ### Usage
 
 ```python
-from application_sdk.common.traces_adaptor import get_traces
+from application_sdk.observability.traces_adaptor import get_traces
 
 traces = get_traces()
 

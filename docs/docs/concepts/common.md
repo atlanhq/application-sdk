@@ -58,7 +58,7 @@ The logger implements a sophisticated storage and retention system:
 The primary way to get a logger instance is via the `get_logger` function:
 
 ```python
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 # Get a logger instance, usually named after the module
 logger = get_logger(__name__)
@@ -133,7 +133,7 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
 The primary way to get a metrics instance is via the `get_metrics` function:
 
 ```python
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.observability.metrics_adaptor import get_metrics
 
 # Get the metrics instance
 metrics = get_metrics()
@@ -219,7 +219,7 @@ The SDK provides a comprehensive tracing system using OpenTelemetry (OTLP) integ
 The primary way to get a traces instance is via the `get_traces` function:
 
 ```python
-from application_sdk.common.traces_adaptor import get_traces
+from application_sdk.observability.traces_adaptor import get_traces
 
 # Get the traces instance
 traces = get_traces()
