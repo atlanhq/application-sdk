@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from temporalio import activity
 
-from application_sdk.common.error_codes import IO_ERRORS
+from application_sdk.common.error_codes import IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -115,10 +115,10 @@ class ParquetOutput(Output):
 
             # Upload the file to object store
             await self.upload_file(file_path)
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error writing pandas dataframe to parquet: {str(e)}",
-                error_code=IO_ERRORS["PARQUET_WRITE_ERROR"].code,
+                error_code=IOError.PARQUET_WRITE_ERROR.code,
             )
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -129,7 +129,7 @@ class ParquetOutput(Output):
                 description="Number of errors while writing to Parquet files",
             )
             logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
-            raise
+            raise IOError(f"{IOError.PARQUET_WRITE_ERROR}: {str(e)}")
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """Write a daft DataFrame to Parquet files and upload to object store.
@@ -172,10 +172,10 @@ class ParquetOutput(Output):
 
             # Upload the file to object store
             await self.upload_file(self.output_path)
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error writing daft dataframe to parquet: {str(e)}",
-                error_code=IO_ERRORS["PARQUET_DAFT_WRITE_ERROR"].code,
+                error_code=IOError.PARQUET_DAFT_WRITE_ERROR.code,
             )
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -186,7 +186,7 @@ class ParquetOutput(Output):
                 description="Number of errors while writing to Parquet files",
             )
             logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
-            raise
+            raise IOError(f"{IOError.PARQUET_DAFT_WRITE_ERROR}: {str(e)}")
 
     async def upload_file(self, local_file_path: str) -> None:
         """Upload a file to the object store.
@@ -199,7 +199,7 @@ class ParquetOutput(Output):
             await ObjectStoreOutput.push_files_to_object_store(
                 self.output_prefix, local_file_path
             )
-        except Exception as e:
+        except IOError as e:
             # Record metrics for failed upload
             self.metrics.record_metric(
                 name="parquet_upload_errors",
@@ -210,9 +210,9 @@ class ParquetOutput(Output):
             )
             logger.error(
                 f"Error uploading file to object store: {str(e)}",
-                error_code=IO_ERRORS["OBJECT_STORE_WRITE_ERROR"].code,
+                error_code=IOError.OBJECT_STORE_WRITE_ERROR.code,
             )
-            raise e
+            raise IOError(f"{IOError.OBJECT_STORE_WRITE_ERROR}: {str(e)}")
 
     def get_full_path(self) -> str:
         """Get the full path of the output file.

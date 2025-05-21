@@ -4,7 +4,7 @@ from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
 from temporalio import activity
 
-from application_sdk.common.error_codes import IO_ERRORS
+from application_sdk.common.error_codes import IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -70,10 +70,10 @@ class IcebergOutput(Output):
                 labels={"mode": self.mode, "type": "pandas"},
                 description="Number of records written to Iceberg table from pandas DataFrame",
             )
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error writing pandas dataframe to iceberg table: {str(e)}",
-                error_code=IO_ERRORS["ICEBERG_WRITE_ERROR"].code,
+                error_code=IOError.ICEBERG_WRITE_ERROR.code,
             )
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -84,7 +84,7 @@ class IcebergOutput(Output):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing pandas dataframe to iceberg table: {str(e)}")
-            raise e
+            raise IOError(f"{IOError.ICEBERG_WRITE_ERROR}: {str(e)}")
 
     async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
         """
@@ -127,10 +127,10 @@ class IcebergOutput(Output):
                 labels={"mode": self.mode},
                 description="Number of chunks written to Iceberg table",
             )
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error writing daft dataframe to iceberg table: {str(e)}",
-                error_code=IO_ERRORS["ICEBERG_DAFT_WRITE_ERROR"].code,
+                error_code=IOError.ICEBERG_DAFT_WRITE_ERROR.code,
             )
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -141,4 +141,4 @@ class IcebergOutput(Output):
                 description="Number of errors while writing to Iceberg table",
             )
             logger.error(f"Error writing daft dataframe to iceberg table: {str(e)}")
-            raise e
+            raise IOError(f"{IOError.ICEBERG_DAFT_WRITE_ERROR}: {str(e)}")

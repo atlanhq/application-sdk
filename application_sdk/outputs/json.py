@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 import orjson
 from temporalio import activity
 
-from application_sdk.common.error_codes import IO_ERRORS
+from application_sdk.common.error_codes import IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -126,7 +126,7 @@ class JsonOutput(Output):
         self.metrics = get_metrics()
 
         if not self.output_path:
-            raise ValueError("output_path is required")
+            raise IOError(f"{IOError.OUTPUT_ERROR}: output_path is required")
 
         self.output_path = os.path.join(self.output_path, output_suffix)
         if typename:
@@ -186,7 +186,7 @@ class JsonOutput(Output):
                 description="Number of records written to JSON files from pandas DataFrame",
             )
 
-        except Exception as e:
+        except IOError as e:
             # Record metrics for failed write
             self.metrics.record_metric(
                 name="json_write_errors",
@@ -197,8 +197,9 @@ class JsonOutput(Output):
             )
             logger.error(
                 f"Error writing dataframe to json: {str(e)}",
-                error_code=IO_ERRORS["JSON_WRITE_ERROR"].code,
+                error_code=IOError.JSON_WRITE_ERROR.code,
             )
+            raise IOError(f"{IOError.JSON_WRITE_ERROR}: {str(e)}")
 
     async def write_daft_dataframe(
         self,
@@ -291,7 +292,7 @@ class JsonOutput(Output):
                 self.output_prefix, self.output_path
             )
 
-        except Exception as e:
+        except IOError as e:
             # Record metrics for failed write
             self.metrics.record_metric(
                 name="json_write_errors",
@@ -302,8 +303,9 @@ class JsonOutput(Output):
             )
             logger.error(
                 f"Error writing daft dataframe to json: {str(e)}",
-                error_code=IO_ERRORS["JSON_DAFT_WRITE_ERROR"].code,
+                error_code=IOError.JSON_DAFT_WRITE_ERROR.code,
             )
+            raise IOError(f"{IOError.JSON_DAFT_WRITE_ERROR}: {str(e)}")
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
@@ -320,8 +322,8 @@ class JsonOutput(Output):
             return
 
         if not all(isinstance(df, pd.DataFrame) for df in self.buffer):
-            raise TypeError(
-                "_flush_buffer encountered non-DataFrame elements in buffer. This should not happen."
+            raise IOError(
+                f"{IOError.OUTPUT_ERROR}: _flush_buffer encountered non-DataFrame elements in buffer. This should not happen."
             )
 
         try:
@@ -355,7 +357,7 @@ class JsonOutput(Output):
             self.buffer.clear()
             self.current_buffer_size = 0
 
-        except Exception as e:
+        except IOError as e:
             # Record metrics for failed write
             self.metrics.record_metric(
                 name="json_write_errors",
@@ -366,6 +368,6 @@ class JsonOutput(Output):
             )
             logger.error(
                 f"Error flushing buffer to json: {str(e)}",
-                error_code=IO_ERRORS["JSON_WRITE_ERROR"].code,
+                error_code=IOError.JSON_WRITE_ERROR.code,
             )
-            raise e
+            raise IOError(f"{IOError.JSON_WRITE_ERROR}: {str(e)}")

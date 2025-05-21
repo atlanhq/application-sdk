@@ -5,7 +5,7 @@ import os
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.common.error_codes import IO_ERRORS
+from application_sdk.common.error_codes import IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import OBJECT_STORE_NAME
 
@@ -27,8 +27,7 @@ class ObjectStoreOutput:
             file_path (str): The full path to the file to be pushed.
 
         Raises:
-            IOError: If there's an error reading the file.
-            Exception: If there's an error pushing the file to the object store.
+            IOError: If there's an error reading the file or pushing to the object store.
         """
         with DaprClient() as client:
             try:
@@ -37,9 +36,9 @@ class ObjectStoreOutput:
             except IOError as e:
                 logger.error(
                     f"Error reading file {file_path}: {str(e)}",
-                    error_code=IO_ERRORS["OBJECT_STORE_READ_ERROR"].code,
+                    error_code=IOError.OBJECT_STORE_READ_ERROR.code,
                 )
-                raise e
+                raise IOError(f"{IOError.OBJECT_STORE_READ_ERROR}: {str(e)}")
 
             relative_path = os.path.relpath(file_path, output_prefix)
             metadata = {
@@ -56,12 +55,12 @@ class ObjectStoreOutput:
                     binding_metadata=metadata,
                 )
                 logger.debug(f"Successfully pushed file: {relative_path}")
-            except Exception as e:
+            except IOError as e:
                 logger.error(
                     f"Error pushing file {relative_path} to object store: {str(e)}",
-                    error_code=IO_ERRORS["OBJECT_STORE_WRITE_ERROR"].code,
+                    error_code=IOError.OBJECT_STORE_WRITE_ERROR.code,
                 )
-                raise e
+                raise IOError(f"{IOError.OBJECT_STORE_WRITE_ERROR}: {str(e)}")
 
     @classmethod
     async def push_files_to_object_store(
@@ -74,16 +73,14 @@ class ObjectStoreOutput:
             input_files_path (str): The path to the directory containing files to push.
 
         Raises:
-            ValueError: If the input_files_path doesn't exist or is not a directory.
-            IOError: If there's an error reading files.
-            Exception: If there's an error with the Dapr client operations.
+            IOError: If the input_files_path doesn't exist or is not a directory, or if there's an error with the Dapr client operations.
 
         Example:
             >>> ObjectStoreOutput.push_files_to_object_store("logs", "/tmp/observability")
         """
         if not os.path.isdir(input_files_path):
-            raise ValueError(
-                f"The provided output_path '{input_files_path}' is not a valid directory."
+            raise IOError(
+                f"{IOError.OBJECT_STORE_ERROR}: The provided output_path '{input_files_path}' is not a valid directory."
             )
 
         try:
@@ -95,9 +92,9 @@ class ObjectStoreOutput:
             logger.info(
                 f"Completed pushing data from {input_files_path} to object store"
             )
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}",
-                error_code=IO_ERRORS["OBJECT_STORE_ERROR"].code,
+                error_code=IOError.OBJECT_STORE_ERROR.code,
             )
-            raise e
+            raise IOError(f"{IOError.OBJECT_STORE_ERROR}: {str(e)}")

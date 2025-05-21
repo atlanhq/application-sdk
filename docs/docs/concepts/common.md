@@ -11,13 +11,15 @@ The SDK provides a structured way to handle and log errors using standardized er
 *   **`ErrorComponent`**: An enum that defines the different components that can generate errors:
     ```python
     class ErrorComponent(Enum):
-        CLIENT = "Client"      # Client-side errors (400 series)
-        INTERNAL = "Internal"  # Internal server errors (500 series)
+        CLIENT = "Client"      # Client-related errors
+        FASTAPI = "FastApi"    # Server and API errors
         TEMPORAL = "Temporal"  # Workflow and activity errors
+        TEMPORAL_WORKFLOW = "TemporalWorkflow"  # Workflow-specific errors
         IO = "IO"             # Input/Output related errors
         COMMON = "Common"     # Common utility errors
         DOCGEN = "DocGen"     # Documentation generation errors
-        ACTIVITY = "Activity" # Activity-specific errors
+        TEMPORAL_ACTIVITY = "TemporalActivity"  # Activity-specific errors
+        ATLAS_TRANSFORMER = "AtlasTransformer"  # Atlas transformer errors
     ```
 
 *   **`ErrorCode`**: A class that represents an error code with its components:
@@ -30,38 +32,32 @@ The SDK provides a structured way to handle and log errors using standardized er
             unique_id: str,
             description: str
         ):
-            self.component = component
-            self.http_code = http_code
-            self.unique_id = unique_id
+            self.code = f"Atlan-{component}-{http_code}-{unique_id}".upper()
             self.description = description
 
-        @property
-        def code(self) -> str:
-            return f"Atlan-{self.component}-{self.http_code}-{self.unique_id}"
+        def __str__(self) -> str:
+            return f"{self.code}: {self.description}"
     ```
 
-*   **Error Code Dictionaries**: Predefined dictionaries for each component containing error codes:
+*   **Error Classes**: Each component has its own error class that inherits from `AtlanError`:
     ```python
-    CLIENT_ERRORS = {
-        "REQUEST_VALIDATION_ERROR": ErrorCode(
-            "Client",
-            "403",
-            "00",
-            "Request validation failed"
-        ),
-        # ... more error codes
-    }
+    class AtlanError(Exception):
+        """Base exception for all Atlan errors."""
+        pass
 
-    INTERNAL_ERRORS = {
-        "INTERNAL_ERROR": ErrorCode(
-            "Internal",
-            "500",
-            "00",
-            "Internal server error"
-        ),
+    class ClientError(AtlanError):
+        """Client-related error codes."""
+        REQUEST_VALIDATION_ERROR = ErrorCode(
+            "Client", "403", "00", "Request validation failed"
+        )
         # ... more error codes
-    }
-    # ... more component error dictionaries
+
+    class FastApiError(AtlanError):
+        """FastApi/Server error codes."""
+        SERVER_START_ERROR = ErrorCode(
+            "FastApi", "503", "00", "Server failed to start"
+        )
+        # ... more error codes
     ```
 
 ### Usage
@@ -69,7 +65,7 @@ The SDK provides a structured way to handle and log errors using standardized er
 Error codes are typically used with the logger:
 
 ```python
-from application_sdk.common.error_codes import CLIENT_ERRORS
+from application_sdk.common.error_codes import ClientError
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -80,8 +76,9 @@ try:
 except Exception as e:
     logger.error(
         f"Request validation failed: {str(e)}",
-        error_code=CLIENT_ERRORS["REQUEST_VALIDATION_ERROR"].code
+        error_code=ClientError.REQUEST_VALIDATION_ERROR.code
     )
+    raise ClientError(f"{ClientError.REQUEST_VALIDATION_ERROR}: {str(e)}")
 ```
 
 ### Configuration
@@ -92,7 +89,7 @@ Error code behavior can be configured using environment variables:
 # Error Code Configuration
 ATLAN_ERROR_CODE_PREFIX=Atlan
 ATLAN_ERROR_CODE_SEPARATOR=-
-ATLAN_ERROR_CODE_HTTP_MAP={"Client": "403", "Internal": "500", "Temporal": "500", "IO": "500", "Common": "500", "DocGen": "500", "Activity": "500"}
+ATLAN_ERROR_CODE_HTTP_MAP={"Client": "403", "FastApi": "500", "Temporal": "500", "IO": "500", "Common": "500", "DocGen": "500", "Activity": "500"}
 ATLAN_ERROR_CODE_UNIQUE_ID_LENGTH=2
 ```
 

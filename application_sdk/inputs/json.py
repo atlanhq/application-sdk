@@ -3,7 +3,7 @@
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
-from application_sdk.common.error_codes import IO_ERRORS
+from application_sdk.common.error_codes import IOError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
@@ -56,12 +56,12 @@ class JsonInput(Input):
                         os.path.join(self.download_file_prefix, file_name),
                         os.path.join(self.path, file_name),
                     )
-            except Exception as e:
+            except IOError as e:
                 logger.error(
                     f"Error downloading file {file_name}: {str(e)}",
-                    error_code=IO_ERRORS["OBJECT_STORE_DOWNLOAD_ERROR"].code,
+                    error_code=IOError.OBJECT_STORE_DOWNLOAD_ERROR.code,
                 )
-                raise
+                raise IOError(f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: {str(e)}")
 
     async def get_batched_dataframe(
         self,
@@ -84,12 +84,12 @@ class JsonInput(Input):
                 )
                 for chunk in json_reader_obj:
                     yield chunk
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error reading batched data from JSON: {str(e)}",
-                error_code=IO_ERRORS["JSON_BATCH_READ_ERROR"].code,
+                error_code=IOError.JSON_BATCH_ERROR.code,
             )
-            raise
+            raise IOError(f"{IOError.JSON_BATCH_ERROR}: {str(e)}")
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """
@@ -109,12 +109,12 @@ class JsonInput(Input):
                     )
                 )
             return pd.concat(dataframes, ignore_index=True)
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error reading data from JSON: {str(e)}",
-                error_code=IO_ERRORS["JSON_READ_ERROR"].code,
+                error_code=IOError.JSON_READ_ERROR.code,
             )
-            raise
+            raise IOError(f"{IOError.JSON_READ_ERROR}: {str(e)}")
 
     async def get_batched_daft_dataframe(
         self,
@@ -133,12 +133,12 @@ class JsonInput(Input):
                     _chunk_size=self.chunk_size,
                 )
                 yield json_reader_obj
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error reading batched data from JSON: {str(e)}",
-                error_code=IO_ERRORS["JSON_BATCH_READ_ERROR"].code,
+                error_code=IOError.JSON_BATCH_ERROR.code,
             )
-            raise
+            raise IOError(f"{IOError.JSON_BATCH_ERROR}: {str(e)}")
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
@@ -150,12 +150,12 @@ class JsonInput(Input):
 
             await self.download_files()
             if not self.file_names or len(self.file_names) == 0:
-                raise ValueError("No files to read")
+                raise IOError(f"{IOError.INPUT_ERROR}: No files to read")
             directory = os.path.join(self.path, self.file_names[0].split("/")[0])
             return daft.read_json(path=f"{directory}/*.json")
-        except Exception as e:
+        except IOError as e:
             logger.error(
                 f"Error reading data from JSON using daft: {str(e)}",
-                error_code=IO_ERRORS["JSON_DAFT_READ_ERROR"].code,
+                error_code=IOError.JSON_DAFT_ERROR.code,
             )
-            raise
+            raise IOError(f"{IOError.JSON_DAFT_ERROR}: {str(e)}")
