@@ -199,7 +199,7 @@ def test_process_with_generated_request_context(request_id: str):
     """Test process() method with generated request context data."""
     with create_logger_adapter() as logger_adapter:
         with mock.patch(
-            "application_sdk.common.logger_adaptors.request_context"
+            "application_sdk.observability.logger_adaptor.request_context"
         ) as mock_context:
             mock_context.get.return_value = {"request_id": request_id}
             msg, kwargs = logger_adapter.process("Test message", {})

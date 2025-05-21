@@ -135,7 +135,9 @@ def test_record_metric_with_various_inputs(name: str, value: float, metric_type:
 
 def test_export_record_with_otlp_enabled():
     """Test export_record() method when OTLP is enabled."""
-    with mock.patch("application_sdk.common.metrics_adaptor.ENABLE_OTLP_METRICS", True):
+    with mock.patch(
+        "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS", True
+    ):
         with create_metrics_adapter() as metrics_adapter:
             record = MetricRecord(
                 timestamp=datetime.now().timestamp(),
@@ -258,7 +260,7 @@ def test_log_to_console():
     """Test _log_to_console() method."""
     with create_metrics_adapter() as metrics_adapter:
         with mock.patch(
-            "application_sdk.common.metrics_adaptor.get_logger"
+            "application_sdk.observability.metrics_adaptor.get_logger"
         ) as mock_get_logger:
             mock_logger = mock.MagicMock()
             mock_get_logger.return_value = mock_logger
