@@ -45,13 +45,13 @@ def test_load(create_async_engine: Any, async_sql_client: AsyncBaseSQLClient):
     assert async_sql_client.connection == mock_connection
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -66,15 +66,15 @@ async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, handler: BaseSQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
 
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -89,14 +89,14 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, handler: BaseSQLHandler
 ):
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -112,7 +112,7 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, handler: BaseSQLHandler
 ):

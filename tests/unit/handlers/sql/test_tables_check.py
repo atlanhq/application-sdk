@@ -1,7 +1,7 @@
 from typing import Any, Optional, Type
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import daft
+import pandas as pd
 import pytest
 from sqlalchemy.engine import Engine
 
@@ -47,12 +47,12 @@ async def test_tables_check_success(sql_handler: BaseSQLHandler) -> None:
     # Create a mock DataFrame with table count
     if not sql_handler.sql_client.engine:
         raise ValueError("Engine is not initialized")
-    mock_df = daft.from_pylist([{"count": 5}])
+    mock_df = pd.DataFrame([{"count": 5}])
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
     )  # type: ignore
 
-    with patch("daft.read_sql") as mock_read_sql:
+    with patch("pandas.read_sql_query") as mock_read_sql:
         mock_read_sql.return_value = mock_df
 
         result = await sql_handler.tables_check(payload={})
@@ -65,12 +65,12 @@ async def test_tables_check_empty(sql_handler: BaseSQLHandler) -> None:
     # Create a mock DataFrame with zero count
     if not sql_handler.sql_client.engine:
         raise ValueError("Engine is not initialized")
-    mock_df = daft.from_pylist([{"count": 0}])
+    mock_df = pd.DataFrame([{"count": 0}])
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
     )  # type: ignore
 
-    with patch("daft.read_sql") as mock_read_sql:
+    with patch("pandas.read_sql_query") as mock_read_sql:
         mock_read_sql.return_value = mock_df
 
         result = await sql_handler.tables_check(payload={})
@@ -83,12 +83,12 @@ async def test_tables_check_failure(sql_handler: BaseSQLHandler) -> None:
     # Create a DataFrame with invalid data that will cause an error
     if not sql_handler.sql_client.engine:
         raise ValueError("Engine is not initialized")
-    mock_df = daft.from_pylist([{"wrong_column": "invalid"}])  # Missing 'count' column
+    mock_df = pd.DataFrame([{"wrong_column": "invalid"}])  # Missing 'count' column
     sql_handler.sql_client.engine.connect.return_value.__enter__.return_value = (
         MagicMock()
     )  # type: ignore
 
-    with patch("daft.read_sql") as mock_read_sql:
+    with patch("pandas.read_sql_query") as mock_read_sql:
         mock_read_sql.return_value = mock_df
 
         result = await sql_handler.tables_check(payload={})
