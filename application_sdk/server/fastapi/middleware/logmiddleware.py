@@ -6,7 +6,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-from application_sdk.common.error_codes import FASTAPI_ERRORS
+from application_sdk.common.error_codes import FastApiError
 from application_sdk.common.logger_adaptors import get_logger, request_context
 
 logger = get_logger(__name__)
@@ -56,10 +56,10 @@ class LogMiddleware(BaseHTTPMiddleware):
             )
             return response
 
-        except Exception as e:
+        except FastApiError as e:
             duration = time.time() - start_time
             self.logger.error(
-                f"{FASTAPI_ERRORS['MIDDLEWARE_ERROR']}: Request failed for {request.method} path: {request.url.path} with request_id: {request_id}",
+                f"{FastApiError.MIDDLEWARE_ERROR}: Request failed for {request.method} path: {request.url.path} with request_id: {request_id}",
                 extra={
                     "method": request.method,
                     "path": request.url.path,

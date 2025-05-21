@@ -13,7 +13,7 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.error_codes import FASTAPI_ERRORS
+from application_sdk.common.error_codes import FastAPIError
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -136,9 +136,9 @@ class Worker:
                 f"Starting worker with task queue: {self.workflow_client.worker_task_queue}"
             )
             await worker.run()
-        except Exception as e:
+        except FastAPIError as e:
             logger.error(
                 f"Error starting worker: {e}",
-                error_code=FASTAPI_ERRORS["SERVER_START_ERROR"].code,
+                error_code=FastAPIError.SERVER_START_ERROR.code,
             )
             raise e

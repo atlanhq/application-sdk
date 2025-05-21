@@ -20,7 +20,7 @@ from fastapi import status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRouter
 
-from application_sdk.common.error_codes import FASTAPI_ERRORS
+from application_sdk.common.error_codes import FastApiError
 from application_sdk.common.logger_adaptors import get_logger
 
 logger = get_logger(__name__)
@@ -47,7 +47,7 @@ def get_ip_address():
             ip = s.getsockname()[0]
             s.close()
             return ip
-        except Exception:
+        except FastApiError:
             return "127.0.0.1"  # Return localhost if all else fails
 
 
@@ -115,10 +115,10 @@ async def shutdown(force: bool = False):
                 await asyncio.wait(pending_tasks, timeout=10)
             except asyncio.CancelledError:
                 logger.info("Tasks cancelled successfully")
-            except Exception as e:
+            except FastApiError as e:
                 logger.error(
                     f"Error during task cancellation: {e}",
-                    error_code=FASTAPI_ERRORS["SERVER_SHUTDOWN_ERROR"].code,
+                    error_code=FastApiError.SERVER_SHUTDOWN_ERROR.code,
                 )
                 raise
 
