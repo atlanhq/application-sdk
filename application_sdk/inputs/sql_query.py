@@ -104,7 +104,7 @@ class SQLQueryInput(Input):
 
     async def get_batched_dataframe(
         self,
-    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
+    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:  # type: ignore
         """Get query results as batched pandas DataFrames asynchronously.
 
         Returns:
@@ -130,29 +130,13 @@ class SQLQueryInput(Input):
 
             if async_session:
                 async with async_session() as session:
-                    result = await session.run_sync(self._read_sql_query)
-                    # Convert regular iterator to async iterator
-                    if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
-                        for item in result:
-                            yield item
-                    else:
-                        yield result  # Single dataframe case
+                    return await session.run_sync(self._read_sql_query)
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
-                    import pandas as pd
-
-                    result = await asyncio.get_event_loop().run_in_executor(
+                    return await asyncio.get_event_loop().run_in_executor(  # type: ignore
                         executor, self._execute_query
                     )
-                    # Convert regular iterator to async iterator
-                    if hasattr(result, "__iter__") and not hasattr(result, "__aiter__"):
-                        for item in result:
-                            if isinstance(item, pd.DataFrame):
-                                yield item
-                    else:
-                        if isinstance(result, pd.DataFrame):
-                            yield result
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
@@ -193,11 +177,13 @@ class SQLQueryInput(Input):
 
                     if isinstance(result, pd.DataFrame):
                         return result
-                    raise
+                    raise Exception(
+                        "Unable to get pandas dataframe from SQL query results"
+                    )
 
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-            raise
+            raise e
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.

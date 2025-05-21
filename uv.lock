@@ -130,6 +130,8 @@ name = "atlan-application-sdk"
 version = "0.1.1rc5"
 source = { editable = "." }
 dependencies = [
+    { name = "duckdb" },
+    { name = "duckdb-engine" },
     { name = "fastapi", extra = ["standard"] },
     { name = "loguru" },
     { name = "opentelemetry-exporter-otlp" },
@@ -150,9 +152,10 @@ iam-auth = [
 iceberg = [
     { name = "pyiceberg" },
 ]
+pandas = [
+    { name = "pandas" },
+]
 scale-data-generator = [
-    { name = "duckdb" },
-    { name = "duckdb-engine" },
     { name = "faker" },
     { name = "numpy" },
     { name = "pandas" },
@@ -200,8 +203,8 @@ test = [
 requires-dist = [
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
-    { name = "duckdb", marker = "extra == 'scale-data-generator'", specifier = ">=1.1.3" },
-    { name = "duckdb-engine", marker = "extra == 'scale-data-generator'", specifier = ">=0.17.0" },
+    { name = "duckdb", specifier = ">=1.1.3" },
+    { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
     { name = "getdaft", extras = ["sql"], marker = "extra == 'daft'", specifier = ">=0.4.12" },
@@ -209,6 +212,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.27.0" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.10.18" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3" },
     { name = "pandas", marker = "extra == 'scale-data-generator'", specifier = ">=2.2.3" },
     { name = "pandas", marker = "extra == 'tests'", specifier = ">=2.2.3" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1" },
@@ -224,7 +228,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1" },
     { name = "uvloop", specifier = ">=0.21.0" },
 ]
-provides-extras = ["workflows", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator"]
+provides-extras = ["workflows", "pandas", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator"]
 
 [package.metadata.requires-dev]
 dev = [

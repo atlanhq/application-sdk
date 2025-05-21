@@ -186,10 +186,20 @@ class ParquetOutput(Output):
             local_file_path (str): Path to the local file to upload.
         """
         try:
-            logger.info(f"Uploading file: {local_file_path} to {self.output_prefix}")
-            await ObjectStoreOutput.push_files_to_object_store(
-                self.output_prefix, local_file_path
-            )
+            if os.path.isdir(local_file_path):
+                logger.info(
+                    f"Uploading files: {local_file_path} to {self.output_prefix}"
+                )
+                await ObjectStoreOutput.push_files_to_object_store(
+                    self.output_prefix, local_file_path
+                )
+            else:
+                logger.info(
+                    f"Uploading file: {local_file_path} to {self.output_prefix}"
+                )
+                await ObjectStoreOutput.push_file_to_object_store(
+                    self.output_prefix, local_file_path
+                )
         except Exception as e:
             # Record metrics for failed upload
             self.metrics.record_metric(

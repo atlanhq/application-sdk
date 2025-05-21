@@ -31,7 +31,7 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
     if chunk_start is None:
         return f"{str(chunk_count)}.json"
     else:
-        return f"{str(chunk_start+1)}-{str(chunk_count)}.json"
+        return f"{str(chunk_start+chunk_count)}.json"
 
 
 def convert_datetime_to_epoch(data: Any) -> Any:
