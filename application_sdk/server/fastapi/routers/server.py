@@ -73,12 +73,15 @@ async def health():
 
 
 def terminate_process():
-    """
-    Terminate the process by sending a SIGTERM signal to the parent process.
-    """
     time.sleep(1)
-    parent = psutil.Process(psutil.Process(os.getpid()).ppid())
-    parent.terminate()
+    try:
+        parent = psutil.Process(psutil.Process(os.getpid()).ppid())
+        parent.terminate()
+        time.sleep(2)  # Give parent time to die
+    except Exception:
+        pass  # Parent might already be dead
+    finally:
+        os._exit(0)  # Ensure we exit cleanly
 
 
 @router.post("/shutdown")
