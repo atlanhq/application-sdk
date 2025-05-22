@@ -91,13 +91,13 @@ def test_load_property_based(
         assert sql_client.connection == mock_connection
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
     """Test basic metadata fetching with fixed configuration"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -119,7 +119,7 @@ async def test_fetch_metadata_property_based(
 ):
     """Property-based test for fetching metadata with various arguments and data"""
     with patch(
-        "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe"
+        "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe"
     ) as mock_run_query:
         # Update handler with the test arguments
         if "database_alias_key" in args:
@@ -140,9 +140,9 @@ async def test_fetch_metadata_property_based(
             }
             test_data.append(test_row)
 
-        import daft
+        import pandas as pd
 
-        mock_run_query.return_value = daft.from_pylist(test_data)
+        mock_run_query.return_value = pd.DataFrame(test_data)
 
         handler.metadata_sql = args["metadata_sql"]
 
@@ -161,15 +161,15 @@ async def test_fetch_metadata_property_based(
                 assert handler.schema_result_key in row
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, handler: BaseSQLHandler
 ):
     """Test metadata fetching without database alias key"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -184,15 +184,15 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, handler: BaseSQLHandler
 ):
     """Test metadata fetching with custom result keys"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -207,7 +207,7 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, handler: BaseSQLHandler
 ):

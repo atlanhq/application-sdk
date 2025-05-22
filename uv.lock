@@ -152,6 +152,9 @@ iam-auth = [
 iceberg = [
     { name = "pyiceberg" },
 ]
+pandas = [
+    { name = "pandas" },
+]
 scale-data-generator = [
     { name = "faker" },
     { name = "numpy" },
@@ -209,6 +212,7 @@ requires-dist = [
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.27.0" },
     { name = "orjson", marker = "extra == 'workflows'", specifier = ">=3.10.18" },
+    { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3" },
     { name = "pandas", marker = "extra == 'scale-data-generator'", specifier = ">=2.2.3" },
     { name = "pandas", marker = "extra == 'tests'", specifier = ">=2.2.3" },
     { name = "pandera", extras = ["io"], marker = "extra == 'tests'", specifier = ">=0.23.1" },
@@ -224,7 +228,7 @@ requires-dist = [
     { name = "temporalio", marker = "extra == 'workflows'", specifier = ">=1.7.1" },
     { name = "uvloop", specifier = ">=0.21.0" },
 ]
-provides-extras = ["workflows", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator"]
+provides-extras = ["workflows", "pandas", "daft", "iceberg", "sqlalchemy", "iam-auth", "tests", "scale-data-generator"]
 
 [package.metadata.requires-dev]
 dev = [

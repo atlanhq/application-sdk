@@ -44,6 +44,9 @@ workflows = [
     "temporalio>=1.7.1",
     "orjson>=3.10.18",
 ]
+pandas = [
+    "pandas>=2.2.3"
+]
 daft = [
     "getdaft[sql]>=0.4.12",
 ]
