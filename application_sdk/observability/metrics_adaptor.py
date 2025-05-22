@@ -12,17 +12,13 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel
 
-from application_sdk.common.logger_adaptors import get_logger
-from application_sdk.common.observability import AtlanObservability
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
     METRICS_BATCH_SIZE,
     METRICS_CLEANUP_ENABLED,
-    METRICS_DATE_FORMAT,
     METRICS_FILE_NAME,
     METRICS_FLUSH_INTERVAL_SECONDS,
     METRICS_RETENTION_DAYS,
-    METRICS_USE_DATE_BASED_FILES,
     OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -32,6 +28,8 @@ from application_sdk.constants import (
     SERVICE_NAME,
     SERVICE_VERSION,
 )
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.observability import AtlanObservability
 
 
 class MetricType(Enum):
@@ -43,7 +41,20 @@ class MetricType(Enum):
 
 
 class MetricRecord(BaseModel):
-    """Pydantic model for metric records."""
+    """A Pydantic model representing a metric record in the system.
+
+    This model defines the structure for metric data with fields for timestamp,
+    name, value, type, labels, and optional description and unit.
+
+    Attributes:
+        timestamp (float): Unix timestamp when the metric was recorded
+        name (str): Name of the metric
+        value (float): Numeric value of the metric
+        type (str): Type of metric (counter, gauge, or histogram)
+        labels (Dict[str, str]): Key-value pairs for metric dimensions
+        description (Optional[str]): Optional description of the metric
+        unit (Optional[str]): Optional unit of measurement
+    """
 
     timestamp: float
     name: str
@@ -54,7 +65,11 @@ class MetricRecord(BaseModel):
     unit: Optional[str] = None
 
     class Config:
-        """Pydantic model configuration."""
+        """Configuration for the MetricRecord Pydantic model.
+
+        Provides custom parsing logic to ensure consistent data types and structure
+        for metric records, including validation and type conversion for all fields.
+        """
 
         @classmethod
         def parse_obj(cls, obj):
@@ -120,12 +135,30 @@ class MetricRecord(BaseModel):
 
 
 class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
-    """Metrics adapter for Atlan."""
+    """A metrics adapter for Atlan that extends AtlanObservability.
+
+    This adapter provides functionality for recording, processing, and exporting
+    metrics to various backends including OpenTelemetry and parquet files.
+
+    Features:
+    - Metric recording with labels and units
+    - OpenTelemetry integration
+    - Periodic metric flushing
+    - Console logging
+    - Parquet file storage
+    """
 
     _flush_task_started = False
 
     def __init__(self):
-        """Initialize the metrics adapter."""
+        """Initialize the metrics adapter with configuration and setup.
+
+        This initialization:
+        - Sets up base observability configuration
+        - Configures date-based file settings
+        - Initializes OpenTelemetry metrics if enabled
+        - Starts periodic flush task for metric buffering
+        """
         super().__init__(
             batch_size=METRICS_BATCH_SIZE,
             flush_interval=METRICS_FLUSH_INTERVAL_SECONDS,
@@ -134,10 +167,6 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             data_dir=OBSERVABILITY_DIR,
             file_name=METRICS_FILE_NAME,
         )
-
-        # Override the date-based file settings
-        self._use_date_based_files = METRICS_USE_DATE_BASED_FILES
-        self._date_format = METRICS_DATE_FORMAT
 
         # Initialize OpenTelemetry metrics if enabled
         if ENABLE_OTLP_METRICS:
@@ -158,7 +187,18 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
                 logging.error(f"Failed to start metrics flush task: {e}")
 
     def _setup_otel_metrics(self):
-        """Setup OpenTelemetry metrics exporter."""
+        """Set up OpenTelemetry metrics exporter and configuration.
+
+        This method:
+        - Configures resource attributes
+        - Creates OTLP exporter
+        - Sets up metric reader
+        - Initializes meter provider
+        - Creates meter for the service
+
+        Raises:
+            Exception: If setup fails, logs error and continues without OTLP
+        """
         try:
             # Get workflow node name for Argo environment
             workflow_node_name = OTEL_WF_NODE_NAME
@@ -209,7 +249,18 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             logging.error(f"Failed to setup OTLP metrics: {e}")
 
     def _parse_otel_resource_attributes(self, env_var: str) -> dict[str, str]:
-        """Parse OpenTelemetry resource attributes from environment variable."""
+        """Parse OpenTelemetry resource attributes from environment variable.
+
+        Args:
+            env_var (str): Comma-separated string of key-value pairs
+
+        Returns:
+            dict[str, str]: Dictionary of parsed resource attributes
+
+        Example:
+            Input: "service.name=myapp,service.version=1.0"
+            Output: {"service.name": "myapp", "service.version": "1.0"}
+        """
         try:
             if env_var:
                 attributes = env_var.split(",")
@@ -223,19 +274,23 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         return {}
 
     def _start_asyncio_flush(self):
-        """Start the asyncio flush task."""
+        """Start an asyncio event loop for periodic metric flushing.
+
+        Creates a new event loop and runs the periodic flush task in the background.
+        This is used when no existing event loop is available.
+        """
         asyncio.run(self._periodic_flush())
 
-    async def _periodic_flush(self):
-        """Periodically flush metrics buffer."""
-        while True:
-            await asyncio.sleep(self._flush_interval)
-            await self._flush_buffer(force=True)
-
     def process_record(self, record: Any) -> Dict[str, Any]:
-        """Process a metric record into a dictionary format.
+        """Process a metric record into a standardized dictionary format.
 
-        This method ensures metrics are properly formatted for storage in metrics.parquet.
+        Args:
+            record (Any): Input metric record, can be MetricRecord or dict
+
+        Returns:
+            Dict[str, Any]: Standardized dictionary representation of the metric
+
+        This method ensures metrics are properly formatted for storage in METRICS_FILE_NAME.
         It converts the MetricRecord into a dictionary with all necessary fields.
         """
         if isinstance(record, MetricRecord):
@@ -253,7 +308,16 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         return record
 
     def export_record(self, record: Any) -> None:
-        """Export a metric record to external systems."""
+        """Export a metric record to external systems.
+
+        Args:
+            record (Any): Metric record to export
+
+        This method:
+        - Validates the record is a MetricRecord
+        - Sends to OpenTelemetry if enabled
+        - Logs to console
+        """
         if not isinstance(record, MetricRecord):
             return
 
@@ -265,7 +329,19 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         self._log_to_console(record)
 
     def _send_to_otel(self, metric_record: MetricRecord):
-        """Send metric to OpenTelemetry."""
+        """Send metric to OpenTelemetry.
+
+        Args:
+            metric_record (MetricRecord): Metric record to send
+
+        This method:
+        - Creates appropriate metric type (counter, gauge, or histogram)
+        - Adds/records the metric value with labels
+        - Handles errors gracefully
+
+        Raises:
+            Exception: If sending fails, logs error and continues
+        """
         try:
             if metric_record.type == MetricType.COUNTER:
                 counter = self.meter.create_counter(
@@ -292,7 +368,19 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             logging.error(f"Error sending metric to OpenTelemetry: {e}")
 
     def _log_to_console(self, metric_record: MetricRecord):
-        """Log metric to console."""
+        """Log metric to console using the logger.
+
+        Args:
+            metric_record (MetricRecord): Metric record to log
+
+        This method:
+        - Formats metric information into a readable string
+        - Includes name, value, type, labels, description, and unit
+        - Uses the metric-specific logger level
+
+        Raises:
+            Exception: If logging fails, logs error and continues
+        """
         try:
             log_message = (
                 f"{metric_record.name} = {metric_record.value} "
@@ -318,7 +406,24 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         description: Optional[str] = None,
         unit: Optional[str] = None,
     ):
-        """Record a metric with the given parameters."""
+        """Record a metric with the given parameters.
+
+        Args:
+            name (str): Name of the metric
+            value (float): Numeric value of the metric
+            metric_type (str): Type of metric (counter, gauge, or histogram)
+            labels (Dict[str, str]): Key-value pairs for metric dimensions
+            description (Optional[str]): Optional description of the metric
+            unit (Optional[str]): Optional unit of measurement
+
+        This method:
+        - Creates a MetricRecord with current timestamp
+        - Adds the record to the buffer for processing
+        - Handles errors gracefully
+
+        Raises:
+            Exception: If recording fails, logs error and continues
+        """
         try:
             # Create metric record
             metric_record = MetricRecord(
@@ -343,9 +448,13 @@ _metrics_instance: Optional[AtlanMetricsAdapter] = None
 
 
 def get_metrics() -> AtlanMetricsAdapter:
-    """Get or create an instance of AtlanMetricsAdapter.
+    """Get or create a singleton instance of AtlanMetricsAdapter.
+
     Returns:
-        AtlanMetricsAdapter: Metrics adapter instance
+        AtlanMetricsAdapter: Singleton instance of the metrics adapter
+
+    This function ensures only one instance of the metrics adapter exists
+    throughout the application lifecycle.
     """
     global _metrics_instance
     if _metrics_instance is None:

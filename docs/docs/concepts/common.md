@@ -151,32 +151,42 @@ The SDK uses the `loguru` library for enhanced logging capabilities, combined wi
     *   Activity context: `activity_id`, `activity_type`, `schedule_to_close_timeout`, `start_to_close_timeout`, `schedule_to_start_timeout`, `heartbeat_timeout`
     *   Other fields: `log_type`
 
-*   **`LogRecordModel`**: Pydantic model for log records, including:
-    *   `timestamp`: When the log was recorded
-    *   `level`: Log level
-    *   `logger_name`: Name of the logger
-    *   `message`: Log message
-    *   `file`: Source file
-    *   `line`: Line number
-    *   `function`: Function name
-    *   `extra`: Additional context (LogExtraModel)
+1. **Parquet Storage**:
+   - Logs are stored in parquet format for efficient storage and querying
+   - Implements buffering to reduce I/O operations
+   - Flushes logs based on two conditions:
+     - When buffer size reaches `LOG_BATCH_SIZE`
+     - When time since last flush exceeds `LOG_FLUSH_INTERVAL_SECONDS`
+   - Uses Hive partitioning for efficient data organization:
+     - Partitioned by year/month/day
+     - Single file per partition for better performance
+     - Uses day-level partitioning for all observability data (logs, metrics, traces)
+   - Handles type consistency for partition columns (year, month, day) as integers
 
-### Request Context
+2. **Log Retention**:
+   - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
+   - Runs cleanup once per day
+   - Maintains state of last cleanup in Dapr state store
+   - Handles both local parquet files and object store cleanup
+   - Efficiently deletes entire partition directories
 
-The logger uses a `ContextVar` to track request context across async boundaries:
-
-```python
-request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
-```
-
-This allows the logger to automatically include request IDs and other request-specific information in logs.
+3. **Storage Locations**:
+   - Local:
+     - Hive partitioned: `/tmp/observability/logs/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `/tmp/observability/metrics/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `/tmp/observability/traces/year=YYYY/month=MM/day=DD/data.parquet`
+   - Object Store:
+     - Hive partitioned: `logs/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `metrics/year=YYYY/month=MM/day=DD/data.parquet`
+     - Hive partitioned: `traces/year=YYYY/month=MM/day=DD/data.parquet`
+     (via Dapr object store binding)
 
 ### Usage
 
 The primary way to get a logger instance is via the `get_logger` function:
 
 ```python
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 # Get a logger instance, usually named after the module
 logger = get_logger(__name__)
@@ -218,8 +228,11 @@ LOG_LEVEL=INFO
 LOG_BATCH_SIZE=100  # Number of logs to buffer before writing
 LOG_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
 LOG_RETENTION_DAYS=30  # Days to keep logs before cleanup
-LOG_USE_DATE_BASED_FILES=true  # Enable date-based file organization
-LOG_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
+LOG_CLEANUP_ENABLED=true  # Enable automatic cleanup
+
+# Hive partitioning configuration
+ENABLE_HIVE_PARTITIONING=true  # Enable Hive partitioning
+# Partitioning is fixed at day level for all observability data
 
 # OTLP settings (if enabled)
 ENABLE_OTLP_LOGS=true
@@ -248,14 +261,13 @@ The SDK provides a comprehensive metrics system using OpenTelemetry (OTLP) integ
     *   **Parquet Storage**: Metrics are stored in parquet format for efficient storage and querying
     *   **Buffering**: Implements buffering and periodic flushing based on batch size and time interval
     *   **Log Integration**: Metrics are also logged with a custom "METRIC" level for visibility
-    *   **Date-based Files**: Supports date-based file organization using `METRICS_DATE_FORMAT`
 
 ### Usage
 
 The primary way to get a metrics instance is via the `get_metrics` function:
 
 ```python
-from application_sdk.common.metrics_adaptor import get_metrics
+from application_sdk.observability.metrics_adaptor import get_metrics
 
 # Get the metrics instance
 metrics = get_metrics()
@@ -302,8 +314,6 @@ The metrics system can be configured using the following environment variables:
 METRICS_BATCH_SIZE=100  # Number of metrics to buffer before writing
 METRICS_FLUSH_INTERVAL_SECONDS=10  # Seconds between forced flushes
 METRICS_RETENTION_DAYS=30  # Days to keep metrics before cleanup
-METRICS_USE_DATE_BASED_FILES=true  # Enable date-based file organization
-METRICS_DATE_FORMAT=%Y-%m-%d  # Format for date-based file names
 
 # OTLP settings (if enabled)
 ENABLE_OTLP_METRICS=true
@@ -343,7 +353,7 @@ The SDK provides a comprehensive tracing system using OpenTelemetry (OTLP) integ
 The primary way to get a traces instance is via the `get_traces` function:
 
 ```python
-from application_sdk.common.traces_adaptor import get_traces
+from application_sdk.observability.traces_adaptor import get_traces
 
 # Get the traces instance
 traces = get_traces()
@@ -384,6 +394,10 @@ The traces adapter implements a sophisticated storage and retention system:
    - Flushes traces based on two conditions:
      - When buffer size reaches `TRACES_BATCH_SIZE`
      - When time since last flush exceeds `TRACES_FLUSH_INTERVAL_SECONDS`
+   - Uses Hive partitioning for efficient data organization:
+     - Partitioned by year/month/day
+     - Single file per partition for better performance
+     - Uses day-level partitioning for all observability data
 
 2. **Trace Retention**:
    - Automatically cleans up traces older than `TRACES_RETENTION_DAYS`
@@ -392,8 +406,8 @@ The traces adapter implements a sophisticated storage and retention system:
    - Handles both local parquet files and object store cleanup
 
 3. **Storage Locations**:
-   - Local: stored in `/tmp/observability` in hive partitioned format
-   - Object Store: `observability/../../../data.parquet` (via Dapr object store binding) in hive partitioned format
+   - Local: `/tmp/observability/traces/year=YYYY/month=MM/day=DD/data.parquet`
+   - Object Store: `traces/year=YYYY/month=MM/day=DD/data.parquet` (via Dapr object store binding)
 
 ## AWS Utilities (`aws_utils.py`)
 

@@ -7,8 +7,8 @@ from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.error_codes import IOError
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import STATE_STORE_NAME
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 activity.logger = logger

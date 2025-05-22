@@ -168,7 +168,7 @@ from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.worker import Worker
 from application_sdk.workflows.metadata_extraction.sql import BaseSQLMetadataExtractionWorkflow
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 APPLICATION_NAME = "postgres-app-example" # Define application name
 logger = get_logger(__name__)
@@ -322,7 +322,7 @@ You can extend `BaseSQLClient` to add support for other authentication mechanism
 
 1.  **Configuration**: Load sensitive credentials and configuration from environment variables or secure stores, not directly in code. Use the constants defined in `application_sdk.constants`.
 2.  **Error Handling**: Implement `try...except` blocks in custom code (especially within Activities or Handlers) to handle potential database errors or unexpected data.
-3.  **Logging**: Use the SDK's logger (`application_sdk.common.logger_adaptors.get_logger`) for consistent and structured logging integrated with Temporal.
+3.  **Logging**: Use the SDK's logger (`application_sdk.observability.logger_adaptor.get_logger`) for consistent and structured logging integrated with Temporal.
 4.  **Idempotency**: Design activities to be idempotent where possible, meaning they can be run multiple times with the same result. Temporal handles retries, but idempotent activities simplify recovery.
 5.  **Testing**: Write unit tests for your custom Client, Activities, and Handler classes to ensure they function correctly. The SDK provides testing utilities (`application_sdk.test_utils`).
 6.  **Resource Management**: Ensure database connections are properly closed. The SDK's client and workflow management generally handle this, but be mindful in custom extensions.

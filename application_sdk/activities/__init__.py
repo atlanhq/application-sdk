@@ -21,8 +21,8 @@ from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.common.error_codes import OrchestratorError
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 activity.logger = logger

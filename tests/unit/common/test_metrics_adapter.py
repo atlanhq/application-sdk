@@ -7,7 +7,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.common.metrics_adaptor import (
+from application_sdk.observability.metrics_adaptor import (
     AtlanMetricsAdapter,
     MetricRecord,
     MetricType,
@@ -142,7 +142,9 @@ def test_record_metric_with_various_inputs(
 
 def test_export_record_with_otlp_enabled():
     """Test export_record() method when OTLP is enabled."""
-    with mock.patch("application_sdk.common.metrics_adaptor.ENABLE_OTLP_METRICS", True):
+    with mock.patch(
+        "application_sdk.observability.metrics_adaptor.ENABLE_OTLP_METRICS", True
+    ):
         with create_metrics_adapter() as metrics_adapter:
             record = MetricRecord(
                 timestamp=datetime.now().timestamp(),
@@ -265,7 +267,7 @@ def test_log_to_console():
     """Test _log_to_console() method."""
     with create_metrics_adapter() as metrics_adapter:
         with mock.patch(
-            "application_sdk.common.metrics_adaptor.get_logger"
+            "application_sdk.observability.metrics_adaptor.get_logger"
         ) as mock_get_logger:
             mock_logger = mock.MagicMock()
             mock_get_logger.return_value = mock_logger

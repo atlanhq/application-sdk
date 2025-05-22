@@ -2,9 +2,9 @@ import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
 from application_sdk.common.error_codes import IOError
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     import daft
