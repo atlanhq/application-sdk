@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional, Type
 import daft
 from pyatlan.model.enums import AtlanConnectorType, EntityStatus
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.common.utils import process_text
 

@@ -138,7 +138,7 @@ If your target is a SQL database, inherit from `BaseSQLHandler`. You'll typicall
 from typing import Dict, Any
 # Absolute imports
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 # Import your specific SQL client
 from .clients import PostgreSQLClient
 

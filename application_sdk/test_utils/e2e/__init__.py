@@ -11,7 +11,7 @@ import pandera.extensions as extensions
 from pandera.io import from_yaml
 from temporalio.client import WorkflowExecutionStatus
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.test_utils.e2e.client import APIServerClient
 from application_sdk.test_utils.e2e.conftest import workflow_details
 from application_sdk.test_utils.e2e.utils import load_config_from_yaml

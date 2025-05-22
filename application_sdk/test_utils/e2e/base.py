@@ -4,7 +4,7 @@ import pytest
 import requests
 from temporalio.client import WorkflowExecutionStatus
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.test_utils.e2e import TestInterface
 from application_sdk.test_utils.e2e.conftest import workflow_details
 
