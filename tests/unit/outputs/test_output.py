@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock, mock_open, patch
 import pandas as pd
 import pytest
 
-from application_sdk.outputs import Output, is_empty_dataframe
+from application_sdk.common.dataframe_utils import is_empty_dataframe
+from application_sdk.outputs import Output
 
 
 def test_is_empty_dataframe_pandas():
@@ -91,9 +92,7 @@ class TestOutput:
         with patch("application_sdk.outputs.logger.error") as mock_logger:
             await self.output.write_batched_dataframe(generate_error())
             mock_logger.assert_called_once()
-            assert (
-                "Error writing batched dataframe to json" in mock_logger.call_args[0][0]
-            )
+            assert "Error writing batched dataframe" in mock_logger.call_args[0][0]
 
     @pytest.mark.asyncio
     async def test_get_statistics_error(self):

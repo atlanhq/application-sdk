@@ -1,10 +1,9 @@
 import glob
-import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.inputs import Input
 from application_sdk.inputs.objectstore import ObjectStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
@@ -51,20 +50,19 @@ class ParquetInput(Input):
         Returns:
             Optional[str]: Path to the downloaded local file.
         """
-        if os.path.isdir(remote_file_path):
-            parquet_files = glob.glob(os.path.join(remote_file_path, "*.parquet"))
-            if not parquet_files:
-                if self.input_prefix:
-                    logger.info(
-                        f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
-                    )
-                    ObjectStoreInput.download_files_from_object_store(
-                        self.input_prefix, remote_file_path
-                    )
-                else:
-                    raise ValueError(
-                        f"No parquet files found in {remote_file_path} and no input prefix provided"
-                    )
+        parquet_files = glob.glob(remote_file_path)
+        if not parquet_files:
+            if self.input_prefix:
+                logger.info(
+                    f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
+                )
+                ObjectStoreInput.download_files_from_object_store(
+                    self.input_prefix, remote_file_path
+                )
+            else:
+                raise ValueError(
+                    f"No parquet files found in {remote_file_path} and no input prefix provided"
+                )
 
     async def get_dataframe(self) -> "pd.DataFrame":
         """
@@ -140,9 +138,7 @@ class ParquetInput(Input):
             # Re-raise to match IcebergInput behavior
             raise
 
-    async def get_batched_daft_dataframe(
-        self,
-    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:  # noqa: F821
+    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
         """
         Get batched daft dataframe from parquet file(s)
 
@@ -153,14 +149,18 @@ class ParquetInput(Input):
         try:
             import daft
 
-            path = self.path
-            if self.input_prefix and self.path:
-                await self.download_files(self.path)
-            # Use daft's native chunking through _chunk_size parameter
-            df_iterator = daft.read_parquet(path, _chunk_size=self.chunk_size)
-            for batch_df in df_iterator:
-                if isinstance(batch_df, daft.DataFrame):
-                    yield batch_df
+            if self.file_names:
+                for file_name in self.file_names:
+                    path = f"{self.path}/{file_name.replace('.json', '.parquet')}"
+                    if self.input_prefix and path:
+                        await self.download_files(path)
+                        yield daft.read_parquet(path)
+            else:
+                path = f"{self.path}/*.parquet"
+                if self.input_prefix and path:
+                    await self.download_files(path)
+                yield daft.read_parquet(path)
+
         except Exception as error:
             logger.error(
                 f"Error reading data from parquet file(s) in batches using daft: {error}"

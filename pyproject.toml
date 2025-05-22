@@ -28,6 +28,8 @@ dependencies = [
     "loguru>=0.7.3",
     "uvloop>=0.21.0",
     "python-dotenv>=1.1.0",
+    "duckdb>=1.1.3",
+    "duckdb-engine>=0.17.0",
 ]
 
 [project.urls]
@@ -41,6 +43,9 @@ workflows = [
     "dapr>=1.14.0",
     "temporalio>=1.7.1",
     "orjson>=3.10.18",
+]
+pandas = [
+    "pandas>=2.2.3"
 ]
 daft = [
     "getdaft[sql]>=0.4.12",
@@ -65,8 +70,6 @@ scale_data_generator = [
     "pyarrow>=20.0.0",
     "faker>=37.1.0",
     "numpy>=1.23.5,<3.0.0",
-    "duckdb>=1.1.3",
-    "duckdb-engine>=0.17.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev

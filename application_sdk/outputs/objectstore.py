@@ -5,8 +5,8 @@ import os
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import OBJECT_STORE_NAME
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -74,7 +74,7 @@ class ObjectStoreOutput:
             Exception: If there's an error with the Dapr client operations.
 
         Example:
-            >>> ObjectStoreOutput.push_files_to_object_store("logs", "/tmp/logs")
+            >>> ObjectStoreOutput.push_files_to_object_store("logs", "/tmp/observability")
         """
         if not os.path.isdir(input_files_path):
             raise ValueError(
