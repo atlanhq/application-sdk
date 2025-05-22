@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import os
-import signal
+
+# import signal
 import sys
 import threading
 from abc import ABC, abstractmethod
@@ -118,14 +119,18 @@ class AtlanObservability(Generic[T], ABC):
         - Global exception hook for unhandled exceptions
         Both handlers ensure data is flushed before termination.
         """
+        pass
+        """
         # Set up signal handlers
         for sig in (signal.SIGTERM, signal.SIGINT):
             signal.signal(sig, self._signal_handler)
 
         # Set up exception hook
         sys.excepthook = self._exception_hook
+        """
 
     def _signal_handler(self, signum, frame):
+        pass
         """Handle system signals by flushing logs.
 
         Args:
@@ -136,7 +141,7 @@ class AtlanObservability(Generic[T], ABC):
         - Logs the received signal
         - Attempts to flush all instances
         - Exits the process
-        """
+
         logging.warning(f"Received signal {signum}, flushing logs...")
         try:
             # Try to get the current event loop
@@ -159,6 +164,7 @@ class AtlanObservability(Generic[T], ABC):
         except Exception as e:
             logging.error(f"Error during signal handler flush: {e}")
         sys.exit(0)
+        """
 
     def _exception_hook(self, exc_type, exc_value, exc_traceback):
         """Handle unhandled exceptions by flushing logs.
