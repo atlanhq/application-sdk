@@ -5,6 +5,7 @@ including databases, schemas, tables, and columns.
 """
 
 import asyncio
+from time import time
 from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
@@ -14,9 +15,10 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
 
 logger = get_logger(__name__)
@@ -183,36 +185,61 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             coefficient of 2.
             In case you override the run method, annotate it with @workflow.run
         """
-        await super().run(workflow_config)
-
+        start_time = time()
         workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
-            workflow_id
-        )
+        workflow_success = False
 
-        workflow_run_id = workflow.info().run_id
-        workflow_args["workflow_run_id"] = workflow_run_id
+        try:
+            await super().run(workflow_config)
 
-        logger.info(f"Starting extraction workflow for {workflow_id}")
-        retry_policy = RetryPolicy(
-            maximum_attempts=6,
-            backoff_coefficient=2,
-        )
+            workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
+                workflow_id
+            )
 
-        output_prefix = workflow_args["output_prefix"]
-        output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
-        workflow_args["output_path"] = output_path
+            workflow_run_id = workflow.info().run_id
+            workflow_args["workflow_run_id"] = workflow_run_id
 
-        fetch_functions = self.get_fetch_functions()
+            logger.info(f"Starting extraction workflow for {workflow_id}")
+            retry_policy = RetryPolicy(
+                maximum_attempts=6,
+                backoff_coefficient=2,
+            )
 
-        fetch_and_transforms = [
-            self.fetch_and_transform(fetch_function, workflow_args, retry_policy)
-            for fetch_function in fetch_functions
-        ]
+            output_prefix = workflow_args["output_prefix"]
+            output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
+            workflow_args["output_path"] = output_path
 
-        await asyncio.gather(*fetch_and_transforms)
+            fetch_functions = self.get_fetch_functions()
 
-        logger.info(f"Extraction workflow completed for {workflow_id}")
+            fetch_and_transforms = [
+                self.fetch_and_transform(fetch_function, workflow_args, retry_policy)
+                for fetch_function in fetch_functions
+            ]
+
+            await asyncio.gather(*fetch_and_transforms)
+
+            logger.info(f"Extraction workflow completed for {workflow_id}")
+            workflow_success = True
+        except Exception as e:
+            logger.error(f"Workflow failed for {workflow_id}: {str(e)}")
+            workflow_success = False
+            raise
+        finally:
+            # Record workflow execution time metric
+            execution_time = time() - start_time
+            metrics = get_metrics()
+            metrics.record_metric(
+                name="workflow_execution_time_seconds",
+                value=execution_time,
+                metric_type=MetricType.GAUGE,
+                labels={
+                    "workflow_id": workflow_id,
+                    "workflow_type": "sql_metadata_extraction",
+                    "status": "success" if workflow_success else "error",
+                },
+                description="Total execution time of SQL metadata extraction workflow in seconds",
+                unit="s",
+            )
 
     def get_fetch_functions(
         self,

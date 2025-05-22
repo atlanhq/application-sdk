@@ -73,6 +73,7 @@ nav:
       - Windows: setup/WINDOWS.md
   - Guides:
       # Core concepts
+      - Getting Started: guides/getting-started.md
       - Architecture: guides/architecture.md
 
       # Development guides

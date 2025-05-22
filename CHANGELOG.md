@@ -1,5 +1,55 @@
 # Changelog
 
+## v0.1.1rc6 (May 20, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc5...v0.1.1rc6
+
+### Features
+
+- Observability changes (metrics, logs, traces) by @abhishekagrawal-atlan + refactoring
+- Enhancements and standardizing of Error Codes by @abhishekagrawal-atlan
+- Transition to Pandas for SQL Querying on Source and Daft for SQL Transformer by @OnkarVO7
+- fix: JsonOutput type checking while writing dataframe by @Hk669
+- feat: enhance workflow activity collection and allow custom output @TechyMT
+- Dependabot changes - version bump
+- improvements to documentation and debugging (#547) (by @inishchith in [49d51f2](https://github.com/atlanhq/application-sdk/commit/49d51f2))
+- update readme (by @AtMrun in [28b74ea](https://github.com/atlanhq/application-sdk/commit/28b74ea))
+- add common setup issues (#542) (by @inishchith in [dd18a31](https://github.com/atlanhq/application-sdk/commit/dd18a31))
+
+
+
+## v0.1.1rc5 (May 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc4...v0.1.1rc5
+
+### Bug Fixes
+
+- uv optional dependencies and groups (by @inishchith in [b789965](https://github.com/atlanhq/application-sdk/commit/b789965))
+
+## v0.1.1rc4 (May 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc3...v0.1.1rc4
+
+### Features
+
+- migrate to uv, goodbye poetry (#485) (by @Nishchith Shetty in [6f0570f](https://github.com/atlanhq/application-sdk/commit/6f0570f))
+
+
+
+## v0.1.1rc3 (May 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc2...v0.1.1rc3
+
+### Features
+
+- Add SQL based transformer mapper (#423) (by @Onkar Ravgan in [459e806](https://github.com/atlanhq/application-sdk/commit/459e806))
+
+### Bug Fixes
+
+- dependabot issues (by @inishchith in [089d4f8](https://github.com/atlanhq/application-sdk/commit/089d4f8))
+- sql transformer diff (#511) (by @Onkar Ravgan in [5641a7a](https://github.com/atlanhq/application-sdk/commit/5641a7a))
+- date datatype in transformed output (by @Onkar Ravgan in [032bbbd](https://github.com/atlanhq/application-sdk/commit/032bbbd))
+
 ## v0.1.1rc2 (May 12, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc1...v0.1.1rc2

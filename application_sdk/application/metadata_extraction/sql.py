@@ -77,8 +77,6 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         # load the workflow client
         await self.workflow_client.load()
 
-        workflow_class = workflow_classes[0]
-
         # setup sql metadata extraction activities
         # requires a sql client for source connectivity, handler for preflight checks, transformer for atlas mapping
         activities = activities_class(
@@ -88,10 +86,16 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         )
 
         # setup and start worker for workflow and activities execution
+
+        # Collect all activities from all workflow classes
+        all_activities = []
+        for workflow_class in workflow_classes:
+            all_activities.extend(workflow_class.get_activities(activities))
+
         self.worker = Worker(
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
-            workflow_activities=workflow_class.get_activities(activities),
+            workflow_activities=all_activities,
             passthrough_modules=passthrough_modules,
         )
 

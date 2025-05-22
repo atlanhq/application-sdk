@@ -7,16 +7,16 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import SQL_SERVER_MIN_VERSION
+from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import MetadataType
 
 logger = get_logger(__name__)
 
-queries = read_sql_files(queries_prefix="app/sql")
+queries = read_sql_files(queries_prefix=SQL_QUERIES_PATH)
 
 
 class SQLConstants(Enum):
@@ -71,12 +71,12 @@ class BaseSQLHandler(HandlerInterface):
             raise ValueError("metadata_sql is not defined")
 
         sql_input = SQLQueryInput(
-            engine=self.sql_client.engine, query=self.metadata_sql
+            engine=self.sql_client.engine, query=self.metadata_sql, chunk_size=None
         )
-        df = await sql_input.get_daft_dataframe()
+        df = await sql_input.get_dataframe()
         result: List[Dict[Any, Any]] = []
         try:
-            for row in df.to_pylist():
+            for row in df.to_dict(orient="records"):
                 result.append(
                     {
                         self.database_result_key: row[self.database_alias_key],
@@ -97,10 +97,12 @@ class BaseSQLHandler(HandlerInterface):
         """
         try:
             sql_input = SQLQueryInput(
-                engine=self.sql_client.engine, query=self.test_authentication_sql
+                engine=self.sql_client.engine,
+                query=self.test_authentication_sql,
+                chunk_size=None,
             )
-            df = await sql_input.get_daft_dataframe()
-            df.to_pylist()
+            df = await sql_input.get_dataframe()
+            df.to_dict(orient="records")
             return True
         except Exception as exc:
             logger.error(
@@ -310,11 +312,13 @@ class BaseSQLHandler(HandlerInterface):
         )
         if not query:
             raise ValueError("tables_check_sql is not defined")
-        sql_input = SQLQueryInput(engine=self.sql_client.engine, query=query)
-        sql_input = await sql_input.get_daft_dataframe()
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine, query=query, chunk_size=None
+        )
+        sql_input = await sql_input.get_dataframe()
         try:
             result = 0
-            for row in sql_input.to_pylist():
+            for row in sql_input.to_dict(orient="records"):
                 result += row["count"]
             return {
                 "success": True,
@@ -365,6 +369,7 @@ class BaseSQLHandler(HandlerInterface):
                 sql_input = await SQLQueryInput(
                     query=self.client_version_sql,
                     engine=self.sql_client.engine,
+                    chunk_size=None,
                 ).get_dataframe()
                 version_string = next(
                     iter(sql_input.to_dict(orient="records")[0].values())

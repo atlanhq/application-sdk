@@ -7,13 +7,14 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
@@ -22,7 +23,7 @@ from application_sdk.transformers.query import QueryBasedTransformer
 logger = get_logger(__name__)
 activity.logger = logger
 
-queries = read_sql_files(queries_prefix="app/sql")
+queries = read_sql_files(queries_prefix=SQL_QUERIES_PATH)
 
 
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
@@ -241,11 +242,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         try:
             sql_input = SQLQueryInput(engine=sql_engine, query=sql_query)
-            daft_dataframe = await sql_input.get_daft_dataframe()
-
-            if daft_dataframe is None:
-                logger.warning("Query execution returned no data.")
-                return None
+            dataframe = await sql_input.get_batched_dataframe()
 
             output_prefix = workflow_args.get("output_prefix")
             output_path = workflow_args.get("output_path")
@@ -261,7 +258,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 output_path=output_path,
                 output_suffix=output_suffix,
             )
-            await parquet_output.write_daft_dataframe(daft_dataframe)
+            await parquet_output.write_batched_dataframe(dataframe)
             logger.info(
                 f"Successfully wrote query results to {parquet_output.get_full_path()}"
             )
@@ -486,7 +483,14 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             file_names=workflow_args.get("file_names"),
             chunk_size=None,
         )
-        raw_input = await raw_input.get_daft_dataframe()
+        raw_input = raw_input.get_batched_daft_dataframe()
+        transformed_output = JsonOutput(
+            output_prefix=output_prefix,
+            output_path=output_path,
+            output_suffix="transformed",
+            typename=typename,
+            chunk_start=workflow_args.get("chunk_start"),
+        )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(
                 "connection_name", None
@@ -494,15 +498,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             workflow_args["connection_qualified_name"] = workflow_args.get(
                 "connection", {}
             ).get("connection_qualified_name", None)
-            transform_metadata = state.transformer.transform_metadata(
-                dataframe=raw_input, **workflow_args
-            )
 
-        transformed_output = JsonOutput(
-            output_prefix=output_prefix,
-            output_path=output_path,
-            output_suffix="transformed",
-            typename=typename,
-        )
-        await transformed_output.write_daft_dataframe(transform_metadata)
+            async for dataframe in raw_input:
+                if not is_empty_dataframe(dataframe):
+                    transform_metadata = state.transformer.transform_metadata(
+                        dataframe=dataframe, **workflow_args
+                    )
+                await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()

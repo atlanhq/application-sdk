@@ -31,53 +31,17 @@ Before running any examples, you must set up your development environment. Pleas
 
 Once your environment is set up:
 
-1. Configure poetry to use the virtual environment: `poetry config virtualenvs.in-project true`
-2. Activate the virtual environment: `source .venv/bin/activate`
-3. Run `make start-all` to start the Dapr runtime and Temporal server
-4. Run the example using `python <example_script.py>` or use the VSCode launch configuration provided below.
+1. Run `uv run poe start-deps` to start the Dapr runtime and Temporal server
+2. Run the example using `uv run <example_script.py>` or use the VSCode launch configuration provided below.
 
 > **Warning:**
 > Example scripts use default credentials (e.g., `password`, `postgres`). **Never use these defaults in production.** Always set secure environment variables for real deployments.
 
 ### Run and Debug examples via VSCode or Cursor
 
-1. Add the following settings to the `.vscode/launch.json` file, configure the program and the environment variables, and run the configuration:
+- Install the [Debugpy](https://github.com/microsoft/debugpy) extension for VSCode or Cursor.
+- Update the `.vscode/launch.json` file with the appropriate program and environment variables.
+- Run the configurations available in the `.vscode/launch.json` file.
 
-```json
-{
-  "version": "0.2.0",
-  "configurations": [
-    {
-      "name": "Run SQL Connector",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/examples/application_sql.py",
-      "cwd": "${workspaceFolder}",
-      "justMyCode": false,
-      "env": {
-        "PYTHONPATH": "${workspaceFolder}",
-        "POSTGRES_HOST": "host",
-        "POSTGRES_PORT": "5432",
-        "POSTGRES_USER": "postgres",
-        "POSTGRES_PASSWORD": "password",
-        "POSTGRES_DATABASE": "postgres"
-      }
-    },
-    {
-      "name": "Python: Debug Tests",
-      "type": "debugpy",
-      "request": "launch",
-      "program": "${workspaceFolder}/.venv/bin/pytest",
-      "args": ["-v"],
-      "cwd": "${workspaceFolder}/tests/unit/paas",
-      "env": {
-        "PYTHONPATH": "${workspaceFolder}"
-      }
-    }
-  ]
-}
-```
-
-- You can navigate to the Run and Debug section in the IDE to run the configurations of your choice.
-
-> **Need help?** If you encounter any issues during setup, reach out on Slack (#pod-app-framework) or email connect@atlan.com.
+> [!NOTE]
+> The `PYTHONPATH` is set to the `.venv/bin/python` path. If you are using a different Python path, you can update the `PYTHONPATH` environment variable in the `.vscode/launch.json` file.

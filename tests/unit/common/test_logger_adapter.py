@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Dict, Generator
 from unittest import mock
 
@@ -7,7 +8,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logger
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 from application_sdk.test_utils.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -109,7 +110,7 @@ def test_process_with_workflow_context():
             assert kwargs["namespace"] == "test_namespace"
             assert kwargs["task_queue"] == "test_queue"
             assert kwargs["attempt"] == 1
-            expected_msg = "Test message Workflow Context: Workflow ID: {workflow_id} Run ID: {run_id} Type: {workflow_type}"
+            expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
             assert msg == expected_msg
 
 
@@ -162,7 +163,7 @@ def test_process_with_activity_context():
             assert kwargs["schedule_to_close_timeout"] == "30s"
             assert kwargs["start_to_close_timeout"] == "25s"
 
-            expected_msg = "Test message Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
+            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
             assert msg == expected_msg
 
 
@@ -189,7 +190,7 @@ def test_process_with_generated_activity_context(activity_info: mock.Mock):
                 kwargs["start_to_close_timeout"] == activity_info.start_to_close_timeout
             )
 
-            expected_msg = "Test message Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
+            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
             assert msg == expected_msg
 
 
@@ -198,7 +199,7 @@ def test_process_with_generated_request_context(request_id: str):
     """Test process() method with generated request context data."""
     with create_logger_adapter() as logger_adapter:
         with mock.patch(
-            "application_sdk.common.logger_adaptors.request_context"
+            "application_sdk.observability.logger_adaptor.request_context"
         ) as mock_context:
             mock_context.get.return_value = {"request_id": request_id}
             msg, kwargs = logger_adapter.process("Test message", {})
@@ -255,3 +256,76 @@ def test_process_with_complex_types(logger_adapter: AtlanLoggerAdapter, mock_log
     finally:
         # Restore the original logger
         logger_adapter.logger = original_logger
+
+
+@pytest.fixture
+def mock_parquet_file(tmp_path):
+    """Create a temporary parquet file for testing."""
+    parquet_path = tmp_path / "logs.parquet"
+    return parquet_path
+
+
+@pytest.fixture(autouse=True)
+def clear_log_buffer(logger_adapter):
+    """Clear the log buffer before each test."""
+    logger_adapter._buffer.clear()
+    yield
+    logger_adapter._buffer.clear()
+
+
+@pytest.mark.asyncio
+async def test_parquet_sink_buffering(mock_parquet_file):
+    """Test that parquet_sink properly buffers logs."""
+    with create_logger_adapter() as logger_adapter:
+        # Set the parquet file path directly on the instance
+        logger_adapter.parquet_path = str(mock_parquet_file)
+
+        # Create a test message
+        test_message = mock.MagicMock()
+        level_mock = mock.MagicMock()
+        level_mock.name = "INFO"  # Set the name attribute directly
+        test_message.record = {
+            "time": datetime.now(),
+            "level": level_mock,
+            "extra": {"logger_name": "test_logger"},
+            "message": "Test message",
+            "file": mock.MagicMock(path="test.py"),
+            "line": 1,
+            "function": "test_function",
+        }
+
+        # Call parquet_sink
+        await logger_adapter.parquet_sink(test_message)
+
+        # Verify log was added to buffer
+        assert len(logger_adapter._buffer) == 1
+        buffered_log = logger_adapter._buffer[0]
+        assert buffered_log["message"] == "Test message"
+        assert buffered_log["level"] == "INFO"
+        assert buffered_log["logger_name"] == "test_logger"
+
+
+@pytest.mark.asyncio
+async def test_parquet_sink_error_handling(mock_parquet_file):
+    """Test that parquet_sink handles errors gracefully."""
+    with create_logger_adapter() as logger_adapter:
+        # Set the parquet file path directly on the instance
+        logger_adapter.parquet_path = str(mock_parquet_file)
+
+        # Create a test message with invalid data
+        test_message = mock.MagicMock()
+        test_message.record = {
+            "time": datetime.now(),
+            "level": mock.MagicMock(name="INFO"),
+            "extra": {"logger_name": "test_logger"},
+            "message": "Test message",
+            "file": None,  # This will cause an error
+            "line": 1,
+            "function": "test_function",
+        }
+
+        # Call parquet_sink - should not raise exception
+        await logger_adapter.parquet_sink(test_message)
+
+        # Verify buffer is empty (error was handled
+        assert len(logger_adapter._buffer) == 0

@@ -42,7 +42,8 @@ APP_DASHBOARD_HOST = str(os.getenv("ATLAN_APP_DASHBOARD_HOST", "localhost"))
 APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
 #: Minimum required SQL Server version
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
-
+#: Path to the SQL queries directory
+SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -116,3 +117,52 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 # AWS Constants
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
+
+# Observability Constants
+#: Directory for storing observability data
+OBSERVABILITY_DIR = os.environ.get("ATLAN_OBSERVABILITY_DIR", "/tmp/observability")
+
+# Log batching configuration
+LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
+LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
+
+# Log Retention configuration
+LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
+LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
+
+# Log Location configuration
+LOG_DIR = os.environ.get("ATLAN_LOG_DIR", "/tmp/observability")
+LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
+# Hive Partitioning Configuration
+ENABLE_HIVE_PARTITIONING = (
+    os.getenv("ATLAN_ENABLE_HIVE_PARTITIONING", "true").lower() == "true"
+)
+
+# Metrics Configuration
+ENABLE_OTLP_METRICS = os.getenv("ATLAN_ENABLE_OTLP_METRICS", "false").lower() == "true"
+METRICS_FILE_NAME = "metrics.parquet"
+METRICS_BATCH_SIZE = int(os.getenv("ATLAN_METRICS_BATCH_SIZE", "100"))
+METRICS_FLUSH_INTERVAL_SECONDS = int(
+    os.getenv("ATLAN_METRICS_FLUSH_INTERVAL_SECONDS", "10")
+)
+METRICS_CLEANUP_ENABLED = (
+    os.getenv("ATLAN_METRICS_CLEANUP_ENABLED", "false").lower() == "true"
+)
+METRICS_RETENTION_DAYS = int(os.getenv("ATLAN_METRICS_RETENTION_DAYS", "30"))
+
+# Traces Configuration
+ENABLE_OTLP_TRACES = os.getenv("ATLAN_ENABLE_OTLP_TRACES", "false").lower() == "true"
+TRACES_BATCH_SIZE = int(os.getenv("ATLAN_TRACES_BATCH_SIZE", "100"))
+TRACES_FLUSH_INTERVAL_SECONDS = int(
+    os.getenv("ATLAN_TRACES_FLUSH_INTERVAL_SECONDS", "5")
+)
+TRACES_RETENTION_DAYS = int(os.getenv("ATLAN_TRACES_RETENTION_DAYS", "30"))
+TRACES_CLEANUP_ENABLED = (
+    os.getenv("ATLAN_TRACES_CLEANUP_ENABLED", "true").lower() == "true"
+)
+TRACES_FILE_NAME = "traces.parquet"
+
+# Dapr Sink Configuration
+ENABLE_OBSERVABILITY_DAPR_SINK = (
+    os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
+)

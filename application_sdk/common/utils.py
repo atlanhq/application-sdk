@@ -5,8 +5,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.error_codes import CommonError
 from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.statestore import StateStoreOutput
 
 logger = get_logger(__name__)
@@ -44,8 +45,6 @@ def prepare_query(
     Returns:
         Optional[str]: The prepared SQL query with filters applied, or None if an error occurs during preparation.
 
-    Raises:
-        Exception: If query preparation fails. Error is logged and None is returned.
     """
     try:
         if not query:
@@ -80,8 +79,13 @@ def prepare_query(
             exclude_empty_tables=exclude_empty_tables,
             exclude_views=exclude_views,
         )
-    except Exception as e:
-        logger.error(f"Error preparing query [{query}]:  {e}")
+    except CommonError as e:
+        # Extract the original error message from the CommonError
+        error_message = str(e).split(": ", 1)[-1] if ": " in str(e) else str(e)
+        logger.error(
+            f"Error preparing query [{query}]:  {error_message}",
+            error_code=CommonError.QUERY_PREPARATION_ERROR.code,
+        )
         return None
 
 
@@ -98,9 +102,19 @@ def prepare_filters(
         tuple: A tuple containing:
             - normalized include regex (str)
             - normalized exclude regex (str)
+
+    Raises:
+        CommonError: If JSON parsing fails for either filter.
     """
-    include_filter = json.loads(include_filter_str)
-    exclude_filter = json.loads(exclude_filter_str)
+    try:
+        include_filter = json.loads(include_filter_str)
+    except json.JSONDecodeError as e:
+        raise CommonError(f"Invalid include filter JSON: {str(e)}")
+
+    try:
+        exclude_filter = json.loads(exclude_filter_str)
+    except json.JSONDecodeError as e:
+        raise CommonError(f"Invalid exclude filter JSON: {str(e)}")
 
     normalized_include_filter_list = normalize_filters(include_filter, True)
     normalized_exclude_filter_list = normalize_filters(exclude_filter, False)
@@ -283,7 +297,7 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
         Dict[str, Any]: Parsed extra field as a dictionary
 
     Raises:
-        ValueError: If the extra field contains invalid JSON
+        CommonError: If the extra field contains invalid JSON
 
     NOTE:
         This helper function is added considering the structure of the credentials
@@ -296,7 +310,9 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
         try:
             return json.loads(extra)
         except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in credentials extra field: {e}")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: Invalid JSON in credentials extra field: {e}"
+            )
 
     return extra  # We know it's a Dict[str, Any] due to the Union type and str check
 
