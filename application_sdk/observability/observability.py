@@ -213,11 +213,14 @@ class AtlanObservability(Generic[T], ABC):
         This method attempts to flush all registered instances,
         logging any errors that occur during flushing.
         """
+        pass
+        """
         for instance in cls._instances:
             try:
                 await instance._flush_buffer(force=True)
             except Exception as e:
                 logging.error(f"Error flushing instance: {e}")
+        """
 
     def _get_partition_path(self, timestamp: datetime) -> str:
         """Generate Hive partition path based on timestamp.
