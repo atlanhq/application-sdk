@@ -10,13 +10,13 @@ The SDK provides a comprehensive error handling system with standardized error c
 
 *   **`ErrorComponent`**: Enum defining the components that can generate errors in the system:
     *   `CLIENT`: Client-related errors
-    *   `FASTAPI`: Server and API errors
-    *   `TEMPORAL`: Workflow and activity errors
-    *   `TEMPORAL_WORKFLOW`: Workflow-specific errors
+    *   `API`: Server and API errors
+    *   `ORCHESTRATOR`: Workflow and activity errors
+    *   `WORKFLOW`: Workflow-specific errors
     *   `IO`: Input/Output errors
     *   `COMMON`: Common utility errors
     *   `DOCGEN`: Documentation generation errors
-    *   `TEMPORAL_ACTIVITY`: Activity-specific errors
+    *   `ACTIVITY`: Activity-specific errors
     *   `ATLAS_TRANSFORMER`: Atlas transformer errors
 
 *   **`ErrorCode`**: Class representing an error code with component, HTTP code, and description:
@@ -31,9 +31,9 @@ The SDK provides a comprehensive error handling system with standardized error c
 
 *   **Error Categories**:
     *   `ClientError`: Client-related errors (400-499)
-    *   `FastApiError`: Server and API errors (500-599)
-    *   `TemporalError`: Workflow and activity errors
-    *   `TemporalWorkflowError`: Workflow-specific errors
+    *   `ApiError`: Server and API errors (500-599)
+    *   `OrchestratorError`: Workflow and activity errors
+    *   `WorkflowError`: Workflow-specific errors
     *   `IOError`: Input/Output errors
     *   `CommonError`: Common utility errors
     *   `DocGenError`: Documentation generation errors
@@ -55,8 +55,8 @@ except ClientError as e:
 try:
     # Server operation
     pass
-except FastApiError as e:
-    raise FastApiError.SERVER_START_ERROR
+except ApiError as e:
+    raise ApiError.SERVER_START_ERROR
 
 # Activity errors
 try:

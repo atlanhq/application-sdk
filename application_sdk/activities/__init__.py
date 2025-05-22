@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.common.error_codes import TemporalError
+from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.handlers import HandlerInterface
 
@@ -134,10 +134,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if workflow_id not in self._state:
                 await self._set_state(workflow_args)
             return self._state[workflow_id]
-        except TemporalError as e:
+        except OrchestratorError as e:
             logger.error(
                 f"Error getting state: {str(e)}",
-                error_code=TemporalError.TEMPORAL_CLIENT_ACTIVITY_ERROR.code,
+                error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
             await self._clean_state()
@@ -157,7 +157,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_id = get_workflow_id()
             if workflow_id in self._state:
                 self._state.pop(workflow_id)
-        except TemporalError as e:
+        except OrchestratorError as e:
             logger.warning("Failed to clean state", exc_info=e)
 
     @activity.defn
@@ -202,10 +202,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             logger.info("Preflight check completed successfully")
             return result
 
-        except TemporalError as e:
+        except OrchestratorError as e:
             logger.error(
                 f"Preflight check failed: {str(e)}",
-                error_code=TemporalError.TEMPORAL_CLIENT_ACTIVITY_ERROR.code,
+                error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
                 exc_info=e,
             )
             raise

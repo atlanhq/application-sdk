@@ -6,12 +6,12 @@ Error codes follow the format: Atlan-{Component}-{HTTP_Code}-{Unique_ID}
 
 Components:
 - Client: Client-related errors
-- FastApi: Server and API errors
-- Temporal: Workflow and activity errors
+- Api: Server and API errors
+- Orchestrator: Workflow and activity errors
 - IO: Input/Output errors
 - Common: Common utility errors
 - Docgen: Documentation generation errors
-- TemporalActivity: Activity-specific errors
+- Activity: Activity-specific errors
 """
 
 from enum import Enum
@@ -21,13 +21,13 @@ class ErrorComponent(Enum):
     """Components that can generate errors in the system."""
 
     CLIENT = "Client"
-    FASTAPI = "API"
-    TEMPORAL = "Temporal"
-    TEMPORAL_WORKFLOW = "Workflow"
+    API = "API"
+    ORCHESTRATOR = "Orchestrator"
+    WORKFLOW = "Workflow"
     IO = "IO"
     COMMON = "Common"
     DOCGEN = "Docgen"
-    TEMPORAL_ACTIVITY = "Activity"
+    ACTIVITY = "Activity"
     ATLAS_TRANSFORMER = "Transformer"
 
 
@@ -66,72 +66,68 @@ class ClientError(AtlanError):
     )
 
 
-class FastApiError(AtlanError):
-    """FastApi/Server error codes."""
+class ApiError(AtlanError):
+    """Api/Server error codes."""
 
-    SERVER_START_ERROR = ErrorCode("FastApi", "503", "00", "Server failed to start")
-    SERVER_SHUTDOWN_ERROR = ErrorCode("FastApi", "503", "01", "Server shutdown error")
-    SERVER_CONFIG_ERROR = ErrorCode(
-        "FastApi", "500", "00", "Server configuration error"
-    )
-    CONFIGURATION_ERROR = ErrorCode(
-        "FastApi", "500", "01", "General configuration error"
-    )
-    LOGGER_SETUP_ERROR = ErrorCode("FastApi", "500", "02", "Logger setup failed")
+    SERVER_START_ERROR = ErrorCode("Api", "503", "00", "Server failed to start")
+    SERVER_SHUTDOWN_ERROR = ErrorCode("Api", "503", "01", "Server shutdown error")
+    SERVER_CONFIG_ERROR = ErrorCode("Api", "500", "00", "Server configuration error")
+    CONFIGURATION_ERROR = ErrorCode("Api", "500", "01", "General configuration error")
+    LOGGER_SETUP_ERROR = ErrorCode("Api", "500", "02", "Logger setup failed")
     LOGGER_PROCESSING_ERROR = ErrorCode(
-        "FastApi", "500", "03", "Error processing log record"
+        "Api", "500", "03", "Error processing log record"
     )
-    LOGGER_OTLP_ERROR = ErrorCode("FastApi", "500", "04", "OTLP logging error")
-    LOGGER_RESOURCE_ERROR = ErrorCode("FastApi", "500", "05", "Logger resource error")
-    UNKNOWN_ERROR = ErrorCode("FastApi", "500", "06", "Unknown system error")
-    SQL_FILE_ERROR = ErrorCode("FastApi", "500", "07", "SQL file error")
-    ENDPOINT_ERROR = ErrorCode("FastApi", "500", "08", "Endpoint error")
-    EVENT_TRIGGER_ERROR = ErrorCode("FastApi", "500", "09", "Event trigger error")
-    MIDDLEWARE_ERROR = ErrorCode("FastApi", "500", "10", "Middleware error")
-    ROUTE_HANDLER_ERROR = ErrorCode("FastApi", "500", "11", "Route handler error")
-    LOG_MIDDLEWARE_ERROR = ErrorCode("FastApi", "500", "12", "Log middleware error")
+    LOGGER_OTLP_ERROR = ErrorCode("Api", "500", "04", "OTLP logging error")
+    LOGGER_RESOURCE_ERROR = ErrorCode("Api", "500", "05", "Logger resource error")
+    UNKNOWN_ERROR = ErrorCode("Api", "500", "06", "Unknown system error")
+    SQL_FILE_ERROR = ErrorCode("Api", "500", "07", "SQL file error")
+    ENDPOINT_ERROR = ErrorCode("Api", "500", "08", "Endpoint error")
+    EVENT_TRIGGER_ERROR = ErrorCode("Api", "500", "09", "Event trigger error")
+    MIDDLEWARE_ERROR = ErrorCode("Api", "500", "10", "Middleware error")
+    ROUTE_HANDLER_ERROR = ErrorCode("Api", "500", "11", "Route handler error")
+    LOG_MIDDLEWARE_ERROR = ErrorCode("Api", "500", "12", "Log middleware error")
 
 
-class TemporalError(AtlanError):
-    """Temporal error codes."""
+class OrchestratorError(AtlanError):
+    """Orchestrator error codes."""
 
-    TEMPORAL_CLIENT_CONNECTION_ERROR = ErrorCode(
-        "Temporal", "403", "00", "Temporal client connection error"
+    ORCHESTRATOR_CLIENT_CONNECTION_ERROR = ErrorCode(
+        "Orchestrator", "403", "00", "Orchestrator client connection error"
     )
-    TEMPORAL_CLIENT_ACTIVITY_ERROR = ErrorCode(
-        "Temporal", "500", "00", "Temporal client activity error"
+    ORCHESTRATOR_CLIENT_ACTIVITY_ERROR = ErrorCode(
+        "Orchestrator", "500", "00", "Orchestrator client activity error"
     )
-    TEMPORAL_CLIENT_WORKER_ERROR = ErrorCode(
-        "Temporal", "500", "01", "Temporal client worker error"
+    ORCHESTRATOR_CLIENT_WORKER_ERROR = ErrorCode(
+        "Orchestrator", "500", "01", "Orchestrator client worker error"
     )
 
 
-class TemporalWorkflowError(AtlanError):
-    """Temporal workflow error codes."""
+class WorkflowError(AtlanError):
+    """Workflow error codes."""
 
     WORKFLOW_EXECUTION_ERROR = ErrorCode(
-        "TemporalWorkflow", "500", "02", "Workflow execution error"
+        "Workflow", "500", "02", "Workflow execution error"
     )
     WORKFLOW_CONFIG_ERROR = ErrorCode(
-        "TemporalWorkflow", "400", "00", "Workflow configuration error"
+        "Workflow", "400", "00", "Workflow configuration error"
     )
     WORKFLOW_VALIDATION_ERROR = ErrorCode(
-        "TemporalWorkflow", "422", "00", "Workflow validation error"
+        "Workflow", "422", "00", "Workflow validation error"
     )
     WORKFLOW_CLIENT_START_ERROR = ErrorCode(
-        "TemporalWorkflow", "500", "03", "Workflow client start error"
+        "Workflow", "500", "03", "Workflow client start error"
     )
     WORKFLOW_CLIENT_STOP_ERROR = ErrorCode(
-        "TemporalWorkflow", "500", "04", "Workflow client stop error"
+        "Workflow", "500", "04", "Workflow client stop error"
     )
     WORKFLOW_CLIENT_STATUS_ERROR = ErrorCode(
-        "TemporalWorkflow", "500", "05", "Workflow client status error"
+        "Workflow", "500", "05", "Workflow client status error"
     )
     WORKFLOW_CLIENT_WORKER_ERROR = ErrorCode(
-        "TemporalWorkflow", "500", "06", "Workflow client worker error"
+        "Workflow", "500", "06", "Workflow client worker error"
     )
     WORKFLOW_CLIENT_NOT_FOUND_ERROR = ErrorCode(
-        "TemporalWorkflow", "404", "00", "Workflow client not found"
+        "Workflow", "404", "00", "Workflow client not found"
     )
 
 
@@ -231,36 +227,32 @@ class DocGenError(AtlanError):
 class ActivityError(AtlanError):
     """Activity error codes."""
 
-    ACTIVITY_START_ERROR = ErrorCode(
-        "TemporalActivity", "503", "00", "Activity start error"
-    )
-    ACTIVITY_END_ERROR = ErrorCode(
-        "TemporalActivity", "500", "00", "Activity end error"
-    )
+    ACTIVITY_START_ERROR = ErrorCode("Activity", "503", "00", "Activity start error")
+    ACTIVITY_END_ERROR = ErrorCode("Activity", "500", "00", "Activity end error")
     QUERY_EXTRACTION_ERROR = ErrorCode(
-        "TemporalActivity", "500", "01", "Query extraction error"
+        "Activity", "500", "01", "Query extraction error"
     )
     QUERY_EXTRACTION_SQL_ERROR = ErrorCode(
-        "TemporalActivity", "500", "02", "Query extraction SQL error"
+        "Activity", "500", "02", "Query extraction SQL error"
     )
     QUERY_EXTRACTION_PARSE_ERROR = ErrorCode(
-        "TemporalActivity", "500", "03", "Query extraction parse error"
+        "Activity", "500", "03", "Query extraction parse error"
     )
     QUERY_EXTRACTION_VALIDATION_ERROR = ErrorCode(
-        "TemporalActivity", "422", "00", "Query extraction validation error"
+        "Activity", "422", "00", "Query extraction validation error"
     )
     METADATA_EXTRACTION_ERROR = ErrorCode(
-        "TemporalActivity", "500", "04", "Metadata extraction error"
+        "Activity", "500", "04", "Metadata extraction error"
     )
     METADATA_EXTRACTION_SQL_ERROR = ErrorCode(
-        "TemporalActivity", "500", "05", "Metadata extraction SQL error"
+        "Activity", "500", "05", "Metadata extraction SQL error"
     )
     METADATA_EXTRACTION_REST_ERROR = ErrorCode(
-        "TemporalActivity", "500", "06", "Metadata extraction REST error"
+        "Activity", "500", "06", "Metadata extraction REST error"
     )
     METADATA_EXTRACTION_PARSE_ERROR = ErrorCode(
-        "TemporalActivity", "500", "07", "Metadata extraction parse error"
+        "Activity", "500", "07", "Metadata extraction parse error"
     )
     METADATA_EXTRACTION_VALIDATION_ERROR = ErrorCode(
-        "TemporalActivity", "422", "01", "Metadata extraction validation error"
+        "Activity", "422", "01", "Metadata extraction validation error"
     )
