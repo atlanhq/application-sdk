@@ -1,6 +1,6 @@
 from typing import TYPE_CHECKING, Union
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     import daft
