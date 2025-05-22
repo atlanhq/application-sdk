@@ -2,7 +2,128 @@
 
 This section describes various utility functions and classes found within the `application_sdk.common` package. These utilities provide foundational functionalities used across different parts of the SDK, such as logging, configuration management, interacting with AWS, and general helper functions.
 
-## Logging (`logger_adaptor.py`)
+## Error Handling (`error_codes.py`)
+
+The SDK provides a comprehensive error handling system with standardized error codes and categories.
+
+### Key Concepts
+
+*   **`ErrorComponent`**: Enum defining the components that can generate errors in the system:
+    *   `CLIENT`: Client-related errors
+    *   `API`: Server and API errors
+    *   `ORCHESTRATOR`: Workflow and activity errors
+    *   `WORKFLOW`: Workflow-specific errors
+    *   `IO`: Input/Output errors
+    *   `COMMON`: Common utility errors
+    *   `DOCGEN`: Documentation generation errors
+    *   `ACTIVITY`: Activity-specific errors
+    *   `ATLAS_TRANSFORMER`: Atlas transformer errors
+
+*   **`ErrorCode`**: Class representing an error code with component, HTTP code, and description:
+    ```python
+    class ErrorCode:
+        def __init__(self, component: str, http_code: str, unique_id: str, description: str):
+            self.code = f"Atlan-{component}-{http_code}-{unique_id}".upper()
+            self.description = description
+    ```
+
+*   **`AtlanError`**: Base exception class for all Atlan errors.
+
+*   **Error Categories**:
+    *   `ClientError`: Client-related errors (400-499)
+    *   `ApiError`: Server and API errors (500-599)
+    *   `OrchestratorError`: Workflow and activity errors
+    *   `WorkflowError`: Workflow-specific errors
+    *   `IOError`: Input/Output errors
+    *   `CommonError`: Common utility errors
+    *   `DocGenError`: Documentation generation errors
+    *   `ActivityError`: Activity-specific errors
+
+### Usage
+
+```python
+from application_sdk.common.error_codes import ClientError, FastApiError, ActivityError
+
+# Client errors
+try:
+    # Some operation
+    pass
+except ClientError as e:
+    raise ClientError.REQUEST_VALIDATION_ERROR
+
+# Server errors
+try:
+    # Server operation
+    pass
+except ApiError as e:
+    raise ApiError.SERVER_START_ERROR
+
+# Activity errors
+try:
+    # Activity operation
+    pass
+except ActivityError as e:
+    raise ActivityError.ACTIVITY_START_ERROR
+```
+
+### Error Code Format
+
+Error codes follow the format: `Atlan-{Component}-{HTTP_Code}-{Unique_ID}`
+
+Example: `ATLAN-CLIENT-403-00` for a request validation error
+
+### Error Categories and HTTP Codes
+
+1. **Client Errors (400-499)**:
+    *   `REQUEST_VALIDATION_ERROR` (403-00)
+    *   `INPUT_VALIDATION_ERROR` (403-01)
+    *   `CLIENT_AUTH_ERROR` (401-00)
+    *   `HANDLER_AUTH_ERROR` (401-01)
+    *   `SQL_CLIENT_AUTH_ERROR` (401-02)
+
+2. **Server Errors (500-599)**:
+    *   `SERVER_START_ERROR` (503-00)
+    *   `SERVER_SHUTDOWN_ERROR` (503-01)
+    *   `SERVER_CONFIG_ERROR` (500-00)
+    *   `CONFIGURATION_ERROR` (500-01)
+    *   `LOGGER_SETUP_ERROR` (500-02)
+    *   And many more...
+
+3. **Activity Errors**:
+    *   `ACTIVITY_START_ERROR` (503-00)
+    *   `ACTIVITY_END_ERROR` (500-00)
+    *   `QUERY_EXTRACTION_ERROR` (500-01)
+    *   And more...
+
+### Best Practices
+
+1. **Error Handling**:
+    *   Use appropriate error categories for different types of errors
+    *   Include error codes in logs for better tracking
+    *   Map error codes to appropriate HTTP status codes
+    *   Include stack traces for debugging
+    *   Mask sensitive data in error messages
+
+2. **Logging Errors**:
+    ```python
+    from application_sdk.common.logger_adaptors import get_logger
+    from application_sdk.common.error_codes import ClientError
+
+    logger = get_logger(__name__)
+
+    try:
+        # Some operation
+        pass
+    except Exception as e:
+        logger.error(
+            f"Operation failed: {ClientError.REQUEST_VALIDATION_ERROR}",
+            exc_info=True,
+            extra={"error_code": ClientError.REQUEST_VALIDATION_ERROR.code}
+        )
+        raise ClientError.REQUEST_VALIDATION_ERROR
+    ```
+
+## Logging (`logger_adaptors.py`)
 
 The SDK uses the `loguru` library for enhanced logging capabilities, combined with standard Python logging and OpenTelemetry (OTLP) integration for structured, observable logs.
 
@@ -13,15 +134,22 @@ The SDK uses the `loguru` library for enhanced logging capabilities, combined wi
 *   **`AtlanLoggerAdapter`**: The main interface for logging within the SDK. It wraps `loguru`, configures standard output format (including colors), handles OTLP exporter setup, and automatically enriches log messages with context.
     *   **Context Enrichment**: Automatically includes details from the current Temporal Workflow or Activity context (like `workflow_id`, `run_id`, `activity_id`, `attempt`, etc.) and FastAPI request context (`request_id`) if available.
     *   **OTLP Integration**: If `ENABLE_OTLP_LOGS` is true, logs are exported via the OpenTelemetry Protocol (OTLP) using `OTLPLogExporter`. Resource attributes (`service.name`, `service.version`, `k8s.workflow.node.name`, etc.) are automatically added based on environment variables (`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_WF_NODE_NAME`, `SERVICE_NAME`, `SERVICE_VERSION`).
-    *   **Custom Level**: Includes a custom `"ACTIVITY"` log level.
+    *   **Custom Levels**: Includes custom log levels:
+        *   `"ACTIVITY"`: For activity-specific logging
+        *   `"METRIC"`: For metric-specific logging
+        *   `"TRACING"`: For trace-specific logging
     *   **Parquet Sink**: Logs are automatically written to a parquet file for efficient storage and querying. The sink implements buffering and periodic flushing based on batch size and time interval.
     *   **Log Retention**: Implements automatic cleanup of old logs based on the configured retention period. Logs older than `LOG_RETENTION_DAYS` are automatically removed.
-*   **Severity Mapping**: Maps standard log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) and the custom ACTIVITY level to OpenTelemetry `SeverityNumber`.
+*   **Severity Mapping**: Maps standard log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) and custom levels (ACTIVITY, METRIC, TRACING) to OpenTelemetry `SeverityNumber`.
 *   **Configuration**: Log level (`LOG_LEVEL`), OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`), batching (`OTEL_BATCH_DELAY_MS`, `OTEL_BATCH_SIZE`), etc., are configured via environment variables defined in `application_sdk.constants`.
 
-### Log Storage and Retention
+### Log Models
 
-The logger implements a sophisticated storage and retention system:
+*   **`LogExtraModel`**: Pydantic model for log extra fields, including:
+    *   Request context: `client_host`, `duration_ms`, `method`, `path`, `request_id`, `status_code`, `url`
+    *   Workflow context: `workflow_id`, `run_id`, `workflow_type`, `namespace`, `task_queue`, `attempt`
+    *   Activity context: `activity_id`, `activity_type`, `schedule_to_close_timeout`, `start_to_close_timeout`, `schedule_to_start_timeout`, `heartbeat_timeout`
+    *   Other fields: `log_type`
 
 1. **Parquet Storage**:
    - Logs are stored in parquet format for efficient storage and querying
@@ -70,6 +198,12 @@ def my_function(data):
         logger.activity("Data processing step completed successfully.") # Use custom activity level
     except Exception as e:
         logger.error(f"Failed during processing: {e}", exc_info=True) # Include stack trace
+
+# Log metrics
+logger.metric("Request duration", duration_ms=150)
+
+# Log traces
+logger.tracing("API call started", endpoint="/api/v1/users")
 
 # In a Temporal Activity:
 from temporalio import activity

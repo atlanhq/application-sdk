@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Dict, List, Union
 from unittest.mock import Mock, mock_open, patch
 
+from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import (
     get_workflow_config,
     normalize_filters,
@@ -74,7 +75,10 @@ class TestPrepareQuery:
 
         with patch("application_sdk.common.utils.logger") as mock_logger:
             result = prepare_query(query, workflow_args)
-            mock_logger.error.assert_called_once()
+            mock_logger.error.assert_called_once_with(
+                "Error preparing query [SELECT * FROM {normalized_include_regex}]:  Expecting value: line 1 column 1 (char 0)",
+                error_code=CommonError.QUERY_PREPARATION_ERROR.code,
+            )
             assert result is None
 
     def test_query_preparation_with_missing_metadata(self) -> None:

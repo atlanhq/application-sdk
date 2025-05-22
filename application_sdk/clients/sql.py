@@ -18,6 +18,7 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
+from application_sdk.common.error_codes import ClientError, CommonError
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
 from application_sdk.observability.logger_adaptor import get_logger
@@ -74,7 +75,7 @@ class BaseSQLClient(ClientInterface):
             credentials (Dict[str, Any]): Database connection credentials.
 
         Raises:
-            ValueError: If connection fails due to authentication or connection issues
+            ClientError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials
         try:
@@ -86,12 +87,14 @@ class BaseSQLClient(ClientInterface):
                 pool_pre_ping=True,
             )
             self.connection = self.engine.connect()
-        except Exception as e:
-            logger.error(f"Error loading SQL client: {str(e)}")
+        except ClientError as e:
+            logger.error(
+                f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Error loading SQL client: {str(e)}"
+            )
             if self.engine:
                 self.engine.dispose()
                 self.engine = None
-            raise ValueError(str(e))
+            raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -109,7 +112,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            ValueError: If required credentials (username or database) are missing.
+            CommonError: If required credentials (username or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_access_key_id = self.credentials["username"]
@@ -118,9 +121,13 @@ class BaseSQLClient(ClientInterface):
         user = extra.get("username")
         database = extra.get("database")
         if not user:
-            raise ValueError("username is required for IAM user authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: username is required for IAM user authentication"
+            )
         if not database:
-            raise ValueError("database is required for IAM user authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM user authentication"
+            )
 
         port = self.credentials["port"]
         region = self.credentials.get("region", None)
@@ -146,7 +153,7 @@ class BaseSQLClient(ClientInterface):
             str: A temporary authentication token for database access.
 
         Raises:
-            ValueError: If required credentials (aws_role_arn or database) are missing.
+            CommonError: If required credentials (aws_role_arn or database) are missing.
         """
         extra = parse_credentials_extra(self.credentials)
         aws_role_arn = extra.get("aws_role_arn")
@@ -154,9 +161,13 @@ class BaseSQLClient(ClientInterface):
         external_id = extra.get("aws_external_id")
 
         if not aws_role_arn:
-            raise ValueError("aws_role_arn is required for IAM role authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: aws_role_arn is required for IAM role authentication"
+            )
         if not database:
-            raise ValueError("database is required for IAM role authentication")
+            raise CommonError(
+                f"{CommonError.CREDENTIALS_PARSE_ERROR}: database is required for IAM role authentication"
+            )
 
         session_name = AWS_SESSION_NAME
         username = self.credentials["username"]
@@ -185,7 +196,7 @@ class BaseSQLClient(ClientInterface):
             str: URL-encoded authentication token.
 
         Raises:
-            ValueError: If an invalid authentication type is specified.
+            CommonError: If an invalid authentication type is specified.
         """
         authType = self.credentials.get("authType", "basic")  # Default to basic auth
         token = None
@@ -198,7 +209,7 @@ class BaseSQLClient(ClientInterface):
             case "basic":
                 token = self.credentials["password"]
             case _:
-                raise ValueError(f"Invalid auth type: {authType}")
+                raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {authType}")
 
         encoded_token = quote_plus(token)
         return encoded_token

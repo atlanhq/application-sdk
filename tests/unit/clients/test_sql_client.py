@@ -6,6 +6,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.error_codes import CommonError
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     metadata_args_strategy,
@@ -581,7 +582,7 @@ def test_get_sqlalchemy_connection_string_invalid_auth_type(sql_client_with_db_c
     }
     sql_client_with_db_config.credentials = credentials
 
-    with pytest.raises(ValueError, match="Invalid auth type: invalid_auth"):
+    with pytest.raises(CommonError, match="invalid_auth"):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
 
 
@@ -603,7 +604,7 @@ def test_get_sqlalchemy_connection_string_iam_user_missing_username(
     sql_client_with_db_config.credentials = credentials
 
     with pytest.raises(
-        ValueError, match="username is required for IAM user authentication"
+        CommonError, match="username is required for IAM user authentication"
     ):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
 
@@ -626,6 +627,6 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
     sql_client_with_db_config.credentials = credentials
 
     with pytest.raises(
-        ValueError, match="aws_role_arn is required for IAM role authentication"
+        CommonError, match="aws_role_arn is required for IAM role authentication"
     ):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
