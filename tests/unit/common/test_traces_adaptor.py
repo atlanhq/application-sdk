@@ -6,7 +6,7 @@ from unittest import mock
 import pytest
 from opentelemetry.trace import SpanKind
 
-from application_sdk.common.traces_adaptor import (
+from application_sdk.observability.traces_adaptor import (
     AtlanTracesAdapter,
     TraceRecord,
     get_traces,
@@ -149,7 +149,7 @@ async def test_log_to_console():
     """Test _log_to_console() method."""
     with create_traces_adapter() as traces_adapter:
         with mock.patch(
-            "application_sdk.common.traces_adaptor.get_logger"
+            "application_sdk.observability.traces_adaptor.get_logger"
         ) as mock_get_logger:
             mock_logger = mock.MagicMock()
             mock_get_logger.return_value = mock_logger

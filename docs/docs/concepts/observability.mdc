@@ -1,0 +1,230 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Observability
+
+The Application SDK provides a comprehensive observability system that includes logging, metrics, and tracing capabilities. All observability data is stored in parquet format with Hive partitioning for efficient storage and querying.
+
+## Overview
+
+The observability system consists of three main components:
+
+1. **Logging**: Captures application logs with context enrichment
+2. **Metrics**: Records application metrics with various types (counter, gauge, histogram)
+3. **Traces**: Tracks request flows and spans with detailed attributes
+
+All three components share common characteristics:
+- Parquet storage with Hive partitioning
+- Buffering and periodic flushing
+- Automatic cleanup of old data
+- OpenTelemetry (OTLP) integration
+- Dapr sink support
+
+## Storage Structure
+
+All observability data follows the same storage pattern:
+
+```
+/tmp/observability/
+├── logs/
+│   └── year=YYYY/
+│       └── month=MM/
+│           └── day=DD/
+│               └── data.parquet
+├── metrics/
+│   └── year=YYYY/
+│       └── month=MM/
+│           └── day=DD/
+│               └── data.parquet
+└── traces/
+    └── year=YYYY/
+        └── month=MM/
+            └── day=DD/
+                └── data.parquet
+```
+
+### Hive Partitioning
+
+- All data is partitioned by year/month/day
+- Partition columns (year, month, day) are stored as integers
+- Single parquet file per partition for better performance
+- Partition values are extracted from the directory structure
+
+### Parquet Storage
+
+- Efficient columnar storage format
+- Supports schema evolution
+- Enables efficient querying and filtering
+- Maintains type consistency for partition columns
+
+## Logging
+
+The logging system provides structured logging with context enrichment and multiple output formats.
+
+### Features
+
+- Structured logging with context enrichment
+- Multiple output formats (console, parquet, OTLP)
+- Automatic context capture (workflow, activity, request)
+- Log level filtering
+- Buffered writes with periodic flushing
+
+### Usage
+
+```python
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
+
+# Basic logging
+logger.info("Processing request")
+logger.error("Failed to process request", exc_info=True)
+
+# With context
+logger.info("Activity completed", extra={"duration_ms": 150})
+```
+
+## Metrics
+
+The metrics system supports various metric types and provides both local storage and OTLP export.
+
+### Features
+
+- Multiple metric types (counter, gauge, histogram)
+- Label support for dimensions
+- Buffered writes with periodic flushing
+- Automatic cleanup of old metrics
+- OTLP export support
+
+### Usage
+
+```python
+from application_sdk.observability.metrics_adaptor import get_metrics
+
+metrics = get_metrics()
+
+# Record different metric types
+metrics.record_metric(
+    name="request_duration_seconds",
+    value=1.5,
+    metric_type="histogram",
+    labels={"endpoint": "/api/v1/users"}
+)
+
+metrics.record_metric(
+    name="active_connections",
+    value=42,
+    metric_type="gauge",
+    labels={"database": "postgres"}
+)
+```
+
+## Traces
+
+The tracing system provides detailed request flow tracking with span attributes and events.
+
+### Features
+
+- Span-based tracing
+- Multiple span types (SERVER, CLIENT, INTERNAL)
+- Rich attribute support
+- Event recording
+- Automatic cleanup of old traces
+- OTLP export support
+
+### Usage
+
+```python
+from application_sdk.observability.traces_adaptor import get_traces
+
+traces = get_traces()
+
+# Record a trace
+traces.record_trace(
+    name="process_request",
+    trace_id="1234567890abcdef",
+    span_id="abcdef1234567890",
+    kind="SERVER",
+    status_code="OK",
+    attributes={
+        "endpoint": "/api/v1/users",
+        "method": "GET"
+    },
+    duration_ms=150.5
+)
+```
+
+## Configuration
+
+The observability system can be configured using environment variables:
+
+```bash
+# Base observability settings
+ATLAN_OBSERVABILITY_DIR=/tmp/observability
+ATLAN_ENABLE_HIVE_PARTITIONING=true
+ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK=true
+
+# Logging settings
+LOG_LEVEL=INFO
+LOG_BATCH_SIZE=100
+LOG_FLUSH_INTERVAL_SECONDS=10
+LOG_RETENTION_DAYS=30
+LOG_CLEANUP_ENABLED=false
+
+# Metrics settings
+METRICS_BATCH_SIZE=100
+METRICS_FLUSH_INTERVAL_SECONDS=10
+METRICS_RETENTION_DAYS=30
+METRICS_CLEANUP_ENABLED=false
+
+# Traces settings
+TRACES_BATCH_SIZE=100
+TRACES_FLUSH_INTERVAL_SECONDS=5
+TRACES_RETENTION_DAYS=30
+TRACES_CLEANUP_ENABLED=true
+
+# OpenTelemetry settings
+OTEL_SERVICE_NAME=atlan-application-sdk
+OTEL_SERVICE_VERSION=0.1.0
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+ENABLE_OTLP_LOGS=false
+ENABLE_OTLP_METRICS=false
+ENABLE_OTLP_TRACES=false
+```
+
+## Data Retention
+
+- All observability data is automatically cleaned up based on retention settings
+- Cleanup runs once per day
+- State of last cleanup is maintained in Dapr state store
+- Both local parquet files and object store data are cleaned up
+- Entire partition directories are deleted for efficiency
+
+## Best Practices
+
+1. **Logging**:
+   - Use appropriate log levels
+   - Include relevant context
+   - Avoid logging sensitive data
+   - Use structured logging for better querying
+
+2. **Metrics**:
+   - Choose appropriate metric types
+   - Use meaningful metric names
+   - Include relevant labels
+   - Avoid high cardinality labels
+
+3. **Traces**:
+   - Keep span durations reasonable
+   - Include relevant attributes
+   - Use appropriate span kinds
+   - Record important events
+
+4. **Storage**:
+   - Monitor disk usage
+   - Adjust retention periods as needed
+   - Enable cleanup for production
+   - Use appropriate batch sizes and flush intervals
+
