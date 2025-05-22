@@ -21,14 +21,14 @@ class ErrorComponent(Enum):
     """Components that can generate errors in the system."""
 
     CLIENT = "Client"
-    FASTAPI = "FastApi"
+    FASTAPI = "API"
     TEMPORAL = "Temporal"
-    TEMPORAL_WORKFLOW = "TemporalWorkflow"
+    TEMPORAL_WORKFLOW = "Workflow"
     IO = "IO"
     COMMON = "Common"
     DOCGEN = "Docgen"
-    TEMPORAL_ACTIVITY = "TemporalActivity"
-    ATLAS_TRANSFORMER = "AtlasTransformer"
+    TEMPORAL_ACTIVITY = "Activity"
+    ATLAS_TRANSFORMER = "Transformer"
 
 
 class ErrorCode:

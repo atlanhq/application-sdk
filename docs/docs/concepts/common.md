@@ -48,21 +48,21 @@ from application_sdk.common.error_codes import ClientError, FastApiError, Activi
 try:
     # Some operation
     pass
-except Exception as e:
+except ClientError as e:
     raise ClientError.REQUEST_VALIDATION_ERROR
 
 # Server errors
 try:
     # Server operation
     pass
-except Exception as e:
+except FastApiError as e:
     raise FastApiError.SERVER_START_ERROR
 
 # Activity errors
 try:
     # Activity operation
     pass
-except Exception as e:
+except ActivityError as e:
     raise ActivityError.ACTIVITY_START_ERROR
 ```
 
@@ -134,40 +134,42 @@ The SDK uses the `loguru` library for enhanced logging capabilities, combined wi
 *   **`AtlanLoggerAdapter`**: The main interface for logging within the SDK. It wraps `loguru`, configures standard output format (including colors), handles OTLP exporter setup, and automatically enriches log messages with context.
     *   **Context Enrichment**: Automatically includes details from the current Temporal Workflow or Activity context (like `workflow_id`, `run_id`, `activity_id`, `attempt`, etc.) and FastAPI request context (`request_id`) if available.
     *   **OTLP Integration**: If `ENABLE_OTLP_LOGS` is true, logs are exported via the OpenTelemetry Protocol (OTLP) using `OTLPLogExporter`. Resource attributes (`service.name`, `service.version`, `k8s.workflow.node.name`, etc.) are automatically added based on environment variables (`OTEL_RESOURCE_ATTRIBUTES`, `OTEL_WF_NODE_NAME`, `SERVICE_NAME`, `SERVICE_VERSION`).
-    *   **Custom Level**: Includes a custom `"ACTIVITY"` log level.
+    *   **Custom Levels**: Includes custom log levels:
+        *   `"ACTIVITY"`: For activity-specific logging
+        *   `"METRIC"`: For metric-specific logging
+        *   `"TRACING"`: For trace-specific logging
     *   **Parquet Sink**: Logs are automatically written to a parquet file for efficient storage and querying. The sink implements buffering and periodic flushing based on batch size and time interval.
     *   **Log Retention**: Implements automatic cleanup of old logs based on the configured retention period. Logs older than `LOG_RETENTION_DAYS` are automatically removed.
-*   **Severity Mapping**: Maps standard log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) and the custom ACTIVITY level to OpenTelemetry `SeverityNumber`.
+*   **Severity Mapping**: Maps standard log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL) and custom levels (ACTIVITY, METRIC, TRACING) to OpenTelemetry `SeverityNumber`.
 *   **Configuration**: Log level (`LOG_LEVEL`), OTLP endpoint (`OTEL_EXPORTER_OTLP_ENDPOINT`), batching (`OTEL_BATCH_DELAY_MS`, `OTEL_BATCH_SIZE`), etc., are configured via environment variables defined in `application_sdk.constants`.
 
-### Log Storage and Retention
+### Log Models
 
-The logger implements a sophisticated storage and retention system:
+*   **`LogExtraModel`**: Pydantic model for log extra fields, including:
+    *   Request context: `client_host`, `duration_ms`, `method`, `path`, `request_id`, `status_code`, `url`
+    *   Workflow context: `workflow_id`, `run_id`, `workflow_type`, `namespace`, `task_queue`, `attempt`
+    *   Activity context: `activity_id`, `activity_type`, `schedule_to_close_timeout`, `start_to_close_timeout`, `schedule_to_start_timeout`, `heartbeat_timeout`
+    *   Other fields: `log_type`
 
-1. **Parquet Storage**:
-   - Logs are stored in parquet format for efficient storage and querying
-   - Implements buffering to reduce I/O operations
-   - Flushes logs based on two conditions:
-     - When buffer size reaches `LOG_BATCH_SIZE`
-     - When time since last flush exceeds `LOG_FLUSH_INTERVAL_SECONDS`
-   - Supports date-based file organization when `LOG_USE_DATE_BASED_FILES` is enabled
-   - Uses `LOG_DATE_FORMAT` for naming date-based files (default: `%Y-%m-%d`)
+*   **`LogRecordModel`**: Pydantic model for log records, including:
+    *   `timestamp`: When the log was recorded
+    *   `level`: Log level
+    *   `logger_name`: Name of the logger
+    *   `message`: Log message
+    *   `file`: Source file
+    *   `line`: Line number
+    *   `function`: Function name
+    *   `extra`: Additional context (LogExtraModel)
 
-2. **Log Retention**:
-   - Automatically cleans up logs older than `LOG_RETENTION_DAYS`
-   - Runs cleanup once per day
-   - Maintains state of last cleanup in Dapr state store
-   - Handles both local parquet files and object store cleanup
-   - Supports both single-file and date-based file cleanup strategies
+### Request Context
 
-3. **Storage Locations**:
-   - Local:
-     - Single file: `/tmp/observability/log.parquet`
-     - Date-based: `/tmp/observability/logs/YYYY-MM-DD.parquet`
-   - Object Store:
-     - Single file: `logs/log.parquet`
-     - Date-based: `logs/YYYY-MM-DD.parquet`
-     (via Dapr object store binding)
+The logger uses a `ContextVar` to track request context across async boundaries:
+
+```python
+request_context: ContextVar[Dict[str, Any]] = ContextVar("request_context", default={})
+```
+
+This allows the logger to automatically include request IDs and other request-specific information in logs.
 
 ### Usage
 
@@ -186,6 +188,12 @@ def my_function(data):
         logger.activity("Data processing step completed successfully.") # Use custom activity level
     except Exception as e:
         logger.error(f"Failed during processing: {e}", exc_info=True) # Include stack trace
+
+# Log metrics
+logger.metric("Request duration", duration_ms=150)
+
+# Log traces
+logger.tracing("API call started", endpoint="/api/v1/users")
 
 # In a Temporal Activity:
 from temporalio import activity
@@ -384,8 +392,8 @@ The traces adapter implements a sophisticated storage and retention system:
    - Handles both local parquet files and object store cleanup
 
 3. **Storage Locations**:
-   - Local: `/tmp/observability/traces.parquet`
-   - Object Store: `observability/traces.parquet` (via Dapr object store binding)
+   - Local: stored in `/tmp/observability` in hive partitioned format
+   - Object Store: `observability/../../../data.parquet` (via Dapr object store binding) in hive partitioned format
 
 ## AWS Utilities (`aws_utils.py`)
 
