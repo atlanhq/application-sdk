@@ -16,9 +16,12 @@ from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
+    LOG_FILE_NAME,
+    METRICS_FILE_NAME,
     OBJECT_STORE_NAME,
     OBSERVABILITY_DIR,
     STATE_STORE_NAME,
+    TRACES_FILE_NAME,
 )
 
 
@@ -220,11 +223,11 @@ class AtlanObservability(Generic[T], ABC):
             str: The partition path
         """
         # Determine the base directory based on file type
-        if self.file_name == "log.parquet":
+        if self.file_name == LOG_FILE_NAME:
             base_dir = "logs"
-        elif self.file_name == "metrics.parquet":
+        elif self.file_name == METRICS_FILE_NAME:
             base_dir = "metrics"
-        elif self.file_name == "traces.parquet":
+        elif self.file_name == TRACES_FILE_NAME:
             base_dir = "traces"
         else:
             base_dir = "other"
@@ -497,11 +500,11 @@ class AtlanObservability(Generic[T], ABC):
         """
         try:
             # Determine the base directory
-            if self.file_name == "log.parquet":
+            if self.file_name == LOG_FILE_NAME:
                 base_dir = "logs"
-            elif self.file_name == "metrics.parquet":
+            elif self.file_name == METRICS_FILE_NAME:
                 base_dir = "metrics"
-            elif self.file_name == "traces.parquet":
+            elif self.file_name == TRACES_FILE_NAME:
                 base_dir = "traces"
             else:
                 base_dir = "other"

@@ -278,7 +278,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Returns:
             Dict[str, Any]: Standardized dictionary representation of the metric
 
-        This method ensures metrics are properly formatted for storage in metrics.parquet.
+        This method ensures metrics are properly formatted for storage in METRICS_FILE_NAME.
         It converts the MetricRecord into a dictionary with all necessary fields.
         """
         if isinstance(record, MetricRecord):
