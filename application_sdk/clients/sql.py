@@ -18,10 +18,10 @@ from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
 )
+from application_sdk.common.credential_utils import resolve_credentials
 from application_sdk.common.error_codes import ClientError, CommonError
 from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import AWS_SESSION_NAME, USE_SERVER_SIDE_CURSOR
-from application_sdk.credentials.factory import CredentialProviderFactory
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -82,7 +82,7 @@ class BaseSQLClient(ClientInterface):
             ClientError: If connection fails due to authentication or connection issues
         """
         self.credentials = credentials  # Update the instance credentials
-        self.resolved_credentials = await self.resolve_credentials(credentials)
+        self.resolved_credentials = await resolve_credentials(credentials)
         try:
             from sqlalchemy import create_engine
 
@@ -100,23 +100,6 @@ class BaseSQLClient(ClientInterface):
                 self.engine.dispose()
                 self.engine = None
             raise ClientError(f"{ClientError.SQL_CLIENT_AUTH_ERROR}: {str(e)}")
-
-    async def resolve_credentials(self, credentials: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Resolve credentials based on credential source.
-
-        Args:
-            credentials (Dict[str, Any]): Source credentials.
-
-        Returns:
-            Dict[str, Any]: Resolved credentials.
-
-        Raises:
-            ValueError: If credential resolution fails.
-        """
-        credential_source = credentials.get("credentialSource", "direct")
-        provider = CredentialProviderFactory.get_provider(credential_source)
-        return await provider.get_credentials(credentials)
 
     async def close(self) -> None:
         """Close the database connection."""
@@ -399,7 +382,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             ValueError: If connection fails due to invalid credentials or connection issues.
         """
         self.credentials = credentials
-        self.resolved_credentials = await self.resolve_credentials(credentials)
+        self.resolved_credentials = await resolve_credentials(credentials)
 
         try:
             from sqlalchemy.ext.asyncio import create_async_engine

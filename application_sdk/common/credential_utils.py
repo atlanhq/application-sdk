@@ -4,12 +4,74 @@ import collections.abc
 import json
 from typing import Any, Dict
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-def process_secret_data(secret_data: Any) -> Dict[str, Any]:
+class CredentialError(Exception):
+    """Base exception for credential-related errors."""
+
+    pass
+
+
+async def resolve_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Resolve credentials based on credential source.
+
+    Args:
+        credentials: Source credentials containing:
+            - credentialSource: "direct" or component name
+            - extra.secret_key: Secret path/key to fetch
+
+    Returns:
+        Dict with resolved credentials
+
+    Raises:
+        CredentialError: If credential resolution fails
+    """
+    credential_source = credentials.get("credentialSource", "direct")
+
+    # If direct, return as-is
+    if credential_source == "direct":
+        return credentials
+
+    # Otherwise, treat as Dapr component name
+    try:
+        # Extract secret key from credentials extra
+        extra = credentials.get("extra", {})
+        secret_key = extra.get("secret_key")
+
+        if not secret_key:
+            raise CredentialError("secret_key is required in extra")
+
+        # Fetch secret from the secret store
+        secret_data = await fetch_secret(credential_source, secret_key)
+
+        # Apply the secret values to the credentials
+        return apply_secret_values(credentials, secret_data)
+
+    except Exception as e:
+        logger.error(f"Error resolving credentials: {str(e)}")
+        raise CredentialError(f"Failed to resolve credentials: {str(e)}")
+
+
+async def fetch_secret(component_name: str, secret_key: str) -> Dict[str, Any]:
+    """Fetch secret using the Dapr component."""
+    from dapr.clients import DaprClient
+
+    try:
+        with DaprClient() as client:
+            secret = client.get_secret(store_name=component_name, key=secret_key)
+            return _process_secret_data(secret.secret)
+    except Exception as e:
+        logger.error(
+            f"Failed to fetch secret using component {component_name}: {str(e)}"
+        )
+        raise
+
+
+def _process_secret_data(secret_data: Any) -> Dict[str, Any]:
     """
     Process raw secret data into a standardized dictionary format.
 
