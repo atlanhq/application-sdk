@@ -641,8 +641,7 @@ class DuckDBUI:
                     return
 
                 # Check if there are any parquet files in the directory
-                parquet_files = list(Path(directory).rglob("*.parquet"))
-                if not parquet_files:
+                if not any(Path(directory).rglob("*.parquet")):
                     return
 
                 # Create view name based on data type
