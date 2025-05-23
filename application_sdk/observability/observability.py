@@ -6,9 +6,9 @@ import sys
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
+from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
-from pathlib import Path
 
 import duckdb
 import pandas as pd

@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import threading
-import uuid
 from time import time
 from typing import Any, Dict, Optional
 
