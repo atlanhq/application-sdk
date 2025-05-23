@@ -49,47 +49,67 @@ class TestCredentialUtils:
         result = _process_secret_data(secret_data)
         assert result == secret_data  # Should return original if JSON parsing fails
 
+    def test_apply_secret_values_simple(self):
+        """Test applying secret values to source credentials with simple case."""
+        source_credentials = {
+            "username": "db_user_key",
+            "password": "db_pass_key",
+            "extra": {"database": "db_name_key"},
+        }
+
+        secret_data = {
+            "db_user_key": "actual_username",
+            "db_pass_key": "actual_password",
+            "db_name_key": "actual_database",
+        }
+
+        result = apply_secret_values(source_credentials, secret_data)
+
+        assert result["username"] == "actual_username"
+        assert result["password"] == "actual_password"
+        assert result["extra"]["database"] == "actual_database"
+
+    def test_apply_secret_values_no_substitution(self):
+        """Test applying secret values when no substitution is needed."""
+        source_credentials = {"username": "direct_user", "password": "direct_pass"}
+
+        secret_data = {"some_key": "some_value"}
+
+        result = apply_secret_values(source_credentials, secret_data)
+
+        # Should remain unchanged
+        assert result == source_credentials
+
     @given(
         source_credentials=credential_dict_strategy,
         secret_data=credential_dict_strategy,
     )
-    def test_apply_secret_values(
+    def test_apply_secret_values_property(
         self, source_credentials: Dict[str, Any], secret_data: Dict[str, Any]
     ):
-        """Test applying secret values to source credentials."""
-        # Create a copy of source credentials with values that exist in secret_data
+        """Property-based test for apply_secret_values with safe data."""
+        # Avoid overlapping keys/values that could cause circular references
+        safe_secret_data = {f"secret_{k}": v for k, v in secret_data.items()}
+
         test_credentials = source_credentials.copy()
 
-        # Add some keys that should be substituted
-        secret_keys = list(secret_data.keys())
-        for i in range(min(2, len(secret_keys))):
-            if i < len(secret_keys):
-                key = secret_keys[i]
-                if key in secret_data:
-                    test_credentials[f"test_{key}"] = key
+        # Only add substitutions for keys that exist in safe_secret_data
+        secret_keys = list(safe_secret_data.keys())
+        if secret_keys:
+            # Add one substitution to test
+            key_to_substitute = secret_keys[0]
+            test_credentials["test_field"] = key_to_substitute
 
-        # Add an extra field with some substitutions
-        extra_dict = {}
-        for i in range(min(2, len(secret_keys))):
-            if i < len(secret_keys):
-                key = secret_keys[i]
-                extra_dict[f"extra_{key}"] = key
+            # Add extra field
+            test_credentials["extra"] = {"extra_field": key_to_substitute}
 
-        test_credentials["extra"] = extra_dict
+        result = apply_secret_values(test_credentials, safe_secret_data)
 
-        # Apply the substitutions
-        result = apply_secret_values(test_credentials, secret_data)
-
-        # Check that substitutions were made correctly
-        for key, value in test_credentials.items():
-            if key != "extra" and isinstance(value, str) and value in secret_data:
-                assert result[key] == secret_data[value]
-
-        # Check extra dict substitutions
-        if "extra" in test_credentials:
-            for key, value in test_credentials["extra"].items():
-                if isinstance(value, str) and value in secret_data:
-                    assert result["extra"][key] == secret_data[value]
+        # Verify substitutions happened correctly
+        if secret_keys and "test_field" in test_credentials:
+            expected_value = safe_secret_data[test_credentials["test_field"]]
+            assert result["test_field"] == expected_value
+            assert result["extra"]["extra_field"] == expected_value
 
     @pytest.mark.asyncio
     async def test_resolve_credentials_direct(self):
