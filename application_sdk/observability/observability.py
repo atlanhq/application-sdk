@@ -6,6 +6,7 @@ import sys
 import threading
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
+from pathlib import Path
 from time import time
 from typing import Any, Dict, Generic, List, TypeVar
 
@@ -635,6 +636,14 @@ class DuckDBUI:
 
             def process_partitioned_files(directory, prefix=""):
                 """Process Hive partitioned parquet files and create views."""
+                # Skip if directory doesn't exist
+                if not os.path.exists(directory):
+                    return
+
+                # Check if there are any parquet files in the directory
+                if not any(Path(directory).rglob("*.parquet")):
+                    return
+
                 # Create view name based on data type
                 view_name = prefix if prefix else "data"
 

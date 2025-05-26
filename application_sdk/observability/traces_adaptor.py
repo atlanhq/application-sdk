@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import threading
-import uuid
 from time import time
 from typing import Any, Dict, Optional
 
@@ -66,104 +65,6 @@ class TraceRecord(BaseModel):
     duration_ms: float
 
 
-class TraceContext:
-    """Context manager for trace recording.
-
-    This class provides a context manager interface for recording traces,
-    automatically handling timing, status updates, and error recording.
-
-    Attributes:
-        adapter (AtlanTracesAdapter): The traces adapter instance
-        name (str): Name of the trace
-        trace_id (str): Unique identifier for the trace
-        span_id (str): Unique identifier for this span
-        kind (str): Type of span
-        status_code (str): Initial status code
-        attributes (Dict[str, Any]): Trace attributes
-        parent_span_id (Optional[str]): Parent span ID
-        status_message (Optional[str]): Status message
-        events (Optional[list[Dict[str, Any]]]): Trace events
-        start_time (float): When the trace started
-    """
-
-    def __init__(
-        self,
-        adapter: "AtlanTracesAdapter",
-        name: str,
-        trace_id: str,
-        span_id: str,
-        kind: str,
-        status_code: str,
-        attributes: Dict[str, Any],
-        parent_span_id: Optional[str] = None,
-        status_message: Optional[str] = None,
-        events: Optional[list[Dict[str, Any]]] = None,
-    ):
-        """Initialize the trace context.
-
-        Args:
-            adapter: The traces adapter instance
-            name: Name of the trace
-            trace_id: Unique identifier for the trace
-            span_id: Unique identifier for this span
-            kind: Type of span
-            status_code: Initial status code
-            attributes: Trace attributes
-            parent_span_id: Optional parent span ID
-            status_message: Optional status message
-            events: Optional list of trace events
-        """
-        self.adapter = adapter
-        self.name = name
-        self.trace_id = trace_id
-        self.span_id = span_id
-        self.kind = kind
-        self.status_code = status_code
-        self.attributes = attributes
-        self.parent_span_id = parent_span_id
-        self.status_message = status_message
-        self.events = events
-        self.start_time = time()
-
-    def __enter__(self) -> "TraceContext":
-        """Enter the trace context.
-
-        Returns:
-            TraceContext: The trace context instance
-        """
-        return self
-
-    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Exit the trace context and record the trace.
-
-        Args:
-            exc_type: Exception type if an exception occurred
-            exc_val: Exception value if an exception occurred
-            exc_tb: Exception traceback if an exception occurred
-
-        This method:
-        - Calculates trace duration
-        - Updates status based on any exceptions
-        - Records the trace with final status
-        """
-        duration_ms = (time() - self.start_time) * 1000
-        status_code = "ERROR" if exc_type is not None else self.status_code
-        status_message = str(exc_val) if exc_type is not None else self.status_message
-
-        self.adapter.record_trace(
-            name=self.name,
-            trace_id=self.trace_id,
-            span_id=self.span_id,
-            kind=self.kind,
-            status_code=status_code,
-            status_message=status_message,
-            attributes=self.attributes,
-            parent_span_id=self.parent_span_id,
-            events=self.events,
-            duration_ms=duration_ms,
-        )
-
-
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     """A traces adapter for Atlan that extends AtlanObservability.
 
@@ -176,7 +77,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
     - Periodic trace flushing
     - Console logging
     - Parquet file storage
-    - Context manager support
     """
 
     _flush_task_started = False
@@ -552,54 +452,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         status_message: Optional[str] = None,
         events: Optional[list[Dict[str, Any]]] = None,
         duration_ms: Optional[float] = None,
-    ) -> TraceContext:
-        """Create a trace context for recording traces.
-
-        Args:
-            name (str): Name of the trace
-            trace_id (str): Unique identifier for the trace
-            span_id (str): Unique identifier for this span
-            kind (str): Type of span
-            status_code (str): Initial status code
-            attributes (Dict[str, Any]): Trace attributes
-            parent_span_id (Optional[str]): Parent span ID
-            status_message (Optional[str]): Status message
-            events (Optional[list[Dict[str, Any]]]): Trace events
-            duration_ms (Optional[float]): Duration in milliseconds
-
-        Returns:
-            TraceContext: Context manager for recording the trace
-
-        This method returns a context manager that will automatically record the trace
-        when the context is exited, including duration and any exceptions that occurred.
-        """
-        return TraceContext(
-            adapter=self,
-            name=name,
-            trace_id=trace_id,
-            span_id=span_id,
-            kind=kind,
-            status_code=status_code,
-            attributes=attributes,
-            parent_span_id=parent_span_id,
-            status_message=status_message,
-            events=events,
-        )
-
-    def _record_trace(
-        self,
-        name: str,
-        trace_id: str,
-        span_id: str,
-        kind: str,
-        status_code: str,
-        attributes: Dict[str, Any],
-        parent_span_id: Optional[str] = None,
-        status_message: Optional[str] = None,
-        events: Optional[list[Dict[str, Any]]] = None,
-        duration_ms: Optional[float] = None,
     ) -> None:
-        """Internal method to record a trace.
+        """Record a trace directly without context manager.
 
         Args:
             name (str): Name of the trace
@@ -613,8 +467,8 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             events (Optional[list[Dict[str, Any]]]): Trace events
             duration_ms (Optional[float]): Duration in milliseconds
 
-        Raises:
-            Exception: If recording fails, logs error and re-raises
+        This method directly records a trace without using a context manager.
+        It's a simpler alternative to the context manager pattern.
         """
         try:
             # Create trace record
@@ -638,36 +492,6 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         except Exception as e:
             logging.error(f"Error recording trace: {e}")
             raise
-
-    def __enter__(self):
-        """Context manager entry.
-
-        Returns:
-            AtlanTracesAdapter: The traces adapter instance
-        """
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit.
-
-        Args:
-            exc_type: Exception type if an exception occurred
-            exc_val: Exception value if an exception occurred
-            exc_tb: Exception traceback if an exception occurred
-
-        If an exception occurred, records an error trace with the exception details.
-        """
-        if exc_type is not None:
-            # If there was an exception, record it
-            self._record_trace(
-                name="error",
-                trace_id=str(uuid.uuid4()),
-                span_id=str(uuid.uuid4()),
-                kind="INTERNAL",
-                status_code="ERROR",
-                status_message=str(exc_val),
-                attributes={"error_type": str(exc_type.__name__)},
-            )
 
 
 # Create a singleton instance of the traces adapter
