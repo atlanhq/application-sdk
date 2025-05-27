@@ -1,9 +1,12 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, RootModel
+
+from application_sdk.outputs.eventstore import WorkflowEndEvent
+from application_sdk.workflows import WorkflowInterface
 
 
 class TestAuthRequest(RootModel[Dict[str, Any]]):
@@ -174,3 +177,54 @@ class WorkflowConfigResponse(BaseModel):
                 },
             }
         }
+
+
+class WorkflowTrigger(BaseModel):
+    workflow_class: Optional[Type[WorkflowInterface]] = None
+    model_config = {"arbitrary_types_allowed": True}
+
+
+class HttpWorkflowTrigger(WorkflowTrigger):
+    endpoint: str = "/start"
+    methods: List[str] = ["POST"]
+
+
+class EventWorkflowTrigger(WorkflowTrigger):
+    should_trigger_workflow: Callable[[Any], bool]
+
+
+class WorkflowEndEventTrigger(EventWorkflowTrigger):
+    finished_workflow_name: str
+    finished_workflow_state: str
+
+    should_trigger_workflow: Callable[[Any], bool]
+
+    def __init__(
+        self,
+        finished_workflow_name: str | None,
+        finished_workflow_state: str | None,
+        *args,
+        **kwargs,
+    ):
+        def should_trigger(event: WorkflowEndEvent):
+            if (
+                finished_workflow_name is not None
+                and finished_workflow_name != event.metadata.workflow_name
+            ):
+                return False
+
+            if (
+                finished_workflow_state is not None
+                and finished_workflow_state != event.metadata.workflow_state
+            ):
+                return False
+
+            return True
+
+        super().__init__(
+            *args,
+            should_trigger_workflow=should_trigger,
+            finished_workflow_name=finished_workflow_name,  # type: ignore
+            finished_workflow_state=finished_workflow_state,  # type: ignore
+            **kwargs,
+        )

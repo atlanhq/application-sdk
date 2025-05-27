@@ -9,7 +9,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
@@ -29,12 +28,14 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
-from application_sdk.outputs.eventstore import Event, EventStore, WorkflowEndEvent
+from application_sdk.outputs.eventstore import Event, EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
+    EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
+    HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
     TestAuthRequest,
@@ -44,64 +45,13 @@ from application_sdk.server.fastapi.models import (
     WorkflowData,
     WorkflowRequest,
     WorkflowResponse,
+    WorkflowTrigger,
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
 from application_sdk.server.fastapi.utils import internal_server_error_handler
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-
-
-class WorkflowTrigger(BaseModel):
-    workflow_class: Optional[Type[WorkflowInterface]] = None
-    model_config = {"arbitrary_types_allowed": True}
-
-
-class HttpWorkflowTrigger(WorkflowTrigger):
-    endpoint: str = "/start"
-    methods: List[str] = ["POST"]
-
-
-class EventWorkflowTrigger(WorkflowTrigger):
-    should_trigger_workflow: Callable[[Any], bool]
-
-
-# TODO: Move this to the right place
-class WorkflowEndEventTrigger(EventWorkflowTrigger):
-    finished_workflow_name: str
-    finished_workflow_state: str
-
-    should_trigger_workflow: Callable[[Any], bool]
-
-    def __init__(
-        self,
-        finished_workflow_name: str | None,
-        finished_workflow_state: str | None,
-        *args,
-        **kwargs,
-    ):
-        def should_trigger(event: WorkflowEndEvent):
-            if (
-                finished_workflow_name is not None
-                and finished_workflow_name != event.metadata.workflow_name
-            ):
-                return False
-
-            if (
-                finished_workflow_state is not None
-                and finished_workflow_state != event.metadata.workflow_state
-            ):
-                return False
-
-            return True
-
-        super().__init__(
-            *args,
-            should_trigger_workflow=should_trigger,
-            finished_workflow_name=finished_workflow_name,  # type: ignore
-            finished_workflow_state=finished_workflow_state,  # type: ignore
-            **kwargs,
-        )
 
 
 class APIServer(ServerInterface):
