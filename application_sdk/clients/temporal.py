@@ -74,13 +74,33 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 workflow_id=activity.info().workflow_id,
                 workflow_run_id=activity.info().workflow_run_id,
                 workflow_state=WorkflowStates.RUNNING.value,
-            )
+            ),
+            activity_id=activity.info().activity_id,
+            activity_type=activity.info().activity_type,
+            activity_state=ActivityStates.RUNNING.value,
         )
-        event.activity_id = activity.info().activity_id
-        event.activity_type = activity.info().activity_type
 
         EventStore.publish_event(event)
-        output = await super().execute_activity(input)
+
+        output = None
+        try:
+            output = await super().execute_activity(input)
+        except Exception as e:
+            end_event = ActivityEndEvent(
+                metadata=EventMetadata(
+                    application_name="application",  # TODO:
+                    event_published_client_timestamp=int(datetime.now().timestamp()),
+                    workflow_name=activity.info().workflow_type,
+                    workflow_id=activity.info().workflow_id,
+                    workflow_run_id=activity.info().workflow_run_id,
+                    workflow_state=WorkflowStates.RUNNING.value,
+                ),
+                activity_id=activity.info().activity_id,
+                activity_type=activity.info().activity_type,
+                activity_state=ActivityStates.FAILED.value,
+            )
+            EventStore.publish_event(end_event)
+            raise e
 
         end_event = ActivityEndEvent(
             metadata=EventMetadata(
@@ -90,13 +110,11 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 workflow_id=activity.info().workflow_id,
                 workflow_run_id=activity.info().workflow_run_id,
                 workflow_state=WorkflowStates.RUNNING.value,
-            )
+            ),
+            activity_id=activity.info().activity_id,
+            activity_type=activity.info().activity_type,
+            activity_state=ActivityStates.COMPLETED.value,  # TODO: Figure out how to get the state of the activity
         )
-        end_event.activity_id = activity.info().activity_id
-        end_event.activity_type = activity.info().activity_type
-        end_event.activity_state = (
-            ActivityStates.COMPLETED.value
-        )  # TODO: Figure out how to get the state of the activity
         EventStore.publish_event(end_event)
         return output
 
@@ -132,12 +150,33 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     )
                 ),
             )
-        output = await super().execute_workflow(input)
+        output = None
+        try:
+            output = await super().execute_workflow(input)
+        except Exception as e:
+            with workflow.unsafe.sandbox_unrestricted():
+                EventStore.publish_event(
+                    WorkflowEndEvent(
+                        metadata=EventMetadata(
+                            workflow_state=WorkflowStates.FAILED.value,
+                            application_name="application",  # TODO:
+                            event_published_client_timestamp=int(
+                                datetime.now().timestamp()
+                            ),
+                            workflow_name=workflow.info().workflow_type,
+                            workflow_id=workflow.info().workflow_id,
+                            workflow_run_id=workflow.info().run_id,
+                        ),
+                        workflow_output=output or {},
+                    ),
+                )
+            raise e
+
         with workflow.unsafe.sandbox_unrestricted():
             EventStore.publish_event(
                 WorkflowEndEvent(
                     metadata=EventMetadata(
-                        workflow_state=WorkflowStates.COMPLETED.value,  # TODO: Figure out how to get the state of the workflow
+                        workflow_state=WorkflowStates.COMPLETED.value,
                         application_name="application",  # TODO:
                         event_published_client_timestamp=int(
                             datetime.now().timestamp()

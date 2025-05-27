@@ -85,9 +85,9 @@ class ActivityStartEvent(ApplicationEvent):
     event_name: str = ApplicationEventNames.ACTIVITY_START.value
 
     # Activity information (required)
-    activity_type: str | None = Field(default=None, init=False)
-    activity_id: str | None = Field(default=None, init=False)
-    activity_state: str | None = Field(default=None, init=False)
+    activity_type: str | None = Field(default=None)
+    activity_id: str | None = Field(default=None)
+    activity_state: str | None = Field(default=None)
 
 
 class ActivityEndEvent(ApplicationEvent):
@@ -102,9 +102,9 @@ class ActivityEndEvent(ApplicationEvent):
     event_name: str = ApplicationEventNames.ACTIVITY_END.value
 
     # Activity information (required)
-    activity_type: str | None = Field(default=None, init=False)
-    activity_id: str | None = Field(default=None, init=False)
-    activity_state: str | None = Field(default=None, init=False)
+    activity_type: str | None = Field(default=None)
+    activity_id: str | None = Field(default=None)
+    activity_state: str | None = Field(default=None)
 
 
 class WorkflowEndEvent(ApplicationEvent):
