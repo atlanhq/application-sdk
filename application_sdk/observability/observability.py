@@ -680,10 +680,10 @@ class StreamlitUI:
     def start_ui(self, db_path=OBSERVABILITY_DIR):
         """Start Streamlit UI and create views for Hive partitioned parquet files."""
         if not self._is_streamlit_running():
-            import subprocess
-            import sys
             import os
             import shutil
+            import subprocess
+            import sys
 
             # Copy the streamlit UI file to the observability directory
             streamlit_app_path = os.path.join(OBSERVABILITY_DIR, "streamlit_app.py")
@@ -694,5 +694,5 @@ class StreamlitUI:
             # Start Streamlit in a subprocess
             self._streamlit_process = subprocess.Popen(
                 [sys.executable, "-m", "streamlit", "run", streamlit_app_path],
-                cwd=OBSERVABILITY_DIR
+                cwd=OBSERVABILITY_DIR,
             )

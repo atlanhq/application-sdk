@@ -44,4 +44,4 @@ These dependencies are included in the `observability` optional dependency group
 
 | Environment Variable | Description | Default Value |
 |---------------------|-------------|---------------|
-| `ATLAN_ENABLE_STREAMLIT_BASED_OBSERVABILITY` | Whether to enable the Streamlit-based observability UI | `false` | 
+| `ATLAN_ENABLE_STREAMLIT_BASED_OBSERVABILITY` | Whether to enable the Streamlit-based observability UI | `false` |
