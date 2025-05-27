@@ -95,12 +95,15 @@ class APIServer(ServerInterface):
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
 
+    ui_enabled: bool = True
+
     def __init__(
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
         workflow_client: Optional[WorkflowClient] = None,
         frontend_templates_path: str = "frontend/templates",
+        ui_enabled: bool = True,
     ):
         """Initialize the FastAPI application.
 
@@ -114,6 +117,7 @@ class APIServer(ServerInterface):
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
+        self.ui_enabled = ui_enabled
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -333,7 +337,7 @@ class APIServer(ServerInterface):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.home)
         # Mount static files
-        # self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
+        self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
 
     async def get_dapr_subscriptions(
         self,
@@ -664,7 +668,8 @@ class APIServer(ServerInterface):
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
         """
-        self.register_ui_routes()
+        if self.ui_enabled:
+            self.register_ui_routes()
 
         logger.info(f"Starting application on {host}:{port}")
         server = Server(

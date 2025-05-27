@@ -16,7 +16,7 @@ from application_sdk.outputs.eventstore import (
     WorkflowEndEvent,
     WorkflowStates,
 )
-from application_sdk.server.fastapi import WorkflowEndEventTrigger
+from application_sdk.server.fastapi.models import WorkflowEndEventTrigger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
@@ -116,6 +116,7 @@ async def application_subscriber():
 
     await application.setup_server(
         workflow_class=SampleWorkflow,
+        ui_enabled=False,
         triggers=[
             WorkflowEndEventTrigger(
                 finished_workflow_name="dependent_workflow",

@@ -93,7 +93,10 @@ class BaseApplication:
         await self.worker.start(daemon=daemon)
 
     async def setup_server(
-        self, workflow_class, triggers: List[WorkflowTrigger] = [HttpWorkflowTrigger()]
+        self,
+        workflow_class,
+        triggers: List[WorkflowTrigger] = [HttpWorkflowTrigger()],
+        ui_enabled: bool = True,
     ):
         """
         Optionally set up a server for the application. (No-op by default)
@@ -104,6 +107,7 @@ class BaseApplication:
         # setup application server. serves the UI, and handles the various triggers
         self.application = APIServer(
             workflow_client=self.workflow_client,
+            ui_enabled=ui_enabled,
         )
 
         # register the workflow on the application server
