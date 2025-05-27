@@ -9,7 +9,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
@@ -29,12 +28,14 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
-from application_sdk.outputs.eventstore import AtlanEvent, EventStore
+from application_sdk.outputs.eventstore import Event, EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
+    EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
+    HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
     TestAuthRequest,
@@ -44,26 +45,13 @@ from application_sdk.server.fastapi.models import (
     WorkflowData,
     WorkflowRequest,
     WorkflowResponse,
+    WorkflowTrigger,
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
 from application_sdk.server.fastapi.utils import internal_server_error_handler
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-
-
-class WorkflowTrigger(BaseModel):
-    workflow_class: Optional[Type[WorkflowInterface]] = None
-    model_config = {"arbitrary_types_allowed": True}
-
-
-class HttpWorkflowTrigger(WorkflowTrigger):
-    endpoint: str = "/start"
-    methods: List[str] = ["POST"]
-
-
-class EventWorkflowTrigger(WorkflowTrigger):
-    should_trigger_workflow: Callable[[Any], bool]
 
 
 class APIServer(ServerInterface):
@@ -107,12 +95,15 @@ class APIServer(ServerInterface):
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
 
+    ui_enabled: bool = True
+
     def __init__(
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
         workflow_client: Optional[WorkflowClient] = None,
         frontend_templates_path: str = "frontend/templates",
+        ui_enabled: bool = True,
     ):
         """Initialize the FastAPI application.
 
@@ -126,6 +117,7 @@ class APIServer(ServerInterface):
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
+        self.ui_enabled = ui_enabled
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -359,7 +351,7 @@ class APIServer(ServerInterface):
         return [
             {
                 "pubsubname": EventStore.EVENT_STORE_NAME,
-                "topic": EventStore.TOPIC_NAME,
+                "topic": "application_events_topic",  # TODO
                 "routes": {"rules": [{"path": "events/v1/event"}]},
             }
         ]
@@ -378,7 +370,7 @@ class APIServer(ServerInterface):
 
         logger.info("Received event {}", event)
         for trigger in self.event_triggers:
-            if trigger.should_trigger_workflow(AtlanEvent(**event)):
+            if trigger.should_trigger_workflow(Event(**event["data"])):
                 logger.info(
                     "Triggering workflow {} with event {}",
                     trigger.workflow_class,
@@ -676,7 +668,8 @@ class APIServer(ServerInterface):
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
         """
-        self.register_ui_routes()
+        if self.ui_enabled:
+            self.register_ui_routes()
 
         logger.info(f"Starting application on {host}:{port}")
         server = Server(

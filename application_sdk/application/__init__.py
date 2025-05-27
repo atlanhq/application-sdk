@@ -2,7 +2,11 @@ from typing import Any, List, Optional
 
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.server import ServerInterface
-from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
+from application_sdk.server.fastapi import (
+    APIServer,
+    HttpWorkflowTrigger,
+    WorkflowTrigger,
+)
 from application_sdk.worker import Worker
 
 
@@ -88,7 +92,12 @@ class BaseApplication:
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
-    async def setup_server(self, workflow_class):
+    async def setup_server(
+        self,
+        workflow_class,
+        triggers: List[WorkflowTrigger] = [HttpWorkflowTrigger()],
+        ui_enabled: bool = True,
+    ):
         """
         Optionally set up a server for the application. (No-op by default)
         """
@@ -98,13 +107,14 @@ class BaseApplication:
         # setup application server. serves the UI, and handles the various triggers
         self.application = APIServer(
             workflow_client=self.workflow_client,
+            ui_enabled=ui_enabled,
         )
 
         # register the workflow on the application server
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint
         self.application.register_workflow(
             workflow_class=workflow_class,
-            triggers=[HttpWorkflowTrigger()],
+            triggers=triggers,
         )
 
     async def start_server(self):
