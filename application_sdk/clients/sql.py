@@ -236,6 +236,21 @@ class BaseSQLClient(ClientInterface):
 
         return connection_string
 
+    def update_dialect_in_url(self, sqlalchemy_url: str) -> str:
+        """Update the dialect in the URL if it is different from the installed dialect.
+
+        Args:
+            url (str): The URL to update.
+
+        Returns:
+            str: The updated URL with the dialect.
+        """
+        installed_dialect = self.DB_CONFIG["template"].split("://")[0]
+        url_dialect = sqlalchemy_url.split("://")[0]
+        if installed_dialect != url_dialect:
+            sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
+        return sqlalchemy_url
+
     def get_sqlalchemy_connection_string(self) -> str:
         """Generate a SQLAlchemy connection string for database connection.
 
@@ -250,6 +265,13 @@ class BaseSQLClient(ClientInterface):
             ValueError: If required connection parameters are missing.
         """
         extra = parse_credentials_extra(self.credentials)
+
+        # If the compiled_url is present, use it directly
+        sqlalchemy_url = extra.get("compiled_url")
+        if sqlalchemy_url:
+            sqlalchemy_url = self.update_dialect_in_url(sqlalchemy_url)
+            return sqlalchemy_url
+
         auth_token = self.get_auth_token()
 
         # Prepare parameters
