@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from typing import Any, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
@@ -31,9 +32,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
     ActivityEndEvent,
     ActivityStartEvent,
+    ActivityStates,
+    EventMetadata,
     EventStore,
     WorkflowEndEvent,
     WorkflowStartEvent,
+    WorkflowStates,
 )
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
@@ -62,24 +66,38 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        event = ActivityStartEvent()
+        event = ActivityStartEvent(
+            metadata=EventMetadata(
+                application_name="application",  # TODO:
+                event_published_client_timestamp=int(datetime.now().timestamp()),
+                workflow_name=activity.info().workflow_type,
+                workflow_id=activity.info().workflow_id,
+                workflow_run_id=activity.info().workflow_run_id,
+                workflow_state=WorkflowStates.RUNNING.value,
+            )
+        )
         event.activity_id = activity.info().activity_id
         event.activity_type = activity.info().activity_type
 
-        EventStore.create_event(
-            event,
-            topic_name=EventStore.TOPIC_NAME,
-        )
+        EventStore.publish_event(event)
         output = await super().execute_activity(input)
 
-        end_event = ActivityEndEvent()
+        end_event = ActivityEndEvent(
+            metadata=EventMetadata(
+                application_name="application",  # TODO:
+                event_published_client_timestamp=int(datetime.now().timestamp()),
+                workflow_name=activity.info().workflow_type,
+                workflow_id=activity.info().workflow_id,
+                workflow_run_id=activity.info().workflow_run_id,
+                workflow_state=WorkflowStates.RUNNING.value,
+            )
+        )
         end_event.activity_id = activity.info().activity_id
         end_event.activity_type = activity.info().activity_type
-
-        EventStore.create_event(
-            end_event,
-            topic_name=EventStore.TOPIC_NAME,
-        )
+        end_event.activity_state = (
+            ActivityStates.COMPLETED.value
+        )  # TODO: Figure out how to get the state of the activity
+        EventStore.publish_event(end_event)
         return output
 
 
@@ -100,24 +118,36 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             Any: The result of the workflow execution.
         """
         with workflow.unsafe.sandbox_unrestricted():
-            EventStore.create_event(
+            EventStore.publish_event(
                 WorkflowStartEvent(
-                    workflow_name=workflow.info().workflow_type,
-                    workflow_id=workflow.info().workflow_id,
-                    workflow_run_id=workflow.info().run_id,
+                    metadata=EventMetadata(
+                        application_name="application",  # TODO:
+                        event_published_client_timestamp=int(
+                            datetime.now().timestamp()
+                        ),
+                        workflow_name=workflow.info().workflow_type,
+                        workflow_id=workflow.info().workflow_id,
+                        workflow_run_id=workflow.info().run_id,
+                        workflow_state=WorkflowStates.RUNNING.value,
+                    )
                 ),
-                topic_name=EventStore.TOPIC_NAME,
             )
         output = await super().execute_workflow(input)
         with workflow.unsafe.sandbox_unrestricted():
-            EventStore.create_event(
+            EventStore.publish_event(
                 WorkflowEndEvent(
-                    workflow_name=workflow.info().workflow_type,
-                    workflow_id=workflow.info().workflow_id,
-                    workflow_run_id=workflow.info().run_id,
+                    metadata=EventMetadata(
+                        workflow_state=WorkflowStates.COMPLETED.value,  # TODO: Figure out how to get the state of the workflow
+                        application_name="application",  # TODO:
+                        event_published_client_timestamp=int(
+                            datetime.now().timestamp()
+                        ),
+                        workflow_name=workflow.info().workflow_type,
+                        workflow_id=workflow.info().workflow_id,
+                        workflow_run_id=workflow.info().run_id,
+                    ),
                     workflow_output=output or {},
                 ),
-                topic_name=EventStore.TOPIC_NAME,
             )
         return output
 
@@ -384,8 +414,7 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             # Disabled EventInterceptor for now
-            # interceptors=[EventInterceptor()],
-            interceptors=[],
+            interceptors=[EventInterceptor()],
         )
 
     async def get_workflow_run_status(

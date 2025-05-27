@@ -1,23 +1,22 @@
 import asyncio
-from datetime import timedelta
-from typing import Any, Callable, Dict, List, cast
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Type
 
 from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
-from application_sdk.activities.common.utils import auto_heartbeater
+from application_sdk.application import BaseApplication
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
-    WORKFLOW_END_EVENT,
-    AtlanEvent,
-    CustomEvent,
+    EventMetadata,
     EventStore,
     WorkflowEndEvent,
+    WorkflowStates,
 )
-from application_sdk.server.fastapi import APIServer, EventWorkflowTrigger
+from application_sdk.server.fastapi import WorkflowEndEventTrigger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
@@ -25,25 +24,11 @@ logger = get_logger(__name__)
 
 
 class SampleActivities(ActivitiesInterface):
-    async def _set_state(self, workflow_args: Dict[str, Any]):
-        pass
-
-    @activity.defn
-    @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        return {"message": "Preflight check completed successfully"}
-
     @activity.defn
     async def activity_1(self):
         logger.info("Activity 1")
 
         await asyncio.sleep(5)
-
-        # Activities can also send custom events to the event store
-        EventStore.create_event(
-            event=CustomEvent(data={"custom_key": "custom_value"}),
-            topic_name=EventStore.TOPIC_NAME,
-        )
 
         return
 
@@ -59,6 +44,8 @@ class SampleActivities(ActivitiesInterface):
 # Workflow that will be triggered by an event
 @workflow.defn
 class SampleWorkflow(WorkflowInterface):
+    activities_cls: Type[ActivitiesInterface] = SampleActivities
+
     @workflow.run
     async def run(self, workflow_config: dict[str, Any]):
         workflow_id = workflow_config["workflow_id"]
@@ -70,17 +57,16 @@ class SampleWorkflow(WorkflowInterface):
         workflow_args["workflow_run_id"] = workflow_run_id
 
         # When a workflow is triggered by an event, the event is passed in as a dictionary
-        event = AtlanEvent(**workflow_args)
-
-        # We can check the event type to determine if the workflow was triggered by an event
-        if event.data.event_type != WORKFLOW_END_EVENT:
-            return
+        event = WorkflowEndEvent(**workflow_args["data"])
 
         # We can also check the event data to get the workflow name and id
-        # workflow_end_event: WorkflowEndEvent = event.data
-        # workflow_name = workflow_end_event.workflow_name
-        # workflow_id = workflow_end_event.workflow_id
-        # workflow_output = workflow_end_event.workflow_output
+        workflow_name = event.metadata.workflow_name
+        workflow_id = event.metadata.workflow_id
+        workflow_output = event.workflow_output
+
+        print("workflow_name", workflow_name)
+        print("workflow_id", workflow_id)
+        print("workflow_output", workflow_output)
 
         await workflow.execute_activity_method(
             self.activities_cls.activity_1,
@@ -94,10 +80,8 @@ class SampleWorkflow(WorkflowInterface):
         )
 
     @staticmethod
-    def get_activities(activities: ActivitiesInterface) -> List[Callable[..., Any]]:
-        # Cast the activities to SampleActivities type
-        sample_activities = cast(SampleActivities, activities)
-        return [sample_activities.activity_1, sample_activities.activity_2]
+    def get_activities(activities: SampleActivities) -> List[Callable[..., Any]]:
+        return [activities.activity_1, activities.activity_2]
 
 
 async def start_worker():
@@ -119,71 +103,46 @@ async def start_worker():
     await worker.start(daemon=True)
 
 
-async def start_fast_api_app():
-    workflow_client = get_workflow_client(application_name=APPLICATION_NAME)
-    await workflow_client.load()
-
-    app = APIServer(
-        workflow_client=workflow_client,
+async def application_subscriber():
+    application = BaseApplication(
+        name=APPLICATION_NAME,
     )
 
-    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
-    def should_trigger_workflow(event: AtlanEvent) -> bool:
-        # First check the event type
-        if event.data.event_type != WORKFLOW_END_EVENT:
-            return False
+    await application.setup_workflow(
+        workflow_classes=[SampleWorkflow], activities_class=SampleActivities
+    )
 
-        # After confirming it's a workflow end event, we can safely cast
-        workflow_end_event = cast(WorkflowEndEvent, event.data)
+    await application.start_worker()
 
-        if workflow_end_event.workflow_name != "dependent_workflow":
-            return False
-
-        # We can optionally check other attributes of the workflow as well,
-        # such as the output of the dependent workflow
-        # if workflow_end_event.workflow_output["counter"] > 5:
-        #     return False
-
-        return True
-
-    # Register the event trigger to trigger the SampleWorkflow when a dependent workflow ends
-    app.register_workflow(
-        SampleWorkflow,
+    await application.setup_server(
+        workflow_class=SampleWorkflow,
         triggers=[
-            EventWorkflowTrigger(
-                should_trigger_workflow=should_trigger_workflow,
-                workflow_class=SampleWorkflow,
+            WorkflowEndEventTrigger(
+                finished_workflow_name="dependent_workflow",
+                finished_workflow_state=WorkflowStates.COMPLETED.value,
             )
         ],
     )
 
-    await app.start()
+    await asyncio.gather(application.start_server(), simulate_worklflow_end_event())
 
 
 async def simulate_worklflow_end_event():
-    await asyncio.sleep(5)
+    await asyncio.sleep(15)
 
     # Simulates that a dependent workflow has ended
-    EventStore.create_event(
+    EventStore.publish_event(
         event=WorkflowEndEvent(
-            workflow_name="dependent_workflow",
-            workflow_id="test",
-            workflow_run_id="test",
-            workflow_output={"output_value": 0},
+            metadata=EventMetadata(
+                workflow_name="dependent_workflow",
+                workflow_state=WorkflowStates.COMPLETED.value,
+                workflow_id="123",
+                workflow_run_id="456",
+                application_name=APPLICATION_NAME,
+                event_published_client_timestamp=int(datetime.now().timestamp()),
+            )
         ),
-        topic_name=EventStore.TOPIC_NAME,
     )
-
-
-async def application_subscriber():
-    # Start the worker
-    await start_worker()
-
-    # Start the workflow and the fast api app
-    ## We start the FastAPI app first, so that it can listen for events
-    ## We regsiter an event trigger in the FastAPI app, so that it can trigger the SampleWorkflow
-    ## When the dependent workflow ends, it will trigger the SampleWorkflow
-    await asyncio.gather(simulate_worklflow_end_event(), start_fast_api_app())
 
 
 if __name__ == "__main__":

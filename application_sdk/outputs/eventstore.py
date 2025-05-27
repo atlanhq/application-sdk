@@ -5,7 +5,8 @@ in the application, including workflow and activity events.
 """
 
 import json
-from datetime import datetime
+from abc import ABC
+from enum import Enum
 from typing import Any, Dict
 
 from dapr import clients
@@ -17,24 +18,62 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 activity.logger = logger
 
-WORKFLOW_END_EVENT = "workflow_end"
-WORKFLOW_START_EVENT = "workflow_start"
-ACTIVITY_START_EVENT = "activity_start"
-ACTIVITY_END_EVENT = "activity_end"
-CUSTOM_EVENT = "custom"
+
+class EventTypes(Enum):
+    APPLICATION_EVENT = "application_events"
 
 
-class Event(BaseModel):
+class ApplicationEventNames(Enum):
+    WORKFLOW_END = "workflow_end"
+    WORKFLOW_START = "workflow_start"
+    ACTIVITY_START = "activity_start"
+    ACTIVITY_END = "activity_end"
+
+
+class WorkflowStates(Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ActivityStates(Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class EventMetadata(BaseModel):
+    application_name: str = Field()
+    event_published_client_timestamp: int = Field()
+
+    # Workflow information
+    workflow_name: str | None = Field()
+    workflow_id: str | None = Field()
+    workflow_run_id: str | None = Field()
+    workflow_state: str | None = Field()
+
+
+class Event(BaseModel, ABC):
     """Base class for all events.
 
     Attributes:
         event_type (str): Type of the event.
     """
 
-    event_type: str = Field(init=False)
+    metadata: EventMetadata
+
+    event_type: str
+    event_name: str
+
+    def get_topic_name(self):
+        return self.event_type + "_topic"
 
 
-class ActivityStartEvent(Event):
+class ApplicationEvent(Event):
+    event_type: str = EventTypes.APPLICATION_EVENT.value
+
+
+class ActivityStartEvent(ApplicationEvent):
     """Event emitted when an activity starts.
 
     Attributes:
@@ -43,14 +82,15 @@ class ActivityStartEvent(Event):
         activity_id (str | None): Unique identifier for the activity.
     """
 
-    event_type: str = Field(default=ACTIVITY_START_EVENT, init=False)
+    event_name: str = ApplicationEventNames.ACTIVITY_START.value
 
     # Activity information (required)
     activity_type: str | None = Field(default=None, init=False)
     activity_id: str | None = Field(default=None, init=False)
+    activity_state: str | None = Field(default=None, init=False)
 
 
-class ActivityEndEvent(Event):
+class ActivityEndEvent(ApplicationEvent):
     """Event emitted when an activity ends.
 
     Attributes:
@@ -59,14 +99,15 @@ class ActivityEndEvent(Event):
         activity_id (str | None): Unique identifier for the activity.
     """
 
-    event_type: str = Field(default=ACTIVITY_END_EVENT, init=False)
+    event_name: str = ApplicationEventNames.ACTIVITY_END.value
 
     # Activity information (required)
     activity_type: str | None = Field(default=None, init=False)
     activity_id: str | None = Field(default=None, init=False)
+    activity_state: str | None = Field(default=None, init=False)
 
 
-class WorkflowEndEvent(Event):
+class WorkflowEndEvent(ApplicationEvent):
     """Event emitted when a workflow ends.
 
     Attributes:
@@ -77,17 +118,12 @@ class WorkflowEndEvent(Event):
         workflow_output (Dict[str, Any]): Output data from the workflow.
     """
 
-    event_type: str = Field(default=WORKFLOW_END_EVENT, init=False)
-
-    # Workflow information (required)
-    workflow_name: str | None = Field(default=None)
-    workflow_id: str | None = Field(default=None)
-    workflow_run_id: str | None = Field(default=None)
+    event_name: str = ApplicationEventNames.WORKFLOW_END.value
 
     workflow_output: Dict[str, Any] = Field(default_factory=dict)
 
 
-class WorkflowStartEvent(Event):
+class WorkflowStartEvent(ApplicationEvent):
     """Event emitted when a workflow starts.
 
     Attributes:
@@ -97,56 +133,7 @@ class WorkflowStartEvent(Event):
         workflow_run_id (str | None): Run identifier for the workflow.
     """
 
-    event_type: str = Field(default=WORKFLOW_START_EVENT, init=False)
-
-    # Workflow information (required)
-    workflow_name: str | None = Field(default=None)
-    workflow_id: str | None = Field(default=None)
-    workflow_run_id: str | None = Field(default=None)
-
-
-class CustomEvent(Event):
-    """Custom event for application-specific events.
-
-    Attributes:
-        event_type (str): Always set to CUSTOM_EVENT.
-        data (Dict[str, Any]): Custom event data.
-    """
-
-    event_type: str = Field(default=CUSTOM_EVENT, init=False)
-    data: Dict[str, Any] = Field(default_factory=dict)
-
-
-class AtlanEvent(BaseModel):
-    """Container for Atlan events with metadata.
-
-    Attributes:
-        data (Union[WorkflowEndEvent, ActivityEndEvent, ActivityStartEvent, CustomEvent]): Event data.
-        datacontenttype (str): Content type of the event data.
-        id (str): Unique identifier for the event.
-        pubsubname (str): Name of the pub/sub system.
-        source (str): Source of the event.
-        specversion (str): Version of the event specification.
-        time (datetime): Timestamp of the event.
-        topic (str): Topic the event was published to.
-        traceid (str): Trace identifier for distributed tracing.
-        traceparent (str): Parent trace information.
-        tracestate (str): Additional trace state.
-        type (str): Type of the event.
-    """
-
-    data: WorkflowEndEvent | ActivityEndEvent | ActivityStartEvent | CustomEvent
-    datacontenttype: str = Field()
-    id: str = Field()
-    pubsubname: str = Field()
-    source: str = Field()
-    specversion: str = Field()
-    time: datetime = Field()
-    topic: str = Field()
-    traceid: str = Field()
-    traceparent: str = Field()
-    tracestate: str = Field()
-    type: str = Field()
+    event_name: str = ApplicationEventNames.WORKFLOW_START.value
 
 
 class EventStore:
@@ -160,10 +147,9 @@ class EventStore:
     """
 
     EVENT_STORE_NAME = "eventstore"
-    TOPIC_NAME = "app_events"
 
     @classmethod
-    def create_event(cls, event: Event, topic_name: str = TOPIC_NAME):
+    def publish_event(cls, event: Event):
         """Create a new generic event.
 
         Args:
@@ -176,9 +162,9 @@ class EventStore:
         with clients.DaprClient() as client:
             client.publish_event(
                 pubsub_name=cls.EVENT_STORE_NAME,
-                topic_name=topic_name,
+                topic_name=event.get_topic_name(),
                 data=json.dumps(event.model_dump(mode="json")),
                 data_content_type="application/json",
             )
 
-        logger.info(f"Published event to {topic_name}")
+        logger.info(f"Published event to {event.get_topic_name()}")

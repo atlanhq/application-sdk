@@ -29,7 +29,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
-from application_sdk.outputs.eventstore import AtlanEvent, EventStore
+from application_sdk.outputs.eventstore import Event, EventStore, WorkflowEndEvent
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
@@ -64,6 +64,42 @@ class HttpWorkflowTrigger(WorkflowTrigger):
 
 class EventWorkflowTrigger(WorkflowTrigger):
     should_trigger_workflow: Callable[[Any], bool]
+
+
+# TODO: Move this to the right place
+class WorkflowEndEventTrigger(EventWorkflowTrigger):
+    finished_workflow_name: str
+    finished_workflow_state: str
+
+    should_trigger_workflow: Callable[[Any], bool]
+
+    def __init__(
+        self,
+        finished_workflow_name: str | None,
+        finished_workflow_state: str | None,
+        *args,
+        **kwargs,
+    ):
+        def should_trigger(event: WorkflowEndEvent):
+            if (
+                finished_workflow_name is not None
+                and finished_workflow_name != event.metadata.workflow_name
+            ):
+                return False
+
+            if (
+                finished_workflow_state is not None
+                and finished_workflow_state != event.metadata.workflow_state
+            ):
+                return False
+
+            return True
+
+        super().__init__(
+            *args,
+            should_trigger_workflow=should_trigger,
+            **kwargs,
+        )
 
 
 class APIServer(ServerInterface):
@@ -345,7 +381,7 @@ class APIServer(ServerInterface):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.home)
         # Mount static files
-        self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
+        # self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
 
     async def get_dapr_subscriptions(
         self,
@@ -359,7 +395,7 @@ class APIServer(ServerInterface):
         return [
             {
                 "pubsubname": EventStore.EVENT_STORE_NAME,
-                "topic": EventStore.TOPIC_NAME,
+                "topic": "application_events_topic",  # DEBUG
                 "routes": {"rules": [{"path": "events/v1/event"}]},
             }
         ]
@@ -378,7 +414,7 @@ class APIServer(ServerInterface):
 
         logger.info("Received event {}", event)
         for trigger in self.event_triggers:
-            if trigger.should_trigger_workflow(AtlanEvent(**event)):
+            if trigger.should_trigger_workflow(Event(**event["data"])):
                 logger.info(
                     "Triggering workflow {} with event {}",
                     trigger.workflow_class,
