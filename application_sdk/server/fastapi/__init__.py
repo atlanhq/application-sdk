@@ -21,6 +21,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    ENABLE_STREAMLIT_BASED_OBSERVABILITY,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -28,7 +29,7 @@ from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
-from application_sdk.observability.observability import DuckDBUI
+from application_sdk.observability.observability import DuckDBUI, StreamlitUI
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
@@ -84,6 +85,7 @@ class APIServer(ServerInterface):
         workflows (List[WorkflowInterface]): List of registered workflows.
         event_triggers (List[EventWorkflowTrigger]): List of event-based workflow triggers.
         duckdb_ui (DuckDBUI): Instance of DuckDBUI for handling DuckDB UI functionality.
+        streamlit_ui (StreamlitUI): Instance of StreamlitUI for handling Streamlit UI functionality.
 
     Args:
         lifespan: Optional lifespan manager for the FastAPI application.
@@ -100,6 +102,7 @@ class APIServer(ServerInterface):
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
     duckdb_ui: DuckDBUI
+    streamlit_ui: StreamlitUI
 
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
@@ -126,6 +129,7 @@ class APIServer(ServerInterface):
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
+        self.streamlit_ui = StreamlitUI()
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -155,10 +159,15 @@ class APIServer(ServerInterface):
         super().__init__(handler)
 
     def observability(self, request: Request) -> RedirectResponse:
-        """Endpoint to launch DuckDB UI for log self-serve exploration."""
-        self.duckdb_ui.start_ui()
-        # Redirect to the local DuckDB UI
-        return RedirectResponse(url="http://0.0.0.0:4213")
+        """Endpoint to launch observability UI for log self-serve exploration."""
+        if ENABLE_STREAMLIT_BASED_OBSERVABILITY:
+            self.streamlit_ui.start_ui()
+            # Redirect to the local Streamlit UI
+            return RedirectResponse(url="http://0.0.0.0:8501")
+        else:
+            self.duckdb_ui.start_ui()
+            # Redirect to the local DuckDB UI
+            return RedirectResponse(url="http://0.0.0.0:4213")
 
     def setup_atlan_docs(self):
         """Set up and serve Atlan documentation.

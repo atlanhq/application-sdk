@@ -658,3 +658,41 @@ class DuckDBUI:
             # Start DuckDB UI
             con.execute("CALL start_ui();")
             self._duckdb_ui_con = con
+
+
+class StreamlitUI:
+    """Class to handle Streamlit-based observability UI functionality."""
+
+    def __init__(self, db_path="/tmp/observability/observability.db"):
+        """Initialize the Streamlit UI handler."""
+        self.db_path = db_path
+        self._streamlit_process = None
+
+    def _is_streamlit_running(self, host="0.0.0.0", port=8501):
+        """Check if Streamlit is already running on the default port."""
+        import socket
+
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            result = sock.connect_ex((host, port))
+            return result == 0
+
+    def start_ui(self, db_path=OBSERVABILITY_DIR):
+        """Start Streamlit UI and create views for Hive partitioned parquet files."""
+        if not self._is_streamlit_running():
+            import subprocess
+            import sys
+            import os
+            import shutil
+
+            # Copy the streamlit UI file to the observability directory
+            streamlit_app_path = os.path.join(OBSERVABILITY_DIR, "streamlit_app.py")
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            source_file = os.path.join(current_dir, "streamlit_ui.py")
+            shutil.copy2(source_file, streamlit_app_path)
+
+            # Start Streamlit in a subprocess
+            self._streamlit_process = subprocess.Popen(
+                [sys.executable, "-m", "streamlit", "run", streamlit_app_path],
+                cwd=OBSERVABILITY_DIR
+            )

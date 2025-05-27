@@ -122,6 +122,9 @@ AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 #: Directory for storing observability data
 OBSERVABILITY_DIR = os.environ.get("ATLAN_OBSERVABILITY_DIR", "/tmp/observability")
 
+# Enable Streamlit-based observability UI
+ENABLE_STREAMLIT_BASED_OBSERVABILITY = os.getenv("ATLAN_ENABLE_STREAMLIT_BASED_OBSERVABILITY", "false").lower() == "true"
+
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
 LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
