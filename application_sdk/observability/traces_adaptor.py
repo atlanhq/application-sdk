@@ -76,6 +76,13 @@ class TracingContext:
     cleanup and error handling. It records both traces and metrics for successful
     and failed operations.
 
+    Attributes:
+        logger: Logger instance for operation logging.
+        metrics: Metrics adapter for recording operation metrics.
+        traces: Traces adapter for recording operation traces.
+        trace_id: Unique identifier for the trace.
+        parent_span_id: Optional parent span ID for trace hierarchy.
+
     Example:
         ```python
         tracing = TracingContext(logger, metrics, traces, trace_id)
@@ -96,11 +103,11 @@ class TracingContext:
         """Initialize the tracing context.
 
         Args:
-            logger: Logger instance for operation logging
-            metrics: Metrics adapter for recording operation metrics
-            traces: Traces adapter for recording operation traces
-            trace_id: Unique identifier for the trace
-            parent_span_id: Optional parent span ID for trace hierarchy
+            logger: Logger instance for operation logging.
+            metrics: Metrics adapter for recording operation metrics.
+            traces: Traces adapter for recording operation traces.
+            trace_id: Unique identifier for the trace.
+            parent_span_id: Optional parent span ID for trace hierarchy.
         """
         self.logger = logger
         self.metrics = metrics
@@ -113,14 +120,14 @@ class TracingContext:
         """Context manager for tracing operations with automatic cleanup.
 
         Args:
-            operation_name: Name of the operation being traced
-            description: Description of the operation for logging
+            operation_name: Name of the operation being traced.
+            description: Description of the operation for logging.
 
         Yields:
-            str: The span ID for the operation
+            str: The span ID for the operation.
 
         Raises:
-            Exception: Re-raises any exception that occurs during the operation
+            Exception: Re-raises any exception that occurs during the operation.
         """
         span_id = str(uuid.uuid4())
         start_time = time.time()
@@ -148,7 +155,13 @@ class TracingContext:
     def _record_success_trace(
         self, operation_name: str, span_id: str, duration_ms: float
     ):
-        """Record successful operation trace."""
+        """Record successful operation trace.
+
+        Args:
+            operation_name: Name of the operation.
+            span_id: Unique identifier for the span.
+            duration_ms: Duration of the operation in milliseconds.
+        """
         self.traces.record_trace(
             name=operation_name,
             trace_id=self.trace_id,
@@ -164,7 +177,14 @@ class TracingContext:
     def _record_failure_trace(
         self, operation_name: str, span_id: str, duration_ms: float, error: str
     ):
-        """Record failed operation trace."""
+        """Record failed operation trace.
+
+        Args:
+            operation_name: Name of the operation.
+            span_id: Unique identifier for the span.
+            duration_ms: Duration of the operation in milliseconds.
+            error: Error message describing the failure.
+        """
         self.traces.record_trace(
             name=operation_name,
             trace_id=self.trace_id,
@@ -184,7 +204,11 @@ class TracingContext:
         )
 
     def _record_success_metric(self, operation_name: str):
-        """Record successful operation metric."""
+        """Record successful operation metric.
+
+        Args:
+            operation_name: Name of the operation.
+        """
         self.metrics.record_metric(
             name=f"{operation_name}_success",
             value=1,
@@ -195,7 +219,12 @@ class TracingContext:
         )
 
     def _record_failure_metric(self, operation_name: str, error: str):
-        """Record failed operation metric."""
+        """Record failed operation metric.
+
+        Args:
+            operation_name: Name of the operation.
+            error: Error message describing the failure.
+        """
         self.metrics.record_metric(
             name=f"{operation_name}_failure",
             value=1,
