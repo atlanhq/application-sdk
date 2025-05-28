@@ -379,7 +379,7 @@ class TemporalWorkflowClient(WorkflowClient):
         if activity_executor is None:
             activity_executor = ThreadPoolExecutor(
                 max_workers=max_concurrent_activities or 5,
-                thread_name_prefix="temporal-activity-",
+                thread_name_prefix="activity-pool-",
             )
 
         return Worker(
