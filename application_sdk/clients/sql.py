@@ -236,7 +236,7 @@ class BaseSQLClient(ClientInterface):
 
         return connection_string
 
-    def update_dialect_in_url(self, sqlalchemy_url: str) -> str:
+    def get_supported_sqlalchemy_url(self, sqlalchemy_url: str) -> str:
         """Update the dialect in the URL if it is different from the installed dialect.
 
         Args:
@@ -269,8 +269,7 @@ class BaseSQLClient(ClientInterface):
         # If the compiled_url is present, use it directly
         sqlalchemy_url = extra.get("compiled_url")
         if sqlalchemy_url:
-            sqlalchemy_url = self.update_dialect_in_url(sqlalchemy_url)
-            return sqlalchemy_url
+            return self.get_supported_sqlalchemy_url(sqlalchemy_url)
 
         auth_token = self.get_auth_token()
 
