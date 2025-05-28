@@ -106,8 +106,14 @@ from application_sdk.inputs.statestore import StateStoreInput
 @workflow.run
 async def run(self, workflow_config: Dict[str, Any]) -> None:
     workflow_id = workflow_config["workflow_id"]
-    # Get workflow arguments using StateStoreInput
-    workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(workflow_id)
+    # Get the workflow configuration from the state store
+    workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+        self.activities_cls.get_workflow_args,
+        workflow_config,  # Pass the whole config containing workflow_id
+        retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+        start_to_close_timeout=self.default_start_to_close_timeout,
+        heartbeat_timeout=self.default_heartbeat_timeout,
+    )
     # ... proceed with workflow logic using workflow_args ...
 ```
 
