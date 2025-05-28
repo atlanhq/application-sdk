@@ -1,5 +1,6 @@
 import asyncio
-from typing import Any, Callable, Dict, Sequence
+from datetime import timedelta
+from typing import Any, Callable, Dict, Sequence, cast
 
 from temporalio import activity, workflow
 
@@ -18,23 +19,28 @@ logger = get_logger(__name__)
 class HelloWorldWorkflow(WorkflowInterface):
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
-        logger.info("HELLO WORLD")
+        activities = HelloWorldActivities()
+
+        await workflow.execute_activity_method(
+            activities.demo_activity,
+            args=[workflow_config],
+            start_to_close_timeout=timedelta(seconds=10),
+            heartbeat_timeout=timedelta(seconds=10),
+        )
 
     @staticmethod
     def get_activities(activities: ActivitiesInterface) -> Sequence[Callable[..., Any]]:
+        activities = cast(HelloWorldActivities, activities)
         return [
-            activities.preflight_check,
+            activities.demo_activity,
         ]
 
 
 class HelloWorldActivities(ActivitiesInterface):
-    async def _set_state(self, workflow_args: Dict[str, Any]) -> None:
-        return
-
     @activity.defn
     @auto_heartbeater
-    async def preflight_check(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
-        return {"message": "Preflight check completed successfully"}
+    async def demo_activity(self, workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+        return {"message": "Demo activity completed successfully"}
 
 
 async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
@@ -51,7 +57,7 @@ async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
 
     # start workflow
     workflow_response = await app.start_workflow(
-        workflow_args={}, workflow_class=HelloWorldWorkflow
+        workflow_args={"workflow_id": "hello-world"}, workflow_class=HelloWorldWorkflow
     )
 
     # start worker
