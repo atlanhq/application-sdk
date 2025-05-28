@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Type
 
 from application_sdk.application import BaseApplication
@@ -62,6 +63,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             BaseSQLMetadataExtractionActivities
         ] = BaseSQLMetadataExtractionActivities,
         passthrough_modules: List[str] = [],
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
@@ -71,7 +73,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             activities_class (Type): Activities class to use for workflow activities. Defaults to BaseSQLMetadataExtractionActivities.
             worker_daemon_mode (bool): Whether to run the worker in daemon mode. Defaults to True.
             passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
-
+            activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
 
         # load the workflow client
@@ -97,6 +99,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_classes=workflow_classes,
             workflow_activities=all_activities,
             passthrough_modules=passthrough_modules,
+            activity_executor=activity_executor,
         )
 
     async def start_workflow(
