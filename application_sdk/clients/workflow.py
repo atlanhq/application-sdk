@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from enum import Enum
 from typing import Any, Dict, Optional, Sequence, Type
 
@@ -132,6 +133,7 @@ class WorkflowClient(ABC):
         workflow_classes: Sequence[Any],
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = None,
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ) -> Any:
         """Create a worker for executing workflow activities.
 
@@ -148,6 +150,7 @@ class WorkflowClient(ABC):
             max_concurrent_activities (Optional[int], optional): Maximum number
                 of activities that can run concurrently. None means no limit.
                 Defaults to None.
+            activity_executor (ThreadPoolExecutor | None): Executor for running activities.
 
         Returns:
             Any: A worker instance specific to the implementation.
