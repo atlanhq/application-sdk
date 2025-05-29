@@ -67,7 +67,6 @@ def _record_success_observability(
 
     # Log completion
     logger.debug(f"Completed function {func_name} in {duration_ms:.2f}ms")
-    logger.info(f"Completed {func_name} in {duration_ms:.2f}ms")
 
 
 def _record_error_observability(
@@ -183,7 +182,6 @@ def observability(
             try:
                 # Log start of operation
                 logger.debug(f"Starting async function {func_name}")
-                logger.info(f"Starting {func_name}")
 
                 # Execute the function
                 result = await func(*args, **kwargs)
@@ -229,7 +227,6 @@ def observability(
             try:
                 # Log start of operation
                 logger.debug(f"Starting sync function {func_name}")
-                logger.info(f"Starting {func_name}")
 
                 # Execute the function
                 result = func(*args, **kwargs)
