@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import threading
-from time import time
+import time
 from typing import Any, Dict, Optional
 
 from opentelemetry import trace
@@ -396,7 +396,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
                 if trace_record.events:
                     for event in trace_record.events:
                         # Convert timestamp to nanoseconds
-                        timestamp = event.get("timestamp", time())
+                        timestamp = event.get("timestamp", time.time())
                         timestamp_nanos = self._timestamp_to_nanos(timestamp)
 
                         span.add_event(
@@ -473,7 +473,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
         try:
             # Create trace record
             trace_record = TraceRecord(
-                timestamp=time(),
+                timestamp=time.time(),
                 trace_id=trace_id,
                 span_id=span_id,
                 parent_span_id=parent_span_id,

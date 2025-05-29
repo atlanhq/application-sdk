@@ -5,6 +5,12 @@ from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.observability.decorators.observability_decorator import (
+    observability,
+)
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.worker import Worker
@@ -12,6 +18,10 @@ from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionWorkflow,
 )
+
+logger = get_logger(__name__)
+metrics = get_metrics()
+traces = get_traces()
 
 
 class BaseSQLMetadataExtractionApplication(BaseApplication):
@@ -54,6 +64,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             application_name=self.application_name
         )
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
         self,
         workflow_classes: List[Type[BaseSQLMetadataExtractionWorkflow]] = [
@@ -102,6 +113,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             activity_executor=activity_executor,
         )
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_workflow(
         self,
         workflow_args: Dict[str, Any],
@@ -128,6 +140,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         )
         return workflow_response
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_worker(self, daemon: bool = True):
         """
         Start the worker for the SQL metadata extraction application.
@@ -136,6 +149,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
         self,
         workflow_class: Type[
