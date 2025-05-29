@@ -2,8 +2,6 @@ import asyncio
 import logging
 import threading
 import time
-import uuid
-from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from opentelemetry import trace
@@ -15,7 +13,6 @@ from opentelemetry.trace import SpanKind
 from pydantic import BaseModel
 
 from application_sdk.constants import (
-    APPLICATION_NAME,
     ENABLE_OTLP_TRACES,
     OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
@@ -32,7 +29,6 @@ from application_sdk.constants import (
     TRACES_RETENTION_DAYS,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.observability.observability import AtlanObservability
 
 
@@ -67,172 +63,6 @@ class TraceRecord(BaseModel):
     attributes: Dict[str, Any]
     events: Optional[list[Dict[str, Any]]] = None
     duration_ms: float
-
-
-class TracingContext:
-    """Simplified tracing context manager for operations.
-
-    This class provides a context manager for tracing operations with automatic
-    cleanup and error handling. It records both traces and metrics for successful
-    and failed operations.
-
-    Attributes:
-        logger: Logger instance for operation logging.
-        metrics: Metrics adapter for recording operation metrics.
-        traces: Traces adapter for recording operation traces.
-        trace_id: Unique identifier for the trace.
-        parent_span_id: Optional parent span ID for trace hierarchy.
-
-    Example:
-        ```python
-        tracing = TracingContext(logger, metrics, traces, trace_id)
-        async with tracing.trace_operation("my_operation", "Description"):
-            # Your operation code here
-            pass
-        ```
-    """
-
-    def __init__(
-        self,
-        logger,
-        metrics,
-        traces,
-        trace_id: str,
-        parent_span_id: Optional[str] = None,
-    ):
-        """Initialize the tracing context.
-
-        Args:
-            logger: Logger instance for operation logging.
-            metrics: Metrics adapter for recording operation metrics.
-            traces: Traces adapter for recording operation traces.
-            trace_id: Unique identifier for the trace.
-            parent_span_id: Optional parent span ID for trace hierarchy.
-        """
-        self.logger = logger
-        self.metrics = metrics
-        self.traces = traces
-        self.trace_id = trace_id
-        self.parent_span_id = parent_span_id
-
-    @asynccontextmanager
-    async def trace_operation(self, operation_name: str, description: str):
-        """Context manager for tracing operations with automatic cleanup.
-
-        Args:
-            operation_name: Name of the operation being traced.
-            description: Description of the operation for logging.
-
-        Yields:
-            str: The span ID for the operation.
-
-        Raises:
-            Exception: Re-raises any exception that occurs during the operation.
-        """
-        span_id = str(uuid.uuid4())
-        start_time = time.time()
-
-        self.logger.info(description)
-
-        try:
-            yield span_id
-
-            # Success metrics and traces
-            duration_ms = (time.time() - start_time) * 1000
-
-            self._record_success_trace(operation_name, span_id, duration_ms)
-            self._record_success_metric(operation_name)
-
-        except Exception as e:
-            # Failure metrics and traces
-            duration_ms = (time.time() - start_time) * 1000
-
-            self._record_failure_trace(operation_name, span_id, duration_ms, str(e))
-            self._record_failure_metric(operation_name, str(e))
-
-            raise
-
-    def _record_success_trace(
-        self, operation_name: str, span_id: str, duration_ms: float
-    ):
-        """Record successful operation trace.
-
-        Args:
-            operation_name: Name of the operation.
-            span_id: Unique identifier for the span.
-            duration_ms: Duration of the operation in milliseconds.
-        """
-        self.traces.record_trace(
-            name=operation_name,
-            trace_id=self.trace_id,
-            span_id=span_id,
-            kind="INTERNAL",
-            status_code="OK",
-            parent_span_id=self.parent_span_id,
-            attributes={"application": APPLICATION_NAME, "operation": operation_name},
-            events=[{"name": f"{operation_name}_success", "timestamp": time.time()}],
-            duration_ms=duration_ms,
-        )
-
-    def _record_failure_trace(
-        self, operation_name: str, span_id: str, duration_ms: float, error: str
-    ):
-        """Record failed operation trace.
-
-        Args:
-            operation_name: Name of the operation.
-            span_id: Unique identifier for the span.
-            duration_ms: Duration of the operation in milliseconds.
-            error: Error message describing the failure.
-        """
-        self.traces.record_trace(
-            name=operation_name,
-            trace_id=self.trace_id,
-            span_id=span_id,
-            kind="INTERNAL",
-            status_code="ERROR",
-            parent_span_id=self.parent_span_id,
-            attributes={"application": APPLICATION_NAME, "operation": operation_name},
-            events=[
-                {
-                    "name": f"{operation_name}_failure",
-                    "timestamp": time.time(),
-                    "attributes": {"error": error},
-                }
-            ],
-            duration_ms=duration_ms,
-        )
-
-    def _record_success_metric(self, operation_name: str):
-        """Record successful operation metric.
-
-        Args:
-            operation_name: Name of the operation.
-        """
-        self.metrics.record_metric(
-            name=f"{operation_name}_success",
-            value=1,
-            metric_type=MetricType.COUNTER,
-            labels={"application": APPLICATION_NAME},
-            description=f"Successful {operation_name.replace('_', ' ')}",
-            unit="count",
-        )
-
-    def _record_failure_metric(self, operation_name: str, error: str):
-        """Record failed operation metric.
-
-        Args:
-            operation_name: Name of the operation.
-            error: Error message describing the failure.
-        """
-        self.metrics.record_metric(
-            name=f"{operation_name}_failure",
-            value=1,
-            metric_type=MetricType.COUNTER,
-            labels={"application": APPLICATION_NAME, "error": error},
-            description=f"Failed {operation_name.replace('_', ' ')}",
-            unit="count",
-        )
 
 
 class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
