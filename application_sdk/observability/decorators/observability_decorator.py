@@ -3,11 +3,12 @@ import inspect
 import logging
 import time
 import uuid
-from typing import Any, Callable, Optional, TypeVar, cast
+from typing import Any, Callable, TypeVar, cast
 
 from application_sdk.observability.metrics_adaptor import MetricType
 
-T = TypeVar('T')
+T = TypeVar("T")
+
 
 def observability(
     logger: Any,
@@ -36,7 +37,9 @@ def observability(
         ```
     """
     # Debug logging to verify decorator initialization
-    logging.info(f"Initializing observability decorator with logger={logger}, metrics={metrics}, traces={traces}")
+    logging.info(
+        f"Initializing observability decorator with logger={logger}, metrics={metrics}, traces={traces}"
+    )
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         # Get function metadata
@@ -66,7 +69,9 @@ def observability(
                 duration_ms = (time.time() - start_time) * 1000
 
                 # Debug logging before recording trace
-                logging.info(f"Recording success trace for {func_name} with trace_id={trace_id}, span_id={span_id}")
+                logging.info(
+                    f"Recording success trace for {func_name} with trace_id={trace_id}, span_id={span_id}"
+                )
 
                 try:
                     # Record success trace
@@ -81,12 +86,16 @@ def observability(
                             "description": func_doc,
                             "module": func.__module__,
                         },
-                        events=[{"name": f"{func_name}_success", "timestamp": time.time()}],
+                        events=[
+                            {"name": f"{func_name}_success", "timestamp": time.time()}
+                        ],
                         duration_ms=duration_ms,
                     )
                     logging.info(f"Successfully recorded trace for {func_name}")
                 except Exception as trace_error:
-                    logging.error(f"Failed to record trace for {func_name}: {str(trace_error)}")
+                    logging.error(
+                        f"Failed to record trace for {func_name}: {str(trace_error)}"
+                    )
 
                 # Debug logging before recording metric
                 logging.info(f"Recording success metric for {func_name}")
@@ -103,10 +112,14 @@ def observability(
                     )
                     logging.info(f"Successfully recorded metric for {func_name}")
                 except Exception as metric_error:
-                    logging.error(f"Failed to record metric for {func_name}: {str(metric_error)}")
+                    logging.error(
+                        f"Failed to record metric for {func_name}: {str(metric_error)}"
+                    )
 
                 # Log completion
-                logging.info(f"Completed async function {func_name} in {duration_ms:.2f}ms")
+                logging.info(
+                    f"Completed async function {func_name} in {duration_ms:.2f}ms"
+                )
                 logger.info(f"Completed {func_name} in {duration_ms:.2f}ms")
 
                 return result
@@ -142,7 +155,9 @@ def observability(
                     )
                     logging.info(f"Successfully recorded error trace for {func_name}")
                 except Exception as trace_error:
-                    logging.error(f"Failed to record error trace for {func_name}: {str(trace_error)}")
+                    logging.error(
+                        f"Failed to record error trace for {func_name}: {str(trace_error)}"
+                    )
 
                 try:
                     # Record failure metric
@@ -156,7 +171,9 @@ def observability(
                     )
                     logging.info(f"Successfully recorded error metric for {func_name}")
                 except Exception as metric_error:
-                    logging.error(f"Failed to record error metric for {func_name}: {str(metric_error)}")
+                    logging.error(
+                        f"Failed to record error metric for {func_name}: {str(metric_error)}"
+                    )
 
                 # Log error
                 logger.error(f"Error in {func_name}: {str(e)}")
@@ -182,7 +199,9 @@ def observability(
                 duration_ms = (time.time() - start_time) * 1000
 
                 # Debug logging before recording trace
-                logging.info(f"Recording success trace for {func_name} with trace_id={trace_id}, span_id={span_id}")
+                logging.info(
+                    f"Recording success trace for {func_name} with trace_id={trace_id}, span_id={span_id}"
+                )
 
                 try:
                     # Record success trace
@@ -197,12 +216,16 @@ def observability(
                             "description": func_doc,
                             "module": func.__module__,
                         },
-                        events=[{"name": f"{func_name}_success", "timestamp": time.time()}],
+                        events=[
+                            {"name": f"{func_name}_success", "timestamp": time.time()}
+                        ],
                         duration_ms=duration_ms,
                     )
                     logging.info(f"Successfully recorded trace for {func_name}")
                 except Exception as trace_error:
-                    logging.error(f"Failed to record trace for {func_name}: {str(trace_error)}")
+                    logging.error(
+                        f"Failed to record trace for {func_name}: {str(trace_error)}"
+                    )
 
                 # Debug logging before recording metric
                 logging.info(f"Recording success metric for {func_name}")
@@ -219,10 +242,14 @@ def observability(
                     )
                     logging.info(f"Successfully recorded metric for {func_name}")
                 except Exception as metric_error:
-                    logging.error(f"Failed to record metric for {func_name}: {str(metric_error)}")
+                    logging.error(
+                        f"Failed to record metric for {func_name}: {str(metric_error)}"
+                    )
 
                 # Log completion
-                logging.info(f"Completed sync function {func_name} in {duration_ms:.2f}ms")
+                logging.info(
+                    f"Completed sync function {func_name} in {duration_ms:.2f}ms"
+                )
                 logger.info(f"Completed {func_name} in {duration_ms:.2f}ms")
 
                 return result
@@ -258,7 +285,9 @@ def observability(
                     )
                     logging.info(f"Successfully recorded error trace for {func_name}")
                 except Exception as trace_error:
-                    logging.error(f"Failed to record error trace for {func_name}: {str(trace_error)}")
+                    logging.error(
+                        f"Failed to record error trace for {func_name}: {str(trace_error)}"
+                    )
 
                 try:
                     # Record failure metric
@@ -272,7 +301,9 @@ def observability(
                     )
                     logging.info(f"Successfully recorded error metric for {func_name}")
                 except Exception as metric_error:
-                    logging.error(f"Failed to record error metric for {func_name}: {str(metric_error)}")
+                    logging.error(
+                        f"Failed to record error metric for {func_name}: {str(metric_error)}"
+                    )
 
                 # Log error
                 logger.error(f"Error in {func_name}: {str(e)}")
@@ -282,4 +313,4 @@ def observability(
         # Return appropriate wrapper based on function type
         return cast(Callable[..., T], async_wrapper if is_async else sync_wrapper)
 
-    return decorator 
+    return decorator
