@@ -1,0 +1,25 @@
+changelog:
+  exclude:
+    labels:
+      - ignore
+    authors:
+      - octocat
+      - atlan-ci
+  categories:
+    - title: 🎉 New Features
+      labels:
+        - feature
+        - enhancement
+    - title: ⛑️ Breaking Changes
+      labels:
+        - breaking
+    - title: 🧪 Experimental
+      labels:
+        - experimental
+    - title: 🐞 Bug Fixes
+      labels:
+        - bug
+        - bugfix
+    - title: 🥗 QOL Improvements
+      labels:
+        - "*"
