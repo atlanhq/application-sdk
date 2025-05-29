@@ -2,7 +2,7 @@ import functools
 import inspect
 import time
 import uuid
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, Awaitable, Callable, TypeVar, Union, cast
 
 from application_sdk.observability.metrics_adaptor import MetricType
 
@@ -13,7 +13,7 @@ def observability(
     logger: Any,
     metrics: Any,
     traces: Any,
-) -> Callable[[Callable[..., T]], Callable[..., T]]:
+) -> Callable[[Callable[..., T]], Callable[..., Union[T, Awaitable[T]]]]:
     """Decorator for adding observability to functions.
 
     This decorator records traces and metrics for both successful and failed function executions.
@@ -36,7 +36,7 @@ def observability(
         ```
     """
 
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
+    def decorator(func: Callable[..., T]) -> Callable[..., Union[T, Awaitable[T]]]:
         # Get function metadata
         func_name = func.__name__
         is_async = inspect.iscoroutinefunction(func)
@@ -57,7 +57,10 @@ def observability(
             )
 
         # Return appropriate wrapper based on function type
-        return cast(Callable[..., T], async_wrapper if is_async else sync_wrapper)
+        return cast(
+            Callable[..., Union[T, Awaitable[T]]],
+            async_wrapper if is_async else sync_wrapper,
+        )
 
     return decorator
 
