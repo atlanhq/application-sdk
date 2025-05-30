@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional
 
 from application_sdk.clients.utils import get_workflow_client
@@ -43,6 +44,7 @@ class BaseApplication:
         workflow_classes,
         activities_class,
         passthrough_modules: List[str] = [],
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """
         Set up the workflow client and start the worker for the application.
@@ -51,6 +53,7 @@ class BaseApplication:
             workflow_classes (list): The workflow classes for the application.
             activities_class (ActivitiesInterface): The activities class for the application.
             passthrough_modules (list): The modules to pass through to the worker.
+            activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
         await self.workflow_client.load()
         activities = activities_class()
@@ -60,6 +63,7 @@ class BaseApplication:
             workflow_classes=workflow_classes,
             workflow_activities=workflow_class.get_activities(activities),
             passthrough_modules=passthrough_modules,
+            activity_executor=activity_executor,
         )
 
     async def start_workflow(self, workflow_args, workflow_class) -> Any:

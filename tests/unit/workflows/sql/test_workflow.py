@@ -34,9 +34,10 @@ def test_get_activities():
 
     activity_sequence = workflow.get_activities(activities)
 
-    assert len(activity_sequence) == 7
+    assert len(activity_sequence) == 8
     assert activity_sequence == [
         activities.preflight_check,
+        activities.get_workflow_args,
         activities.fetch_databases,
         activities.fetch_schemas,
         activities.fetch_tables,
