@@ -39,6 +39,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[QueryBasedTransformer]] = None,
+        server: Optional[APIServer] = None,
     ):
         """
         Initialize the SQL metadata extraction application.
@@ -48,6 +49,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             client_class (Type[BaseSQLClient]): SQL client class for source connectivity.
             handler_class (Optional[Type[HandlerInterface]]): Handler class for preflight checks and metadata logic. Defaults to BaseSQLHandler.
             transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to QueryBasedTransformer.
+            server (Optional[APIServer]): Server for the application. Defaults to None.
         """
         self.application_name = name
         self.transformer_class = transformer_class or QueryBasedTransformer
@@ -55,7 +57,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.handler_class = handler_class or BaseSQLHandler
 
         # setup application server. serves the UI, and handles the various triggers
-        self.application = None
+        self.server = server
 
         self.worker = None
 
@@ -169,14 +171,14 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             await self.workflow_client.load()
 
         # setup application server. serves the UI, and handles the various triggers
-        self.application = APIServer(
+        self.server = APIServer(
             handler=self.handler_class(sql_client=self.client_class()),
             workflow_client=self.workflow_client,
         )
 
         # register the workflow on the application server
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint
-        self.application.register_workflow(
+        self.server.register_workflow(
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
