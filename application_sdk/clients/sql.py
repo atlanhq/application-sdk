@@ -336,8 +336,10 @@ class BaseSQLClient(ClientInterface):
             try:
                 from sqlalchemy import text
 
+                # Convert text object to string if needed
+                query_str = query.text if hasattr(query, 'text') else query
                 cursor = await loop.run_in_executor(
-                    pool, self.connection.execute, text(query)
+                    pool, self.connection.execute, text(query_str)
                 )
                 if not cursor or not cursor.cursor:
                     raise ValueError("Cursor is not supported")
@@ -439,13 +441,16 @@ class AsyncBaseSQLClient(BaseSQLClient):
         try:
             from sqlalchemy import text
 
+            # Convert text object to string if needed
+            query_str = query.text if hasattr(query, 'text') else query
+
             if use_server_side_cursor:
                 await self.connection.execution_options(yield_per=batch_size)
 
             result = (
-                await self.connection.stream(text(query))
+                await self.connection.stream(text(query_str))
                 if use_server_side_cursor
-                else await self.connection.execute(text(query))
+                else await self.connection.execute(text(query_str))
             )
 
             column_names = list(result.keys())

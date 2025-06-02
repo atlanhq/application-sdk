@@ -63,9 +63,25 @@ class SQLQueryInput(Input):
         """
         import pandas as pd
         from sqlalchemy import text
+        from sqlalchemy.sql.elements import TextClause
 
         conn = session.connection()
-        return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+        try:
+            # First try using SQLAlchemy's execute
+            if isinstance(self.query, TextClause):
+                result = conn.execute(self.query)
+                return pd.DataFrame(result.fetchall(), columns=result.keys())
+            else:
+                # Try to get the underlying DBAPI connection
+                dbapi_conn = getattr(conn, 'connection', None)
+                if dbapi_conn is not None:
+                    return pd.read_sql_query(self.query, dbapi_conn, chunksize=self.chunk_size)
+                # Fallback to SQLAlchemy execute
+                result = conn.execute(text(self.query))
+                return pd.DataFrame(result.fetchall(), columns=result.keys())
+        except Exception as e:
+            logger.error(f"Error executing query: {str(e)}")
+            raise
 
     def _execute_query_daft(
         self,
@@ -99,8 +115,25 @@ class SQLQueryInput(Input):
         with self.engine.connect() as conn:
             import pandas as pd
             from sqlalchemy import text
+            from sqlalchemy.sql.elements import TextClause
 
-            return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+            try:
+                # First try using SQLAlchemy's execute
+                if isinstance(self.query, TextClause):
+                    result = conn.execute(self.query)
+                    return pd.DataFrame(result.fetchall(), columns=result.keys())
+                else:
+                    # Try to get the underlying DBAPI connection
+                    dbapi_conn = getattr(conn, 'connection', None)
+                    if dbapi_conn is not None:
+                        return pd.read_sql_query(self.query, dbapi_conn, chunksize=self.chunk_size)
+                    # Fallback to SQLAlchemy execute
+                    result = conn.execute(text(self.query))
+                    return pd.DataFrame(result.fetchall(), columns=result.keys())
+                
+            except Exception as e:
+                logger.error(f"Error executing query: {str(e)}")
+                raise
 
     async def get_batched_dataframe(
         self,
@@ -183,7 +216,7 @@ class SQLQueryInput(Input):
 
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-            raise e
+            raise
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.
