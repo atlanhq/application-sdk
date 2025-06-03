@@ -73,9 +73,11 @@ class SQLQueryInput(Input):
                 return pd.DataFrame(result.fetchall(), columns=result.keys())
             else:
                 # Try to get the underlying DBAPI connection
-                dbapi_conn = getattr(conn, 'connection', None)
+                dbapi_conn = getattr(conn, "connection", None)
                 if dbapi_conn is not None:
-                    return pd.read_sql_query(self.query, dbapi_conn, chunksize=self.chunk_size)
+                    return pd.read_sql_query(
+                        self.query, dbapi_conn, chunksize=self.chunk_size
+                    )
                 # Fallback to SQLAlchemy execute
                 result = conn.execute(text(self.query))
                 return pd.DataFrame(result.fetchall(), columns=result.keys())
@@ -124,13 +126,15 @@ class SQLQueryInput(Input):
                     return pd.DataFrame(result.fetchall(), columns=result.keys())
                 else:
                     # Try to get the underlying DBAPI connection
-                    dbapi_conn = getattr(conn, 'connection', None)
+                    dbapi_conn = getattr(conn, "connection", None)
                     if dbapi_conn is not None:
-                        return pd.read_sql_query(self.query, dbapi_conn, chunksize=self.chunk_size)
+                        return pd.read_sql_query(
+                            self.query, dbapi_conn, chunksize=self.chunk_size
+                        )
                     # Fallback to SQLAlchemy execute
                     result = conn.execute(text(self.query))
                     return pd.DataFrame(result.fetchall(), columns=result.keys())
-                
+
             except Exception as e:
                 logger.error(f"Error executing query: {str(e)}")
                 raise
