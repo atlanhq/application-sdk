@@ -336,8 +336,6 @@ class BaseSQLClient(ClientInterface):
             try:
                 from sqlalchemy import text
 
-                # Convert text object to string if needed
-                # query_str = query.text if hasattr(query, "text") else query
                 cursor = await loop.run_in_executor(
                     pool, self.connection.execute, text(query)
                 )
@@ -440,9 +438,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
         try:
             from sqlalchemy import text
-
-            # Convert text object to string if needed
-            # query_str = query.text if hasattr(query, "text") else query
 
             if use_server_side_cursor:
                 await self.connection.execution_options(yield_per=batch_size)
