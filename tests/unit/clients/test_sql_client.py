@@ -639,7 +639,7 @@ def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_c
             "compiled_url": "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
         }
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
@@ -655,7 +655,7 @@ def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect
             "compiled_url": "postgresql+psycopg2://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
         }
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
