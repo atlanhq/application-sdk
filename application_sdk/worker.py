@@ -6,6 +6,7 @@ including their initialization, configuration, and execution.
 
 import asyncio
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional, Sequence
 
 import uvloop
@@ -58,6 +59,7 @@ class Worker:
         passthrough_modules: List[str] = [],
         workflow_classes: Sequence[ClassType] = [],
         max_concurrent_activities: Optional[int] = None,
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """Initialize the Worker.
 
@@ -72,6 +74,8 @@ class Worker:
                 Defaults to empty list.
             max_concurrent_activities: Maximum number of activities that can run
                 concurrently. Defaults to None (no limit).
+            activity_executor: Executor for running activities.
+                Defaults to None (uses a default thread pool executor).
 
         Returns:
             None
@@ -88,6 +92,11 @@ class Worker:
             set(passthrough_modules + self.default_passthrough_modules)
         )
         self.max_concurrent_activities = max_concurrent_activities
+
+        self.activity_executor = activity_executor or ThreadPoolExecutor(
+            max_workers=max_concurrent_activities or 5,
+            thread_name_prefix="activity-pool-",
+        )
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
@@ -129,6 +138,7 @@ class Worker:
                 workflow_classes=self.workflow_classes,
                 passthrough_modules=self.passthrough_modules,
                 max_concurrent_activities=self.max_concurrent_activities,
+                activity_executor=self.activity_executor,
             )
 
             logger.info(

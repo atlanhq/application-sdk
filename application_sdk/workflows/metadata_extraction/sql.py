@@ -16,7 +16,6 @@ from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
 from application_sdk.constants import APPLICATION_NAME
-from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -62,6 +61,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         """
         return [
             activities.preflight_check,
+            activities.get_workflow_args,
             activities.fetch_databases,
             activities.fetch_schemas,
             activities.fetch_tables,
@@ -192,8 +192,13 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         try:
             await super().run(workflow_config)
 
-            workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
-                workflow_id
+            # Get the workflow configuration from the state store
+            workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+                self.activities_cls.get_workflow_args,
+                workflow_config,  # Pass the whole config containing workflow_id
+                retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
             workflow_run_id = workflow.info().run_id
@@ -246,7 +251,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
     ) -> list[
         Callable[
             [BaseSQLMetadataExtractionActivities, Dict[str, Any]],
-            Coroutine[Any, Any, ActivityStatistics | None],
+            Coroutine[Any, Any, Any],
         ]
     ]:
         """Get the list of functions for fetching SQL metadata.

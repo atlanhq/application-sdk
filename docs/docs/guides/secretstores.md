@@ -47,7 +47,7 @@ The code sample below shows how to implement a credential source dropdown in you
   <label>Where are your credentials stored? *</label>
   <select id="credentialSource" onchange="handleCredentialSourceChange()">
     <option value="direct">I will enter them below</option>
-    <option value="aws_secrets_manager">AWS Secrets Manager</option>
+    <option value="aws-secrets">AWS Secrets Manager</option>
   </select>
 </div>
 

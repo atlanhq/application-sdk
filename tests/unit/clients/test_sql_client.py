@@ -630,3 +630,33 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
         CommonError, match="aws_role_arn is required for IAM role authentication"
     ):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+
+def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_config):
+    """Test connection string generation with compiled url"""
+    credentials = {
+        "extra": {
+            "compiled_url": "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+        }
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+    assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect(
+    sql_client_with_db_config,
+):
+    """Test connection string generation with compiled url with invalid dialect"""
+    credentials = {
+        "extra": {
+            "compiled_url": "postgresql+psycopg2://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+        }
+    }
+    sql_client_with_db_config.credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+    assert conn_str == expected

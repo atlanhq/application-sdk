@@ -1,6 +1,7 @@
 """Utilities for credential providers."""
 
 import collections.abc
+import copy
 import json
 from typing import Any, Dict
 
@@ -113,7 +114,7 @@ def apply_secret_values(
     Returns:
         Dict[str, Any]: Credentials with secret values applied.
     """
-    result_credentials = source_credentials.copy()
+    result_credentials = copy.deepcopy(source_credentials)
 
     # Replace credential values with secret values
     for key, value in list(result_credentials.items()):
