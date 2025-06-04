@@ -220,7 +220,7 @@ class SQLQueryInput(Input):
 
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
-            raise
+            raise e
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """Get query results as a daft DataFrame.
