@@ -28,7 +28,7 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
-from application_sdk.outputs.eventstore import Event, EventStore
+from application_sdk.outputs.eventstore import EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
@@ -228,7 +228,7 @@ class APIServer(ServerInterface):
             if not self.workflow_client:
                 raise Exception("Temporal client not initialized")
 
-            # Use the captured wf_class variable, which is guaranteed to be non-None
+            # # Use the captured wf_class variable, which is guaranteed to be non-None
             workflow_data = await self.workflow_client.start_workflow(
                 body.model_dump(), workflow_class=workflow_class
             )
@@ -249,19 +249,25 @@ class APIServer(ServerInterface):
             if isinstance(trigger, HttpWorkflowTrigger):
                 # Add the route with our pre-defined handler
                 # Getting routers as local variables to avoid module references
-                workflow_router = self.workflow_router
-                app = self.app
-
-                workflow_router.add_api_route(
+                self.workflow_router.add_api_route(
                     trigger.endpoint,
                     start_workflow,  # Use our handler with captured wf_class
                     methods=trigger.methods,
                     response_model=WorkflowResponse,
                 )
 
-                app.include_router(workflow_router, prefix="/workflows/v1")
+                self.app.include_router(self.workflow_router, prefix="/workflows/v1")
             elif isinstance(trigger, EventWorkflowTrigger):
                 self.event_triggers.append(trigger)
+
+                self.events_router.add_api_route(
+                    f"/event/{trigger.event_trigger_id}",
+                    start_workflow,
+                    methods=["POST"],
+                    response_model=WorkflowResponse,
+                )
+
+                self.app.include_router(self.events_router, prefix="/events/v1")
 
     def register_routes(self):
         """
@@ -327,12 +333,6 @@ class APIServer(ServerInterface):
             response_model="list",
         )
 
-        self.events_router.add_api_route(
-            "/event",
-            self.on_event,
-            methods=["POST"],
-        )
-
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.home)
@@ -348,38 +348,32 @@ class APIServer(ServerInterface):
             List[dict[str, Any]]: List of Dapr subscription configurations including
                 pubsub name, topic, and routing rules.
         """
-        return [
-            {
-                "pubsubname": EventStore.EVENT_STORE_NAME,
-                "topic": "application_events_topic",  # TODO
-                "routes": {"rules": [{"path": "events/v1/event"}]},
-            }
-        ]
 
-    async def on_event(self, event: dict[str, Any]):
-        """Handle incoming events and trigger appropriate workflows.
+        subscriptions: List[dict[str, Any]] = []
+        for event_trigger in self.event_triggers:
+            filters = [
+                f"{event_filter.path} {event_filter.operator} '{event_filter.value}'"
+                for event_filter in event_trigger.event_filters
+            ]
+            filters.append(f"event.data.event_name == '{event_trigger.event_name}'")
+            filters.append(f"event.data.event_type == '{event_trigger.event_type}'")
 
-        Args:
-            event (dict[str, Any]): The event data to process.
+            subscriptions.append(
+                {
+                    "pubsubname": EventStore.EVENT_STORE_NAME,
+                    "topic": event_trigger.event_type + "_topic",
+                    "routes": {
+                        "rules": [
+                            {
+                                "match": " && ".join(filters),
+                                "path": f"/events/v1/event/{event_trigger.event_trigger_id}",
+                            }
+                        ]
+                    },
+                }
+            )
 
-        Raises:
-            Exception: If temporal client is not initialized.
-        """
-        if not self.workflow_client:
-            raise Exception("Temporal client not initialized")
-
-        logger.info("Received event {}", event)
-        for trigger in self.event_triggers:
-            if trigger.should_trigger_workflow(Event(**event["data"])):
-                logger.info(
-                    "Triggering workflow {} with event {}",
-                    trigger.workflow_class,
-                    event,
-                )
-                if trigger.workflow_class:
-                    await self.workflow_client.start_workflow(
-                        workflow_args=event, workflow_class=trigger.workflow_class
-                    )
+        return subscriptions
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         """Test authentication credentials."""

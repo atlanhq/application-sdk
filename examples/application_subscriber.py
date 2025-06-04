@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Type
 
@@ -11,12 +13,14 @@ from application_sdk.constants import APPLICATION_NAME
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
+    ApplicationEventNames,
+    Event,
     EventMetadata,
     EventStore,
-    WorkflowEndEvent,
+    EventTypes,
+    ObservabilityEventNames,
     WorkflowStates,
 )
-from application_sdk.server.fastapi.models import WorkflowEndEventTrigger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
@@ -27,6 +31,25 @@ class SampleActivities(ActivitiesInterface):
     @activity.defn
     async def activity_1(self):
         logger.info("Activity 1")
+
+        EventStore.publish_event(
+            event=Event(
+                metadata=EventMetadata(
+                    workflow_name="AssetExtractionWorkflow",
+                    workflow_id="123",
+                    workflow_run_id="456",
+                    application_name=APPLICATION_NAME,
+                    event_published_client_timestamp=int(datetime.now().timestamp()),
+                    workflow_state=WorkflowStates.COMPLETED.value,
+                ),
+                event_type=EventTypes.OBSERVABILITY_EVENT.value,
+                event_name=ObservabilityEventNames.ERROR.value,
+                data={
+                    "error_message": "This is a test error",
+                    "error_stack_trace": "This is a test stack trace",
+                },
+            )
+        )
 
         await asyncio.sleep(5)
 
@@ -57,16 +80,14 @@ class SampleWorkflow(WorkflowInterface):
         workflow_args["workflow_run_id"] = workflow_run_id
 
         # When a workflow is triggered by an event, the event is passed in as a dictionary
-        event = WorkflowEndEvent(**workflow_args["data"])
+        event = Event(**workflow_args["data"])
 
         # We can also check the event data to get the workflow name and id
         workflow_name = event.metadata.workflow_name
         workflow_id = event.metadata.workflow_id
-        workflow_output = event.workflow_output
 
         print("workflow_name", workflow_name)
         print("workflow_id", workflow_id)
-        print("workflow_output", workflow_output)
 
         await workflow.execute_activity_method(
             self.activities_cls.activity_1,
@@ -104,25 +125,36 @@ async def start_worker():
 
 
 async def application_subscriber():
-    application = BaseApplication(
-        name=APPLICATION_NAME,
+    # Open the application manifest in the current directory
+    application_manifest = json.load(
+        open(os.path.join(os.path.dirname(__file__), "subscriber_manifest.json"))
     )
 
+    # 2 Steps to setup event registration,
+    # 1. Setup the event in the manifest, with event name, type and filters => This creates an event trigger
+    # 2. Register the event subscription to a workflow => This binds the workflow to the event trigger
+
+    # Initialize the application
+    application = BaseApplication(
+        name=APPLICATION_NAME,
+        application_manifest=application_manifest,  # Optional, if the manifest has event registration, it will be bootstrapped
+    )
+
+    # Register the event subscription to a workflow
+    application.register_event_subscription("AssetExtractionCompleted", SampleWorkflow)
+
+    # Can also register the events to multiple workflows
+    # application.register_event_subscription("ErrorEvent", SampleWorkflow)
+
+    # Setup the workflow is needed to start the worker
     await application.setup_workflow(
         workflow_classes=[SampleWorkflow], activities_class=SampleActivities
     )
-
     await application.start_worker()
 
     await application.setup_server(
         workflow_class=SampleWorkflow,
         ui_enabled=False,
-        triggers=[
-            WorkflowEndEventTrigger(
-                finished_workflow_name="dependent_workflow",
-                finished_workflow_state=WorkflowStates.COMPLETED.value,
-            )
-        ],
     )
 
     await asyncio.gather(application.start_server(), simulate_worklflow_end_event())
@@ -133,15 +165,18 @@ async def simulate_worklflow_end_event():
 
     # Simulates that a dependent workflow has ended
     EventStore.publish_event(
-        event=WorkflowEndEvent(
+        event=Event(
             metadata=EventMetadata(
-                workflow_name="dependent_workflow",
+                workflow_name="AssetExtractionWorkflow",
                 workflow_state=WorkflowStates.COMPLETED.value,
                 workflow_id="123",
                 workflow_run_id="456",
                 application_name=APPLICATION_NAME,
                 event_published_client_timestamp=int(datetime.now().timestamp()),
-            )
+            ),
+            event_type=EventTypes.APPLICATION_EVENT.value,
+            event_name=ApplicationEventNames.WORKFLOW_END.value,
+            data={},
         ),
     )
 

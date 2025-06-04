@@ -21,6 +21,7 @@ activity.logger = logger
 
 class EventTypes(Enum):
     APPLICATION_EVENT = "application_events"
+    OBSERVABILITY_EVENT = "observability_events"
 
 
 class ApplicationEventNames(Enum):
@@ -28,6 +29,10 @@ class ApplicationEventNames(Enum):
     WORKFLOW_START = "workflow_start"
     ACTIVITY_START = "activity_start"
     ACTIVITY_END = "activity_end"
+
+
+class ObservabilityEventNames(Enum):
+    ERROR = "error"
 
 
 class WorkflowStates(Enum):
@@ -65,75 +70,13 @@ class Event(BaseModel, ABC):
     event_type: str
     event_name: str
 
+    data: Dict[str, Any]
+
     def get_topic_name(self):
         return self.event_type + "_topic"
 
-
-class ApplicationEvent(Event):
-    event_type: str = EventTypes.APPLICATION_EVENT.value
-
-
-class ActivityStartEvent(ApplicationEvent):
-    """Event emitted when an activity starts.
-
-    Attributes:
-        event_type (str): Always set to ACTIVITY_START_EVENT.
-        activity_type (str | None): Type of the activity.
-        activity_id (str | None): Unique identifier for the activity.
-    """
-
-    event_name: str = ApplicationEventNames.ACTIVITY_START.value
-
-    # Activity information (required)
-    activity_type: str | None = Field(default=None)
-    activity_id: str | None = Field(default=None)
-    activity_state: str | None = Field(default=None)
-
-
-class ActivityEndEvent(ApplicationEvent):
-    """Event emitted when an activity ends.
-
-    Attributes:
-        event_type (str): Always set to ACTIVITY_END_EVENT.
-        activity_type (str | None): Type of the activity.
-        activity_id (str | None): Unique identifier for the activity.
-    """
-
-    event_name: str = ApplicationEventNames.ACTIVITY_END.value
-
-    # Activity information (required)
-    activity_type: str | None = Field(default=None)
-    activity_id: str | None = Field(default=None)
-    activity_state: str | None = Field(default=None)
-
-
-class WorkflowEndEvent(ApplicationEvent):
-    """Event emitted when a workflow ends.
-
-    Attributes:
-        event_type (str): Always set to WORKFLOW_END_EVENT.
-        workflow_name (str | None): Name of the workflow.
-        workflow_id (str | None): Unique identifier for the workflow.
-        workflow_run_id (str | None): Run identifier for the workflow.
-        workflow_output (Dict[str, Any]): Output data from the workflow.
-    """
-
-    event_name: str = ApplicationEventNames.WORKFLOW_END.value
-
-    workflow_output: Dict[str, Any] = Field(default_factory=dict)
-
-
-class WorkflowStartEvent(ApplicationEvent):
-    """Event emitted when a workflow starts.
-
-    Attributes:
-        event_type (str): Always set to WORKFLOW_START_EVENT.
-        workflow_name (str | None): Name of the workflow.
-        workflow_id (str | None): Unique identifier for the workflow.
-        workflow_run_id (str | None): Run identifier for the workflow.
-    """
-
-    event_name: str = ApplicationEventNames.WORKFLOW_START.value
+    class Config:
+        extra = "allow"
 
 
 class EventStore:
