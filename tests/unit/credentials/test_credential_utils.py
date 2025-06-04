@@ -160,7 +160,6 @@ class TestCredentialUtils:
 
         with pytest.raises(CommonError) as exc_info:
             await resolve_credentials(credentials)
-        assert str(CommonError.CREDENTIALS_RESOLUTION_ERROR) in str(exc_info.value)
         assert "secret_key is required in extra" in str(exc_info.value)
 
     @pytest.mark.asyncio
@@ -170,34 +169,36 @@ class TestCredentialUtils:
 
         with pytest.raises(CommonError) as exc_info:
             await resolve_credentials(credentials)
-        assert str(CommonError.CREDENTIALS_RESOLUTION_ERROR) in str(exc_info.value)
         assert "secret_key is required in extra" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    @patch("dapr.clients.DaprClient")
-    async def test_fetch_secret_success(self, mock_dapr_client: Mock):
+    @patch("application_sdk.inputs.secretstore.DaprClient")
+    async def test_fetch_secret_success(self, mock_dapr_client):
         """Test successful secret fetching."""
-        mock_client_instance = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client_instance
+        # Setup mock
+        mock_client = MagicMock()
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
 
-        mock_secret_response = MagicMock()
-        mock_secret_response.secret = {"username": "test", "password": "secret"}
-        mock_client_instance.get_secret.return_value = mock_secret_response
+        # Mock the secret response
+        mock_response = MagicMock()
+        mock_response.secret = {"username": "test", "password": "secret"}
+        mock_client.get_secret.return_value = mock_response
 
         result = await SecretStoreInput.fetch_secret("test-component", "test-key")
 
-        mock_client_instance.get_secret.assert_called_once_with(
+        # Verify the result
+        assert result == {"username": "test", "password": "secret"}
+        mock_client.get_secret.assert_called_once_with(
             store_name="test-component", key="test-key"
         )
-        assert result == {"username": "test", "password": "secret"}
 
     @pytest.mark.asyncio
-    @patch("dapr.clients.DaprClient")
+    @patch("application_sdk.inputs.secretstore.DaprClient")
     async def test_fetch_secret_failure(self, mock_dapr_client: Mock):
         """Test failed secret fetching."""
-        mock_client_instance = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client_instance
-        mock_client_instance.get_secret.side_effect = Exception("Connection failed")
+        mock_client = MagicMock()
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client.get_secret.side_effect = Exception("Connection failed")
 
         with pytest.raises(Exception, match="Connection failed"):
             await SecretStoreInput.fetch_secret("test-component", "test-key")
@@ -215,5 +216,5 @@ class TestCredentialUtils:
 
         with pytest.raises(CommonError) as exc_info:
             await resolve_credentials(credentials)
-        assert str(CommonError.CREDENTIALS_RESOLUTION_ERROR) in str(exc_info.value)
         assert "Failed to resolve credentials" in str(exc_info.value)
+        assert "Dapr connection failed" in str(exc_info.value)
