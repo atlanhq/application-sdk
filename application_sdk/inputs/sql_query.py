@@ -70,7 +70,16 @@ class SQLQueryInput(Input):
             # First try using SQLAlchemy's execute
             if isinstance(self.query, TextClause):
                 result = conn.execute(self.query)
-                return pd.DataFrame(result.fetchall(), columns=result.keys())
+                if self.chunk_size:
+                    def result_generator():
+                        while True:
+                            chunk = result.fetchmany(self.chunk_size)
+                            if not chunk:
+                                break
+                            yield pd.DataFrame(chunk, columns=result.keys())
+                    return result_generator()
+                else:
+                    return pd.DataFrame(result.fetchall(), columns=result.keys())
             else:
                 # Try to get the underlying DBAPI connection
                 dbapi_conn = getattr(conn, "connection", None)
