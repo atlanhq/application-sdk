@@ -1,0 +1,33 @@
+{
+    "applicationId": "order-processing-service",
+    "eventRegistration": {
+      "consumes": [
+        {
+          "eventId": "AssetExtractionCompleted",
+          "eventType": "application_events",
+          "eventName": "workflow_end",
+          "version": "v1",
+          "filters": [
+            {
+              "path": "event.data.metadata.workflow_name",
+              "operator": "==",
+              "value": "AssetExtractionWorkflow"
+            },
+            {
+              "path": "event.data.metadata.workflow_state",
+              "operator": "==",
+              "value": "completed"
+            }
+          ]
+        }
+      ],
+
+      "produces": [
+        {
+          "eventId": "OrderProcessed",
+          "eventType": "application_events",
+          "eventName": "workflow_end"
+        }
+      ]
+    }
+  }

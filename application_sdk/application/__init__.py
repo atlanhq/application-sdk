@@ -1,13 +1,18 @@
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 from application_sdk.clients.utils import get_workflow_client
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import (
     APIServer,
     HttpWorkflowTrigger,
     WorkflowTrigger,
 )
+from application_sdk.server.fastapi.models import EventWorkflowTrigger
 from application_sdk.worker import Worker
+from application_sdk.workflows import WorkflowInterface
+
+logger = get_logger(__name__)
 
 
 class BaseApplication:
@@ -23,6 +28,7 @@ class BaseApplication:
         self,
         name: str,
         server: Optional[ServerInterface] = None,
+        application_manifest: Optional[dict] = None,
     ):
         """
         Initialize the application.
@@ -33,6 +39,7 @@ class BaseApplication:
         """
         self.application_name = name
         self.server = server
+        self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
 
         # setup application server. serves the UI, and handles the various triggers
         self.application = None
@@ -41,6 +48,57 @@ class BaseApplication:
         self.application = None  # For server, if needed
 
         self.workflow_client = get_workflow_client(application_name=name)
+
+        self.application_manifest: Dict[str, Any] = application_manifest
+        self.bootstrap_event_registration()
+
+    def bootstrap_event_registration(self):
+        if self.application_manifest is None:
+            logger.warning("No application manifest found, skipping event registration")
+            return
+
+        if self.application_manifest.get("eventRegistration") is None:
+            logger.warning(
+                "No event registration found in the application manifest, skipping event registration"
+            )
+            return
+
+        event_registration = self.application_manifest.get("eventRegistration")
+        if (
+            not event_registration
+            or not event_registration.get("consumes")
+            or len(event_registration.get("consumes", [])) == 0
+        ):
+            logger.warning("No event registration found, skipping event registration")
+            return
+
+        self.event_subscriptions = {}
+
+        for event in event_registration["consumes"]:
+            logger.info(f"Setting up event registration for {event}")
+            event_trigger: EventWorkflowTrigger = EventWorkflowTrigger(
+                event_type=event["eventType"],
+                event_name=event["eventName"],
+                event_filters=event["filters"],
+                event_trigger_id=event["eventId"],
+            )
+
+            if event["eventId"] in self.event_subscriptions:
+                raise ValueError(
+                    f"Event {event['eventId']} duplicate in the application manifest"
+                )
+
+            self.event_subscriptions[event["eventId"]] = event_trigger
+
+    def register_event_subscription(
+        self, event_id: str, workflow_class: Type[WorkflowInterface]
+    ):
+        if event_id not in self.event_subscriptions:
+            raise ValueError(
+                f"Event {event_id} not initialized in the application manifest"
+            )
+
+        self.event_subscriptions[event_id].workflow_class = workflow_class
 
     async def setup_workflow(
         self,
@@ -109,6 +167,17 @@ class BaseApplication:
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
         )
+
+        for event_trigger in self.event_subscriptions.values():
+            if event_trigger.workflow_class is None:
+                raise ValueError(
+                    f"Workflow class not set for event trigger {event_trigger.event_trigger_id}"
+                )
+
+            self.application.register_workflow(
+                workflow_class=event_trigger.workflow_class,
+                triggers=[event_trigger],
+            )
 
         # register the workflow on the application server
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint

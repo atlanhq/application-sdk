@@ -30,13 +30,12 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
-    ActivityEndEvent,
-    ActivityStartEvent,
     ActivityStates,
+    ApplicationEventNames,
+    Event,
     EventMetadata,
     EventStore,
-    WorkflowEndEvent,
-    WorkflowStartEvent,
+    EventTypes,
     WorkflowStates,
 )
 from application_sdk.outputs.secretstore import SecretStoreOutput
@@ -66,7 +65,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         Returns:
             Any: The result of the activity execution.
         """
-        event = ActivityStartEvent(
+        event = Event(
             metadata=EventMetadata(
                 application_name="application",  # TODO:
                 event_published_client_timestamp=int(datetime.now().timestamp()),
@@ -75,9 +74,13 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 workflow_run_id=activity.info().workflow_run_id,
                 workflow_state=WorkflowStates.RUNNING.value,
             ),
-            activity_id=activity.info().activity_id,
-            activity_type=activity.info().activity_type,
-            activity_state=ActivityStates.RUNNING.value,
+            event_type=EventTypes.APPLICATION_EVENT.value,
+            event_name=ApplicationEventNames.ACTIVITY_START.value,
+            data={
+                "activity_id": activity.info().activity_id,
+                "activity_type": activity.info().activity_type,
+                "activity_state": ActivityStates.RUNNING.value,
+            },
         )
 
         EventStore.publish_event(event)
@@ -86,7 +89,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
         try:
             output = await super().execute_activity(input)
         except Exception as e:
-            end_event = ActivityEndEvent(
+            end_event = Event(
                 metadata=EventMetadata(
                     application_name="application",  # TODO:
                     event_published_client_timestamp=int(datetime.now().timestamp()),
@@ -95,14 +98,18 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                     workflow_run_id=activity.info().workflow_run_id,
                     workflow_state=WorkflowStates.RUNNING.value,
                 ),
-                activity_id=activity.info().activity_id,
-                activity_type=activity.info().activity_type,
-                activity_state=ActivityStates.FAILED.value,
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.ACTIVITY_END.value,
+                data={
+                    "activity_id": activity.info().activity_id,
+                    "activity_type": activity.info().activity_type,
+                    "activity_state": ActivityStates.FAILED.value,
+                },
             )
             EventStore.publish_event(end_event)
             raise e
 
-        end_event = ActivityEndEvent(
+        end_event = Event(
             metadata=EventMetadata(
                 application_name="application",  # TODO:
                 event_published_client_timestamp=int(datetime.now().timestamp()),
@@ -111,9 +118,13 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 workflow_run_id=activity.info().workflow_run_id,
                 workflow_state=WorkflowStates.RUNNING.value,
             ),
-            activity_id=activity.info().activity_id,
-            activity_type=activity.info().activity_type,
-            activity_state=ActivityStates.COMPLETED.value,  # TODO: Figure out how to get the state of the activity
+            event_type=EventTypes.APPLICATION_EVENT.value,
+            event_name=ApplicationEventNames.ACTIVITY_END.value,
+            data={
+                "activity_id": activity.info().activity_id,
+                "activity_type": activity.info().activity_type,
+                "activity_state": ActivityStates.COMPLETED.value,  # TODO: Figure out how to get the state of the activity
+            },
         )
         EventStore.publish_event(end_event)
         return output
@@ -137,7 +148,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         """
         with workflow.unsafe.sandbox_unrestricted():
             EventStore.publish_event(
-                WorkflowStartEvent(
+                Event(
                     metadata=EventMetadata(
                         application_name="application",  # TODO:
                         event_published_client_timestamp=int(
@@ -147,7 +158,13 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         workflow_id=workflow.info().workflow_id,
                         workflow_run_id=workflow.info().run_id,
                         workflow_state=WorkflowStates.RUNNING.value,
-                    )
+                    ),
+                    event_type=EventTypes.APPLICATION_EVENT.value,
+                    event_name=ApplicationEventNames.WORKFLOW_START.value,
+                    data={
+                        "workflow_id": workflow.info().workflow_id,
+                        "workflow_run_id": workflow.info().run_id,
+                    },
                 ),
             )
         output = None
@@ -156,7 +173,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         except Exception as e:
             with workflow.unsafe.sandbox_unrestricted():
                 EventStore.publish_event(
-                    WorkflowEndEvent(
+                    Event(
                         metadata=EventMetadata(
                             workflow_state=WorkflowStates.FAILED.value,
                             application_name="application",  # TODO:
@@ -167,14 +184,19 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                             workflow_id=workflow.info().workflow_id,
                             workflow_run_id=workflow.info().run_id,
                         ),
-                        workflow_output=output or {},
+                        event_type=EventTypes.APPLICATION_EVENT.value,
+                        event_name=ApplicationEventNames.WORKFLOW_END.value,
+                        data={
+                            "workflow_id": workflow.info().workflow_id,
+                            "workflow_run_id": workflow.info().run_id,
+                        },
                     ),
                 )
             raise e
 
         with workflow.unsafe.sandbox_unrestricted():
             EventStore.publish_event(
-                WorkflowEndEvent(
+                Event(
                     metadata=EventMetadata(
                         workflow_state=WorkflowStates.COMPLETED.value,
                         application_name="application",  # TODO:
@@ -185,7 +207,12 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                         workflow_id=workflow.info().workflow_id,
                         workflow_run_id=workflow.info().run_id,
                     ),
-                    workflow_output=output or {},
+                    event_type=EventTypes.APPLICATION_EVENT.value,
+                    event_name=ApplicationEventNames.WORKFLOW_END.value,
+                    data={
+                        "workflow_id": workflow.info().workflow_id,
+                        "workflow_run_id": workflow.info().run_id,
+                    },
                 ),
             )
         return output
