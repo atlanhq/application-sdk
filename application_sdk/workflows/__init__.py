@@ -13,7 +13,6 @@ from temporalio.common import RetryPolicy
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.constants import HEARTBEAT_TIMEOUT, START_TO_CLOSE_TIMEOUT
-from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -74,14 +73,16 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
                 workflow_id is used to extract the workflow configuration from the
                 state store.
         """
-        workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
-            workflow_id
+        # Get the workflow configuration from the state store
+        workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+            self.activities_cls.get_workflow_args,
+            workflow_config,  # Pass the whole config containing workflow_id
+            retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
-        logger.info(
-            "Starting workflow execution",
-        )
+        logger.info("Starting workflow execution")
 
         try:
             workflow_run_id = workflow.info().run_id

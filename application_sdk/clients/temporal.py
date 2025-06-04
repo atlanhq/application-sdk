@@ -1,4 +1,5 @@
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence, Type
 
@@ -451,6 +452,7 @@ class TemporalWorkflowClient(WorkflowClient):
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ) -> Worker:
         """Create a Temporal worker.
 
@@ -459,6 +461,7 @@ class TemporalWorkflowClient(WorkflowClient):
             workflow_classes (Sequence[ClassType]): Workflow classes to register.
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
             max_concurrent_activities (int | None): Maximum number of concurrent activities.
+            activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         Returns:
             Worker: The created worker instance.
 
@@ -467,6 +470,13 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if not self.client:
             raise ValueError("Client is not loaded")
+
+        # Always provide an executor if none given
+        if activity_executor is None:
+            activity_executor = ThreadPoolExecutor(
+                max_workers=max_concurrent_activities or 5,
+                thread_name_prefix="activity-pool-",
+            )
 
         return Worker(
             self.client,
@@ -479,6 +489,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 )
             ),
             max_concurrent_activities=max_concurrent_activities,
+            activity_executor=activity_executor,
             # Disabled EventInterceptor for now
             interceptors=[EventInterceptor()],
         )
