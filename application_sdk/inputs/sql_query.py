@@ -62,10 +62,15 @@ class SQLQueryInput(Input):
                 or iterator of DataFrames if chunked.
         """
         import pandas as pd
+        from pandas.compat._optional import import_optional_dependency
         from sqlalchemy import text
 
         conn = session.connection()
-        return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+        if import_optional_dependency("sqlalchemy", errors="ignore"):
+            return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+        else:
+            dbapi_conn = getattr(conn, "connection", None)
+            return pd.read_sql_query(self.query, dbapi_conn, chunksize=self.chunk_size)
 
     def _execute_query_daft(
         self,
@@ -98,9 +103,18 @@ class SQLQueryInput(Input):
         """
         with self.engine.connect() as conn:
             import pandas as pd
+            from pandas.compat._optional import import_optional_dependency
             from sqlalchemy import text
 
-            return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+            if import_optional_dependency("sqlalchemy", errors="ignore"):
+                return pd.read_sql_query(
+                    text(self.query), conn, chunksize=self.chunk_size
+                )
+            else:
+                dbapi_conn = getattr(conn, "connection", None)
+                return pd.read_sql_query(
+                    self.query, dbapi_conn, chunksize=self.chunk_size
+                )
 
     async def get_batched_dataframe(
         self,
