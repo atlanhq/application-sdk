@@ -6,13 +6,9 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.common.credential_utils import (
-    CredentialError,
-    _process_secret_data,
-    apply_secret_values,
-    fetch_secret,
-    resolve_credentials,
-)
+from application_sdk.common.credential_utils import resolve_credentials
+from application_sdk.common.error_codes import CommonError
+from application_sdk.inputs.secretstore import SecretStoreInput
 
 # Helper strategy for credentials dictionaries
 credential_dict_strategy = st.dictionaries(
@@ -32,7 +28,7 @@ class TestCredentialUtils:
     )
     def test_process_secret_data_dict(self, secret_data: Dict[str, str]):
         """Test processing secret data when it's already a dictionary."""
-        result = _process_secret_data(secret_data)
+        result = SecretStoreInput._process_secret_data(secret_data)
         assert result == secret_data
 
     def test_process_secret_data_json(self):
@@ -40,13 +36,13 @@ class TestCredentialUtils:
         nested_data = {"username": "test_user", "password": "test_pass"}
         secret_data = {"data": json.dumps(nested_data)}
 
-        result = _process_secret_data(secret_data)
+        result = SecretStoreInput._process_secret_data(secret_data)
         assert result == nested_data
 
     def test_process_secret_data_invalid_json(self):
         """Test processing secret data with invalid JSON."""
         secret_data = {"data": "invalid json string"}
-        result = _process_secret_data(secret_data)
+        result = SecretStoreInput._process_secret_data(secret_data)
         assert result == secret_data  # Should return original if JSON parsing fails
 
     def test_apply_secret_values_simple(self):
@@ -63,7 +59,7 @@ class TestCredentialUtils:
             "db_name_key": "actual_database",
         }
 
-        result = apply_secret_values(source_credentials, secret_data)
+        result = SecretStoreInput.apply_secret_values(source_credentials, secret_data)
 
         assert result["username"] == "actual_username"
         assert result["password"] == "actual_password"
@@ -75,7 +71,7 @@ class TestCredentialUtils:
 
         secret_data = {"some_key": "some_value"}
 
-        result = apply_secret_values(source_credentials, secret_data)
+        result = SecretStoreInput.apply_secret_values(source_credentials, secret_data)
 
         # Should remain unchanged
         assert result == source_credentials
@@ -103,7 +99,9 @@ class TestCredentialUtils:
             # Add extra field
             test_credentials["extra"] = {"extra_field": key_to_substitute}
 
-        result = apply_secret_values(test_credentials, safe_secret_data)
+        result = SecretStoreInput.apply_secret_values(
+            test_credentials, safe_secret_data
+        )
 
         # Verify substitutions happened correctly
         if secret_keys and "test_field" in test_credentials:
@@ -132,7 +130,7 @@ class TestCredentialUtils:
         assert result == credentials
 
     @pytest.mark.asyncio
-    @patch("application_sdk.common.credential_utils.fetch_secret")
+    @patch("application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret")
     async def test_resolve_credentials_with_secret_store(
         self, mock_fetch_secret: AsyncMock
     ):
@@ -160,16 +158,20 @@ class TestCredentialUtils:
         """Test resolving credentials with missing secret_key."""
         credentials = {"credentialSource": "aws-secrets", "extra": {}}
 
-        with pytest.raises(CredentialError, match="secret_key is required in extra"):
+        with pytest.raises(CommonError) as exc_info:
             await resolve_credentials(credentials)
+        assert str(CommonError.CREDENTIALS_RESOLUTION_ERROR) in str(exc_info.value)
+        assert "secret_key is required in extra" in str(exc_info.value)
 
     @pytest.mark.asyncio
     async def test_resolve_credentials_no_extra(self):
         """Test resolving credentials with no extra field."""
         credentials = {"credentialSource": "aws-secrets"}
 
-        with pytest.raises(CredentialError, match="secret_key is required in extra"):
+        with pytest.raises(CommonError) as exc_info:
             await resolve_credentials(credentials)
+        assert str(CommonError.CREDENTIALS_RESOLUTION_ERROR) in str(exc_info.value)
+        assert "secret_key is required in extra" in str(exc_info.value)
 
     @pytest.mark.asyncio
     @patch("dapr.clients.DaprClient")
@@ -182,7 +184,7 @@ class TestCredentialUtils:
         mock_secret_response.secret = {"username": "test", "password": "secret"}
         mock_client_instance.get_secret.return_value = mock_secret_response
 
-        result = await fetch_secret("test-component", "test-key")
+        result = await SecretStoreInput.fetch_secret("test-component", "test-key")
 
         mock_client_instance.get_secret.assert_called_once_with(
             store_name="test-component", key="test-key"
@@ -198,10 +200,10 @@ class TestCredentialUtils:
         mock_client_instance.get_secret.side_effect = Exception("Connection failed")
 
         with pytest.raises(Exception, match="Connection failed"):
-            await fetch_secret("test-component", "test-key")
+            await SecretStoreInput.fetch_secret("test-component", "test-key")
 
     @pytest.mark.asyncio
-    @patch("application_sdk.common.credential_utils.fetch_secret")
+    @patch("application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret")
     async def test_resolve_credentials_fetch_error(self, mock_fetch_secret: Mock):
         """Test resolving credentials when fetch_secret fails."""
         mock_fetch_secret.side_effect = Exception("Dapr connection failed")
@@ -211,5 +213,7 @@ class TestCredentialUtils:
             "extra": {"secret_key": "postgres/test"},
         }
 
-        with pytest.raises(CredentialError, match="Failed to resolve credentials"):
+        with pytest.raises(CommonError) as exc_info:
             await resolve_credentials(credentials)
+        assert str(CommonError.CREDENTIALS_RESOLUTION_ERROR) in str(exc_info.value)
+        assert "Failed to resolve credentials" in str(exc_info.value)
