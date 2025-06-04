@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Type
+from typing import Any, Callable, Dict, List, Type, cast
 
 from temporalio import activity, workflow
 
@@ -10,7 +10,6 @@ from application_sdk.activities import ActivitiesInterface
 from application_sdk.application import BaseApplication
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import APPLICATION_NAME
-from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
     ApplicationEventNames,
@@ -71,9 +70,12 @@ class SampleWorkflow(WorkflowInterface):
 
     @workflow.run
     async def run(self, workflow_config: dict[str, Any]):
-        workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
-            workflow_id
+        # Get the workflow configuration from the state store
+        workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+            self.activities_cls.get_workflow_args,
+            workflow_config,  # Pass the whole config containing workflow_id
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
         workflow_run_id = workflow.info().run_id
@@ -101,8 +103,10 @@ class SampleWorkflow(WorkflowInterface):
         )
 
     @staticmethod
-    def get_activities(activities: SampleActivities) -> List[Callable[..., Any]]:
-        return [activities.activity_1, activities.activity_2]
+    def get_activities(activities: ActivitiesInterface) -> List[Callable[..., Any]]:
+        sample_activities = cast(SampleActivities, activities)
+
+        return [sample_activities.activity_1, sample_activities.activity_2]
 
 
 async def start_worker():

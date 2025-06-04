@@ -244,6 +244,7 @@ async def test_create_worker(
         activities=activities,
         workflow_runner=ANY,
         interceptors=ANY,
+        activity_executor=ANY,
         max_concurrent_activities=ANY,
     )
 

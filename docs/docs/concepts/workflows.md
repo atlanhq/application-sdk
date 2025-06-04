@@ -95,7 +95,7 @@ While most customization typically happens in `Activities`, `Handlers`, or `Clie
     *   **Use Case:** When you need fundamentally different orchestration logic beyond just changing the sequence in `get_activities`.
     *   **Implementation:** Define an `async def run(self, workflow_config: Dict[str, Any])` method decorated with `@workflow.run`.
         *   You are responsible for the entire orchestration flow.
-        *   You **must** handle retrieving the full `workflow_args` from `StateStoreInput`.
+        *   You **must** handle retrieving the full `workflow_args` using the `get_workflow_args` activity.
         *   You execute activities using `await workflow.execute_activity_method(...)`.
         *   Calling `await super().run(workflow_config)` might be useful for initial setup (like preflight) but isn't required if you handle all steps.
 
@@ -130,7 +130,13 @@ While most customization typically happens in `Activities`, `Handlers`, or `Clie
         async def run(self, workflow_config: Dict[str, Any]) -> str: # Return type example
             # 1. Load full arguments (Essential step)
             workflow_id = workflow_config["workflow_id"]
-            workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(workflow_id)
+            workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+                self.activities_cls.get_workflow_args,
+                workflow_config,  # Pass the whole config containing workflow_id
+                retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
             workflow.logger.info(f"Starting custom run logic for {workflow_id}")
             workflow_args["workflow_run_id"] = workflow.info().run_id # Add run ID
 

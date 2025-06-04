@@ -22,6 +22,7 @@ from temporalio import activity
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.handlers import HandlerInterface
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -159,6 +160,36 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 self._state.pop(workflow_id)
         except OrchestratorError as e:
             logger.warning("Failed to clean state", exc_info=e)
+
+    @activity.defn
+    @auto_heartbeater
+    async def get_workflow_args(
+        self, workflow_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Activity to safely retrieve workflow configuration from state store.
+
+        Args:
+            workflow_config: Dictionary containing workflow_id and other parameters
+
+        Returns:
+            Dict containing the complete workflow configuration
+
+        Raises:
+            IOError: If configuration cannot be retrieved from state store
+        """
+        workflow_id = workflow_config.get("workflow_id")
+        if not workflow_id:
+            raise ValueError("workflow_id is required in workflow_config")
+
+        try:
+            # This already handles the Dapr call internally
+            return StateStoreInput.extract_configuration(workflow_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to retrieve workflow configuration for {workflow_id}: {str(e)}",
+                exc_info=e,
+            )
+            raise
 
     @activity.defn
     @auto_heartbeater

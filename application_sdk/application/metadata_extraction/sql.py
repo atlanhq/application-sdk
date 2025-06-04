@@ -1,9 +1,16 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Type
 
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.handlers.sql import BaseSQLHandler
+from application_sdk.observability.decorators.observability_decorator import (
+    observability,
+)
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import get_metrics
+from application_sdk.observability.traces_adaptor import get_traces
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.transformers.query import QueryBasedTransformer
 from application_sdk.worker import Worker
@@ -11,6 +18,10 @@ from application_sdk.workflows.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
     BaseSQLMetadataExtractionWorkflow,
 )
+
+logger = get_logger(__name__)
+metrics = get_metrics()
+traces = get_traces()
 
 
 class BaseSQLMetadataExtractionApplication(BaseApplication):
@@ -53,6 +64,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             application_name=self.application_name
         )
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
         self,
         workflow_classes: List[Type[BaseSQLMetadataExtractionWorkflow]] = [
@@ -62,6 +74,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             BaseSQLMetadataExtractionActivities
         ] = BaseSQLMetadataExtractionActivities,
         passthrough_modules: List[str] = [],
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
@@ -71,7 +84,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             activities_class (Type): Activities class to use for workflow activities. Defaults to BaseSQLMetadataExtractionActivities.
             worker_daemon_mode (bool): Whether to run the worker in daemon mode. Defaults to True.
             passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
-
+            activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
 
         # load the workflow client
@@ -97,8 +110,10 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_classes=workflow_classes,
             workflow_activities=all_activities,
             passthrough_modules=passthrough_modules,
+            activity_executor=activity_executor,
         )
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_workflow(
         self,
         workflow_args: Dict[str, Any],
@@ -125,6 +140,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         )
         return workflow_response
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def start_worker(self, daemon: bool = True):
         """
         Start the worker for the SQL metadata extraction application.
@@ -133,6 +149,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             raise ValueError("Worker not initialized")
         await self.worker.start(daemon=daemon)
 
+    @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
         self,
         workflow_class: Type[
