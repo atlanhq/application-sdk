@@ -9,7 +9,7 @@
           "version": "v1",
           "filters": [
             {
-              "path": "event.data.metadata.workflow_name",
+              "path": "event.data.metadata.workflow_type",
               "operator": "==",
               "value": "AssetExtractionWorkflow"
             },
@@ -24,7 +24,7 @@
 
       "produces": [
         {
-          "eventId": "OrderProcessed",
+          "eventId": "PublishAssetCompleted",
           "eventType": "application_events",
           "eventName": "workflow_end"
         }

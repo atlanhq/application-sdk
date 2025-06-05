@@ -179,7 +179,6 @@ class WorkflowConfigResponse(BaseModel):
         }
 
 
-# TODO: Move these models to proper place
 class WorkflowTrigger(BaseModel):
     workflow_class: Optional[Type[WorkflowInterface]] = None
     model_config = {"arbitrary_types_allowed": True}
