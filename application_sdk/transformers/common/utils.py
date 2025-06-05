@@ -7,7 +7,7 @@ for text processing and URI/name building.
 import glob
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def process_text(text: str, max_length: int = 100000) -> str:
@@ -119,3 +119,34 @@ def get_yaml_query_template_path_mappings(
             result[file_name] = file
 
     return result
+
+
+def flatten_yaml_columns(
+    nested: dict, parent_key: str = "", sep: str = "."
+) -> list[dict]:
+    """
+    Recursively flattens a nested columns dictionary into a list of dicts
+    with dot-separated keys for the 'name' field, suitable for SQL processing.
+
+    Args:
+        nested (dict): The nested columns dictionary.
+        parent_key (str): The prefix for the current level.
+        sep (str): The separator to use (default: ".").
+
+    Returns:
+        list[dict]: A flat list of column definitions with dot notation.
+    """
+    flat_columns: List[Dict[str, Any]] = []
+    for key, value in nested.items():
+        new_key = f"{parent_key}{sep}{key}" if parent_key else key
+        if isinstance(value, dict) and any(isinstance(v, dict) for v in value.values()):
+            # If value is a dict and has nested dicts, recurse
+            flat_columns.extend(flatten_yaml_columns(value, new_key, sep=sep))
+        else:
+            # This is a leaf node (column definition)
+            col_def = (
+                value.copy() if isinstance(value, dict) else {"source_query": value}
+            )
+            col_def["name"] = new_key
+            flat_columns.append(col_def)
+    return flat_columns
