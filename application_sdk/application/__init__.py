@@ -4,11 +4,7 @@ from typing import Any, Dict, List, Optional, Type
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server import ServerInterface
-from application_sdk.server.fastapi import (
-    APIServer,
-    HttpWorkflowTrigger,
-    WorkflowTrigger,
-)
+from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
@@ -157,7 +153,6 @@ class BaseApplication:
     async def setup_server(
         self,
         workflow_class,
-        triggers: List[WorkflowTrigger] = [HttpWorkflowTrigger()],
         ui_enabled: bool = True,
     ):
         """
@@ -187,7 +182,7 @@ class BaseApplication:
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint
         self.application.register_workflow(
             workflow_class=workflow_class,
-            triggers=triggers,
+            triggers=[HttpWorkflowTrigger()],
         )
 
     async def start_server(self):

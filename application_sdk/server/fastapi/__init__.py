@@ -228,7 +228,7 @@ class APIServer(ServerInterface):
             if not self.workflow_client:
                 raise Exception("Temporal client not initialized")
 
-            # # Use the captured wf_class variable, which is guaranteed to be non-None
+            # Use the captured wf_class variable, which is guaranteed to be non-None
             workflow_data = await self.workflow_client.start_workflow(
                 body.model_dump(), workflow_class=workflow_class
             )
