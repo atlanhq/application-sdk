@@ -65,6 +65,7 @@ class SQLQueryInput(Input):
         from pandas.compat._optional import import_optional_dependency
         from sqlalchemy import text
 
+        # Used import_optional_dependency to avoid pandas error relating to the text usage with self.query + to use dbapi_conn when sqlalchemy is not installed
         conn = session.connection()
         if import_optional_dependency("sqlalchemy", errors="ignore"):
             return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
@@ -106,6 +107,7 @@ class SQLQueryInput(Input):
             from pandas.compat._optional import import_optional_dependency
             from sqlalchemy import text
 
+            # Used import_optional_dependency to avoid pandas error relating to the text usage with self.query + to use dbapi_conn when sqlalchemy is not installed
             if import_optional_dependency("sqlalchemy", errors="ignore"):
                 return pd.read_sql_query(
                     text(self.query), conn, chunksize=self.chunk_size
