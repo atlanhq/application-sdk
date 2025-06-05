@@ -7,9 +7,8 @@ from temporalio import activity, workflow
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.utils import auto_heartbeater
 from application_sdk.clients.utils import get_workflow_client
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.constants import APPLICATION_NAME
-from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
     WORKFLOW_END_EVENT,
     AtlanEvent,
@@ -61,9 +60,12 @@ class SampleActivities(ActivitiesInterface):
 class SampleWorkflow(WorkflowInterface):
     @workflow.run
     async def run(self, workflow_config: dict[str, Any]):
-        workflow_id = workflow_config["workflow_id"]
-        workflow_args: Dict[str, Any] = StateStoreInput.extract_configuration(
-            workflow_id
+        # Get the workflow configuration from the state store
+        workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+            self.activities_cls.get_workflow_args,
+            workflow_config,  # Pass the whole config containing workflow_id
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
         )
 
         workflow_run_id = workflow.info().run_id
@@ -97,7 +99,11 @@ class SampleWorkflow(WorkflowInterface):
     def get_activities(activities: ActivitiesInterface) -> List[Callable[..., Any]]:
         # Cast the activities to SampleActivities type
         sample_activities = cast(SampleActivities, activities)
-        return [sample_activities.activity_1, sample_activities.activity_2]
+        return [
+            sample_activities.activity_1,
+            sample_activities.activity_2,
+            sample_activities.get_workflow_args,
+        ]
 
 
 async def start_worker():

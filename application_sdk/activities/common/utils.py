@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
@@ -98,7 +98,14 @@ def auto_heartbeater(fn: F) -> F:
             send_periodic_heartbeat(heartbeat_timeout.total_seconds() / 3)
         )
         try:
-            return await fn(*args, **kwargs)
+            # check if activity is async
+            if asyncio.iscoroutinefunction(fn):
+                return await fn(*args, **kwargs)
+            else:
+                logger.warning(
+                    f"{fn.__name__} is not async, you should register heartbeats manually instead of using the @auto_heartbeater decorator"
+                )
+                return fn(*args, **kwargs)
         except Exception as e:
             print(f"Error in activity: {e}")
             raise e

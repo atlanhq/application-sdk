@@ -1,6 +1,70 @@
 # Changelog
 
 
+## v0.1.1rc11 (June 02, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc10...v0.1.1rc11
+
+### Bug Fixes
+
+- changed application -> server, custom servers in constructor in [16a3f7f](https://github.com/atlanhq/application-sdk/commit/16a3f7f81b7a26400019c76611ec6ee327ea9e1a)
+
+
+## v0.1.1rc10 (May 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc9...v0.1.1rc10
+
+### Features
+
+- add observability decorator (#559) (by @Abhishek Agrawal in [1dd4c82](https://github.com/atlanhq/application-sdk/commit/1dd4c82))
+
+
+
+## v0.1.1rc9 (May 28, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc8...v0.1.1rc9
+
+### Features
+
+- add support for sync activity executor (#563) (by @Nishchith Shetty in [fe5f396](https://github.com/atlanhq/application-sdk/commit/fe5f396))
+
+## v0.1.1rc8 (May 28, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc7...v0.1.1rc8
+
+### Features
+
+- Add SQLAlchemy url support (#561) (by @Onkar Ravgan in [67bc050](https://github.com/atlanhq/application-sdk/commit/67bc050))
+
+
+
+## v0.1.1rc7 (May 28, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc6...v0.1.1rc7
+
+### Bug Fixes
+
+- issue with retrieving workflow args (#562) (by @Nishchith Shetty in [1f3f194](https://github.com/atlanhq/application-sdk/commit/1f3f194))
+- Observability (duckDB UI) (#556) (by @Abhishek Agrawal in [d06b52a](https://github.com/atlanhq/application-sdk/commit/d06b52a))
+
+## v0.1.1rc6 (May 20, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc5...v0.1.1rc6
+
+### Features
+
+- Observability changes (metrics, logs, traces) by @abhishekagrawal-atlan + refactoring
+- Enhancements and standardizing of Error Codes by @abhishekagrawal-atlan
+- Transition to Pandas for SQL Querying on Source and Daft for SQL Transformer by @OnkarVO7
+- fix: JsonOutput type checking while writing dataframe by @Hk669
+- feat: enhance workflow activity collection and allow custom output @TechyMT
+- Dependabot changes - version bump
+- improvements to documentation and debugging (#547) (by @inishchith in [49d51f2](https://github.com/atlanhq/application-sdk/commit/49d51f2))
+- update readme (by @AtMrun in [28b74ea](https://github.com/atlanhq/application-sdk/commit/28b74ea))
+- add common setup issues (#542) (by @inishchith in [dd18a31](https://github.com/atlanhq/application-sdk/commit/dd18a31))
+
+
+
 ## v0.1.1rc5 (May 13, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc4...v0.1.1rc5

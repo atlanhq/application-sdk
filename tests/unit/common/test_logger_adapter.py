@@ -8,7 +8,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 from loguru import logger
 
-from application_sdk.common.logger_adaptors import AtlanLoggerAdapter, get_logger
+from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 from application_sdk.test_utils.hypothesis.strategies.common.logger import (
     activity_info_strategy,
     workflow_info_strategy,
@@ -110,7 +110,7 @@ def test_process_with_workflow_context():
             assert kwargs["namespace"] == "test_namespace"
             assert kwargs["task_queue"] == "test_queue"
             assert kwargs["attempt"] == 1
-            expected_msg = "Test message Workflow Context: Workflow ID: {workflow_id} Run ID: {run_id} Type: {workflow_type}"
+            expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
             assert msg == expected_msg
 
 
@@ -163,7 +163,7 @@ def test_process_with_activity_context():
             assert kwargs["schedule_to_close_timeout"] == "30s"
             assert kwargs["start_to_close_timeout"] == "25s"
 
-            expected_msg = "Test message Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
+            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
             assert msg == expected_msg
 
 
@@ -190,7 +190,7 @@ def test_process_with_generated_activity_context(activity_info: mock.Mock):
                 kwargs["start_to_close_timeout"] == activity_info.start_to_close_timeout
             )
 
-            expected_msg = "Test message Activity Context: Activity ID: {activity_id} Workflow ID: {workflow_id} Run ID: {run_id} Type: {activity_type}"
+            expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
             assert msg == expected_msg
 
 
@@ -199,7 +199,7 @@ def test_process_with_generated_request_context(request_id: str):
     """Test process() method with generated request context data."""
     with create_logger_adapter() as logger_adapter:
         with mock.patch(
-            "application_sdk.common.logger_adaptors.request_context"
+            "application_sdk.observability.logger_adaptor.request_context"
         ) as mock_context:
             mock_context.get.return_value = {"request_id": request_id}
             msg, kwargs = logger_adapter.process("Test message", {})

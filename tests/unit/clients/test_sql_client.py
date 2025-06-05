@@ -6,6 +6,7 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.error_codes import CommonError
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     metadata_args_strategy,
@@ -91,13 +92,13 @@ def test_load_property_based(
         assert sql_client.connection == mock_connection
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata(mock_run_query: Any, handler: BaseSQLHandler):
     """Test basic metadata fetching with fixed configuration"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -119,7 +120,7 @@ async def test_fetch_metadata_property_based(
 ):
     """Property-based test for fetching metadata with various arguments and data"""
     with patch(
-        "application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe"
+        "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe"
     ) as mock_run_query:
         # Update handler with the test arguments
         if "database_alias_key" in args:
@@ -140,9 +141,9 @@ async def test_fetch_metadata_property_based(
             }
             test_data.append(test_row)
 
-        import daft
+        import pandas as pd
 
-        mock_run_query.return_value = daft.from_pylist(test_data)
+        mock_run_query.return_value = pd.DataFrame(test_data)
 
         handler.metadata_sql = args["metadata_sql"]
 
@@ -161,15 +162,15 @@ async def test_fetch_metadata_property_based(
                 assert handler.schema_result_key in row
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_without_database_alias_key(
     mock_run_query: Any, handler: BaseSQLHandler
 ):
     """Test metadata fetching without database alias key"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -184,15 +185,15 @@ async def test_fetch_metadata_without_database_alias_key(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_result_keys(
     mock_run_query: Any, handler: BaseSQLHandler
 ):
     """Test metadata fetching with custom result keys"""
     data = [{"TABLE_CATALOG": "test_db", "TABLE_SCHEMA": "test_schema"}]
-    import daft
+    import pandas as pd
 
-    mock_run_query.return_value = daft.from_pylist(data)
+    mock_run_query.return_value = pd.DataFrame(data)
 
     # Sample SQL query
     handler.metadata_sql = "SELECT * FROM information_schema.tables"
@@ -207,7 +208,7 @@ async def test_fetch_metadata_with_result_keys(
     mock_run_query.assert_called_once_with()
 
 
-@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_daft_dataframe")
+@patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
 async def test_fetch_metadata_with_error(
     mock_run_query: AsyncMock, handler: BaseSQLHandler
 ):
@@ -483,7 +484,7 @@ def test_get_sqlalchemy_connection_string_basic_auth(sql_client_with_db_config):
         "database": "test_db",
         "authType": "basic",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=None"
@@ -500,7 +501,7 @@ def test_get_sqlalchemy_connection_string_iam_user(sql_client_with_db_config):
         "authType": "iam_user",
         "extra": {"username": "db_user", "database": "test_db"},
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with patch.object(
         sql_client_with_db_config, "get_iam_user_token", return_value="iam_token"
@@ -523,7 +524,7 @@ def test_get_sqlalchemy_connection_string_iam_role(sql_client_with_db_config):
             "aws_external_id": "external-id",
         },
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with patch.object(
         sql_client_with_db_config, "get_iam_role_token", return_value="iam_token"
@@ -544,7 +545,7 @@ def test_get_sqlalchemy_connection_string_with_parameters(sql_client_with_db_con
         "authType": "basic",
         "ssl_mode": "require",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
     expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
@@ -563,7 +564,7 @@ def test_get_sqlalchemy_connection_string_missing_required_param(
         # Missing database
         "authType": "basic",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(ValueError, match="database is required"):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
@@ -579,9 +580,9 @@ def test_get_sqlalchemy_connection_string_invalid_auth_type(sql_client_with_db_c
         "database": "test_db",
         "authType": "invalid_auth",
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
-    with pytest.raises(ValueError, match="Invalid auth type: invalid_auth"):
+    with pytest.raises(CommonError, match="invalid_auth"):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
 
 
@@ -600,10 +601,10 @@ def test_get_sqlalchemy_connection_string_iam_user_missing_username(
             "database": "test_db"
         },
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(
-        ValueError, match="username is required for IAM user authentication"
+        CommonError, match="username is required for IAM user authentication"
     ):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
 
@@ -623,9 +624,39 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
             "aws_external_id": "external-id",
         },
     }
-    sql_client_with_db_config.credentials = credentials
+    sql_client_with_db_config.resolved_credentials = credentials
 
     with pytest.raises(
-        ValueError, match="aws_role_arn is required for IAM role authentication"
+        CommonError, match="aws_role_arn is required for IAM role authentication"
     ):
         sql_client_with_db_config.get_sqlalchemy_connection_string()
+
+
+def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_config):
+    """Test connection string generation with compiled url"""
+    credentials = {
+        "extra": {
+            "compiled_url": "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+        }
+    }
+    sql_client_with_db_config.resolved_credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+    assert conn_str == expected
+
+
+def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect(
+    sql_client_with_db_config,
+):
+    """Test connection string generation with compiled url with invalid dialect"""
+    credentials = {
+        "extra": {
+            "compiled_url": "postgresql+psycopg2://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+        }
+    }
+    sql_client_with_db_config.resolved_credentials = credentials
+
+    conn_str = sql_client_with_db_config.get_sqlalchemy_connection_string()
+    expected = "postgresql+psycopg://test_user:test_pass@localhost:5432/test_db?connect_timeout=5&ssl_mode=require"
+    assert conn_str == expected

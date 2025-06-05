@@ -20,8 +20,10 @@ from pydantic import BaseModel
 from temporalio import activity
 
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.handlers import HandlerInterface
+from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -133,8 +135,12 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if workflow_id not in self._state:
                 await self._set_state(workflow_args)
             return self._state[workflow_id]
-        except Exception as e:
-            logger.error(f"Error getting state: {str(e)}", exc_info=e)
+        except OrchestratorError as e:
+            logger.error(
+                f"Error getting state: {str(e)}",
+                error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
+                exc_info=e,
+            )
             await self._clean_state()
             raise
 
@@ -152,8 +158,38 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_id = get_workflow_id()
             if workflow_id in self._state:
                 self._state.pop(workflow_id)
-        except Exception as e:
+        except OrchestratorError as e:
             logger.warning("Failed to clean state", exc_info=e)
+
+    @activity.defn
+    @auto_heartbeater
+    async def get_workflow_args(
+        self, workflow_config: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Activity to safely retrieve workflow configuration from state store.
+
+        Args:
+            workflow_config: Dictionary containing workflow_id and other parameters
+
+        Returns:
+            Dict containing the complete workflow configuration
+
+        Raises:
+            IOError: If configuration cannot be retrieved from state store
+        """
+        workflow_id = workflow_config.get("workflow_id")
+        if not workflow_id:
+            raise ValueError("workflow_id is required in workflow_config")
+
+        try:
+            # This already handles the Dapr call internally
+            return StateStoreInput.extract_configuration(workflow_id)
+        except Exception as e:
+            logger.error(
+                f"Failed to retrieve workflow configuration for {workflow_id}: {str(e)}",
+                exc_info=e,
+            )
+            raise
 
     @activity.defn
     @auto_heartbeater
@@ -197,6 +233,10 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             logger.info("Preflight check completed successfully")
             return result
 
-        except Exception as e:
-            logger.error(f"Preflight check failed: {str(e)}", exc_info=True)
+        except OrchestratorError as e:
+            logger.error(
+                f"Preflight check failed: {str(e)}",
+                error_code=OrchestratorError.ORCHESTRATOR_CLIENT_ACTIVITY_ERROR.code,
+                exc_info=e,
+            )
             raise

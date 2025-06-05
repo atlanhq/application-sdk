@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional
 
 from application_sdk.clients.utils import get_workflow_client
@@ -28,13 +29,11 @@ class BaseApplication:
             server (ServerInterface): The server class for the application.
         """
         self.application_name = name
-        self.server = server
 
         # setup application server. serves the UI, and handles the various triggers
-        self.application = None
+        self.server = server
 
         self.worker = None
-        self.application = None  # For server, if needed
 
         self.workflow_client = get_workflow_client(application_name=name)
 
@@ -43,6 +42,7 @@ class BaseApplication:
         workflow_classes,
         activities_class,
         passthrough_modules: List[str] = [],
+        activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """
         Set up the workflow client and start the worker for the application.
@@ -51,6 +51,7 @@ class BaseApplication:
             workflow_classes (list): The workflow classes for the application.
             activities_class (ActivitiesInterface): The activities class for the application.
             passthrough_modules (list): The modules to pass through to the worker.
+            activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
         await self.workflow_client.load()
         activities = activities_class()
@@ -60,6 +61,7 @@ class BaseApplication:
             workflow_classes=workflow_classes,
             workflow_activities=workflow_class.get_activities(activities),
             passthrough_modules=passthrough_modules,
+            activity_executor=activity_executor,
         )
 
     async def start_workflow(self, workflow_args, workflow_class) -> Any:
@@ -95,14 +97,14 @@ class BaseApplication:
         if self.workflow_client is None:
             await self.workflow_client.load()
 
-        # setup application server. serves the UI, and handles the various triggers
-        self.application = APIServer(
+        # Overrides the application server. serves the UI, and handles the various triggers
+        self.server = APIServer(
             workflow_client=self.workflow_client,
         )
 
         # register the workflow on the application server
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint
-        self.application.register_workflow(
+        self.server.register_workflow(
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
@@ -114,7 +116,7 @@ class BaseApplication:
         Raises:
             ValueError: If the application server is not initialized.
         """
-        if self.application is None:
+        if self.server is None:
             raise ValueError("Application server not initialized")
 
-        await self.application.start()
+        await self.server.start()

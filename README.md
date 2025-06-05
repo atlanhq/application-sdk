@@ -1,7 +1,8 @@
 # Atlan Application SDK
 [![On-Push Checks](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/push.yaml) [![CodeQL Advanced](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml/badge.svg)](https://github.com/atlanhq/application-sdk/actions/workflows/codeql.yaml) [![PyPI version](https://img.shields.io/pypi/v/atlan-application-sdk.svg)](https://pypi.org/project/atlan-application-sdk/)
 
-Application SDK is a Python library for developing applications on the Atlan Platform. It provides a comprehensive PaaS (Platform as a Service) system with tools and services to build, test, and manage applications.
+The Atlan Application SDK is a Python library designed for building applications on the Atlan platform. It offers a full PaaS (Platform-as-a-Service) toolkit — from local development to deployment and partner collaboration — so you can create integrations and tools that seamlessly extend the Atlan experience for our mutual customers.
+
 
 ## Usage
 
@@ -34,17 +35,20 @@ poetry add atlan-application-sdk
 
 - We welcome contributions! Please see our [Contributing Guide](https://github.com/atlanhq/application-sdk/blob/main/CONTRIBUTING.md) for guidelines.
 
-## Need Help?
+## Partner Collaboration
 
-Get support through any of these channels:
+- For information on how to collaborate with Atlan on app development and integrations, please see our [Partner Collaboration Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/guides/partners.md).
+
+## Need help?
+We’re here whenever you need us:
 
 - Email: **connect@atlan.com**
-- Slack: **#pod-app-framework**
 - Issues: [GitHub Issues](https://github.com/atlanhq/application-sdk/issues)
+
 
 ## Security
 
-- Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/main/SECURITY.md) document for guidance on responsible disclosure, or Please e-mail security@atlan.com and we will respond promptly.
+Have you discovered a vulnerability or have concerns about the SDK? Please read our [SECURITY.md](https://github.com/atlanhq/application-sdk/blob/main/SECURITY.md) document for guidance on responsible disclosure, or please e-mail security@atlan.com and we will respond promptly.
 
 ## License and Attribution
 

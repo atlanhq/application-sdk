@@ -6,4 +6,4 @@ As of today, you can build this frontend using any frontend framework.
 
 More information about Atlantis will be available soon.
 
-If you have any questions please reach out on the **#pod-app-framework** slack channel.
+If you have any questions please reach out us at connect@atlan.com.

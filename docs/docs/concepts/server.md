@@ -90,7 +90,7 @@ from pydantic import BaseModel
 
 from application_sdk.server.fastapi import APIServer
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.constants import APPLICATION_NAME
 # Assuming your custom classes are defined elsewhere
 from my_connector.handlers import MyConnectorHandler
@@ -189,7 +189,7 @@ The `APIServer` class provides default endpoints like `/workflows/v1/test_auth`,
 # In your handler file (e.g., my_connector/handlers.py)
 from typing import Any, Dict, List, Optional
 from application_sdk.handlers import HandlerInterface
-from application_sdk.common.logger_adaptors import get_logger
+from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import MetadataType
 
 logger = get_logger(__name__)

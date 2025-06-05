@@ -60,3 +60,5 @@ dapr init --runtime-version 1.13.6 --slim
 > Your development environment is now ready! Head over to our [Getting Started Guide](../guides/getting-started.md) to learn how to:
 > - Install project dependencies
 > - Run example applications
+
+For common setup issues, please see our [Troubleshooting Guide](https://github.com/atlanhq/application-sdk/blob/main/docs/docs/setup/troubleshooting.md).

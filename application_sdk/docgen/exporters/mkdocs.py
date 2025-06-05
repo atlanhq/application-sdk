@@ -6,9 +6,9 @@ from typing import Any, Dict, List, Optional
 import yaml
 from pydantic import BaseModel, HttpUrl
 
-from application_sdk.common.logger_adaptors import get_logger
 from application_sdk.docgen.models.export.page import Page
 from application_sdk.docgen.models.manifest import DocsManifest
+from application_sdk.observability.logger_adaptor import get_logger
 
 
 class MkDocsConfig(BaseModel):
