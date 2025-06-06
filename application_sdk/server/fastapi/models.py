@@ -196,7 +196,7 @@ class EventFilter(BaseModel):
 
 
 class EventWorkflowTrigger(WorkflowTrigger):
-    event_trigger_id: str
+    event_id: str
     event_type: str
     event_name: str
     event_filters: List[EventFilter]

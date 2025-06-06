@@ -77,7 +77,7 @@ class BaseApplication:
                 event_type=event["eventType"],
                 event_name=event["eventName"],
                 event_filters=event["filters"],
-                event_trigger_id=event["eventId"],
+                event_id=event["eventId"],
             )
 
             if event["eventId"] in self.event_subscriptions:
@@ -170,7 +170,7 @@ class BaseApplication:
         for event_trigger in self.event_subscriptions.values():
             if event_trigger.workflow_class is None:
                 raise ValueError(
-                    f"Workflow class not set for event trigger {event_trigger.event_trigger_id}"
+                    f"Workflow class not set for event trigger {event_trigger.event_id}"
                 )
 
             self.application.register_workflow(

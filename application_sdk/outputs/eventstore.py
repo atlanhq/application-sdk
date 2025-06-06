@@ -94,15 +94,12 @@ class EventStore:
     EVENT_STORE_NAME = "eventstore"
 
     @classmethod
-    def publish_event(cls, event: Event):
-        """Create a new generic event.
+    def enrich_event_metadata(cls, event: Event):
+        """Enrich the event metadata with the workflow and activity information.
 
         Args:
             event (Event): Event data.
-            topic_name (str, optional): Topic name to publish the event to. Defaults to TOPIC_NAME.
 
-        Example:
-            >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
         if not event.metadata:
             event.metadata = EventMetadata()
@@ -133,6 +130,21 @@ class EventStore:
                 event.metadata.workflow_state = WorkflowStates.RUNNING.value
         except Exception:
             logger.warning("Not in activity context, cannot set activity metadata")
+
+        return event
+
+    @classmethod
+    def publish_event(cls, event: Event):
+        """Create a new generic event.
+
+        Args:
+            event (Event): Event data.
+            topic_name (str, optional): Topic name to publish the event to. Defaults to TOPIC_NAME.
+
+        Example:
+            >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
+        """
+        event = cls.enrich_event_metadata(event)
 
         with clients.DaprClient() as client:
             client.publish_event(

@@ -261,7 +261,7 @@ class APIServer(ServerInterface):
                 self.event_triggers.append(trigger)
 
                 self.events_router.add_api_route(
-                    f"/event/{trigger.event_trigger_id}",
+                    f"/event/{trigger.event_id}",
                     start_workflow,
                     methods=["POST"],
                     response_model=WorkflowResponse,
@@ -352,7 +352,7 @@ class APIServer(ServerInterface):
         subscriptions: List[dict[str, Any]] = []
         for event_trigger in self.event_triggers:
             filters = [
-                f"{event_filter.path} {event_filter.operator} '{event_filter.value}'"
+                f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
                 for event_filter in event_trigger.event_filters
             ]
             filters.append(f"event.data.event_name == '{event_trigger.event_name}'")
@@ -366,7 +366,7 @@ class APIServer(ServerInterface):
                         "rules": [
                             {
                                 "match": " && ".join(filters),
-                                "path": f"/events/v1/event/{event_trigger.event_trigger_id}",
+                                "path": f"/events/v1/event/{event_trigger.event_id}",
                             }
                         ]
                     },
