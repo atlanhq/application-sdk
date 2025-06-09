@@ -379,6 +379,13 @@ class APIServer(ServerInterface):
             response_model="list",
         )
 
+        self.events_router.add_api_route(
+            "/drop",
+            self.drop_event,
+            methods=["POST"],
+            response_model=EventWorkflowResponse,
+        )
+
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.home)
@@ -414,12 +421,25 @@ class APIServer(ServerInterface):
                                 "match": " && ".join(filters),
                                 "path": f"/events/v1/event/{event_trigger.event_id}",
                             }
-                        ]
+                        ],
+                        "default": "/events/v1/drop",
                     },
                 }
             )
 
         return subscriptions
+
+    async def drop_event(self, body: EventWorkflowRequest) -> EventWorkflowResponse:
+        """Drop an event."""
+        return EventWorkflowResponse(
+            success=False,
+            message="Event didn't match any of the filters",
+            data=WorkflowData(
+                workflow_id="",
+                run_id="",
+            ),
+            status=EventWorkflowResponse.Status.DROP,
+        )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         """Test authentication credentials."""
