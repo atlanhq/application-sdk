@@ -274,10 +274,12 @@ class BaseSQLClient(ClientInterface):
             ValueError: If required connection parameters are missing.
         """
         extra = parse_credentials_extra(self.resolved_credentials)
+
+        # TODO: Uncomment this when the native deployment is ready
         # If the compiled_url is present, use it directly
-        sqlalchemy_url = extra.get("compiled_url")
-        if sqlalchemy_url:
-            return self.get_supported_sqlalchemy_url(sqlalchemy_url)
+        # sqlalchemy_url = extra.get("compiled_url")
+        # if sqlalchemy_url:
+        #     return self.get_supported_sqlalchemy_url(sqlalchemy_url)
 
         auth_token = self.get_auth_token()
 
