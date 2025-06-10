@@ -39,10 +39,9 @@ class BaseApplication:
         self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
 
         # setup application server. serves the UI, and handles the various triggers
-        self.application = None
+        self.server = server
 
         self.worker = None
-        self.application = None  # For server, if needed
 
         self.workflow_client = get_workflow_client(application_name=name)
 
@@ -161,8 +160,8 @@ class BaseApplication:
         if self.workflow_client is None:
             await self.workflow_client.load()
 
-        # setup application server. serves the UI, and handles the various triggers
-        self.application = APIServer(
+        # Overrides the application server. serves the UI, and handles the various triggers
+        self.server = APIServer(
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
         )
@@ -180,7 +179,7 @@ class BaseApplication:
 
         # register the workflow on the application server
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint
-        self.application.register_workflow(
+        self.server.register_workflow(
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
@@ -192,7 +191,7 @@ class BaseApplication:
         Raises:
             ValueError: If the application server is not initialized.
         """
-        if self.application is None:
+        if self.server is None:
             raise ValueError("Application server not initialized")
 
-        await self.application.start()
+        await self.server.start()

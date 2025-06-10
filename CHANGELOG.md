@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.1.1rc12 (June 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc11...v0.1.1rc12
+
+### Bug Fixes
+
+- Pandas read_sql for Redshift adbc connection (#572) (by @Onkar Ravgan in [183d204](https://github.com/atlanhq/application-sdk/commit/183d204))
+
+
+
+## v0.1.1rc11 (June 02, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc10...v0.1.1rc11
+
+### Bug Fixes
+
+- changed application -> server, custom servers in constructor in [16a3f7f](https://github.com/atlanhq/application-sdk/commit/16a3f7f81b7a26400019c76611ec6ee327ea9e1a)
+
+
 ## v0.1.1rc10 (May 29, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc9...v0.1.1rc10

@@ -262,7 +262,10 @@ class CommonError(AtlanError):
         ErrorComponent.COMMON, "400", "00", "Filter preparation error"
     )
     CREDENTIALS_PARSE_ERROR = ErrorCode(
-        ErrorComponent.COMMON, "400", "01", "Credentials parse error"
+        ErrorComponent.COMMON, "400", "02", "Credentials parse error"
+    )
+    CREDENTIALS_RESOLUTION_ERROR = ErrorCode(
+        ErrorComponent.COMMON, "401", "03", "Credentials resolution error"
     )
 
 

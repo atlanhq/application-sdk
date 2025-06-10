@@ -49,6 +49,32 @@ class SQLQueryInput(Input):
         self.chunk_size = chunk_size
         self.engine = engine
 
+    def _execute_pandas_query(
+        self, conn
+    ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
+        """Helper function to execute SQL query using pandas.
+           The function is responsible for using import_optional_dependency method of the pandas library to import sqlalchemy
+           This function helps pandas in determining weather to use the sqlalchemy connection object and constructs like text()
+           or use the underlying database connection object. This has been done to make sure connectors like the Redshift connector,
+           which do not support the sqlalchemy connection object, can be made compatible with the application-sdk.
+
+        Args:
+            conn: Database connection object.
+
+        Returns:
+            Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
+                or iterator of DataFrames if chunked.
+        """
+        import pandas as pd
+        from pandas.compat._optional import import_optional_dependency
+        from sqlalchemy import text
+
+        if import_optional_dependency("sqlalchemy", errors="ignore"):
+            return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+        else:
+            dbapi_conn = getattr(conn, "connection", None)
+            return pd.read_sql_query(self.query, dbapi_conn, chunksize=self.chunk_size)
+
     def _read_sql_query(
         self, session: "Session"
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
@@ -61,11 +87,8 @@ class SQLQueryInput(Input):
             Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
         """
-        import pandas as pd
-        from sqlalchemy import text
-
         conn = session.connection()
-        return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+        return self._execute_pandas_query(conn)
 
     def _execute_query_daft(
         self,
@@ -97,10 +120,7 @@ class SQLQueryInput(Input):
                 or iterator of DataFrames if chunked.
         """
         with self.engine.connect() as conn:
-            import pandas as pd
-            from sqlalchemy import text
-
-            return pd.read_sql_query(text(self.query), conn, chunksize=self.chunk_size)
+            return self._execute_pandas_query(conn)
 
     async def get_batched_dataframe(
         self,

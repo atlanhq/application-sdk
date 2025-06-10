@@ -79,6 +79,7 @@ nav:
       # Development guides
       - Creating an SQL Application: guides/sql-application-guide.md
       - Custom Frontends with Atlantis: guides/atlantis.md
+      - Secret Stores: guides/secretstores.md
 
       # Best practices & testing
       - Best Practices: guides/best-practices.md
