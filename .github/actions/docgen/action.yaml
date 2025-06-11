@@ -29,7 +29,7 @@ runs:
     - name: Install dependencies
       shell: bash
       run: |
-        uv sync --all-groups
+        uv sync --all-extras --all-groups
         uv add mkdocs mkdocs-material
 
     - name: Verify and Generate Docs
