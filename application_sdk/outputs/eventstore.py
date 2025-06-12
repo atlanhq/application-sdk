@@ -59,6 +59,8 @@ class EventMetadata(BaseModel):
     activity_id: str | None = Field(init=True, default=None)
     attempt: int | None = Field(init=True, default=None)
 
+    topic_name: str | None = Field(init=False, default=None)
+
 
 class Event(BaseModel, ABC):
     """Base class for all events.
@@ -108,6 +110,7 @@ class EventStore:
         event.metadata.event_published_client_timestamp = int(
             datetime.now().timestamp()
         )
+        event.metadata.topic_name = event.get_topic_name()
 
         try:
             workflow_info = workflow.info()
@@ -134,7 +137,7 @@ class EventStore:
         return event
 
     @classmethod
-    def publish_event(cls, event: Event):
+    def publish_event(cls, event: Event, enrich_metadata: bool = True):
         """Create a new generic event.
 
         Args:
@@ -144,7 +147,8 @@ class EventStore:
         Example:
             >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
-        event = cls.enrich_event_metadata(event)
+        if enrich_metadata:
+            event = cls.enrich_event_metadata(event)
 
         with clients.DaprClient() as client:
             client.publish_event(
