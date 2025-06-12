@@ -67,7 +67,7 @@ class APIServer(ServerInterface):
         app (FastAPI): The main FastAPI application instance.
         workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
         workflow_router (APIRouter): Router for workflow-related endpoints.
-        pubsub_router (APIRouter): Router for pub/sub operations.
+        dapr_router (APIRouter): Router for pub/sub operations.
         events_router (APIRouter): Router for event handling.
         docs_directory_path (str): Path to documentation source directory.
         docs_export_path (str): Path where documentation will be exported.
@@ -85,7 +85,7 @@ class APIServer(ServerInterface):
     app: FastAPI
     workflow_client: Optional[WorkflowClient]
     workflow_router: APIRouter
-    pubsub_router: APIRouter
+    dapr_router: APIRouter
     events_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
@@ -129,7 +129,7 @@ class APIServer(ServerInterface):
 
         # Create router instances using the renamed import
         self.workflow_router = APIRouter()
-        self.pubsub_router = APIRouter()
+        self.dapr_router = APIRouter()
         self.events_router = APIRouter()
 
         # Set up the application
@@ -190,7 +190,7 @@ class APIServer(ServerInterface):
         # Then include all routers
         self.app.include_router(get_server_router())
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
-        self.app.include_router(self.pubsub_router, prefix="/dapr")
+        self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
     async def home(self, request: Request) -> HTMLResponse:
@@ -285,7 +285,7 @@ class APIServer(ServerInterface):
                         workflow_id="",
                         run_id="",
                     ),
-                    status=EventWorkflowResponse.Status.RETRY,
+                    status=EventWorkflowResponse.Status.DROP,
                 )
 
         for trigger in triggers:
@@ -372,7 +372,7 @@ class APIServer(ServerInterface):
             methods=["POST"],
         )
 
-        self.pubsub_router.add_api_route(
+        self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
             methods=["GET"],

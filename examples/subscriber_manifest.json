@@ -1,5 +1,5 @@
 {
-    "applicationId": "order-processing-service",
+    "applicationId": "publish-app",
     "eventRegistration": {
       "consumes": [
         {
