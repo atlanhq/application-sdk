@@ -5,7 +5,6 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.handlers import HandlerInterface
-from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
 from application_sdk.server.fastapi import (
     APIServer,
     EventWorkflowTrigger,
@@ -137,16 +136,6 @@ class TestServer:
 
         self.app.event_triggers = []
         self.app.workflow_client = temporal_client
-
-        def trigger_workflow_on_start(event: AtlanEvent):
-            if event.data.event_type == "workflow_start":
-                return True
-            return False
-
-        def trigger_workflow_name(event: AtlanEvent):
-            if isinstance(event.data, WorkflowEndEvent):
-                return event.data.workflow_name == "test_workflow"
-            return False
 
         self.app.register_workflow(
             SampleWorkflow,
