@@ -7,7 +7,6 @@ alwaysApply: false
 
 - Run the unit tests using the command: `uv run pytests tests/`
 
-
 - **Test Framework**
     - Write tests before fixing bugs
     - Keep tests readable and maintainable
