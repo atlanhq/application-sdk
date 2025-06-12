@@ -106,7 +106,11 @@ class SampleWorkflow(WorkflowInterface):
     def get_activities(activities: ActivitiesInterface) -> List[Callable[..., Any]]:
         sample_activities = cast(SampleActivities, activities)
 
-        return [sample_activities.activity_1, sample_activities.activity_2]
+        return [
+            sample_activities.activity_1,
+            sample_activities.activity_2,
+            sample_activities.get_workflow_args,
+        ]
 
 
 async def start_worker():
