@@ -170,7 +170,7 @@ class BaseApplication:
                     f"Workflow class not set for event trigger {event_trigger.event_id}"
                 )
 
-            self.application.register_workflow(
+            self.server.register_workflow(
                 workflow_class=event_trigger.workflow_class,
                 triggers=[event_trigger],
             )
