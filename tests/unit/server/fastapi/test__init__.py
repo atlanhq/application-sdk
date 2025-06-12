@@ -99,11 +99,6 @@ class TestServer:
     async def test_event_trigger_success(self, event_data: Dict[str, Any]):
         """Test event trigger with hypothesis generated event data"""
 
-        def should_trigger_workflow(event: AtlanEvent):
-            if event.data.event_type == "workflow_end":
-                return True
-            return False
-
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()
 
@@ -114,7 +109,10 @@ class TestServer:
             SampleWorkflow,
             triggers=[
                 EventWorkflowTrigger(
-                    should_trigger_workflow=should_trigger_workflow,
+                    event_id="",
+                    event_type="",
+                    event_name="",
+                    event_filters=[],
                     workflow_class=SampleWorkflow,
                 )
             ],
@@ -154,13 +152,12 @@ class TestServer:
             SampleWorkflow,
             triggers=[
                 EventWorkflowTrigger(
-                    should_trigger_workflow=trigger_workflow_on_start,
+                    event_id="",
+                    event_type="",
+                    event_name="",
+                    event_filters=[],
                     workflow_class=SampleWorkflow,
-                ),
-                EventWorkflowTrigger(
-                    should_trigger_workflow=trigger_workflow_name,
-                    workflow_class=SampleWorkflow,
-                ),
+                )
             ],
         )
 
