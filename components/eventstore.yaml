@@ -3,16 +3,6 @@ kind: Component
 metadata:
   name: eventstore
 spec:
-  type: pubsub.kafka
+  type: pubsub.in-memory
   version: v1
-  metadata:
-    - name: brokers
-      value: "localhost:9092"
-    - name: consumerGroup
-      value: "dapr-app"
-    - name: clientID
-      value: "dapr-app"
-    - name: authType
-      value: "none"
-    - name: disableTls
-      value: "true"
+  metadata: []
