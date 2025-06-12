@@ -4,6 +4,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Type, cast
 
+from dapr import clients
 from temporalio import activity, workflow
 
 from application_sdk.activities import ActivitiesInterface
@@ -33,14 +34,6 @@ class SampleActivities(ActivitiesInterface):
 
         EventStore.publish_event(
             event=Event(
-                metadata=EventMetadata(
-                    workflow_name="AssetExtractionWorkflow",
-                    workflow_id="123",
-                    workflow_run_id="456",
-                    application_name=APPLICATION_NAME,
-                    event_published_client_timestamp=int(datetime.now().timestamp()),
-                    workflow_state=WorkflowStates.COMPLETED.value,
-                ),
                 event_type=EventTypes.OBSERVABILITY_EVENT.value,
                 event_name=ObservabilityEventNames.ERROR.value,
                 data={
@@ -82,13 +75,13 @@ class SampleWorkflow(WorkflowInterface):
         workflow_args["workflow_run_id"] = workflow_run_id
 
         # When a workflow is triggered by an event, the event is passed in as a dictionary
-        event = Event(**workflow_args["data"])
+        event = Event(**workflow_args["event"])
 
         # We can also check the event data to get the workflow name and id
-        workflow_name = event.metadata.workflow_name
+        workflow_type = event.metadata.workflow_type
         workflow_id = event.metadata.workflow_id
 
-        print("workflow_name", workflow_name)
+        print("workflow_type", workflow_type)
         print("workflow_id", workflow_id)
 
         await workflow.execute_activity_method(
@@ -172,21 +165,26 @@ async def simulate_worklflow_end_event():
     await asyncio.sleep(15)
 
     # Simulates that a dependent workflow has ended
-    EventStore.publish_event(
-        event=Event(
-            metadata=EventMetadata(
-                workflow_name="AssetExtractionWorkflow",
-                workflow_state=WorkflowStates.COMPLETED.value,
-                workflow_id="123",
-                workflow_run_id="456",
-                application_name=APPLICATION_NAME,
-                event_published_client_timestamp=int(datetime.now().timestamp()),
-            ),
-            event_type=EventTypes.APPLICATION_EVENT.value,
-            event_name=ApplicationEventNames.WORKFLOW_END.value,
-            data={},
+    event = Event(
+        metadata=EventMetadata(
+            workflow_type="AssetExtractionWorkflow",
+            workflow_state=WorkflowStates.COMPLETED.value,
+            workflow_id="123",
+            workflow_run_id="456",
+            application_name="AssetExtractionApplication",
+            event_published_client_timestamp=int(datetime.now().timestamp()),
         ),
+        event_type=EventTypes.APPLICATION_EVENT.value,
+        event_name=ApplicationEventNames.WORKFLOW_END.value,
+        data={},
     )
+    with clients.DaprClient() as client:
+        client.publish_event(
+            pubsub_name=EventStore.EVENT_STORE_NAME,
+            topic_name=event.get_topic_name(),
+            data=json.dumps(event.model_dump(mode="json")),
+            data_content_type="application/json",
+        )
 
 
 if __name__ == "__main__":

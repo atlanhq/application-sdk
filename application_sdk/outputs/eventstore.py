@@ -6,13 +6,15 @@ in the application, including workflow and activity events.
 
 import json
 from abc import ABC
+from datetime import datetime
 from enum import Enum
 from typing import Any, Dict
 
 from dapr import clients
 from pydantic import BaseModel, Field
-from temporalio import activity
+from temporalio import activity, workflow
 
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -36,26 +38,26 @@ class ObservabilityEventNames(Enum):
 
 
 class WorkflowStates(Enum):
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-class ActivityStates(Enum):
+    UNKNOWN = "unknown"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
 
 
 class EventMetadata(BaseModel):
-    application_name: str = Field()
-    event_published_client_timestamp: int = Field()
+    application_name: str = Field(init=True, default=APPLICATION_NAME)
+    event_published_client_timestamp: int = Field(init=True, default=0)
 
     # Workflow information
-    workflow_name: str | None = Field()
-    workflow_id: str | None = Field()
-    workflow_run_id: str | None = Field()
-    workflow_state: str | None = Field()
+    workflow_type: str | None = Field(init=True, default=None)
+    workflow_id: str | None = Field(init=True, default=None)
+    workflow_run_id: str | None = Field(init=True, default=None)
+    workflow_state: str | None = Field(init=True, default=WorkflowStates.UNKNOWN.value)
+
+    # Activity information (Only when in an activity flow)
+    activity_type: str | None = Field(init=True, default=None)
+    activity_id: str | None = Field(init=True, default=None)
+    attempt: int | None = Field(init=True, default=None)
 
 
 class Event(BaseModel, ABC):
@@ -65,7 +67,7 @@ class Event(BaseModel, ABC):
         event_type (str): Type of the event.
     """
 
-    metadata: EventMetadata
+    metadata: EventMetadata = Field(init=True, default_factory=EventMetadata)
 
     event_type: str
     event_name: str
@@ -92,6 +94,46 @@ class EventStore:
     EVENT_STORE_NAME = "eventstore"
 
     @classmethod
+    def enrich_event_metadata(cls, event: Event):
+        """Enrich the event metadata with the workflow and activity information.
+
+        Args:
+            event (Event): Event data.
+
+        """
+        if not event.metadata:
+            event.metadata = EventMetadata()
+
+        event.metadata.application_name = APPLICATION_NAME
+        event.metadata.event_published_client_timestamp = int(
+            datetime.now().timestamp()
+        )
+
+        try:
+            workflow_info = workflow.info()
+            if workflow_info:
+                event.metadata.workflow_type = workflow_info.workflow_type
+                event.metadata.workflow_id = workflow_info.workflow_id
+                event.metadata.workflow_run_id = workflow_info.run_id
+        except Exception:
+            logger.warning("Not in workflow context, cannot set workflow metadata")
+
+        try:
+            activity_info = activity.info()
+            if activity_info:
+                event.metadata.activity_type = activity_info.activity_type
+                event.metadata.activity_id = activity_info.activity_id
+                event.metadata.attempt = activity_info.attempt
+                event.metadata.workflow_type = activity_info.workflow_type
+                event.metadata.workflow_id = activity_info.workflow_id
+                event.metadata.workflow_run_id = activity_info.workflow_run_id
+                event.metadata.workflow_state = WorkflowStates.RUNNING.value
+        except Exception:
+            logger.warning("Not in activity context, cannot set activity metadata")
+
+        return event
+
+    @classmethod
     def publish_event(cls, event: Event):
         """Create a new generic event.
 
@@ -102,6 +144,8 @@ class EventStore:
         Example:
             >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
+        event = cls.enrich_event_metadata(event)
+
         with clients.DaprClient() as client:
             client.publish_event(
                 pubsub_name=cls.EVENT_STORE_NAME,

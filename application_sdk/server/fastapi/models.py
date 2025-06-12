@@ -111,6 +111,19 @@ class WorkflowRequest(RootModel[Dict[str, Any]]):
         }
 
 
+class EventWorkflowRequest(BaseModel):
+    event: Event = Field(alias="data", description="Event object")
+    datacontenttype: str = Field(
+        alias="datacontenttype", description="Data content type"
+    )
+    id: str = Field(alias="id", description="Event ID")
+    source: str = Field(alias="source", description="Event source")
+    specversion: str = Field(alias="specversion", description="Event spec version")
+    time: str = Field(alias="time", description="Event time")
+    type: str = Field(alias="type", description="Event type")
+    topic: str = Field(alias="topic", description="Event topic")
+
+
 class WorkflowData(BaseModel):
     workflow_id: str = Field(..., description="Unique identifier for the workflow")
     run_id: str = Field(..., description="Unique identifier for the workflow run")
@@ -136,6 +149,17 @@ class WorkflowResponse(BaseModel):
                 },
             }
         }
+
+
+class EventWorkflowResponse(WorkflowResponse):
+    class Status(str, Enum):
+        SUCCESS = "SUCCESS"
+        RETRY = "RETRY"
+        DROP = "DROP"
+
+    # This should be a string enum of the status of the workflow, based on the Dapr docs
+    # https://docs.dapr.io/reference/api/pubsub_api/#expected-http-response
+    status: Status = Field(..., description="Status of the workflow")
 
 
 class WorkflowConfigRequest(BaseModel):
@@ -179,7 +203,6 @@ class WorkflowConfigResponse(BaseModel):
         }
 
 
-# TODO: Move these models to proper place
 class WorkflowTrigger(BaseModel):
     workflow_class: Optional[Type[WorkflowInterface]] = None
     model_config = {"arbitrary_types_allowed": True}
@@ -197,7 +220,7 @@ class EventFilter(BaseModel):
 
 
 class EventWorkflowTrigger(WorkflowTrigger):
-    event_trigger_id: str
+    event_id: str
     event_type: str
     event_name: str
     event_filters: List[EventFilter]

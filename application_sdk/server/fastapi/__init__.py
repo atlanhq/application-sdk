@@ -32,6 +32,8 @@ from application_sdk.outputs.eventstore import EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
+    EventWorkflowRequest,
+    EventWorkflowResponse,
     EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -223,24 +225,68 @@ class APIServer(ServerInterface):
         if workflow_class is None:
             raise ValueError("workflow_class cannot be None")
 
+        async def start_workflow_http(body: WorkflowRequest) -> WorkflowResponse:
+            try:
+                if not self.workflow_client:
+                    raise Exception("Temporal client not initialized")
+
+                # Use the captured wf_class variable, which is guaranteed to be non-None
+                workflow_data = await self.workflow_client.start_workflow(
+                    body.model_dump(), workflow_class=workflow_class
+                )
+
+                return WorkflowResponse(
+                    success=True,
+                    message="Workflow started successfully",
+                    data=WorkflowData(
+                        workflow_id=workflow_data.get("workflow_id") or "",
+                        run_id=workflow_data.get("run_id") or "",
+                    ),
+                )
+            except Exception as e:
+                logger.error(f"Error starting workflow: {e}")
+                return WorkflowResponse(
+                    success=False,
+                    message="Workflow failed to start",
+                    data=WorkflowData(
+                        workflow_id="",
+                        run_id="",
+                    ),
+                )
+
         # Create a closure for the start_workflow function that captures wf_class directly
-        async def start_workflow(body: WorkflowRequest) -> WorkflowResponse:
-            if not self.workflow_client:
-                raise Exception("Temporal client not initialized")
+        async def start_workflow_event(
+            body: EventWorkflowRequest,
+        ) -> EventWorkflowResponse:
+            try:
+                if not self.workflow_client:
+                    raise Exception("Temporal client not initialized")
 
-            # Use the captured wf_class variable, which is guaranteed to be non-None
-            workflow_data = await self.workflow_client.start_workflow(
-                body.model_dump(), workflow_class=workflow_class
-            )
+                # Use the captured wf_class variable, which is guaranteed to be non-None
+                workflow_data = await self.workflow_client.start_workflow(
+                    body.model_dump(), workflow_class=workflow_class
+                )
 
-            return WorkflowResponse(
-                success=True,
-                message="Workflow started successfully",
-                data=WorkflowData(
-                    workflow_id=workflow_data.get("workflow_id") or "",
-                    run_id=workflow_data.get("run_id") or "",
-                ),
-            )
+                return EventWorkflowResponse(
+                    success=True,
+                    message="Workflow started successfully",
+                    data=WorkflowData(
+                        workflow_id=workflow_data.get("workflow_id") or "",
+                        run_id=workflow_data.get("run_id") or "",
+                    ),
+                    status=EventWorkflowResponse.Status.SUCCESS,
+                )
+            except Exception as e:
+                logger.error(f"Error starting workflow: {e}")
+                return EventWorkflowResponse(
+                    success=False,
+                    message="Workflow failed to start",
+                    data=WorkflowData(
+                        workflow_id="",
+                        run_id="",
+                    ),
+                    status=EventWorkflowResponse.Status.RETRY,
+                )
 
         for trigger in triggers:
             # Set the workflow class on the trigger
@@ -251,7 +297,7 @@ class APIServer(ServerInterface):
                 # Getting routers as local variables to avoid module references
                 self.workflow_router.add_api_route(
                     trigger.endpoint,
-                    start_workflow,  # Use our handler with captured wf_class
+                    start_workflow_http,  # Use our handler with captured wf_class
                     methods=trigger.methods,
                     response_model=WorkflowResponse,
                 )
@@ -261,10 +307,10 @@ class APIServer(ServerInterface):
                 self.event_triggers.append(trigger)
 
                 self.events_router.add_api_route(
-                    f"/event/{trigger.event_trigger_id}",
-                    start_workflow,
+                    f"/event/{trigger.event_id}",
+                    start_workflow_event,
                     methods=["POST"],
-                    response_model=WorkflowResponse,
+                    response_model=EventWorkflowResponse,
                 )
 
                 self.app.include_router(self.events_router, prefix="/events/v1")
@@ -352,7 +398,7 @@ class APIServer(ServerInterface):
         subscriptions: List[dict[str, Any]] = []
         for event_trigger in self.event_triggers:
             filters = [
-                f"{event_filter.path} {event_filter.operator} '{event_filter.value}'"
+                f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
                 for event_filter in event_trigger.event_filters
             ]
             filters.append(f"event.data.event_name == '{event_trigger.event_name}'")
@@ -366,7 +412,7 @@ class APIServer(ServerInterface):
                         "rules": [
                             {
                                 "match": " && ".join(filters),
-                                "path": f"/events/v1/event/{event_trigger.event_trigger_id}",
+                                "path": f"/events/v1/event/{event_trigger.event_id}",
                             }
                         ]
                     },
