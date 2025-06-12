@@ -10,9 +10,6 @@ inputs:
     description: Whether to add a comment to the PR with the Trivy scan results
     required: false
     default: 'true'
-  slack-webhook-url:
-    description: Slack webhook URL for notifications
-    required: false
 
 runs:
   using: 'composite'
@@ -146,33 +143,3 @@ runs:
       env:
         TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
         TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
-
-    - name: Send Slack Notification for Vulnerabilities
-      if: inputs.add-report-comment-to-pr == 'true' && inputs.slack-webhook-url != ''
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        author_name: Github-Actions
-        fields: repo,workflow
-        text: "🚨 *Security Alert: High/Critical Vulnerabilities Detected* \n
-               Repository: ${{ github.repository }} \n
-               Branch: ${{ github.ref_name }} \n
-               PR: ${{ github.event.pull_request.html_url }} \n
-               , please review and address these vulnerabilities."
-      env:
-        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
-
-    - name: Send Slack Notification for Secrets
-      if: inputs.add-report-comment-to-pr == 'true' && inputs.slack-webhook-url != ''
-      uses: 8398a7/action-slack@v3
-      with:
-        status: ${{ job.status }}
-        author_name: Github-Actions
-        fields: repo,workflow
-        text: "🔒 *Security Alert: Secrets Detected* \n
-               Repository: ${{ github.repository }} \n
-               Branch: ${{ github.ref_name }} \n
-               PR: ${{ github.event.pull_request.html_url }} \n
-               , please review and remove any exposed secrets."
-      env:
-        SLACK_WEBHOOK_URL: ${{ inputs.slack-webhook-url }}
