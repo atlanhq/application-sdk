@@ -46,7 +46,6 @@ class PublishBaseTest(TestInterface):
         config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
 
         # Load scenario-specific configuration
-        cls.expected_api_responses = config["expected_api_responses"]
         cls.scenario_config = config.get("scenario_config", {})
         cls.test_name = config["test_name"]
         cls.workflow_config = config.get("workflow_config", {})
