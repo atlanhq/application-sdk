@@ -351,7 +351,7 @@ class APIServer(ServerInterface):
         return [
             {
                 "pubsubname": EventStore.EVENT_STORE_NAME,
-                "topic": "application_events_topic",  # DEBUG
+                "topic": "application_events_topic",  # TODO
                 "routes": {"rules": [{"path": "events/v1/event"}]},
             }
         ]
