@@ -98,6 +98,8 @@ class WorkflowEndEventTrigger(EventWorkflowTrigger):
         super().__init__(
             *args,
             should_trigger_workflow=should_trigger,
+            finished_workflow_name=finished_workflow_name,  # type: ignore
+            finished_workflow_state=finished_workflow_state,  # type: ignore
             **kwargs,
         )
 
