@@ -35,8 +35,6 @@ class BaseApplication:
             server (ServerInterface): The server class for the application.
         """
         self.application_name = name
-        self.server = server
-        self.event_subscriptions: Dict[str, EventWorkflowTrigger] = {}
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server

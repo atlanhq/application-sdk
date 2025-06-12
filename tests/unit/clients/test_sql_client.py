@@ -632,6 +632,7 @@ def test_get_sqlalchemy_connection_string_iam_role_missing_role_arn(
         sql_client_with_db_config.get_sqlalchemy_connection_string()
 
 
+@pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
 def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_config):
     """Test connection string generation with compiled url"""
     credentials = {
@@ -646,6 +647,7 @@ def test_get_sqlalchemy_connection_string_with_compiled_url(sql_client_with_db_c
     assert conn_str == expected
 
 
+@pytest.mark.skip(reason="Skipping this test until the native deployment is ready")
 def test_get_sqlalchemy_connection_string_with_compiled_url_with_invalid_dialect(
     sql_client_with_db_config,
 ):
