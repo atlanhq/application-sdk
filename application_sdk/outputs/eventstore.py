@@ -22,8 +22,8 @@ activity.logger = logger
 
 
 class EventTypes(Enum):
-    APPLICATION_EVENT = "application_events"
-    OBSERVABILITY_EVENT = "observability_events"
+    APPLICATION_EVENT = "application_event"
+    OBSERVABILITY_EVENT = "observability_event"
 
 
 class ApplicationEventNames(Enum):

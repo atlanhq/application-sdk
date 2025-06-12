@@ -4,7 +4,7 @@
       "consumes": [
         {
           "eventId": "AssetExtractionCompleted",
-          "eventType": "application_events",
+          "eventType": "application_event",
           "eventName": "workflow_end",
           "version": "v1",
           "filters": [
@@ -25,7 +25,7 @@
       "produces": [
         {
           "eventId": "PublishAssetCompleted",
-          "eventType": "application_events",
+          "eventType": "application_event",
           "eventName": "workflow_end"
         }
       ]
