@@ -23,7 +23,6 @@ activity.logger = logger
 
 class EventTypes(Enum):
     APPLICATION_EVENT = "application_event"
-    OBSERVABILITY_EVENT = "observability_event"
 
 
 class ApplicationEventNames(Enum):
@@ -31,10 +30,6 @@ class ApplicationEventNames(Enum):
     WORKFLOW_START = "workflow_start"
     ACTIVITY_START = "activity_start"
     ACTIVITY_END = "activity_end"
-
-
-class ObservabilityEventNames(Enum):
-    ERROR = "error"
 
 
 class WorkflowStates(Enum):

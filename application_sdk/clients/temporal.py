@@ -423,7 +423,6 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
-            # Disabled EventInterceptor for now
             interceptors=[EventInterceptor()],
         )
 
