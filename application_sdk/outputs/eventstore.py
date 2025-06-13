@@ -14,7 +14,7 @@ from dapr import clients
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import APPLICATION_NAME, PUBSUB_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -82,13 +82,7 @@ class EventStore:
     """Event store for publishing application events.
 
     This class provides functionality to publish events to a pub/sub system.
-
-    Attributes:
-        EVENT_STORE_NAME (str): Name of the event store binding.
-        TOPIC_NAME (str): Default topic name for events.
     """
-
-    EVENT_STORE_NAME = "eventstore"
 
     @classmethod
     def enrich_event_metadata(cls, event: Event):
@@ -147,7 +141,7 @@ class EventStore:
 
         with clients.DaprClient() as client:
             client.publish_event(
-                pubsub_name=cls.EVENT_STORE_NAME,
+                pubsub_name=PUBSUB_NAME,
                 topic_name=event.get_topic_name(),
                 data=json.dumps(event.model_dump(mode="json")),
                 data_content_type="application/json",

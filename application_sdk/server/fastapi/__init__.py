@@ -20,6 +20,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    PUBSUB_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -28,7 +29,6 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
-from application_sdk.outputs.eventstore import EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.models import (
@@ -413,7 +413,7 @@ class APIServer(ServerInterface):
 
             subscriptions.append(
                 {
-                    "pubsubname": EventStore.EVENT_STORE_NAME,
+                    "pubsubname": PUBSUB_NAME,
                     "topic": event_trigger.event_type + "_topic",
                     "routes": {
                         "rules": [
