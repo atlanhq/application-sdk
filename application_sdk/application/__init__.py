@@ -87,6 +87,9 @@ class BaseApplication:
     def register_event_subscription(
         self, event_id: str, workflow_class: Type[WorkflowInterface]
     ):
+        if self.event_subscriptions is None:
+            raise ValueError("Event subscriptions not initialized")
+
         if event_id not in self.event_subscriptions:
             raise ValueError(
                 f"Event {event_id} not initialized in the application manifest"
@@ -164,16 +167,17 @@ class BaseApplication:
             ui_enabled=ui_enabled,
         )
 
-        for event_trigger in self.event_subscriptions.values():
-            if event_trigger.workflow_class is None:
-                raise ValueError(
-                    f"Workflow class not set for event trigger {event_trigger.event_id}"
-                )
+        if self.event_subscriptions:
+            for event_trigger in self.event_subscriptions.values():
+                if event_trigger.workflow_class is None:
+                    raise ValueError(
+                        f"Workflow class not set for event trigger {event_trigger.event_id}"
+                    )
 
-            self.server.register_workflow(
-                workflow_class=event_trigger.workflow_class,
-                triggers=[event_trigger],
-            )
+                self.server.register_workflow(
+                    workflow_class=event_trigger.workflow_class,
+                    triggers=[event_trigger],
+                )
 
         # register the workflow on the application server
         # the workflow is by default triggered by an HTTP POST request to the /start endpoint
