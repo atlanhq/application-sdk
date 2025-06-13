@@ -2,10 +2,10 @@ from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.handlers import HandlerInterface
-from application_sdk.outputs.eventstore import AtlanEvent, WorkflowEndEvent
 from application_sdk.server.fastapi import (
     APIServer,
     EventWorkflowTrigger,
@@ -13,7 +13,6 @@ from application_sdk.server.fastapi import (
     PreflightCheckResponse,
 )
 from application_sdk.test_utils.hypothesis.strategies.server.fastapi import (
-    event_data_strategy,
     payload_strategy,
 )
 from application_sdk.workflows import WorkflowInterface
@@ -94,15 +93,22 @@ class TestServer:
         self.mock_handler.preflight_check.assert_called_once_with(payload)
 
     @pytest.mark.asyncio
-    @given(event_data=event_data_strategy)
-    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-    async def test_event_trigger_success(self, event_data: Dict[str, Any]):
+    async def test_event_trigger_success(self):
         """Test event trigger with hypothesis generated event data"""
-
-        def should_trigger_workflow(event: AtlanEvent):
-            if event.data.event_type == "workflow_end":
-                return True
-            return False
+        event_data = {
+            "data": {
+                "event_type": "test_event_type",
+                "event_name": "test_event_name",
+                "data": {},
+            },
+            "datacontenttype": "application/json",
+            "id": "some-id",
+            "source": "test-source",
+            "specversion": "1.0",
+            "time": "2024-06-13T00:00:00Z",
+            "type": "test_event_type",
+            "topic": "test_topic",
+        }
 
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()
@@ -114,63 +120,73 @@ class TestServer:
             SampleWorkflow,
             triggers=[
                 EventWorkflowTrigger(
-                    should_trigger_workflow=should_trigger_workflow,
+                    event_id="test_event_id",
+                    event_type="test_event_type",
+                    event_name="test_event_name",
+                    event_filters=[],
                     workflow_class=SampleWorkflow,
                 )
             ],
         )
 
         # Act
-        await self.app.on_event(event_data)
+        # Use the FastAPI app for testing
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/events/v1/event/test_event_id",
+                json=event_data,
+            )
+
+            assert response.status_code == 200
 
         # Assert
-        temporal_client.start_workflow.assert_called_once_with(
-            workflow_args=event_data,
-            workflow_class=SampleWorkflow,
-        )
+        temporal_client.start_workflow.assert_called_once()
 
     @pytest.mark.asyncio
-    @given(event_data=event_data_strategy)
-    @settings(suppress_health_check=[HealthCheck.function_scoped_fixture])
-    async def test_event_trigger_conditions(self, event_data: Dict[str, Any]):
+    async def test_event_trigger_conditions(self):
         """Test event trigger conditions with hypothesis generated event data"""
+        event_data = {
+            "data": {
+                "event_type": "test_event_type",
+                "event_name": "test_event_name",
+                "data": {},
+            },
+            "datacontenttype": "application/json",
+            "id": "some-id",
+            "source": "test-source",
+            "specversion": "1.0",
+            "time": "2024-06-13T00:00:00Z",
+            "type": "test_event_type",
+            "topic": "test_topic",
+        }
+
         temporal_client = AsyncMock()
         temporal_client.start_workflow = AsyncMock()
 
-        self.app.event_triggers = []
         self.app.workflow_client = temporal_client
-
-        def trigger_workflow_on_start(event: AtlanEvent):
-            if event.data.event_type == "workflow_start":
-                return True
-            return False
-
-        def trigger_workflow_name(event: AtlanEvent):
-            if isinstance(event.data, WorkflowEndEvent):
-                return event.data.workflow_name == "test_workflow"
-            return False
+        self.app.event_triggers = []
 
         self.app.register_workflow(
             SampleWorkflow,
             triggers=[
                 EventWorkflowTrigger(
-                    should_trigger_workflow=trigger_workflow_on_start,
+                    event_id="test_event_id_invalid",
+                    event_type="test_event_type",
+                    event_name="test_event_name",
+                    event_filters=[],
                     workflow_class=SampleWorkflow,
-                ),
-                EventWorkflowTrigger(
-                    should_trigger_workflow=trigger_workflow_name,
-                    workflow_class=SampleWorkflow,
-                ),
+                )
             ],
         )
 
         # Act
-        await self.app.on_event(event_data)
+        transport = ASGITransport(app=self.app.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as ac:
+            response = await ac.post(
+                "/events/v1/event/test_event_id",
+                json=event_data,
+            )
 
         # Assert
-        assert temporal_client.start_workflow.call_count <= 1
-        if temporal_client.start_workflow.called:
-            temporal_client.start_workflow.assert_called_with(
-                workflow_args=event_data,
-                workflow_class=SampleWorkflow,
-            )
+        assert response.status_code == 404
