@@ -70,7 +70,7 @@ class TestInterface:
         cls.config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
 
         # Set common configuration
-        cls.expected_api_responses = cls.config["expected_api_responses"]
+        cls.expected_api_responses = cls.config.get("expected_api_responses", {})
         cls.workflow_args = cls.config.get("workflow_args", {})
         cls.test_name = cls.config["test_name"]
 
