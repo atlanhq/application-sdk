@@ -209,8 +209,8 @@ class TestInterface:
         data = []
 
         # Check if there are json or parquet files in the extracted directory
-        files_list = glob(f"{extracted_file_path}**/*.json", recursive=True) or glob(
-            f"{extracted_file_path}**/*.parquet", recursive=True
+        files_list = glob(f"{extracted_file_path}/**/*.json", recursive=True) or glob(
+            f"{extracted_file_path}/**/*.parquet", recursive=True
         )
         for f_name in files_list or []:
             if f_name.endswith(".parquet"):
