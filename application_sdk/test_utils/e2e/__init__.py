@@ -66,10 +66,7 @@ class TestInterface:
         cls.prepare_dir_paths()
         config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
         cls.expected_api_responses = config["expected_api_responses"]
-        cls.workflow_args = {}
-        cls.workflow_args["credentials"] = config["credentials"]
-        cls.workflow_args["metadata"] = config["metadata"]
-        cls.workflow_args["connection"] = config["connection"]
+        cls.workflow_args = config["workflow_args"]
         cls.client = APIServerClient(
             host=config["server_config"]["server_host"],
             version=config["server_config"]["server_version"],
@@ -86,34 +83,6 @@ class TestInterface:
         Raises:
             NotImplementedError: If the subclass does not implement this method.
             AssertionError: If the health check fails.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def test_auth(self):
-        """Test the authentication functionality.
-
-        This method should verify that the authentication process works correctly,
-        including token generation, validation, and error handling for invalid
-        credentials.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If authentication tests fail.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def test_preflight_check(self):
-        """Test the preflight check functionality.
-
-        This method should verify that the preflight check process correctly
-        validates all prerequisites before workflow execution, including
-        permissions, resource availability, and configuration.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If preflight check tests fail.
         """
         raise NotImplementedError
 
