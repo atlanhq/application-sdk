@@ -8,7 +8,6 @@ from typing import Any, Dict, List, Optional
 import orjson
 import pandas as pd
 import pandera.extensions as extensions
-import pytest
 from pandera.io import from_yaml
 from temporalio.client import WorkflowExecutionStatus
 
