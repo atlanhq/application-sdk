@@ -11,10 +11,6 @@ from application_sdk.test_utils.e2e.conftest import workflow_details
 logger = get_logger(__name__)
 
 
-class WorkflowExecutionError(Exception):
-    """Exception class for raising exceptions during workflow execution"""
-
-
 class BaseTest(TestInterface):
     config_file_path: str
     extracted_output_base_path: str
