@@ -72,9 +72,9 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         workflow_classes: List[Type[BaseSQLMetadataExtractionWorkflow]] = [
             BaseSQLMetadataExtractionWorkflow
         ],
-        activities_class: Type[
+        activities_classes: List[Type[BaseSQLMetadataExtractionActivities]] = [
             BaseSQLMetadataExtractionActivities
-        ] = BaseSQLMetadataExtractionActivities,
+        ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
@@ -88,24 +88,27 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
+        # check if the workflow classes and activities classes are the same length
+        if len(workflow_classes) != len(activities_classes):
+            raise ValueError(
+                "Workflow classes and activities classes must be the same length"
+            )
 
         # load the workflow client
         await self.workflow_client.load()
 
-        # setup sql metadata extraction activities
-        # requires a sql client for source connectivity, handler for preflight checks, transformer for atlas mapping
-        activities = activities_class(
-            sql_client_class=self.client_class,
-            handler_class=self.handler_class,
-            transformer_class=self.transformer_class,
-        )
-
-        # setup and start worker for workflow and activities execution
-
         # Collect all activities from all workflow classes
         all_activities = []
-        for workflow_class in workflow_classes:
-            all_activities.extend(workflow_class.get_activities(activities))
+        for i in range(len(workflow_classes)):
+            all_activities.extend(
+                workflow_classes[i].get_activities(
+                    activities_classes[i](
+                        sql_client_class=self.client_class,
+                        handler_class=self.handler_class,
+                        transformer_class=self.transformer_class,
+                    )
+                )
+            )
 
         self.worker = Worker(
             workflow_client=self.workflow_client,
