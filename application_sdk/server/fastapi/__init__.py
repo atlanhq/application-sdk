@@ -9,7 +9,6 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import BaseModel
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
@@ -21,6 +20,7 @@ from application_sdk.constants import (
     APP_PORT,
     APP_TENANT_ID,
     APPLICATION_NAME,
+    EVENT_STORE_NAME,
     WORKFLOW_UI_HOST,
     WORKFLOW_UI_PORT,
 )
@@ -29,13 +29,16 @@ from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
-from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
+    EventWorkflowRequest,
+    EventWorkflowResponse,
+    EventWorkflowTrigger,
     FetchMetadataRequest,
     FetchMetadataResponse,
+    HttpWorkflowTrigger,
     PreflightCheckRequest,
     PreflightCheckResponse,
     TestAuthRequest,
@@ -45,6 +48,7 @@ from application_sdk.server.fastapi.models import (
     WorkflowData,
     WorkflowRequest,
     WorkflowResponse,
+    WorkflowTrigger,
 )
 from application_sdk.server.fastapi.routers.server import get_server_router
 from application_sdk.server.fastapi.utils import internal_server_error_handler
@@ -52,20 +56,6 @@ from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
 metrics = get_metrics()
-
-
-class WorkflowTrigger(BaseModel):
-    workflow_class: Optional[Type[WorkflowInterface]] = None
-    model_config = {"arbitrary_types_allowed": True}
-
-
-class HttpWorkflowTrigger(WorkflowTrigger):
-    endpoint: str = "/start"
-    methods: List[str] = ["POST"]
-
-
-class EventWorkflowTrigger(WorkflowTrigger):
-    should_trigger_workflow: Callable[[Any], bool]
 
 
 class APIServer(ServerInterface):
@@ -79,7 +69,7 @@ class APIServer(ServerInterface):
         app (FastAPI): The main FastAPI application instance.
         workflow_client (Optional[WorkflowClient]): Client for interacting with Temporal workflows.
         workflow_router (APIRouter): Router for workflow-related endpoints.
-        pubsub_router (APIRouter): Router for pub/sub operations.
+        dapr_router (APIRouter): Router for pub/sub operations.
         events_router (APIRouter): Router for event handling.
         docs_directory_path (str): Path to documentation source directory.
         docs_export_path (str): Path where documentation will be exported.
@@ -97,7 +87,7 @@ class APIServer(ServerInterface):
     app: FastAPI
     workflow_client: Optional[WorkflowClient]
     workflow_router: APIRouter
-    pubsub_router: APIRouter
+    dapr_router: APIRouter
     events_router: APIRouter
     handler: Optional[HandlerInterface]
     templates: Jinja2Templates
@@ -109,12 +99,15 @@ class APIServer(ServerInterface):
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
 
+    ui_enabled: bool = True
+
     def __init__(
         self,
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
         workflow_client: Optional[WorkflowClient] = None,
         frontend_templates_path: str = "frontend/templates",
+        ui_enabled: bool = True,
     ):
         """Initialize the FastAPI application.
 
@@ -128,6 +121,7 @@ class APIServer(ServerInterface):
         self.workflow_client = workflow_client
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
+        self.ui_enabled = ui_enabled
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -137,7 +131,7 @@ class APIServer(ServerInterface):
 
         # Create router instances using the renamed import
         self.workflow_router = APIRouter()
-        self.pubsub_router = APIRouter()
+        self.dapr_router = APIRouter()
         self.events_router = APIRouter()
 
         # Set up the application
@@ -199,7 +193,7 @@ class APIServer(ServerInterface):
         # Then include all routers
         self.app.include_router(get_server_router())
         self.app.include_router(self.workflow_router, prefix="/workflows/v1")
-        self.app.include_router(self.pubsub_router, prefix="/dapr")
+        self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
     async def home(self, request: Request) -> HTMLResponse:
@@ -234,24 +228,68 @@ class APIServer(ServerInterface):
         if workflow_class is None:
             raise ValueError("workflow_class cannot be None")
 
+        async def start_workflow_http(body: WorkflowRequest) -> WorkflowResponse:
+            try:
+                if not self.workflow_client:
+                    raise Exception("Temporal client not initialized")
+
+                # Use the captured wf_class variable, which is guaranteed to be non-None
+                workflow_data = await self.workflow_client.start_workflow(
+                    body.model_dump(), workflow_class=workflow_class
+                )
+
+                return WorkflowResponse(
+                    success=True,
+                    message="Workflow started successfully",
+                    data=WorkflowData(
+                        workflow_id=workflow_data.get("workflow_id") or "",
+                        run_id=workflow_data.get("run_id") or "",
+                    ),
+                )
+            except Exception as e:
+                logger.error(f"Error starting workflow: {e}")
+                return WorkflowResponse(
+                    success=False,
+                    message="Workflow failed to start",
+                    data=WorkflowData(
+                        workflow_id="",
+                        run_id="",
+                    ),
+                )
+
         # Create a closure for the start_workflow function that captures wf_class directly
-        async def start_workflow(body: WorkflowRequest) -> WorkflowResponse:
-            if not self.workflow_client:
-                raise Exception("Temporal client not initialized")
+        async def start_workflow_event(
+            body: EventWorkflowRequest,
+        ) -> EventWorkflowResponse:
+            try:
+                if not self.workflow_client:
+                    raise Exception("Temporal client not initialized")
 
-            # Use the captured wf_class variable, which is guaranteed to be non-None
-            workflow_data = await self.workflow_client.start_workflow(
-                body.model_dump(), workflow_class=workflow_class
-            )
+                # Use the captured wf_class variable, which is guaranteed to be non-None
+                workflow_data = await self.workflow_client.start_workflow(
+                    body.model_dump(), workflow_class=workflow_class
+                )
 
-            return WorkflowResponse(
-                success=True,
-                message="Workflow started successfully",
-                data=WorkflowData(
-                    workflow_id=workflow_data.get("workflow_id") or "",
-                    run_id=workflow_data.get("run_id") or "",
-                ),
-            )
+                return EventWorkflowResponse(
+                    success=True,
+                    message="Workflow started successfully",
+                    data=WorkflowData(
+                        workflow_id=workflow_data.get("workflow_id") or "",
+                        run_id=workflow_data.get("run_id") or "",
+                    ),
+                    status=EventWorkflowResponse.Status.SUCCESS,
+                )
+            except Exception as e:
+                logger.error(f"Error starting workflow: {e}")
+                return EventWorkflowResponse(
+                    success=False,
+                    message="Workflow failed to start",
+                    data=WorkflowData(
+                        workflow_id="",
+                        run_id="",
+                    ),
+                    status=EventWorkflowResponse.Status.DROP,
+                )
 
         for trigger in triggers:
             # Set the workflow class on the trigger
@@ -260,19 +298,25 @@ class APIServer(ServerInterface):
             if isinstance(trigger, HttpWorkflowTrigger):
                 # Add the route with our pre-defined handler
                 # Getting routers as local variables to avoid module references
-                workflow_router = self.workflow_router
-                app = self.app
-
-                workflow_router.add_api_route(
+                self.workflow_router.add_api_route(
                     trigger.endpoint,
-                    start_workflow,  # Use our handler with captured wf_class
+                    start_workflow_http,  # Use our handler with captured wf_class
                     methods=trigger.methods,
                     response_model=WorkflowResponse,
                 )
 
-                app.include_router(workflow_router, prefix="/workflows/v1")
+                self.app.include_router(self.workflow_router, prefix="/workflows/v1")
             elif isinstance(trigger, EventWorkflowTrigger):
                 self.event_triggers.append(trigger)
+
+                self.events_router.add_api_route(
+                    f"/event/{trigger.event_id}",
+                    start_workflow_event,
+                    methods=["POST"],
+                    response_model=EventWorkflowResponse,
+                )
+
+                self.app.include_router(self.events_router, prefix="/events/v1")
 
     def register_routes(self):
         """
@@ -331,7 +375,7 @@ class APIServer(ServerInterface):
             methods=["POST"],
         )
 
-        self.pubsub_router.add_api_route(
+        self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
             methods=["GET"],
@@ -339,9 +383,10 @@ class APIServer(ServerInterface):
         )
 
         self.events_router.add_api_route(
-            "/event",
-            self.on_event,
+            "/drop",
+            self.drop_event,
             methods=["POST"],
+            response_model=EventWorkflowResponse,
         )
 
     def register_ui_routes(self):
@@ -359,38 +404,45 @@ class APIServer(ServerInterface):
             List[dict[str, Any]]: List of Dapr subscription configurations including
                 pubsub name, topic, and routing rules.
         """
-        return [
-            {
-                "pubsubname": EventStore.EVENT_STORE_NAME,
-                "topic": EventStore.TOPIC_NAME,
-                "routes": {"rules": [{"path": "events/v1/event"}]},
-            }
-        ]
 
-    async def on_event(self, event: dict[str, Any]):
-        """Handle incoming events and trigger appropriate workflows.
+        subscriptions: List[dict[str, Any]] = []
+        for event_trigger in self.event_triggers:
+            filters = [
+                f"({event_filter.path} {event_filter.operator} '{event_filter.value}')"
+                for event_filter in event_trigger.event_filters
+            ]
+            filters.append(f"event.data.event_name == '{event_trigger.event_name}'")
+            filters.append(f"event.data.event_type == '{event_trigger.event_type}'")
 
-        Args:
-            event (dict[str, Any]): The event data to process.
+            subscriptions.append(
+                {
+                    "pubsubname": EVENT_STORE_NAME,
+                    "topic": event_trigger.event_type + "_topic",
+                    "routes": {
+                        "rules": [
+                            {
+                                "match": " && ".join(filters),
+                                "path": f"/events/v1/event/{event_trigger.event_id}",
+                            }
+                        ],
+                        "default": "/events/v1/drop",
+                    },
+                }
+            )
 
-        Raises:
-            Exception: If temporal client is not initialized.
-        """
-        if not self.workflow_client:
-            raise Exception("Temporal client not initialized")
+        return subscriptions
 
-        logger.info("Received event {}", event)
-        for trigger in self.event_triggers:
-            if trigger.should_trigger_workflow(AtlanEvent(**event)):
-                logger.info(
-                    "Triggering workflow {} with event {}",
-                    trigger.workflow_class,
-                    event,
-                )
-                if trigger.workflow_class:
-                    await self.workflow_client.start_workflow(
-                        workflow_args=event, workflow_class=trigger.workflow_class
-                    )
+    async def drop_event(self, body: EventWorkflowRequest) -> EventWorkflowResponse:
+        """Drop an event."""
+        return EventWorkflowResponse(
+            success=False,
+            message="Event didn't match any of the filters",
+            data=WorkflowData(
+                workflow_id="",
+                run_id="",
+            ),
+            status=EventWorkflowResponse.Status.DROP,
+        )
 
     async def test_auth(self, body: TestAuthRequest) -> TestAuthResponse:
         """Test authentication credentials."""
@@ -679,7 +731,8 @@ class APIServer(ServerInterface):
             host (str, optional): Host address to bind to. Defaults to "0.0.0.0".
             port (int, optional): Port to listen on. Defaults to 8000.
         """
-        self.register_ui_routes()
+        if self.ui_enabled:
+            self.register_ui_routes()
 
         logger.info(f"Starting application on {host}:{port}")
         server = Server(
