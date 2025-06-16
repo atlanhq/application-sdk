@@ -98,7 +98,7 @@ class TestInterface:
         """
         Test running the metadata extraction workflow
         """
-        return self.run_workflow()
+        raise NotImplementedError
 
     def run_workflow(self):
         """

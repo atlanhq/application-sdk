@@ -61,7 +61,7 @@ class BaseTest(TestInterface):
         """
         Test running the metadata extraction workflow
         """
-        super().test_run_workflow()
+        self.run_workflow()
 
     @pytest.mark.order(5)
     def test_configuration_get(self):
