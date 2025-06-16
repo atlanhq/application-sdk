@@ -102,6 +102,11 @@ OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 
+#: Name of the Atlan storage component in DAPR
+ATLAN_STORAGE_NAME = os.getenv("ATLAN_STORAGE_NAME", "atlan-storage")
+#: Whether to enable Atlan storage upload
+ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
