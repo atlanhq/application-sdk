@@ -54,6 +54,7 @@ class TestInterface:
     config_file_path: str
     extracted_output_base_path: str
     expected_output_base_path: str
+    expected_dir_path: Optional[str] = None
     workflow_args: Dict[str, Any]
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
@@ -186,7 +187,10 @@ class TestInterface:
         Returns:
             pd.DataFrame: Normalised dataframe of the extracted data
         """
-        extracted_dir_path = f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
+        extracted_dir_path = (
+            self.expected_dir_path
+            or f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
+        )
         data = []
 
         # Check if there are json or parquet files in the extracted directory
