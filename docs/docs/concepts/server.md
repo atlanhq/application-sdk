@@ -25,7 +25,7 @@ This module provides the core server framework for building Atlan applications, 
 4.  **Workflow Triggers (`application_sdk.server.fastapi.__init__.py`)**:
     *   **Purpose:** Define how workflows are initiated.
         *   `HttpWorkflowTrigger`: Triggers a workflow via an HTTP request to a specific endpoint registered via `register_workflow`. Requires `WorkflowClient` to be configured.
-        *   `EventWorkflowTrigger`: Triggers a workflow based on incoming events, evaluated by a `should_trigger_workflow` function.
+        *   `EventWorkflowTrigger`: Triggers a workflow based on incoming events
 
 5.  **Models (`application_sdk.server.fastapi.models.py`)**:
     *   **Purpose:** Defines Pydantic models used for request/response validation and serialization for the default API endpoints (e.g., `TestAuthRequest`, `WorkflowResponse`, `PreflightCheckRequest`, `PreflightCheckResponse`).

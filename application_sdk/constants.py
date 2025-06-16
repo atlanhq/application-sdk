@@ -84,6 +84,8 @@ STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the object store component in DAPR
 OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
+#: Name of the pubsub component in DAPR
+EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
