@@ -1,4 +1,4 @@
-import time
+from time import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
@@ -32,6 +32,7 @@ from application_sdk.observability.observability import DuckDBUI
 from application_sdk.outputs.eventstore import AtlanEvent, EventStore
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
+from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
     FetchMetadataRequest,
     FetchMetadataResponse,
@@ -50,6 +51,7 @@ from application_sdk.server.fastapi.utils import internal_server_error_handler
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
+metrics = get_metrics()
 
 
 class WorkflowTrigger(BaseModel):
@@ -146,6 +148,7 @@ class APIServer(ServerInterface):
 
         # Add middleware
         self.app.add_middleware(LogMiddleware)
+        self.app.add_middleware(MetricsMiddleware)
 
         # Register routers and setup docs
         self.register_routers()
