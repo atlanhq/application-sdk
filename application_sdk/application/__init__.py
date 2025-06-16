@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.eventstore import EventRegistration
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
@@ -51,38 +52,31 @@ class BaseApplication:
             logger.warning("No application manifest found, skipping event registration")
             return
 
-        if self.application_manifest.get("eventRegistration") is None:
+        event_registration = EventRegistration(
+            **self.application_manifest.get("eventRegistration", {})
+        )
+        if not event_registration.consumes or len(event_registration.consumes) == 0:
             logger.warning(
                 "No event registration found in the application manifest, skipping event registration"
             )
             return
 
-        event_registration = self.application_manifest.get("eventRegistration")
-        if (
-            not event_registration
-            or not event_registration.get("consumes")
-            or len(event_registration.get("consumes", [])) == 0
-        ):
-            logger.warning("No event registration found, skipping event registration")
-            return
-
         self.event_subscriptions = {}
-
-        for event in event_registration["consumes"]:
-            logger.info(f"Setting up event registration for {event}")
+        for consume in event_registration.consumes:
+            logger.info(f"Setting up event registration for {consume}")
             event_trigger: EventWorkflowTrigger = EventWorkflowTrigger(
-                event_type=event["eventType"],
-                event_name=event["eventName"],
-                event_filters=event["filters"],
-                event_id=event["eventId"],
+                event_type=consume.event_type,
+                event_name=consume.event_name,
+                event_filters=consume.filters,
+                event_id=consume.event_id,
             )
 
-            if event["eventId"] in self.event_subscriptions:
+            if event_trigger.event_id in self.event_subscriptions:
                 raise ValueError(
-                    f"Event {event['eventId']} duplicate in the application manifest"
+                    f"Event {event_trigger.event_id} duplicate in the application manifest"
                 )
 
-            self.event_subscriptions[event["eventId"]] = event_trigger
+            self.event_subscriptions[consume.event_id] = event_trigger
 
     def register_event_subscription(
         self, event_id: str, workflow_class: Type[WorkflowInterface]

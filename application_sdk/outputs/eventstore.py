@@ -8,13 +8,13 @@ import json
 from abc import ABC
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from dapr import clients
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.constants import APPLICATION_NAME, PUBSUB_NAME
+from application_sdk.constants import APPLICATION_NAME, EVENT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -55,6 +55,25 @@ class EventMetadata(BaseModel):
     attempt: int | None = Field(init=True, default=None)
 
     topic_name: str | None = Field(init=False, default=None)
+
+
+class EventFilter(BaseModel):
+    path: str
+    operator: str
+    value: str
+
+
+class Consumes(BaseModel):
+    event_id: str = Field(alias="eventId")
+    event_type: str = Field(alias="eventType")
+    event_name: str = Field(alias="eventName")
+    version: str = Field()
+    filters: List[EventFilter] = Field(init=True, default=[])
+
+
+class EventRegistration(BaseModel):
+    consumes: List[Consumes] = Field(init=True, default=[])
+    produces: List[Dict[str, Any]] = Field(init=True, default=[])
 
 
 class Event(BaseModel, ABC):
@@ -136,15 +155,17 @@ class EventStore:
         Example:
             >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
-        if enrich_metadata:
-            event = cls.enrich_event_metadata(event)
+        try:
+            if enrich_metadata:
+                event = cls.enrich_event_metadata(event)
 
-        with clients.DaprClient() as client:
-            client.publish_event(
-                pubsub_name=PUBSUB_NAME,
-                topic_name=event.get_topic_name(),
-                data=json.dumps(event.model_dump(mode="json")),
-                data_content_type="application/json",
-            )
-
-        logger.info(f"Published event to {event.get_topic_name()}")
+            with clients.DaprClient() as client:
+                client.publish_event(
+                    pubsub_name=EVENT_STORE_NAME,
+                    topic_name=event.get_topic_name(),
+                    data=json.dumps(event.model_dump(mode="json")),
+                    data_content_type="application/json",
+                )
+                logger.info(f"Published event to {event.get_topic_name()}")
+        except Exception as e:
+            logger.error(f"Error publishing event to {event.get_topic_name()}: {e}")

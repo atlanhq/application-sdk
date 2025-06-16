@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, RootModel
 
-from application_sdk.outputs.eventstore import Event
+from application_sdk.outputs.eventstore import Event, EventFilter
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -211,12 +211,6 @@ class WorkflowTrigger(BaseModel):
 class HttpWorkflowTrigger(WorkflowTrigger):
     endpoint: str = "/start"
     methods: List[str] = ["POST"]
-
-
-class EventFilter(BaseModel):
-    path: str
-    value: Any
-    operator: str
 
 
 class EventWorkflowTrigger(WorkflowTrigger):
