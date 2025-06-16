@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional
 import orjson
 import pandas as pd
 import pandera.extensions as extensions
+import pytest
 from pandera.io import from_yaml
 from temporalio.client import WorkflowExecutionStatus
 
@@ -30,6 +31,10 @@ def check_record_count_ge(df: pd.DataFrame, *, expected_record_count) -> bool:
         )
 
 
+class WorkflowExecutionError(Exception):
+    """Exception class for raising exceptions during workflow execution"""
+
+
 class TestInterface:
     """Interface for end-to-end tests.
 
@@ -50,9 +55,7 @@ class TestInterface:
     config_file_path: str
     extracted_output_base_path: str
     expected_output_base_path: str
-    credentials: Dict[str, Any]
-    metadata: Dict[str, Any]
-    connection: Dict[str, Any]
+    workflow_args: Dict[str, Any]
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
 
@@ -64,9 +67,10 @@ class TestInterface:
         cls.prepare_dir_paths()
         config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
         cls.expected_api_responses = config["expected_api_responses"]
-        cls.credentials = config["credentials"]
-        cls.metadata = config["metadata"]
-        cls.connection = config["connection"]
+        cls.workflow_args = {}
+        cls.workflow_args["credentials"] = config["credentials"]
+        cls.workflow_args["metadata"] = config["metadata"]
+        cls.workflow_args["connection"] = config["connection"]
         cls.client = APIServerClient(
             host=config["server_config"]["server_host"],
             version=config["server_config"]["server_version"],
@@ -101,20 +105,6 @@ class TestInterface:
         raise NotImplementedError
 
     @abstractmethod
-    def test_metadata(self):
-        """Test metadata validation and processing.
-
-        This method should verify that metadata is correctly validated, processed,
-        and stored according to the application's requirements. It should test
-        both valid and invalid metadata scenarios.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If metadata validation tests fail.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def test_preflight_check(self):
         """Test the preflight check functionality.
 
@@ -128,19 +118,28 @@ class TestInterface:
         """
         raise NotImplementedError
 
-    @abstractmethod
     def test_run_workflow(self):
-        """Test the workflow execution process.
-
-        This method should verify the complete workflow execution process,
-        including initialization, task execution, error handling, and result
-        validation. It should test both successful and error scenarios.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If workflow execution tests fail.
         """
-        raise NotImplementedError
+        Test running the metadata extraction workflow
+        """
+        response = self.client.run_workflow(data=self.workflow_args)
+        self.assertEqual(response["success"], True)
+        self.assertEqual(response["message"], "Workflow started successfully")
+        workflow_details[self.test_name] = {
+            "workflow_id": response["data"]["workflow_id"],
+            "run_id": response["data"]["run_id"],
+        }
+
+        # Wait for the workflow to complete
+        workflow_status = self.monitor_and_wait_workflow_execution()
+
+        # If worklfow is not completed successfully, raise an exception
+        if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
+            raise WorkflowExecutionError(
+                f"Workflow failed with status: {workflow_status}"
+            )
+
+        logger.info("Workflow completed successfully")
 
     @classmethod
     def prepare_dir_paths(cls):

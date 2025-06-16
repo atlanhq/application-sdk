@@ -19,9 +19,7 @@ class BaseTest(TestInterface):
     config_file_path: str
     extracted_output_base_path: str
     schema_base_path: str
-    credentials: Dict[str, Any]
-    metadata: Dict[str, Any]
-    connection: Dict[str, Any]
+    workflow_args: Dict[str, Any]
 
     @pytest.mark.order(1)
     def test_health_check(self):
@@ -36,7 +34,9 @@ class BaseTest(TestInterface):
         """
         Test the auth and test connection flow
         """
-        response = self.client.test_connection(credentials=self.credentials)
+        response = self.client.test_connection(
+            credentials=self.workflow_args["credentials"]
+        )
         self.assertEqual(response, self.expected_api_responses["auth"])
 
     @pytest.mark.order(3)
@@ -44,7 +44,9 @@ class BaseTest(TestInterface):
         """
         Test Metadata
         """
-        response = self.client.get_metadata(credentials=self.credentials)
+        response = self.client.get_metadata(
+            credentials=self.workflow_args["credentials"]
+        )
         self.assertEqual(response, self.expected_api_responses["metadata"])
 
     @pytest.mark.order(4)
@@ -53,7 +55,8 @@ class BaseTest(TestInterface):
         Test Preflight Check
         """
         response = self.client.preflight_check(
-            credentials=self.credentials, metadata=self.metadata
+            credentials=self.workflow_args["credentials"],
+            metadata=self.workflow_args["metadata"],
         )
         self.assertEqual(response, self.expected_api_responses["preflight_check"])
 
@@ -62,28 +65,7 @@ class BaseTest(TestInterface):
         """
         Test running the metadata extraction workflow
         """
-        response = self.client.run_workflow(
-            credentials=self.credentials,
-            metadata=self.metadata,
-            connection=self.connection,
-        )
-        self.assertEqual(response["success"], True)
-        self.assertEqual(response["message"], "Workflow started successfully")
-        workflow_details[self.test_name] = {
-            "workflow_id": response["data"]["workflow_id"],
-            "run_id": response["data"]["run_id"],
-        }
-
-        # Wait for the workflow to complete
-        workflow_status = self.monitor_and_wait_workflow_execution()
-
-        # If worklfow is not completed successfully, raise an exception
-        if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
-            raise WorkflowExecutionError(
-                f"Workflow failed with status: {workflow_status}"
-            )
-
-        logger.info("Workflow completed successfully")
+        super().test_run_workflow()
 
     @pytest.mark.order(5)
     def test_configuration_get(self):
@@ -102,8 +84,12 @@ class BaseTest(TestInterface):
         )
 
         # Verify that response data contains the expected metadata and connection
-        self.assertEqual(response_data["data"]["connection"], self.connection)
-        self.assertEqual(response_data["data"]["metadata"], self.metadata)
+        self.assertEqual(
+            response_data["data"]["connection"], self.workflow_args["connection"]
+        )
+        self.assertEqual(
+            response_data["data"]["metadata"], self.workflow_args["metadata"]
+        )
 
     @pytest.mark.order(6)
     def test_configuration_update(self):
@@ -111,8 +97,11 @@ class BaseTest(TestInterface):
         Test configuration update
         """
         update_payload = {
-            "connection": self.connection,
-            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+            "connection": self.workflow_args["connection"],
+            "metadata": {
+                **self.workflow_args["metadata"],
+                "temp-table-regex": "^temp_.*",
+            },
         }
         response = requests.post(
             f"{self.client.host}/workflows/v1/config/{workflow_details[self.test_name]['workflow_id']}",
@@ -254,8 +243,8 @@ class BaseTest(TestInterface):
                 "/start",
                 data={
                     "credentials": invalid_credentials,
-                    "metadata": self.metadata,
-                    "connection": self.connection,
+                    "metadata": self.workflow_args["metadata"],
+                    "connection": self.workflow_args["connection"],
                 },
             )
             if response.status_code == 200:
