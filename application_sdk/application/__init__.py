@@ -48,6 +48,7 @@ class BaseApplication:
         self.bootstrap_event_registration()
 
     def bootstrap_event_registration(self):
+        self.event_subscriptions = {}
         if self.application_manifest is None:
             logger.warning("No application manifest found, skipping event registration")
             return
@@ -61,7 +62,6 @@ class BaseApplication:
             )
             return
 
-        self.event_subscriptions = {}
         for consume in event_registration.consumes:
             logger.info(f"Setting up event registration for {consume}")
             event_trigger: EventWorkflowTrigger = EventWorkflowTrigger(
