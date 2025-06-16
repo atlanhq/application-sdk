@@ -55,7 +55,7 @@ class TestInterface:
     extracted_output_base_path: str
     expected_output_base_path: str
     expected_dir_path: Optional[str] = None
-    workflow_args: Dict[str, Any]
+    test_workflow_args: Dict[str, Any]
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
 
@@ -71,7 +71,7 @@ class TestInterface:
 
         # Set common configuration
         cls.expected_api_responses = cls.config.get("expected_api_responses", {})
-        cls.workflow_args = cls.config.get("workflow_args", {})
+        cls.test_workflow_args = cls.config.get("test_workflow_args", {})
         cls.test_name = cls.config["test_name"]
 
         # Set up API client
@@ -93,11 +93,18 @@ class TestInterface:
         """
         raise NotImplementedError
 
+    @abstractmethod
     def test_run_workflow(self):
         """
         Test running the metadata extraction workflow
         """
-        response = self.client.run_workflow(data=self.workflow_args)
+        return self.run_workflow()
+
+    def run_workflow(self):
+        """
+        Test running the metadata extraction workflow
+        """
+        response = self.client.run_workflow(data=self.test_workflow_args)
         self.assertEqual(response["success"], True)
         self.assertEqual(response["message"], "Workflow started successfully")
         workflow_details[self.test_name] = {
@@ -178,7 +185,19 @@ class TestInterface:
             # Wait for the polling interval before checking the status again
             time.sleep(self.polling_interval)
 
-    def _get_normalised_dataframe(self, expected_file_postfix: str) -> "pd.DataFrame":
+    @abstractmethod
+    def _get_extracted_dir_path(self, expected_file_postfix: str) -> str:
+        """
+        Method to get the extracted directory path
+
+        Args:
+            expected_file_postfix (str): Postfix for the expected file
+        Returns:
+            str: Extracted directory path
+        """
+        raise NotImplementedError
+
+    def _get_normalised_dataframe(self, extracted_file_path: str) -> "pd.DataFrame":
         """
         Method to get the normalised dataframe of the extracted data
 
@@ -187,15 +206,11 @@ class TestInterface:
         Returns:
             pd.DataFrame: Normalised dataframe of the extracted data
         """
-        extracted_dir_path = (
-            self.expected_dir_path
-            or f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
-        )
         data = []
 
         # Check if there are json or parquet files in the extracted directory
-        files_list = glob(f"{extracted_dir_path}/*.json") or glob(
-            f"{extracted_dir_path}/*.parquet"
+        files_list = glob(f"{extracted_file_path}**/*.json", recursive=True) or glob(
+            f"{extracted_file_path}**/*.parquet", recursive=True
         )
         for f_name in files_list or []:
             if f_name.endswith(".parquet"):
@@ -207,7 +222,7 @@ class TestInterface:
 
         if not data:
             raise FileNotFoundError(
-                f"No data found in the extracted directory: {extracted_dir_path}"
+                f"No data found in the extracted directory: {extracted_file_path}"
             )
         return pd.json_normalize(data)
 
@@ -246,9 +261,11 @@ class TestInterface:
                 .replace(".yml", "")
             )
 
+            extracted_file_path = self._get_extracted_dir_path(expected_file_postfix)
+
             logger.info(f"Validating data for: {expected_file_postfix}")
             # Load the pandera schema from the yaml file
             schema = from_yaml(schema_yaml_file_path)
-            dataframe = self._get_normalised_dataframe(expected_file_postfix)
+            dataframe = self._get_normalised_dataframe(extracted_file_path)
             schema.validate(dataframe, lazy=True)
             logger.info(f"Data Validation for {expected_file_postfix} successful")

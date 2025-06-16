@@ -15,7 +15,7 @@ class BaseTest(TestInterface):
     config_file_path: str
     extracted_output_base_path: str
     schema_base_path: str
-    workflow_args: Dict[str, Any]
+    test_workflow_args: Dict[str, Any]
 
     @pytest.mark.order(1)
     def test_health_check(self):
@@ -31,7 +31,7 @@ class BaseTest(TestInterface):
         Test the auth and test connection flow
         """
         response = self.client.test_connection(
-            credentials=self.workflow_args["credentials"]
+            credentials=self.test_workflow_args["credentials"]
         )
         self.assertEqual(response, self.expected_api_responses["auth"])
 
@@ -41,7 +41,7 @@ class BaseTest(TestInterface):
         Test Metadata
         """
         response = self.client.get_metadata(
-            credentials=self.workflow_args["credentials"]
+            credentials=self.test_workflow_args["credentials"]
         )
         self.assertEqual(response, self.expected_api_responses["metadata"])
 
@@ -51,8 +51,8 @@ class BaseTest(TestInterface):
         Test Preflight Check
         """
         response = self.client.preflight_check(
-            credentials=self.workflow_args["credentials"],
-            metadata=self.workflow_args["metadata"],
+            credentials=self.test_workflow_args["credentials"],
+            metadata=self.test_workflow_args["metadata"],
         )
         self.assertEqual(response, self.expected_api_responses["preflight_check"])
 
@@ -81,10 +81,10 @@ class BaseTest(TestInterface):
 
         # Verify that response data contains the expected metadata and connection
         self.assertEqual(
-            response_data["data"]["connection"], self.workflow_args["connection"]
+            response_data["data"]["connection"], self.test_workflow_args["connection"]
         )
         self.assertEqual(
-            response_data["data"]["metadata"], self.workflow_args["metadata"]
+            response_data["data"]["metadata"], self.test_workflow_args["metadata"]
         )
 
     @pytest.mark.order(6)
@@ -93,9 +93,9 @@ class BaseTest(TestInterface):
         Test configuration update
         """
         update_payload = {
-            "connection": self.workflow_args["connection"],
+            "connection": self.test_workflow_args["connection"],
             "metadata": {
-                **self.workflow_args["metadata"],
+                **self.test_workflow_args["metadata"],
                 "temp-table-regex": "^temp_.*",
             },
         }
@@ -239,8 +239,8 @@ class BaseTest(TestInterface):
                 "/start",
                 data={
                     "credentials": invalid_credentials,
-                    "metadata": self.workflow_args["metadata"],
-                    "connection": self.workflow_args["connection"],
+                    "metadata": self.test_workflow_args["metadata"],
+                    "connection": self.test_workflow_args["connection"],
                 },
             )
             if response.status_code == 200:
@@ -286,3 +286,9 @@ class BaseTest(TestInterface):
         except requests.exceptions.RequestException:
             # If the request fails with an exception, the test passes
             pass
+
+    def _get_extracted_dir_path(self, expected_file_postfix: str) -> str:
+        """
+        Method to get the extracted directory path
+        """
+        return f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
