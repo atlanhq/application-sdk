@@ -205,7 +205,10 @@ class BaseTest(TestInterface):
         try:
             response = self.client._post(
                 "/check",
-                data={"credentials": invalid_credentials, "metadata": self.metadata},
+                data={
+                    "credentials": invalid_credentials,
+                    "metadata": self.test_workflow_args["metadata"],
+                },
             )
             if response.status_code == 200:
                 response_data = response.json()
