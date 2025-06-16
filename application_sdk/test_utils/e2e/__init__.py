@@ -64,14 +64,20 @@ class TestInterface:
         Sets up the class by preparing directory paths and loading configuration.
         """
         cls.prepare_dir_paths()
-        config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
-        cls.expected_api_responses = config["expected_api_responses"]
-        cls.workflow_args = config["workflow_args"]
+
+        # Load configuration
+        cls.config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
+
+        # Set common configuration
+        cls.expected_api_responses = cls.config["expected_api_responses"]
+        cls.workflow_args = cls.config.get("workflow_args", {})
+        cls.test_name = cls.config["test_name"]
+
+        # Set up API client
         cls.client = APIServerClient(
-            host=config["server_config"]["server_host"],
-            version=config["server_config"]["server_version"],
+            host=cls.config["server_config"]["server_host"],
+            version=cls.config["server_config"]["server_version"],
         )
-        cls.test_name = config["test_name"]
 
     @abstractmethod
     def test_health_check(self):
