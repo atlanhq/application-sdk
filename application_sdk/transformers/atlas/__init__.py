@@ -52,6 +52,7 @@ class AtlasTransformer(TransformerInterface):
             Database,
             Function,
             Procedure,
+            Query,
             Schema,
             Table,
             TagAttachment,
@@ -70,6 +71,7 @@ class AtlasTransformer(TransformerInterface):
             "FUNCTION": Function,
             "TAG_REF": TagAttachment,
             "PROCEDURE": Procedure,
+            "QUERY": Query,
         }
 
     def transform_metadata(
