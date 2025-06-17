@@ -1,0 +1,161 @@
+ # Query entity template for Atlas
+# This template defines the structure for Query entities, including all relevant attributes.
+# Follows the conventions of other templates in this directory.
+
+name: Query
+superTypes:
+  - SQL
+serviceType: atlan
+description: Instance of a query in Atlan.
+typeVersion: 1.2
+
+attributeDefs:
+  - name: rawQuery
+    description: Deprecated. See 'longRawQuery' instead.
+    typeName: string
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: true
+    includeInNotification: true
+  - name: longRawQuery
+    description: Raw SQL query string.
+    typeName: string
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: false
+    includeInNotification: true
+  - name: rawQueryText
+    description: ''
+    typeName: string
+    isOptional: true
+    cardinality: SINGLE
+    isUnique: false
+    isIndexable: false
+    includeInNotification: true
+    indexTypeESConfig:
+      analyzer: truncate_analyzer
+  - name: defaultSchemaQualifiedName
+    description: Unique name of the default schema to use for this query.
+    typeName: string
+    indexType: STRING
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    skipScrubbing: true
+    isIndexable: true
+    includeInNotification: true
+    indexTypeESFields:
+      text:
+        type: text
+        analyzer: atlan_text_analyzer
+  - name: defaultDatabaseQualifiedName
+    description: Unique name of the default database to use for this query.
+    typeName: string
+    indexType: STRING
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    skipScrubbing: true
+    isIndexable: true
+    includeInNotification: true
+    indexTypeESFields:
+      text:
+        type: text
+        analyzer: atlan_text_analyzer
+  - name: variablesSchemaBase64
+    description: Base64-encoded string of the variables to use in this query.
+    typeName: string
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: true
+    skipScrubbing: true
+    includeInNotification: true
+  - name: isPrivate
+    description: Whether this query is private (true) or shared (false).
+    typeName: boolean
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    skipScrubbing: true
+    isIndexable: true
+    includeInNotification: true
+  - name: isSqlSnippet
+    description: Whether this query is a SQL snippet (true) or not (false).
+    typeName: boolean
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: true
+    skipScrubbing: true
+    includeInNotification: true
+  - name: parentQualifiedName
+    description: Unique name of the parent collection or folder in which this query exists.
+    typeName: string
+    indexType: STRING
+    isOptional: false
+    cardinality: SINGLE
+    valuesMinCount: 1
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: true
+    skipScrubbing: true
+    includeInNotification: true
+    indexTypeESFields:
+      text:
+        type: text
+        analyzer: atlan_text_analyzer
+  - name: collectionQualifiedName
+    description: Unique name of the collection in which this query exists.
+    typeName: string
+    indexType: STRING
+    isOptional: false
+    cardinality: SINGLE
+    valuesMinCount: 1
+    valuesMaxCount: 1
+    isUnique: false
+    skipScrubbing: true
+    isIndexable: true
+    includeInNotification: true
+    indexTypeESFields:
+      text:
+        type: text
+        analyzer: atlan_text_analyzer
+  - name: isVisualQuery
+    description: Whether this query is a visual query (true) or not (false).
+    typeName: boolean
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: true
+    skipScrubbing: true
+    includeInNotification: true
+  - name: visualBuilderSchemaBase64
+    description: Base64-encoded string for the visual query builder.
+    typeName: string
+    isOptional: true
+    cardinality: SINGLE
+    valuesMinCount: 0
+    valuesMaxCount: 1
+    isUnique: false
+    isIndexable: false
+    skipScrubbing: true
+    includeInNotification: true
