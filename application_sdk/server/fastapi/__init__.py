@@ -740,3 +740,32 @@ class APIServer(ServerInterface):
             )
         )
         await server.serve()
+
+    def add_handler_route(
+        self,
+        path: str,
+        handler_method: Callable,
+        methods: List[str],
+        response_model: Optional[Type] = None,
+    ) -> None:
+        """
+        Add a route that uses a handler method.
+
+        Args:
+            path: API path
+            handler_method: The handler method to use
+            methods: List of HTTP methods
+            response_model: Optional response model for FastAPI
+
+        Raises:
+            ValueError: If handler is not initialized
+        """
+        if not self.handler:
+            raise ValueError("Handler not initialized")
+
+        self.workflow_router.add_api_route(
+            path=path,
+            endpoint=handler_method,
+            methods=methods,
+            response_model=response_model,
+        )
