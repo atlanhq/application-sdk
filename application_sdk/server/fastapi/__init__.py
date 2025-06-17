@@ -55,7 +55,6 @@ from application_sdk.server.fastapi.utils import internal_server_error_handler
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
-metrics = get_metrics()
 
 
 class APIServer(ServerInterface):
