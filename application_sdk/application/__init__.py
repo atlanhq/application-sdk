@@ -26,6 +26,7 @@ class BaseApplication:
         self,
         name: str,
         server: Optional[ServerInterface] = None,
+        handler: Optional[HandlerInterface] = None,
         application_manifest: Optional[dict] = None,
     ):
         """
@@ -34,8 +35,11 @@ class BaseApplication:
         Args:
             name (str): The name of the application.
             server (ServerInterface): The server class for the application.
+            handler (HandlerInterface): The handler instance for processing server-specific operations.
+            application_manifest (dict): The application manifest.
         """
         self.application_name = name
+        self.handler = handler
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server
@@ -147,7 +151,6 @@ class BaseApplication:
     async def setup_server(
         self,
         workflow_class,
-        handler: Optional[HandlerInterface] = None,
         ui_enabled: bool = True,
     ):
         """
@@ -157,9 +160,6 @@ class BaseApplication:
 
         Args:
             workflow_class: The workflow class to register with the server.
-            handler (Optional[HandlerInterface]): Optional handler instance for processing
-                server-specific operations. If provided, this handler will be used for any
-                registered handler routes. Defaults to None.
             ui_enabled (bool): Whether to enable the UI. Defaults to True.
 
         Raises:
@@ -172,7 +172,7 @@ class BaseApplication:
         if self.server is None:
             self.server = APIServer(
                 workflow_client=self.workflow_client,
-                handler=handler,
+                handler=self.handler,
                 ui_enabled=ui_enabled,
             )
 
