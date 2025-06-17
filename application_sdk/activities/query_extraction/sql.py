@@ -140,6 +140,18 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             workflow_args=workflow_args,
         )
 
+    def get_formatted_query(self, query: str, workflow_args: Dict[str, Any]) -> str:
+        """Formats the query with the workflow arguments.
+
+        Args:
+            query (str): The query to format.
+            workflow_args (Dict[str, Any]): The workflow arguments.
+        """
+        miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
+        return query.format(
+            miner_start_time_epoch=miner_args.miner_start_time_epoch,
+        )
+
     @activity.defn
     @auto_heartbeater
     async def fetch_queries(
@@ -167,7 +179,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         try:
             state = await self._get_state(workflow_args)
             sql_input = SQLQueryInput(
-                engine=state.sql_client.engine, query=self.fetch_queries_sql
+                engine=state.sql_client.engine,
+                query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
             )
             sql_input = await sql_input.get_daft_dataframe()
 
