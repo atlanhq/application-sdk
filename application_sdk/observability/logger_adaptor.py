@@ -520,6 +520,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 # Only append workflow context if we have workflow info
                 workflow_msg = f" Workflow Context: Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.workflow_type}"
                 msg = f"{msg}{workflow_msg}"
+                kwargs.update(workflow_context.model_dump())
         except Exception:
             pass
 
@@ -531,6 +532,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
                 # Only append activity context if we have activity info
                 activity_msg = f" Activity Context: Activity ID: {activity_context.activity_id} Workflow ID: {activity_context.workflow_id} Run ID: {activity_context.workflow_run_id} Type: {activity_context.activity_type}"
                 msg = f"{msg}{activity_msg}"
+                kwargs.update(activity_context.model_dump())
         except Exception:
             pass
 
