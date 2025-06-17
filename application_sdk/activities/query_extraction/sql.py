@@ -194,7 +194,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             raw_output = JsonOutput(
                 output_prefix=workflow_args["output_prefix"],
                 output_path=workflow_args["output_path"],
-                output_suffix="/raw/query",
+                output_suffix="raw/query",
                 chunk_size=100000,
             )
             await raw_output.write_daft_dataframe(sql_input)
