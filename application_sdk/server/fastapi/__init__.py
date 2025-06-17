@@ -769,3 +769,4 @@ class APIServer(ServerInterface):
             methods=methods,
             response_model=response_model,
         )
+        self.app.include_router(self.workflow_router, prefix="/workflows/v1")
