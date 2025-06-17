@@ -1,6 +1,46 @@
 # Changelog
 
 
+## v0.1.1rc15 (June 16, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc14...v0.1.1rc15
+
+### Features
+
+- add support for event based workflows (#560) (by @SanilK2108 in [27d8a13](https://github.com/atlanhq/application-sdk/commit/27d8a13))
+
+### Bug Fixes
+
+- workflow argument handling in test classes (#582) (by @Mustafa in [01ab925](https://github.com/atlanhq/application-sdk/commit/01ab925))
+
+## v0.1.1rc14 (June 10, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc13...v0.1.1rc14
+
+### Bug Fixes
+
+- dapr limit while file upload (#576) (by @Onkar Ravgan in [32f63d6](https://github.com/atlanhq/application-sdk/commit/32f63d6))
+
+
+
+## v0.1.1rc13 (June 10, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc12...v0.1.1rc13
+
+### Bug Fixes
+
+- update compiled_url_logic (#574) (by @Onkar Ravgan in [c1c6253](https://github.com/atlanhq/application-sdk/commit/c1c6253))
+
+## v0.1.1rc12 (June 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc11...v0.1.1rc12
+
+### Bug Fixes
+
+- Pandas read_sql for Redshift adbc connection (#572) (by @Onkar Ravgan in [183d204](https://github.com/atlanhq/application-sdk/commit/183d204))
+
+
+
 ## v0.1.1rc11 (June 02, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc10...v0.1.1rc11

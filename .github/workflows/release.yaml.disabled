@@ -65,7 +65,7 @@ jobs:
       - name: Install dependencies
         shell: bash
         run: |
-          uv sync --all-extras
+          uv sync --all-extras --all-groups
           pip install semver
 
       - name: Get current version

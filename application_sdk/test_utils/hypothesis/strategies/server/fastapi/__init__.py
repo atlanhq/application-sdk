@@ -2,7 +2,7 @@ import json
 
 from hypothesis import strategies as st
 
-from application_sdk.outputs.eventstore import WorkflowEndEvent
+from application_sdk.outputs.eventstore import Event
 
 # Strategy for generating auth credentials
 auth_credentials_strategy = st.fixed_dictionaries(
@@ -61,9 +61,10 @@ payload_strategy = st.fixed_dictionaries(
 
 # Strategy for generating workflow events
 workflow_event_strategy = st.builds(
-    WorkflowEndEvent,
-    workflow_id=st.text(),
-    workflow_name=st.text().map(lambda x: x.lower() + "_workflow"),
+    Event,
+    event_type=st.just("application_event"),
+    event_name=st.just("workflow_start"),
+    data={},
 )
 
 # Strategy for generating complete event data

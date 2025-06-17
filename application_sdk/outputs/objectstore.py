@@ -32,7 +32,7 @@ class ObjectStoreOutput:
         with DaprClient() as client:
             try:
                 with open(file_path, "rb") as f:
-                    file_content = f.read(1024 * 1024 * 10)  # Read up to 10MB
+                    file_content = f.read()
             except IOError as e:
                 logger.error(f"Error reading file {file_path}: {str(e)}")
                 raise e

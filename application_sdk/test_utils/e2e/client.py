@@ -56,26 +56,18 @@ class APIServerClient:
         assert response.status_code == 200
         return response.json()
 
-    def run_workflow(
-        self, credentials: Dict, metadata: Dict, connection: Dict
-    ) -> Dict[str, Any]:
+    def run_workflow(self, data: Dict) -> Dict[str, Any]:
         """
         Method for the /start API to run the workflow
 
         Args:
-            credentials (Dict): Credentials for the workflow
-            metadata (Dict): Metadata for the workflow
-            connection (Dict): Connection details for the workflow
+            data (Dict): Data for the workflow start API
         Returns:
             Dict: Response from the workflow start API
         """
         response = self._post(
             "/start",
-            data={
-                "credentials": credentials,
-                "metadata": metadata,
-                "connection": connection,
-            },
+            data=data,
         )
         assert response.status_code == 200
         return response.json()
