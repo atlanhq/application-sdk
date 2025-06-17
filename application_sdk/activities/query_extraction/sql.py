@@ -150,6 +150,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
         return query.format(
             miner_start_time_epoch=miner_args.miner_start_time_epoch,
+            database_name_cleaned=miner_args.database_name_cleaned,
+            schema_name_cleaned=miner_args.schema_name_cleaned,
+            timestamp_column=miner_args.timestamp_column,
+            chunk_size=miner_args.chunk_size,
+            current_marker=miner_args.current_marker,
+            sql_replace_from=miner_args.sql_replace_from,
+            sql_replace_to=miner_args.sql_replace_to,
         )
 
     @activity.defn
