@@ -14,7 +14,6 @@ from opentelemetry.sdk._logs._internal.export import BatchLogRecordProcessor
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.trace.span import TraceFlags
 from pydantic import BaseModel, Field
-from temporalio import activity, workflow
 
 from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
@@ -37,6 +36,7 @@ from application_sdk.constants import (
     SERVICE_VERSION,
 )
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.utils import get_workflow_context
 
 
 class LogExtraModel(BaseModel):
@@ -515,49 +515,21 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             pass
 
         try:
-            workflow_info = workflow.info()
-            if workflow_info:
-                workflow_context = {
-                    "workflow_id": workflow_info.workflow_id or "",
-                    "run_id": workflow_info.run_id or "",
-                    "workflow_type": workflow_info.workflow_type or "",
-                    "namespace": workflow_info.namespace or "",
-                    "task_queue": workflow_info.task_queue or "",
-                    "attempt": workflow_info.attempt or 0,
-                }
-                kwargs.update(workflow_context)
-
+            workflow_context = get_workflow_context()
+            if workflow_context and workflow_context.in_workflow:
                 # Only append workflow context if we have workflow info
-                workflow_msg = f" Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
+                workflow_msg = f" Workflow Context: Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.workflow_type}"
                 msg = f"{msg}{workflow_msg}"
         except Exception:
             pass
 
         try:
-            activity_info = activity.info()
-            if activity_info:
-                activity_context = {
-                    "workflow_id": activity_info.workflow_id or "",
-                    "run_id": activity_info.workflow_run_id or "",
-                    "activity_id": activity_info.activity_id or "",
-                    "activity_type": activity_info.activity_type or "",
-                    "task_queue": activity_info.task_queue or "",
-                    "attempt": activity_info.attempt or 0,
-                    "schedule_to_close_timeout": str(
-                        activity_info.schedule_to_close_timeout or 0
-                    ),
-                    "start_to_close_timeout": str(
-                        activity_info.start_to_close_timeout or None
-                    ),
-                    "schedule_to_start_timeout": str(
-                        activity_info.schedule_to_start_timeout or None
-                    ),
-                    "heartbeat_timeout": str(activity_info.heartbeat_timeout or None),
-                }
+            activity_context = get_workflow_context()
+            if activity_context and activity_context.in_activity:
                 kwargs.update(activity_context)
 
                 # Only append activity context if we have activity info
-                activity_msg = f" Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
+                activity_msg = f" Activity Context: Activity ID: {activity_context.activity_id} Workflow ID: {activity_context.workflow_id} Run ID: {activity_context.workflow_run_id} Type: {activity_context.activity_type}"
                 msg = f"{msg}{activity_msg}"
         except Exception:
             pass

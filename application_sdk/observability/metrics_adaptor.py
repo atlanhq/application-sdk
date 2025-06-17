@@ -11,7 +11,6 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
 from pydantic import BaseModel
-from temporalio import activity, workflow
 
 from application_sdk.constants import (
     ENABLE_OTLP_METRICS,
@@ -31,6 +30,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.utils import get_workflow_context
 
 
 class MetricType(Enum):
@@ -425,31 +425,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
-        try:
-            activity_info = activity.info()
-
-            if activity_info:
-                labels["activity_context"] = "true"
-                labels["activity_id"] = activity_info.activity_id or ""
-                labels["workflow_id"] = activity_info.workflow_id or ""
-                labels["workflow_run_id"] = activity_info.workflow_run_id or ""
-                labels["workflow_type"] = activity_info.workflow_type or ""
-        except Exception:
-            # Not in activity context
-            labels["activity_context"] = "false"
-            pass
-
-        try:
-            workflow_info = workflow.info()
-            if workflow_info:
-                labels["workflow_context"] = "true"
-                labels["workflow_id"] = workflow_info.workflow_id or ""
-                labels["workflow_run_id"] = workflow_info.run_id or ""
-                labels["workflow_type"] = workflow_info.workflow_type or ""
-        except Exception:
-            # Not in workflow context
-            labels["workflow_context"] = "false"
-            pass
+        labels.update(get_workflow_context().model_dump())
 
         try:
             # Create metric record
