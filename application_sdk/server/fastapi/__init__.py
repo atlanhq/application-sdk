@@ -1,4 +1,4 @@
-from time import time
+import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
