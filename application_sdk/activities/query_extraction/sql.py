@@ -148,7 +148,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             workflow_args (Dict[str, Any]): The workflow arguments.
         """
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
-        return query.format(
+        temp_query = query.format(
             miner_start_time_epoch=miner_args.miner_start_time_epoch,
             database_name_cleaned=miner_args.database_name_cleaned,
             schema_name_cleaned=miner_args.schema_name_cleaned,
@@ -158,6 +158,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_replace_from=miner_args.sql_replace_from,
             sql_replace_to=miner_args.sql_replace_to,
         )
+        temp_query = temp_query.replace(
+            miner_args.ranged_sql_start_key, workflow_args["start_marker"]
+        )
+        temp_query = temp_query.replace(
+            miner_args.ranged_sql_end_key, workflow_args["end_marker"]
+        )
+        return temp_query
 
     @activity.defn
     @auto_heartbeater
@@ -195,13 +202,14 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 output_prefix=workflow_args["output_prefix"],
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
-                chunk_size=100000,
+                chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
+                start_marker=workflow_args["start_marker"],
+                end_marker=workflow_args["end_marker"],
             )
             await raw_output.write_daft_dataframe(sql_input)
 
             logger.info(
-                "Query fetch completed, %s records processed",
-                raw_output.total_record_count,
+                f"Query fetch completed, {raw_output.total_record_count} records processed",
             )
         except Exception as e:
             logger.error(

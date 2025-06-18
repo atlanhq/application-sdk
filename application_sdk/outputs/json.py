@@ -89,6 +89,8 @@ class JsonOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
@@ -122,6 +124,8 @@ class JsonOutput(Output):
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.path_gen = path_gen
+        self.start_marker = start_marker
+        self.end_marker = end_marker
         self.metrics = get_metrics()
 
         if not self.output_path:
@@ -133,11 +137,10 @@ class JsonOutput(Output):
         os.makedirs(self.output_path, exist_ok=True)
 
         # For Query Extraction
-        start_marker = kwargs.get("start_marker")
-        end_marker = kwargs.get("end_marker")
-        if start_marker and end_marker:
+        if self.start_marker and self.end_marker:
             self.path_gen = (
-                lambda chunk_start, chunk_count: f"{start_marker}_{end_marker}.json"
+                lambda chunk_start,
+                chunk_count: f"{self.start_marker}_{self.end_marker}.json"
             )
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
