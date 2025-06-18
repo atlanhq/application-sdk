@@ -37,7 +37,7 @@ def get_workflow_context() -> WorkflowContext:
             context.attempt = str(workflow_info.attempt or 0)
             context.in_workflow = "true"
     except Exception:
-        context.in_workflow = "false"
+        pass
 
     try:
         activity_info = activity.info()
@@ -49,8 +49,6 @@ def get_workflow_context() -> WorkflowContext:
             context.activity_type = activity_info.activity_type or ""
             context.task_queue = activity_info.task_queue or ""
             context.attempt = str(activity_info.attempt or 0)
-        else:
-            context.in_activity = "false"
     except Exception:
         pass
 
