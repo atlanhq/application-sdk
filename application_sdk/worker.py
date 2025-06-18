@@ -15,6 +15,7 @@ from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
@@ -92,6 +93,8 @@ class Worker:
             set(passthrough_modules + self.default_passthrough_modules)
         )
         self.max_concurrent_activities = max_concurrent_activities
+        if self.max_concurrent_activities is None:
+            self.max_concurrent_activities = MAX_CONCURRENT_ACTIVITIES
 
         self.activity_executor = activity_executor or ThreadPoolExecutor(
             max_workers=max_concurrent_activities or 5,
