@@ -130,7 +130,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "0.1.1rc16"
+version = "0.1.1rc17"
 source = { editable = "." }
 dependencies = [
     { name = "duckdb" },
