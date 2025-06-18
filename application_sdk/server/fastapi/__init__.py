@@ -31,6 +31,7 @@ from application_sdk.observability.metrics_adaptor import MetricType, get_metric
 from application_sdk.observability.observability import DuckDBUI
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
+from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
     EventWorkflowRequest,
     EventWorkflowResponse,
@@ -140,6 +141,7 @@ class APIServer(ServerInterface):
 
         # Add middleware
         self.app.add_middleware(LogMiddleware)
+        self.app.add_middleware(MetricsMiddleware)
 
         # Register routers and setup docs
         self.register_routers()
