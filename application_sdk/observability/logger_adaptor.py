@@ -527,8 +527,6 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
 
         try:
             if workflow_context and workflow_context.in_activity == "true":
-                kwargs.update(workflow_context.model_dump())
-
                 # Only append activity context if we have activity info
                 activity_msg = f" Activity Context: Activity ID: {workflow_context.activity_id} Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.activity_type}"
                 msg = f"{msg}{activity_msg}"
