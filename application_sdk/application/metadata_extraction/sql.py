@@ -77,6 +77,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        max_concurrent_activities: Optional[int] = None,
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
@@ -116,6 +117,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
             workflow_activities=all_activities,
             passthrough_modules=passthrough_modules,
             activity_executor=activity_executor,
+            max_concurrent_activities=max_concurrent_activities,
         )
 
     @observability(logger=logger, metrics=metrics, traces=traces)
