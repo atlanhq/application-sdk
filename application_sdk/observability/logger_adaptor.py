@@ -514,8 +514,9 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
         except Exception:
             pass
 
+        workflow_context = get_workflow_context()
+
         try:
-            workflow_context = get_workflow_context()
             if workflow_context and workflow_context.in_workflow == "true":
                 # Only append workflow context if we have workflow info
                 workflow_msg = f" Workflow Context: Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.workflow_type}"
@@ -525,14 +526,13 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             pass
 
         try:
-            activity_context = get_workflow_context()
-            if activity_context and activity_context.in_activity == "true":
-                kwargs.update(activity_context)
+            if workflow_context and workflow_context.in_activity == "true":
+                kwargs.update(workflow_context.model_dump())
 
                 # Only append activity context if we have activity info
-                activity_msg = f" Activity Context: Activity ID: {activity_context.activity_id} Workflow ID: {activity_context.workflow_id} Run ID: {activity_context.workflow_run_id} Type: {activity_context.activity_type}"
+                activity_msg = f" Activity Context: Activity ID: {workflow_context.activity_id} Workflow ID: {workflow_context.workflow_id} Run ID: {workflow_context.workflow_run_id} Type: {workflow_context.activity_type}"
                 msg = f"{msg}{activity_msg}"
-                kwargs.update(activity_context.model_dump())
+                kwargs.update(workflow_context.model_dump())
         except Exception:
             pass
 
