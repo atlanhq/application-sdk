@@ -19,10 +19,12 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk.clients.auth import AuthManager
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     MAX_CONCURRENT_ACTIVITIES,
+    WORKFLOW_AUTH_ENABLED,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -209,6 +211,10 @@ class TemporalWorkflowClient(WorkflowClient):
         port: str | None = None,
         application_name: str | None = None,
         namespace: str | None = "default",
+        auth_enabled: bool | None = None,
+        auth_url: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
     ):
         """Initialize the Temporal workflow client.
 
@@ -221,6 +227,14 @@ class TemporalWorkflowClient(WorkflowClient):
                 Defaults to environment variable APPLICATION_NAME.
             namespace (str | None, optional): Temporal namespace. Defaults to
                 "default" or environment variable WORKFLOW_NAMESPACE.
+            auth_enabled (bool | None, optional): Whether authentication is enabled. Defaults to
+                environment variable WORKFLOW_AUTH_ENABLED.
+            auth_url (str | None, optional): OAuth2 token endpoint URL. Defaults to
+                environment variable WORKFLOW_AUTH_URL.
+            client_id (str | None, optional): OAuth2 client ID. Defaults to
+                environment variable WORKFLOW_AUTH_CLIENT_ID.
+            client_secret (str | None, optional): OAuth2 client secret. Defaults to
+                environment variable WORKFLOW_AUTH_CLIENT_SECRET.
         """
         self.client = None
         self.worker = None
@@ -231,6 +245,18 @@ class TemporalWorkflowClient(WorkflowClient):
         self.host = host if host else WORKFLOW_HOST
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
+
+        self.auth_manager = AuthManager(
+            application_name=self.application_name,
+            auth_enabled=auth_enabled,
+            auth_url=auth_url,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
+        self.auth_enabled = (
+            auth_enabled if auth_enabled is not None else WORKFLOW_AUTH_ENABLED
+        )
 
         logger = get_logger(__name__)
         workflow.logger = logger
@@ -274,22 +300,40 @@ class TemporalWorkflowClient(WorkflowClient):
         """Connect to the Temporal server.
 
         Establishes a connection to the Temporal server using the configured
-        connection string and namespace.
+        connection string and namespace. If authentication is enabled, includes
+        the OAuth2 access token in the connection.
 
         Raises:
             ConnectionError: If connection to the Temporal server fails.
+            ValueError: If authentication is enabled but credentials are missing.
         """
-        self.client = await Client.connect(
-            self.get_connection_string(),
-            namespace=self.namespace,
-        )
+        connection_options: Dict[str, Any] = {
+            "target_host": self.get_connection_string(),
+            "namespace": self.namespace,
+        }
+
+        if self.auth_enabled:
+            try:
+                token = await self.auth_manager.get_access_token()
+                if token:
+                    connection_options["grpc_metadata"] = [
+                        ("authorization", f"Bearer {token}")
+                    ]
+            except Exception as e:
+                logger.error(f"Failed to get authentication headers: {e}")
+                raise
+
+        self.client = await Client.connect(**connection_options)
 
     async def close(self) -> None:
         """Close the Temporal client connection.
 
-        Gracefully closes the connection to the Temporal server. This is a
-        no-op if the connection is already closed.
+        Gracefully closes the connection to the Temporal server and clears
+        any authentication tokens. This is a no-op if the connection is
+        already closed.
         """
+        if hasattr(self, "auth_manager"):
+            self.auth_manager.clear_cache()
         return
 
     async def start_workflow(
