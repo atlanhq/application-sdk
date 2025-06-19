@@ -158,6 +158,11 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_replace_from=miner_args.sql_replace_from,
             sql_replace_to=miner_args.sql_replace_to,
         )
+
+        temp_query = temp_query.replace(
+            miner_args.sql_replace_from, miner_args.sql_replace_to
+        )
+
         temp_query = temp_query.replace(
             miner_args.ranged_sql_start_key, workflow_args["start_marker"]
         )

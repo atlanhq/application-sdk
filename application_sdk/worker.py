@@ -14,8 +14,8 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
