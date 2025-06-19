@@ -1207,3 +1207,80 @@ class TagAttachment(assets.TagAttachment):
             }
         except Exception as e:
             raise ValueError(f"Error creating TagAttachment Entity: {str(e)}")
+
+
+class Query(assets.Query):
+    """Query entity transformer for Atlas.
+
+    This class handles the transformation of query metadata into Atlas Query entities.
+    """
+
+    @classmethod
+    def get_attributes(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Parse a dictionary into a Query entity.
+
+        Args:
+            obj (Dict[str, Any]): Dictionary containing query metadata.
+
+        Returns:
+            Dict[str, Any]: Dictionary with 'attributes', 'custom_attributes', and 'entity_class'.
+
+        Raises:
+            ValueError: If required fields are missing or invalid.
+        """
+        try:
+            # Required fields from entity spec
+            assert (
+                obj.get("parentQualifiedName") is not None
+            ), "parentQualifiedName is required"
+            assert (
+                obj.get("collectionQualifiedName") is not None
+            ), "collectionQualifiedName is required"
+
+            attributes = {}
+            custom_attributes = {}
+
+            # Map fields from input to Query entity attributes
+            attributes["longRawQuery"] = obj.get("querytxt")
+            attributes["rawQueryText"] = obj.get("querytxt")
+            attributes["defaultDatabaseQualifiedName"] = obj.get("dbname")
+            attributes["defaultSchemaQualifiedName"] = obj.get("schemaname")
+            attributes["parentQualifiedName"] = obj["parentQualifiedName"]
+            attributes["collectionQualifiedName"] = obj["collectionQualifiedName"]
+            attributes["isPrivate"] = obj.get("isPrivate")
+            attributes["isSqlSnippet"] = obj.get("isSqlSnippet")
+            attributes["isVisualQuery"] = obj.get("isVisualQuery")
+            attributes["visualBuilderSchemaBase64"] = obj.get(
+                "visualBuilderSchemaBase64"
+            )
+            attributes["variablesSchemaBase64"] = obj.get("variablesSchemaBase64")
+
+            # Deprecated field for backward compatibility
+            attributes["rawQuery"] = obj.get("rawQuery")
+
+            # Place username and sessionid in custom_attributes
+            if obj.get("username"):
+                custom_attributes["username"] = obj["username"]
+            if obj.get("sessionid"):
+                custom_attributes["sessionid"] = obj["sessionid"]
+            if obj.get("starttime"):
+                custom_attributes["starttime"] = obj["starttime"]
+            if obj.get("endtime"):
+                custom_attributes["endtime"] = obj["endtime"]
+            if obj.get("session_starttime"):
+                custom_attributes["session_starttime"] = obj["session_starttime"]
+            if obj.get("session_endtime"):
+                custom_attributes["session_endtime"] = obj["session_endtime"]
+
+            # Add any other fields not mapped above to custom_attributes
+            for k, v in obj.items():
+                if k not in attributes and k not in custom_attributes:
+                    custom_attributes[k] = v
+
+            return {
+                "attributes": attributes,
+                "custom_attributes": custom_attributes,
+                "entity_class": Query,
+            }
+        except AssertionError as e:
+            raise ValueError(f"Error creating Query Entity: {str(e)}")
