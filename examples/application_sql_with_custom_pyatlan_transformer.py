@@ -236,8 +236,9 @@ async def application_sql_with_custom_pyatlan_transformer(
     )
 
     await app.setup_workflow(
-        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        activities_class=SampleSQLActivities,
+        workflow_and_activities_classes=[
+            (BaseSQLMetadataExtractionWorkflow, SampleSQLActivities)
+        ]
     )
 
     # wait for the worker to start

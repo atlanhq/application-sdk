@@ -54,8 +54,9 @@ app = BaseSQLMetadataExtractionApplication(
 )
 
 await app.setup_workflow(
-    workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-    activities_class=SampleSQLActivities,
+    workflow_and_activities_classes=[
+        (BaseSQLMetadataExtractionWorkflow, SampleSQLActivities)
+    ],
     worker_daemon_mode=True,
 )
 
@@ -132,8 +133,9 @@ async def main():
         handler_class=SampleSQLHandler,
     )
     await app.setup_workflow(
-        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        activities_class=SampleSQLActivities,
+        workflow_and_activities_classes=[
+            (BaseSQLMetadataExtractionWorkflow, SampleSQLActivities)
+        ],
         worker_daemon_mode=True,
     )
     workflow_args = {

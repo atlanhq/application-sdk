@@ -1,6 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 
+from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import EventRegistration
@@ -93,8 +94,9 @@ class BaseApplication:
 
     async def setup_workflow(
         self,
-        workflow_classes,
-        activities_class,
+        workflow_and_activities_classes: List[
+            Tuple[Type[WorkflowInterface], Type[ActivitiesInterface]]
+        ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
@@ -102,18 +104,25 @@ class BaseApplication:
         Set up the workflow client and start the worker for the application.
 
         Args:
-            workflow_classes (list): The workflow classes for the application.
-            activities_class (ActivitiesInterface): The activities class for the application.
+            workflow_and_activities_classes (list): The workflow and activities classes for the application.
             passthrough_modules (list): The modules to pass through to the worker.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
         await self.workflow_client.load()
-        activities = activities_class()
-        workflow_class = workflow_classes[0]
+
+        workflow_classes = [
+            workflow_class for workflow_class, _ in workflow_and_activities_classes
+        ]
+        workflow_activities = []
+        for workflow_class, activities_class in workflow_and_activities_classes:
+            workflow_activities.extend(
+                workflow_class.get_activities(activities_class())
+            )
+
         self.worker = Worker(
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
-            workflow_activities=workflow_class.get_activities(activities),
+            workflow_activities=workflow_activities,
             passthrough_modules=passthrough_modules,
             activity_executor=activity_executor,
         )

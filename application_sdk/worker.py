@@ -14,6 +14,7 @@ from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
+from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -58,7 +59,7 @@ class Worker:
         workflow_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = [],
         workflow_classes: Sequence[ClassType] = [],
-        max_concurrent_activities: Optional[int] = None,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """Initialize the Worker.
