@@ -5,9 +5,9 @@ from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import EventRegistration
-from application_sdk.server import ServerInterface
+from application_sdk.server import HandlerInterface, ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.server.fastapi.models import EventWorkflowTrigger
+from application_sdk.server.fastapi.models import EventWorkflowTrigger, HandlerRoute
 from application_sdk.worker import Worker
 from application_sdk.workflows import WorkflowInterface
 
@@ -27,6 +27,7 @@ class BaseApplication:
         self,
         name: str,
         server: Optional[ServerInterface] = None,
+        handler: Optional[HandlerInterface] = None,
         application_manifest: Optional[dict] = None,
     ):
         """
@@ -35,8 +36,11 @@ class BaseApplication:
         Args:
             name (str): The name of the application.
             server (ServerInterface): The server class for the application.
+            handler (HandlerInterface): The handler instance for processing server-specific operations.
+            application_manifest (dict): The application manifest.
         """
         self.application_name = name
+        self.handler = handler
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server
@@ -159,16 +163,27 @@ class BaseApplication:
         ui_enabled: bool = True,
     ):
         """
-        Optionally set up a server for the application. (No-op by default)
+        Set up a server for the application if one wasn't provided during initialization.
+        If a server was provided in __init__, this method will use that server instead
+        of creating a new APIServer.
+
+        Args:
+            workflow_class: The workflow class to register with the server.
+            ui_enabled (bool): Whether to enable the UI. Defaults to True.
+
+        Raises:
+            ValueError: If workflow class is not set for an event trigger.
         """
         if self.workflow_client is None:
             await self.workflow_client.load()
 
-        # Overrides the application server. serves the UI, and handles the various triggers
-        self.server = APIServer(
-            workflow_client=self.workflow_client,
-            ui_enabled=ui_enabled,
-        )
+        # Only create new APIServer if no server was provided in __init__
+        if self.server is None:
+            self.server = APIServer(
+                workflow_client=self.workflow_client,
+                handler=self.handler,
+                ui_enabled=ui_enabled,
+            )
 
         if self.event_subscriptions:
             for event_trigger in self.event_subscriptions.values():
@@ -200,3 +215,26 @@ class BaseApplication:
             raise ValueError("Application server not initialized")
 
         await self.server.start()
+
+    async def register_handler_routes(self, routes: List[HandlerRoute]) -> None:
+        """
+        Register additional routes that use handler methods.
+
+        Args:
+            routes: List of HandlerRoute objects defining the routes to register
+
+        Raises:
+            ValueError: If server is not an APIServer instance
+        """
+        if not isinstance(self.server, APIServer):
+            raise ValueError(
+                "Server must be an APIServer instance to register handler routes"
+            )
+
+        for route in routes:
+            self.server.add_handler_route(
+                path=route.path,
+                handler_method=route.handler_method,
+                methods=route.methods,
+                response_model=route.response_model,
+            )

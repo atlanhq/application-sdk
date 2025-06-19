@@ -1,7 +1,7 @@
 # Request/Response DTOs for workflows
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Callable, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, RootModel
 
@@ -221,3 +221,20 @@ class EventWorkflowTrigger(WorkflowTrigger):
 
     def should_trigger_workflow(self, event: Event) -> bool:
         return True
+
+
+class HandlerRoute(BaseModel):
+    """Model for defining a handler route."""
+
+    path: str = Field(..., description="API path for the route")
+    handler_method: Callable = Field(..., description="The handler method to be called")
+    methods: List[str] = Field(
+        ..., description="List of HTTP methods (GET, POST, etc.)"
+    )
+    response_model: Optional[Type] = Field(
+        None, description="Optional response model for FastAPI"
+    )
+
+    model_config = {
+        "arbitrary_types_allowed": True  # Needed for Callable and Type fields
+    }
