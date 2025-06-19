@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Optional, Type
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
+from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
@@ -77,7 +78,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
-        max_concurrent_activities: Optional[int] = None,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.

@@ -59,7 +59,7 @@ class Worker:
         workflow_activities: Sequence[CallableType] = [],
         passthrough_modules: List[str] = [],
         workflow_classes: Sequence[ClassType] = [],
-        max_concurrent_activities: Optional[int] = None,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
     ):
         """Initialize the Worker.
@@ -93,8 +93,6 @@ class Worker:
             set(passthrough_modules + self.default_passthrough_modules)
         )
         self.max_concurrent_activities = max_concurrent_activities
-        if self.max_concurrent_activities is None:
-            self.max_concurrent_activities = MAX_CONCURRENT_ACTIVITIES
 
         self.activity_executor = activity_executor or ThreadPoolExecutor(
             max_workers=max_concurrent_activities or 5,

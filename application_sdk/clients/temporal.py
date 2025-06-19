@@ -384,7 +384,7 @@ class TemporalWorkflowClient(WorkflowClient):
         activities: Sequence[CallableType],
         workflow_classes: Sequence[ClassType],
         passthrough_modules: Sequence[str],
-        max_concurrent_activities: Optional[int],
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
     ) -> Worker:
         """Create a Temporal worker.
@@ -403,9 +403,6 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if not self.client:
             raise ValueError("Client is not loaded")
-
-        if not max_concurrent_activities:
-            max_concurrent_activities = MAX_CONCURRENT_ACTIVITIES
 
         # Always provide an executor if none given
         if activity_executor is None:
