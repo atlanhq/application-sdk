@@ -51,8 +51,7 @@ async def application_hello_world(daemon: bool = True) -> Dict[str, Any]:
 
     # setup workflow
     await app.setup_workflow(
-        workflow_classes=[HelloWorldWorkflow],
-        activities_class=HelloWorldActivities,
+        workflow_and_activities_classes=[(HelloWorldWorkflow, HelloWorldActivities)]
     )
 
     # start workflow

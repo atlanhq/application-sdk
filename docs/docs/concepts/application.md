@@ -27,8 +27,9 @@ This module provides the generic application abstraction for orchestrating workf
         name="hello-world"
     )
     await app.setup_workflow(
-        workflow_classes=[HelloWorldWorkflow],
-        activities_class=HelloWorldActivities,
+        workflow_and_activities_classes=[
+            (HelloWorldWorkflow, HelloWorldActivities)
+        ],
     )
     await app.start_workflow(workflow_args={}, workflow_class=HelloWorldWorkflow)
     await app.start_worker()
