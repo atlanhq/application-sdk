@@ -127,8 +127,7 @@ class EventStore:
                 event.metadata.workflow_id = workflow_info.workflow_id
                 event.metadata.workflow_run_id = workflow_info.run_id
         except Exception:
-            # Not in workflow context, cannot set workflow metadata
-            pass
+            logger.debug("Not in workflow context, cannot set workflow metadata")
 
         try:
             activity_info = activity.info()
@@ -141,8 +140,7 @@ class EventStore:
                 event.metadata.workflow_run_id = activity_info.workflow_run_id
                 event.metadata.workflow_state = WorkflowStates.RUNNING.value
         except Exception:
-            # Not in activity context, cannot set activity metadata
-            pass
+            logger.debug("Not in activity context, cannot set activity metadata")
 
         return event
 
