@@ -27,8 +27,9 @@ class ObjectStoreInput:
         Downloads all files from the object store for a given prefix.
 
         Args:
-            download_file_prefix (str): The base path in the object store to download files from.
-            local_directory (str): The local directory where the files should be downloaded.
+            download_file_prefix (str): The base path in the object store to
+                download files from.
+            file_path (str): Local directory where the files will be saved.
 
         Raises:
             Exception: If there's an error downloading any file from the object store.
@@ -40,8 +41,9 @@ class ObjectStoreInput:
 
             # List all files in the object store path
             with DaprClient() as client:
-                relative_path = os.path.relpath(file_path, download_file_prefix)
-                metadata = {"fileName": relative_path}
+                # Use the prefix directly when listing files from the object store
+                # as it represents the remote path from which files should be retrieved.
+                metadata = {"fileName": download_file_prefix}
                 try:
                     # Assuming the object store binding supports a "list" operation
                     response = client.invoke_binding(

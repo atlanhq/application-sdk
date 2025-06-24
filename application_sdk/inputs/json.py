@@ -50,8 +50,11 @@ class JsonInput(Input):
                 if self.download_file_prefix is not None and not os.path.exists(
                     os.path.join(self.path, file_name)
                 ):
+                    # Only pass the prefix without the filename so that
+                    # download_file_from_object_store can correctly compute
+                    # the relative path for the object store lookup.
                     ObjectStoreInput.download_file_from_object_store(
-                        os.path.join(self.download_file_prefix, file_name),
+                        self.download_file_prefix,
                         os.path.join(self.path, file_name),
                     )
             except IOError as e:
