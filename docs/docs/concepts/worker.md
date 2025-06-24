@@ -56,8 +56,8 @@ await worker.start(daemon=True)
 **Parameters:**
 
 *   **`daemon` (bool):**
-    *   `True` (Default): Starts the worker in a separate background daemon thread. The `await worker.start()` call returns immediately, allowing your main application (like a FastAPI server) to continue running. This is the typical mode when running alongside a web application.
-    *   `False`: Starts the worker in the current thread. The `await worker.start()` call will block indefinitely until the worker is interrupted (e.g., by Ctrl+C). This is useful for standalone worker processes or debugging.
+    *   `True` (Default): Schedules the worker as a background asyncio task. The `await worker.start()` call returns immediately, allowing your main application (like a FastAPI server) to continue running. This is the typical mode when running alongside a web application.
+    *   `False`: Runs the worker in the current task. The `await worker.start()` call will block indefinitely until the worker is interrupted (e.g., by Ctrl+C). This is useful for standalone worker processes or debugging.
 
 ## Configuration and Extensibility
 

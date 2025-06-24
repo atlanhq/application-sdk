@@ -5,7 +5,6 @@ including their initialization, configuration, and execution.
 """
 
 import asyncio
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional, Sequence
 
@@ -98,15 +97,16 @@ class Worker:
             max_workers=max_concurrent_activities or 5,
             thread_name_prefix="activity-pool-",
         )
+        self._worker_task: Optional[asyncio.Task] = None
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
 
-        This method starts the worker either in the current thread or as a daemon
-        thread based on the daemon parameter.
+        This method starts the worker either in the current task or, when
+        ``daemon`` is ``True``, schedules it as a background asyncio task.
 
         Args:
-            daemon: Whether to run the worker in a daemon thread.
+            daemon: Whether to run the worker in daemon mode.
                 Defaults to True.
             *args: Additional positional arguments passed to the worker.
             **kwargs: Additional keyword arguments passed to the worker.
@@ -120,14 +120,12 @@ class Worker:
             ConnectionError: If connection to Temporal server fails.
 
         Note:
-            When running as a daemon, the worker runs in a separate thread and
+            When running in daemon mode, the worker runs as an asyncio task and
             does not block the main thread.
         """
         if daemon:
-            worker_thread = threading.Thread(
-                target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
-            )
-            worker_thread.start()
+            if self._worker_task is None or self._worker_task.done():
+                self._worker_task = asyncio.create_task(self.start(daemon=False))
             return
 
         if not self.workflow_client:

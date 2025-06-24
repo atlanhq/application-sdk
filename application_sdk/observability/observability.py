@@ -391,42 +391,23 @@ class AtlanObservability(Generic[T], ABC):
             # Write records to each partition
             for partition_path, partition_data in partition_records.items():
                 os.makedirs(partition_path, exist_ok=True)
-                # Use a consistent file name for each partition
-                parquet_path = os.path.join(partition_path, "data.parquet")
-
-                # Read existing data if any
-                existing_df = None
-                if os.path.exists(parquet_path):
-                    try:
-                        # Read the entire parquet file without excluding any columns
-                        existing_df = pd.read_parquet(parquet_path)
-                    except Exception as e:
-                        logging.error(f"Error reading existing parquet file: {e}")
-                        # If there's an error reading the existing file, we'll overwrite it
-                        existing_df = None
+                # Write each batch as a separate parquet file to avoid rewriting existing data
+                parquet_filename = f"{int(time() * 1000)}.parquet"
+                parquet_path = os.path.join(partition_path, parquet_filename)
 
                 # Create new dataframe from current records
-                new_df = pd.DataFrame(partition_data)
+                df = pd.DataFrame(partition_data)
 
                 # Extract partition values from path
-                partition_parts = os.path.basename(os.path.dirname(parquet_path)).split(
-                    os.sep
-                )
+                partition_parts = partition_path.split(os.sep)
                 for part in partition_parts:
                     if part.startswith("year="):
-                        new_df["year"] = int(part.split("=")[1])
+                        df["year"] = int(part.split("=")[1])
                     elif part.startswith("month="):
-                        new_df["month"] = int(part.split("=")[1])
+                        df["month"] = int(part.split("=")[1])
                     elif part.startswith("day="):
-                        new_df["day"] = int(part.split("=")[1])
+                        df["day"] = int(part.split("=")[1])
 
-                # Merge with existing data if any
-                if existing_df is not None:
-                    df = pd.concat([existing_df, new_df], ignore_index=True)
-                else:
-                    df = new_df
-
-                # Sort by timestamp to maintain order
                 df = df.sort_values("timestamp")
 
                 # Write to parquet file

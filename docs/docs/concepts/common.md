@@ -456,7 +456,7 @@ Contains miscellaneous helper functions used throughout the SDK.
 *   **`get_actual_cpu_count()`**: Attempts to determine the number of CPUs available to the current process, considering potential container limits (via `os.sched_getaffinity`), falling back to `os.cpu_count()`.
 *   **`get_safe_num_threads()`**: Calculates a reasonable number of threads for parallel processing, typically `get_actual_cpu_count() + 4`.
 *   **`parse_credentials_extra(credentials)`**: Safely parses the `extra` field within a `credentials` dictionary (assuming it's a JSON string) and merges its contents back into the main dictionary.
-*   **`run_sync(func)`**: A decorator (intended for internal use, e.g., in `AsyncBaseSQLClient`) to run a synchronous function (`func`) in a `ThreadPoolExecutor` to avoid blocking an asyncio event loop.
+*   **`run_sync(func)`**: A decorator (intended for internal use, e.g., in `AsyncBaseSQLClient`) to run a synchronous function (`func`) in the event loop's default executor so the asyncio loop isn't blocked.
 
 ### Usage Examples
 
