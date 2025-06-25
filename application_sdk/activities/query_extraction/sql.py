@@ -14,8 +14,8 @@ from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
@@ -180,7 +180,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         """Fetch and process queries from the database.
 
         This activity fetches SQL queries from the database using the configured SQL client
-        and processes them into a JSON output format.
+        and processes them into a Parquet output format.
 
         Args:
             workflow_args (Dict[str, Any]): Dictionary containing workflow configuration including:
@@ -203,7 +203,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             sql_input = await sql_input.get_daft_dataframe()
 
-            raw_output = JsonOutput(
+            raw_output = ParquetOutput(
                 output_prefix=workflow_args["output_prefix"],
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
@@ -434,3 +434,55 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
         return parallel_markers
+
+    @activity.defn
+    @auto_heartbeater
+    async def create_marker_file(self, workflow_args: Dict[str, Any]) -> None:
+        """Create a marker file with the maximum end value from query results.
+
+        This activity creates a marker file that contains the maximum end timestamp
+        from all processed query batches. This marker can be used for subsequent
+        query extraction runs to continue from where the previous run left off.
+
+        Args:
+            workflow_args (Dict[str, Any]): Dictionary containing workflow configuration including:
+                - output_prefix (str): Prefix for output files
+                - output_path (str): Path where output files will be stored
+                - max_end_value (int): Maximum end timestamp value from all query batches
+
+        Returns:
+            None
+
+        Raises:
+            Exception: If marker file creation fails
+        """
+        try:
+            max_end_value = workflow_args.get("max_end_value")
+            if max_end_value is None:
+                logger.warning(
+                    "No max_end_value provided, skipping marker file creation"
+                )
+                return
+
+            output_path = workflow_args["output_path"]
+            marker_file_path = os.path.join(output_path, "marker.json.ignore")
+
+            # Ensure the directory exists
+            os.makedirs(os.path.dirname(marker_file_path), exist_ok=True)
+
+            # Write just the raw timestamp value without JSON formatting or quotes
+            with open(marker_file_path, "w") as f:
+                f.write(str(max_end_value))
+
+            # Push the marker file to object store
+            await ObjectStoreOutput.push_file_to_object_store(
+                workflow_args["output_prefix"], marker_file_path
+            )
+
+            logger.info(
+                f"Successfully created marker file with max_end: {max_end_value}"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to create marker file: {e}")
+            raise e
