@@ -468,6 +468,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             workflow_args["output_prefix"], metadata_file_path
         )
 
-        await self.write_marker(parallel_markers, workflow_args)
+        try:
+            await self.write_marker(parallel_markers, workflow_args)
+        except Exception as e:
+            logger.warning(f"Failed to write marker file: {e}")
 
         return parallel_markers
