@@ -65,7 +65,6 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             activities.fetch_queries,
             activities.preflight_check,
             activities.get_workflow_args,
-            activities.create_marker_file,
         ]
 
     @workflow.run
@@ -131,21 +130,5 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             )
 
         await asyncio.gather(*miner_activities)
-
-        # Create marker file with maximum end value from all results
-        if results:
-            max_end_value = max(int(result["end"]) for result in results)
-            marker_args = workflow_args.copy()
-            marker_args["max_end_value"] = max_end_value
-
-            await workflow.execute_activity_method(
-                self.activities_cls.create_marker_file,
-                marker_args,
-                retry_policy=retry_policy,
-                start_to_close_timeout=self.default_start_to_close_timeout,
-                heartbeat_timeout=self.default_heartbeat_timeout,
-            )
-
-            logger.info(f"Created marker file with max_end: {max_end_value}")
 
         logger.info(f"Miner workflow completed for {workflow_id}")
