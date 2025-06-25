@@ -380,7 +380,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         """
         Write the marker to the output path.
         """
-        output_path = workflow_args["output_path"].rsplit("/", 1)[0]
+        output_path = workflow_args["output_path"].rsplit("/", 2)[0]
         marker_file_path = os.path.join(output_path, "markerfile")
 
         # find the last marker from the parallel_markers
@@ -396,7 +396,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
         """Read the marker from the output path."""
         try:
-            output_path = workflow_args["output_path"].rsplit("/", 1)[0]
+            output_path = workflow_args["output_path"].rsplit("/", 2)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
             with open(marker_file_path, "r") as f:
                 current_marker = f.read()
