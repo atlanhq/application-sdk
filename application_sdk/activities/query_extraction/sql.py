@@ -375,7 +375,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
 
     async def write_marker(
-            self, parallel_markers: List[Dict[str, Any]], workflow_args: Dict[str, Any]
+        self, parallel_markers: List[Dict[str, Any]], workflow_args: Dict[str, Any]
     ):
         """
         Write the marker to the output path.
