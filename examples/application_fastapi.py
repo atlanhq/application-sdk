@@ -3,7 +3,6 @@ from typing import Any, Dict, List, Optional
 
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
-from application_sdk.server.fastapi.models import MetadataType
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -16,7 +15,7 @@ class SampleSQLHandler(BaseSQLHandler):
 
     async def fetch_metadata(
         self,
-        metadata_type: Optional[MetadataType] = None,
+        metadata_type: Optional[str] = None,
         database: Optional[str] = None,
         **kwargs: Any,
     ) -> List[Dict[str, str]]:

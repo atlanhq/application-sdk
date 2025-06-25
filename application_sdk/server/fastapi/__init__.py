@@ -491,13 +491,16 @@ class APIServer(ServerInterface):
         start_time = time.time()
         metrics = get_metrics()
 
+        metadata_type = body.root.get("type", "all")
+        database = body.root.get("database", None)
+
         try:
             if not self.handler:
                 raise Exception("Handler not initialized")
 
             await self.handler.load(body.model_dump())
             metadata = await self.handler.fetch_metadata(
-                metadata_type=body.root["type"], database=body.root["database"]
+                metadata_type=metadata_type, database=database
             )
 
             # Record successful metadata fetch
@@ -507,8 +510,8 @@ class APIServer(ServerInterface):
                 metric_type=MetricType.COUNTER,
                 labels={
                     "status": "success",
-                    "type": body.root["type"],
-                    "database": body.root["database"],
+                    "type": metadata_type,
+                    "database": database,
                 },
                 description="Total number of metadata fetch requests",
             )
@@ -519,7 +522,7 @@ class APIServer(ServerInterface):
                 name="metadata_duration_seconds",
                 value=duration,
                 metric_type=MetricType.HISTOGRAM,
-                labels={"type": body.root["type"], "database": body.root["database"]},
+                labels={"type": metadata_type, "database": database},
                 description="Metadata fetch duration in seconds",
             )
 
@@ -532,8 +535,8 @@ class APIServer(ServerInterface):
                 metric_type=MetricType.COUNTER,
                 labels={
                     "status": "error",
-                    "type": body.root["type"],
-                    "database": body.root["database"],
+                    "type": metadata_type,
+                    "database": database,
                 },
                 description="Total number of metadata fetch requests",
             )
