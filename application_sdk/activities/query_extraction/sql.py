@@ -468,4 +468,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             workflow_args["output_prefix"], metadata_file_path
         )
 
+        await self.write_marker(parallel_markers, workflow_args)
+
         return parallel_markers
