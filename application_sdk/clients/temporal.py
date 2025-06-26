@@ -316,9 +316,9 @@ class TemporalWorkflowClient(WorkflowClient):
             try:
                 token = await self.auth_manager.get_access_token()
                 if token:
-                    connection_options["grpc_metadata"] = [
-                        ("authorization", f"Bearer {token}")
-                    ]
+                    connection_options["rpc_metadata"] = {
+                        "authorization": f"Bearer {token}"
+                    }
             except Exception as e:
                 logger.error(f"Failed to get authentication headers: {e}")
                 raise
