@@ -450,6 +450,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             logger.info(f"Marker file downloaded to {marker_file_path}")
             if not os.path.exists(marker_file_path):
                 logger.warning(f"Marker file does not exist at {marker_file_path}")
+                return None
             with open(marker_file_path, "r") as f:
                 current_marker = f.read()
             logger.info(f"Current marker: {current_marker}")
