@@ -107,6 +107,9 @@ class ObjectStoreInput:
                     binding_metadata=metadata,
                 )
                 # check if response.data is in binary format
+                logger.info(
+                        f"Inside download_file_from_object_store ( DaprInput ): data written to file: {response.data}"
+                    )
                 write_mode = "wb" if isinstance(response.data, bytes) else "w"
                 with open(file_path, write_mode) as f:
                     logger.info(

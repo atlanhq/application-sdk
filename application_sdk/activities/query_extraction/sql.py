@@ -438,9 +438,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             output_path = workflow_args["output_path"].rsplit("/", 2)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
             logger.info(f"Downloading marker file from {marker_file_path}")
+
+            os.makedirs(workflow_args["output_prefix"], exist_ok=True)
+
             ObjectStoreInput.download_file_from_object_store(
                 workflow_args["output_prefix"], marker_file_path
             )
+            
             logger.info(f"Output prefix: {workflow_args['output_prefix']}")
             logger.info(f"Marker file downloaded to {marker_file_path}")
             if not os.path.exists(marker_file_path):
