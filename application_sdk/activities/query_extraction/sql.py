@@ -380,8 +380,24 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
     async def write_marker(
         self, parallel_markers: List[Dict[str, Any]], workflow_args: Dict[str, Any]
     ):
-        """
-        Write the marker to the output path.
+        """Write the marker to the output path.
+
+        This method writes the last marker from the parallelized query results to a marker file.
+        The marker file is used to track the progress of query extraction and can be used to
+        resume processing from where it left off in subsequent runs.
+
+        Args:
+            parallel_markers (List[Dict[str, Any]]): List of parallelized query markers containing
+                metadata about each chunk including start, end, and count information.
+            workflow_args (Dict[str, Any]): Dictionary containing workflow configuration including:
+                - output_prefix (str): Prefix for output files
+                - miner_args (Dict[str, Any]): Mining arguments containing crossover_marker_file_path
+
+        Returns:
+            None
+
+        Raises:
+            Exception: If marker file writing or object store upload fails
         """
         #output_path = workflow_args["output_path"].rsplit("/", 2)[0]
         #marker_file_path = os.path.join(output_path, "markerfile")
@@ -404,7 +420,23 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         logger.info(f"Marker file written to {marker_file_path}")
 
     def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
-        """Read the marker from the output path."""
+        """Read the marker from the output path.
+
+        This method reads the current marker value from a marker file to determine the
+        starting point for query extraction. The marker represents a timestamp that
+        indicates where the previous extraction process left off.
+
+        Args:
+            workflow_args (Dict[str, Any]): Dictionary containing workflow configuration.
+                Currently not used in the implementation but kept for interface consistency.
+
+        Returns:
+            Optional[int]: The marker value as an integer timestamp, or None if the marker
+                file cannot be read or doesn't exist.
+
+        Raises:
+            Exception: If marker file reading fails (logged as warning, not re-raised)
+        """
         try:
             #output_path = workflow_args["output_path"].rsplit("/", 2)[0]
             #marker_file_path = os.path.join(output_path, "markerfile")
