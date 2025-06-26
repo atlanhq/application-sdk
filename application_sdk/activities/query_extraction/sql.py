@@ -214,9 +214,11 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             await raw_output.write_daft_dataframe(sql_input)
 
+            """
             logger.info(
                 f"Query fetch completed, {raw_output.total_record_count} records processed",
             )
+            """
         except Exception as e:
             logger.error(
                 "Query fetch failed %s",
@@ -263,7 +265,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         marked_sql = query.replace(ranged_sql_start_key, current_marker)
         rewritten_query = f"WITH T AS ({marked_sql}) SELECT {timestamp_column} FROM T ORDER BY {timestamp_column} ASC"
-        logger.info(f"Executing query: {rewritten_query}")
+        # logger.info(f"Executing query: {rewritten_query}")
 
         chunk_start_marker = None
         chunk_end_marker = None
@@ -276,7 +278,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 new_marker = str(int(timestamp.timestamp() * 1000))
 
                 if last_marker == new_marker:
-                    logger.info("Skipping duplicate start time")
+                    # logger.info("Skipping duplicate start time")
                     record_count += 1
                     continue
 
@@ -315,7 +317,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 ranged_sql_end_key=ranged_sql_end_key,
             )
 
-        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
+        # logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
 
         return parallel_markers
 
@@ -360,11 +362,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             ),
         )
 
+        """
         logger.info(
             f"Processed {record_count} records in chunk {len(parallel_markers)}, "
             f"with start marker {start_marker} and end marker {end_marker}"
         )
         logger.info(f"Chunked SQL: {chunked_sql}")
+        """
 
         parallel_markers.append(
             {
@@ -499,7 +503,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             logger.error(f"Failed to parallelize queries: {e}")
             raise e
 
-        logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
+        # logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
 
         # Write the results to a metadata file
         output_path = os.path.join(workflow_args["output_path"], "raw", "query")
