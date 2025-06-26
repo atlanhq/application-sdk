@@ -310,6 +310,7 @@ class TemporalWorkflowClient(WorkflowClient):
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
+            "tls": True,
         }
 
         if self.auth_enabled:
