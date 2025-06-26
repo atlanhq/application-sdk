@@ -31,6 +31,10 @@ class ParquetOutput(Output):
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks created.
+        chunk_start (Optional[int]): Starting index for chunk numbering.
+        path_gen (Callable): Function to generate file paths.
+        start_marker (Optional[str]): Start marker for query extraction.
+        end_marker (Optional[str]): End marker for query extraction.
     """
 
     def __init__(
@@ -43,6 +47,9 @@ class ParquetOutput(Output):
         chunk_size: Optional[int] = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
+        chunk_start: Optional[int] = None,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
     ):
         """Initialize the Parquet output handler.
 
@@ -55,6 +62,14 @@ class ParquetOutput(Output):
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
             chunk_count (int, optional): Initial chunk count. Defaults to 0.
+            chunk_start (Optional[int], optional): Starting index for chunk numbering.
+                Defaults to None.
+            path_gen (Callable, optional): Function to generate file paths.
+                Defaults to path_gen function.
+            start_marker (Optional[str], optional): Start marker for query extraction.
+                Defaults to None.
+            end_marker (Optional[str], optional): End marker for query extraction.
+                Defaults to None.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -64,6 +79,9 @@ class ParquetOutput(Output):
         self.chunk_size = chunk_size
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
+        self.chunk_start = chunk_start
+        self.start_marker = start_marker
+        self.end_marker = end_marker
         self.metrics = get_metrics()
 
         # Create output directory
@@ -71,6 +89,34 @@ class ParquetOutput(Output):
         if self.typename:
             self.output_path = os.path.join(self.output_path, self.typename)
         os.makedirs(self.output_path, exist_ok=True)
+
+    def path_gen(
+        self,
+        chunk_start: int | None = None,
+        chunk_count: int = 0,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
+    ) -> str:
+        """Generate a file path for a chunk.
+
+        Args:
+            chunk_start (int | None): Starting index of the chunk, or None for single chunk.
+            chunk_count (int): Total number of chunks.
+            start_marker (Optional[str]): Start marker for query extraction.
+            end_marker (Optional[str]): End marker for query extraction.
+
+        Returns:
+            str: Generated file path for the chunk.
+        """
+        # For Query Extraction - use start and end markers without chunk count
+        if start_marker and end_marker:
+            return f"{start_marker}_{end_marker}.parquet"
+
+        # For regular chunking - include chunk count
+        if chunk_start is None:
+            return f"{str(chunk_count)}.parquet"
+        else:
+            return f"{str(chunk_start+chunk_count)}.parquet"
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -85,7 +131,7 @@ class ParquetOutput(Output):
             # Update counters
             self.chunk_count += 1
             self.total_record_count += len(dataframe)
-            file_path = f"{self.output_path}/{self.chunk_count}.parquet"
+            file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
 
             # Write the dataframe to parquet using pandas native method
             dataframe.to_parquet(
@@ -141,9 +187,12 @@ class ParquetOutput(Output):
             self.chunk_count += 1
             self.total_record_count += row_count
 
+            # Generate file path using path_gen function
+            file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
+
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
-                self.output_path,
+                file_path,
                 write_mode=self.write_mode,
             )
 
@@ -166,7 +215,7 @@ class ParquetOutput(Output):
             )
 
             # Upload the file to object store
-            await self.upload_file(self.output_path)
+            await self.upload_file(file_path)
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(

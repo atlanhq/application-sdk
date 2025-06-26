@@ -71,7 +71,7 @@ class ObjectStoreInput:
                     download_file_prefix, local_file_path
                 )
 
-            logger.debug(
+            logger.info(
                 f"Successfully downloaded all files from: {download_file_prefix}"
             )
         except Exception as e:
@@ -103,13 +103,13 @@ class ObjectStoreInput:
                     operation=cls.OBJECT_GET_OPERATION,
                     binding_metadata=metadata,
                 )
+
                 # check if response.data is in binary format
                 write_mode = "wb" if isinstance(response.data, bytes) else "w"
                 with open(file_path, write_mode) as f:
                     f.write(response.data)
-                    f.close()
 
-                logger.debug(f"Successfully downloaded file: {relative_path}")
+                logger.info(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
                 logger.error(
                     f"Error downloading file {relative_path} to object store: {str(e)}"
