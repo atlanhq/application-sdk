@@ -405,6 +405,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         logger.info(f"Writing marker file to {output_path}")
         marker_file_path = os.path.join(output_path, "markerfile")
 
+        if not parallel_markers:
+            logger.warning("No parallel markers generated, skipping marker file write.")
+            return
+
         # find the last marker from the parallel_markers
         last_marker = parallel_markers[-1]["end"]
         with open(marker_file_path, "w") as f:
@@ -444,7 +448,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             ObjectStoreInput.download_file_from_object_store(
                 workflow_args["output_prefix"], marker_file_path
             )
-            
+
             logger.info(f"Output prefix: {workflow_args['output_prefix']}")
             logger.info(f"Marker file downloaded to {marker_file_path}")
             if not os.path.exists(marker_file_path):
