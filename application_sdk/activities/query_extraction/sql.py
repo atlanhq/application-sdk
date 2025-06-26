@@ -15,6 +15,7 @@ from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
@@ -430,6 +431,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         try:
             output_path = workflow_args["output_path"].rsplit("/", 2)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
+            ObjectStoreInput.download_file_from_object_store(
+                workflow_args["output_prefix"], marker_file_path
+            )
             with open(marker_file_path, "r") as f:
                 current_marker = f.read()
             return int(current_marker)
