@@ -411,7 +411,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with open(marker_file_path, "w") as f:
             f.write(last_marker)
 
-        logger.info(f"last marker: {last_marker}")
+        logger.info(f"Last marker: {last_marker}")
         await ObjectStoreOutput.push_file_to_object_store(
             workflow_args["output_prefix"], marker_file_path
         )
