@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Callable, Literal, Optional
+from typing import TYPE_CHECKING, Literal, Optional
 
 from temporalio import activity
 
@@ -14,34 +14,6 @@ activity.logger = logger
 if TYPE_CHECKING:
     import daft
     import pandas as pd
-
-
-def path_gen(
-    chunk_start: int | None,
-    chunk_count: int,
-    start_marker: Optional[str] = None,
-    end_marker: Optional[str] = None,
-) -> str:
-    """Generate a file path for a chunk.
-
-    Args:
-        chunk_start (int | None): Starting index of the chunk, or None for single chunk.
-        chunk_count (int): Total number of chunks.
-        start_marker (Optional[str]): Start marker for query extraction.
-        end_marker (Optional[str]): End marker for query extraction.
-
-    Returns:
-        str: Generated file path for the chunk.
-    """
-    # For Query Extraction - use start and end markers without chunk count
-    if start_marker and end_marker:
-        return f"{start_marker}_{end_marker}.parquet"
-
-    # For regular chunking - include chunk count
-    if chunk_start is None:
-        return f"{str(chunk_count)}.parquet"
-    else:
-        return f"{str(chunk_start+chunk_count)}.parquet"
 
 
 class ParquetOutput(Output):
@@ -76,9 +48,6 @@ class ParquetOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
         chunk_start: Optional[int] = None,
-        path_gen: Callable[
-            [int | None, int, Optional[str], Optional[str]], str
-        ] = path_gen,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
     ):
@@ -111,7 +80,6 @@ class ParquetOutput(Output):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.chunk_start = chunk_start
-        self.path_gen = path_gen
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.metrics = get_metrics()
@@ -122,14 +90,33 @@ class ParquetOutput(Output):
             self.output_path = os.path.join(self.output_path, self.typename)
         os.makedirs(self.output_path, exist_ok=True)
 
-        # For Query Extraction
-        if self.start_marker and self.end_marker:
-            self.path_gen = (
-                lambda chunk_start,
-                chunk_count,
-                start_marker,
-                end_marker: f"{self.start_marker}_{self.end_marker}.parquet"
-            )
+    def path_gen(
+        self,
+        chunk_start: int | None = None,
+        chunk_count: int = 0,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
+    ) -> str:
+        """Generate a file path for a chunk.
+
+        Args:
+            chunk_start (int | None): Starting index of the chunk, or None for single chunk.
+            chunk_count (int): Total number of chunks.
+            start_marker (Optional[str]): Start marker for query extraction.
+            end_marker (Optional[str]): End marker for query extraction.
+
+        Returns:
+            str: Generated file path for the chunk.
+        """
+        # For Query Extraction - use start and end markers without chunk count
+        if start_marker and end_marker:
+            return f"{start_marker}_{end_marker}.parquet"
+
+        # For regular chunking - include chunk count
+        if chunk_start is None:
+            return f"{str(chunk_count)}.parquet"
+        else:
+            return f"{str(chunk_start+chunk_count)}.parquet"
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
