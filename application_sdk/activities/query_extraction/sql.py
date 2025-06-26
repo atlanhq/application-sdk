@@ -428,9 +428,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             Exception: If marker file reading fails (logged as warning, not re-raised)
         """
         try:
-            #output_path = workflow_args["output_path"].rsplit("/", 2)[0]
-            #marker_file_path = os.path.join(output_path, "markerfile")
-            with open("/tmp/markers", "r") as f:
+            output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+            marker_file_path = os.path.join(output_path, "markerfile")
+            with open(marker_file_path, "r") as f:
                 current_marker = f.read()
             return int(current_marker)
         except Exception as e:
