@@ -107,7 +107,7 @@ class ObjectStoreInput:
                 # check if response.data is in binary format
                 write_mode = "wb" if isinstance(response.data, bytes) else "w"
                 with open(file_path, write_mode) as f:
-                    f.close()
+                    f.write(response.data)
 
                 logger.info(f"Successfully downloaded file: {relative_path}")
             except Exception as e:
