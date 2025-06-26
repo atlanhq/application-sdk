@@ -40,6 +40,8 @@ class MinerArgs(BaseModel):
         ranged_sql_end_key (str): Placeholder for range end timestamp.
         miner_start_time_epoch (int): Start time for mining in epoch format.
             Defaults to 14 days ago.
+        crossover_marker_file_path (Optional[str]): Path to the crossover marker file.
+            Defaults to None.
     """
 
     database_name_cleaned: str
@@ -54,6 +56,7 @@ class MinerArgs(BaseModel):
     miner_start_time_epoch: int = Field(
         default_factory=lambda: int((datetime.now() - timedelta(days=14)).timestamp())
     )
+    crossover_marker_file_path: Optional[str] = None
 
 
 class BaseSQLQueryExtractionActivitiesState(ActivitiesState):
@@ -380,8 +383,15 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         """
         Write the marker to the output path.
         """
-        output_path = workflow_args["output_path"].rsplit("/", 2)[0]
-        marker_file_path = os.path.join(output_path, "markerfile")
+        #output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+        #marker_file_path = os.path.join(output_path, "markerfile")
+        #marker_file_path = "/tmp/markers/markerfile"
+        miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
+        marker_file_path = miner_args.crossover_marker_file_path
+
+        if not marker_file_path:
+            logger.info("No marker file path provided, skipping marker write")
+            return
 
         # find the last marker from the parallel_markers
         last_marker = parallel_markers[-1]["end"]
