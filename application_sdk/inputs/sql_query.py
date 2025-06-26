@@ -1,5 +1,4 @@
 import asyncio
-import concurrent
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
 from application_sdk.inputs import Input
@@ -152,11 +151,7 @@ class SQLQueryInput(Input):
                 async with async_session() as session:
                     return await session.run_sync(self._read_sql_query)
             else:
-                # Run the blocking operation in a thread pool
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    return await asyncio.get_event_loop().run_in_executor(  # type: ignore
-                        executor, self._execute_query
-                    )
+                return await asyncio.to_thread(self._execute_query)
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
 
@@ -188,18 +183,14 @@ class SQLQueryInput(Input):
                 async with async_session() as session:
                     return await session.run_sync(self._read_sql_query)
             else:
-                # Run the blocking operation in a thread pool
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    result = await asyncio.get_event_loop().run_in_executor(
-                        executor, self._execute_query
-                    )
-                    import pandas as pd
+                result = await asyncio.to_thread(self._execute_query)
+                import pandas as pd
 
-                    if isinstance(result, pd.DataFrame):
-                        return result
-                    raise Exception(
-                        "Unable to get pandas dataframe from SQL query results"
-                    )
+                if isinstance(result, pd.DataFrame):
+                    return result
+                raise Exception(
+                    "Unable to get pandas dataframe from SQL query results"
+                )
 
         except Exception as e:
             logger.error(f"Error reading data(pandas) from SQL: {str(e)}")
@@ -225,14 +216,10 @@ class SQLQueryInput(Input):
         try:
             import daft
 
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                result = await asyncio.get_event_loop().run_in_executor(
-                    executor, self._execute_query_daft
-                )
-                if isinstance(result, daft.DataFrame):
-                    return result
-                raise
+            result = await asyncio.to_thread(self._execute_query_daft)
+            if isinstance(result, daft.DataFrame):
+                return result
+            raise
         except Exception as e:
             logger.error(f"Error reading data(daft) from SQL: {str(e)}")
             raise

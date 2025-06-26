@@ -342,32 +342,31 @@ class BaseSQLClient(ClientInterface):
 
         logger.info(f"Running query: {query}")
 
-        with ThreadPoolExecutor() as pool:
-            try:
-                from sqlalchemy import text
+        try:
+            from sqlalchemy import text
 
-                cursor = await loop.run_in_executor(
-                    pool, self.connection.execute, text(query)
+            cursor = await loop.run_in_executor(
+                None, self.connection.execute, text(query)
+            )
+            if not cursor or not cursor.cursor:
+                raise ValueError("Cursor is not supported")
+            column_names: List[str] = [
+                description.name.lower()
+                for description in cursor.cursor.description
+            ]
+
+            while True:
+                rows = await loop.run_in_executor(
+                    None, cursor.fetchmany, batch_size
                 )
-                if not cursor or not cursor.cursor:
-                    raise ValueError("Cursor is not supported")
-                column_names: List[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+                if not rows:
+                    break
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            except Exception as e:
-                logger.error("Error running query in batch: {error}", error=str(e))
-                raise e
+                results = [dict(zip(column_names, row)) for row in rows]
+                yield results
+        except Exception as e:
+            logger.error("Error running query in batch: {error}", error=str(e))
+            raise e
 
         logger.info("Query execution completed")
 

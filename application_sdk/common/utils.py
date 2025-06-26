@@ -2,7 +2,6 @@ import asyncio
 import glob
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 from application_sdk.common.error_codes import CommonError
@@ -318,18 +317,17 @@ def parse_credentials_extra(credentials: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def run_sync(func):
-    """Run a function in a thread pool executor.
+    """Run a synchronous function without blocking the event loop.
 
     Args:
-        func: The function to run in thread pool.
+        func: The function to run in a thread from the default executor.
 
     Returns:
-        An async wrapper function that runs the input function in a thread pool.
+        An async wrapper function that runs the input function in the event loop's default executor.
     """
 
     async def wrapper(*args, **kwargs):
         loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor() as pool:
-            return await loop.run_in_executor(pool, func, *args, **kwargs)
+        return await loop.run_in_executor(None, func, *args, **kwargs)
 
     return wrapper
