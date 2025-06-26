@@ -95,6 +95,9 @@ class ObjectStoreInput:
         """
         with DaprClient() as client:
             relative_path = os.path.relpath(file_path, download_file_prefix)
+            logger.info(
+                f"Inside download_file_from_object_store ( DaprInput ): {relative_path}"
+            )
             metadata = {"key": relative_path, "fileName": relative_path}
 
             try:
@@ -106,7 +109,13 @@ class ObjectStoreInput:
                 # check if response.data is in binary format
                 write_mode = "wb" if isinstance(response.data, bytes) else "w"
                 with open(file_path, write_mode) as f:
+                    logger.info(
+                        f"Inside download_file_from_object_store ( DaprInput ): Writing to file: {file_path}"
+                    )
                     f.write(response.data)
+                    logger.info(
+                        f"Inside download_file_from_object_store ( DaprInput ): data written to file: {response.data}"
+                    )
                     f.close()
 
                 logger.debug(f"Successfully downloaded file: {relative_path}")

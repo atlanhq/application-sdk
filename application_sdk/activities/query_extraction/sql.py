@@ -398,6 +398,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             Exception: If marker file writing or object store upload fails
         """
         output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+        logger.info(f"Writing marker file to {output_path}")
         marker_file_path = os.path.join(output_path, "markerfile")
 
         # find the last marker from the parallel_markers
@@ -405,6 +406,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with open(marker_file_path, "w") as f:
             f.write(last_marker)
 
+        logger.info(f"last marker: {last_marker}")
         await ObjectStoreOutput.push_file_to_object_store(
             workflow_args["output_prefix"], marker_file_path
         )
@@ -431,11 +433,17 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         try:
             output_path = workflow_args["output_path"].rsplit("/", 2)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
+            logger.info(f"Downloading marker file from {marker_file_path}")
             ObjectStoreInput.download_file_from_object_store(
                 workflow_args["output_prefix"], marker_file_path
             )
+            logger.info(f"Output prefix: {workflow_args['output_prefix']}")
+            logger.info(f"Marker file downloaded to {marker_file_path}")
+            if not os.path.exists(marker_file_path):
+                logger.warning(f"Marker file does not exist at {marker_file_path}")
             with open(marker_file_path, "r") as f:
                 current_marker = f.read()
+            logger.info(f"Current marker: {current_marker}")
             return int(current_marker)
         except Exception as e:
             logger.warning(f"Failed to read marker: {e}")
