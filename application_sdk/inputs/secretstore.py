@@ -7,7 +7,7 @@ from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
-from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.constants import SECRET_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -15,7 +15,9 @@ logger = get_logger(__name__)
 
 class SecretStoreInput:
     @classmethod
-    async def fetch_secret(cls, component_name: str, secret_key: str) -> Dict[str, Any]:
+    async def fetch_secret(
+        cls, secret_key: str, component_name: str = SECRET_STORE_NAME
+    ) -> Dict[str, Any]:
         """Fetch secret using the Dapr component.
 
         Args:
@@ -94,24 +96,24 @@ class SecretStoreInput:
 
         return result_data
 
-    @classmethod
-    def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
-        """Extract credentials from the state store using the credential GUID.
+    # @classmethod
+    # def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
+    #     """Extract credentials from the state store using the credential GUID.
 
-        Args:
-            credential_guid: The unique identifier for the credentials.
+    #     Args:
+    #         credential_guid: The unique identifier for the credentials.
 
-        Returns:
-            Dict[str, Any]: The credentials if found.
+    #     Returns:
+    #         Dict[str, Any]: The credentials if found.
 
-        Raises:
-            ValueError: If the credential_guid is invalid or credentials are not found.
-            Exception: If there's an error with the Dapr client operations.
+    #     Raises:
+    #         ValueError: If the credential_guid is invalid or credentials are not found.
+    #         Exception: If there's an error with the Dapr client operations.
 
-        Examples:
-            >>> SecretStoreInput.extract_credentials("1234567890")
-            {"username": "admin", "password": "password"}
-        """
-        if not credential_guid:
-            raise ValueError("Invalid credential GUID provided.")
-        return StateStoreInput.get_state(f"credential_{credential_guid}")
+    #     Examples:
+    #         >>> SecretStoreInput.extract_credentials("1234567890")
+    #         {"username": "admin", "password": "password"}
+    #     """
+    #     if not credential_guid:
+    #         raise ValueError("Invalid credential GUID provided.")
+    #     return cls.(f"credential_{credential_guid}")

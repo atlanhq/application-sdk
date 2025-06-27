@@ -66,7 +66,7 @@ def test_store_configuration_success(
     reason="Failing due to hypothesis error: Cannot create a collection of min_size=666 unique elements with values drawn from only 17 distinct elements"
 )
 @given(config=credentials_strategy(), uuid=uuid_strategy)  # type: ignore
-def test_extract_credentials_success(
+async def test_extract_credentials_success(
     mock_dapr_input_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
     mock_dapr_input_client.reset_mock()  # Reset mock between examples
@@ -74,7 +74,7 @@ def test_extract_credentials_success(
     mock_state.data = json.dumps(config)
     mock_dapr_input_client.get_state.return_value = mock_state
 
-    result = SecretStoreInput.extract_credentials(uuid)
+    result = await SecretStoreInput.fetch_secret(secret_key=f"credential_{uuid}")
 
     assert result == config
     mock_dapr_input_client.get_state.assert_called_once_with(
