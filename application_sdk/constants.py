@@ -31,7 +31,7 @@ load_dotenv(dotenv_path=".env")
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
-DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "")
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "atlan")
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server

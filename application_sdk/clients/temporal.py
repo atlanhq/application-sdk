@@ -23,6 +23,7 @@ from application_sdk.clients.auth import AuthManager
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_AUTH_ENABLED,
     WORKFLOW_HOST,
@@ -236,13 +237,16 @@ class TemporalWorkflowClient(WorkflowClient):
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
 
-        The task queue name is derived from the application name and is used
-        to route workflow tasks to appropriate workers.
+        The task queue name is derived from the application name and deployment name
+        and is used to route workflow tasks to appropriate workers.
 
         Returns:
-            str: The task queue name, which is the same as the application name.
+            str: The task queue name in format "app_name-deployment_name".
         """
-        return self.application_name
+        if DEPLOYMENT_NAME:
+            return f"{self.application_name}-{DEPLOYMENT_NAME}"
+        else:
+            return self.application_name
 
     def get_connection_string(self) -> str:
         """Get the Temporal server connection string.
@@ -278,10 +282,13 @@ class TemporalWorkflowClient(WorkflowClient):
             ConnectionError: If connection to the Temporal server fails.
             ValueError: If authentication is enabled but credentials are missing.
         """
+        # Set TLS based on host - disable for localhost/127.0.0.1, enable for others
+        tls_enabled = self.host not in ["127.0.0.1", "localhost"]
+
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
-            "tls": True,
+            "tls": tls_enabled,
         }
 
         if self.auth_enabled:
@@ -326,12 +333,24 @@ class TemporalWorkflowClient(WorkflowClient):
             WorkflowFailureError: If the workflow fails to start.
             ValueError: If the client is not loaded.
         """
+        # Check if credentials should be stored based on credentialSource
+        should_store_credentials = False
         if "credentials" in workflow_args:
-            # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
-                workflow_args["credentials"]
-            )
-            del workflow_args["credentials"]
+            credential_source = workflow_args["credentials"].get("credentialSource", "")
+            should_store_credentials = credential_source == "direct"
+
+            if should_store_credentials:
+                # Only store credentials if credentialSource is "direct"
+                workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
+                    workflow_args["credentials"]
+                )
+                del workflow_args["credentials"]
+            else:
+                # For non-direct credential sources, keep credentials in workflow_args
+                # but don't store them in SecretStore
+                logger.info(
+                    f"Skipping credential storage for credentialSource: {credential_source}"
+                )
 
         workflow_id = workflow_args.get("workflow_id")
         output_prefix = workflow_args.get("output_prefix", "/tmp/output")
@@ -347,19 +366,36 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             )
 
+        # Determine configuration approach based on credential storage
+        if should_store_credentials:
+            # StateStore approach - store configuration and pass only workflow_id with flag
             StateStoreOutput.store_configuration(workflow_id, workflow_args)
-
-            logger.info(f"Created workflow config with ID: {workflow_id}")
+            args = [{"workflow_id": workflow_id, "_use_statestore": True}]
+            logger.info(
+                f"Created workflow config with ID: {workflow_id} (StateStore approach)"
+            )
+        else:
+            # Direct approach - pass full configuration with flag
+            workflow_args["_use_statestore"] = False
+            args = [workflow_args]
+            logger.info(f"Created workflow with ID: {workflow_id} (direct approach)")
 
         try:
-            # Pass the full workflow_args to the workflow
+            # Get task_queue from workflow_args or credentials or use default
+            task_queue = (
+                workflow_args.get("task_queue")
+                or workflow_args.get("credentials", {}).get("task_queue")
+                or self.worker_task_queue
+            )
+
+            # Pass the conditional args to the workflow
             if not self.client:
                 raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
-                args=[{"workflow_id": workflow_id}],
+                args=args,
                 id=workflow_id,
-                task_queue=self.worker_task_queue,
+                task_queue=task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
                 execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
