@@ -64,23 +64,32 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         """Run the workflow with the given configuration.
 
         This method provides the base implementation for workflow execution. It:
-        1. Extracts workflow configuration from the state store
+        1. Extracts workflow configuration from the state store or uses direct configuration
         2. Sets up workflow run ID and retry policy
         3. Executes the preflight check activity
 
         Args:
-            workflow_config (Dict[str, Any]): Includes workflow_id and other parameters
-                workflow_id is used to extract the workflow configuration from the
-                state store.
+            workflow_config (Dict[str, Any]): Either includes workflow_id and _use_statestore flag
+                for StateStore approach, or contains the complete workflow configuration for
+                direct approach.
         """
-        # Get the workflow configuration from the state store
-        workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
-            self.activities_cls.get_workflow_args,
-            workflow_config,  # Pass the whole config containing workflow_id
-            retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
-            start_to_close_timeout=self.default_start_to_close_timeout,
-            heartbeat_timeout=self.default_heartbeat_timeout,
-        )
+        # Determine configuration approach based on _use_statestore flag
+        use_statestore = workflow_config.get("_use_statestore", False)
+
+        if use_statestore:
+            # StateStore approach - retrieve workflow configuration from state store
+            workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+                self.activities_cls.get_workflow_args,
+                workflow_config,  # Pass the whole config containing workflow_id
+                retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
+            logger.info("Retrieved workflow configuration from StateStore")
+        else:
+            # Direct approach - use passed configuration directly
+            workflow_args = workflow_config
+            logger.info("Using workflow configuration passed directly")
 
         logger.info("Starting workflow execution")
 
