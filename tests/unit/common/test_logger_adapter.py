@@ -105,11 +105,11 @@ def test_process_with_workflow_context():
             msg, kwargs = logger_adapter.process("Test message", {})
 
             assert kwargs["workflow_id"] == "test_workflow_id"
-            assert kwargs["run_id"] == "test_run_id"
+            assert kwargs["workflow_run_id"] == "test_run_id"
             assert kwargs["workflow_type"] == "test_workflow_type"
             assert kwargs["namespace"] == "test_namespace"
             assert kwargs["task_queue"] == "test_queue"
-            assert kwargs["attempt"] == 1
+            assert kwargs["attempt"] == "1"
             expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
             assert msg == expected_msg
 
@@ -127,11 +127,11 @@ def test_process_with_generated_workflow_context(workflow_info: mock.Mock):
             msg, kwargs = logger_adapter.process("Test message", {})
 
             assert kwargs["workflow_id"] == workflow_info.workflow_id
-            assert kwargs["run_id"] == workflow_info.run_id
+            assert kwargs["workflow_run_id"] == workflow_info.run_id
             assert kwargs["workflow_type"] == workflow_info.workflow_type
             assert kwargs["namespace"] == workflow_info.namespace
             assert kwargs["task_queue"] == workflow_info.task_queue
-            assert kwargs["attempt"] == workflow_info.attempt
+            assert kwargs["attempt"] == str(workflow_info.attempt)
             expected_msg = f"Test message Workflow Context: Workflow ID: {workflow_info.workflow_id} Run ID: {workflow_info.run_id} Type: {workflow_info.workflow_type}"
             assert msg == expected_msg
 
@@ -155,13 +155,11 @@ def test_process_with_activity_context():
             msg, kwargs = logger_adapter.process("Test message", {})
 
             assert kwargs["workflow_id"] == "test_workflow_id"
-            assert kwargs["run_id"] == "test_run_id"
+            assert kwargs["workflow_run_id"] == "test_run_id"
             assert kwargs["activity_id"] == "test_activity_id"
             assert kwargs["activity_type"] == "test_activity_type"
             assert kwargs["task_queue"] == "test_queue"
-            assert kwargs["attempt"] == 1
-            assert kwargs["schedule_to_close_timeout"] == "30s"
-            assert kwargs["start_to_close_timeout"] == "25s"
+            assert kwargs["attempt"] == "1"
 
             expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
             assert msg == expected_msg
@@ -177,18 +175,11 @@ def test_process_with_generated_activity_context(activity_info: mock.Mock):
             msg, kwargs = logger_adapter.process("Test message", {})
 
             assert kwargs["workflow_id"] == activity_info.workflow_id
-            assert kwargs["run_id"] == activity_info.workflow_run_id
+            assert kwargs["workflow_run_id"] == activity_info.workflow_run_id
             assert kwargs["activity_id"] == activity_info.activity_id
             assert kwargs["activity_type"] == activity_info.activity_type
             assert kwargs["task_queue"] == activity_info.task_queue
-            assert kwargs["attempt"] == activity_info.attempt
-            assert (
-                kwargs["schedule_to_close_timeout"]
-                == activity_info.schedule_to_close_timeout
-            )
-            assert (
-                kwargs["start_to_close_timeout"] == activity_info.start_to_close_timeout
-            )
+            assert kwargs["attempt"] == str(activity_info.attempt)
 
             expected_msg = f"Test message Activity Context: Activity ID: {activity_info.activity_id} Workflow ID: {activity_info.workflow_id} Run ID: {activity_info.workflow_run_id} Type: {activity_info.activity_type}"
             assert msg == expected_msg

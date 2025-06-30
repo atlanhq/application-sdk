@@ -11,17 +11,11 @@ from application_sdk.test_utils.e2e.conftest import workflow_details
 logger = get_logger(__name__)
 
 
-class WorkflowExecutionError(Exception):
-    """Exception class for raising exceptions during workflow execution"""
-
-
 class BaseTest(TestInterface):
     config_file_path: str
     extracted_output_base_path: str
     schema_base_path: str
-    credentials: Dict[str, Any]
-    metadata: Dict[str, Any]
-    connection: Dict[str, Any]
+    test_workflow_args: Dict[str, Any]
 
     @pytest.mark.order(1)
     def test_health_check(self):
@@ -36,7 +30,9 @@ class BaseTest(TestInterface):
         """
         Test the auth and test connection flow
         """
-        response = self.client.test_connection(credentials=self.credentials)
+        response = self.client.test_connection(
+            credentials=self.test_workflow_args["credentials"]
+        )
         self.assertEqual(response, self.expected_api_responses["auth"])
 
     @pytest.mark.order(3)
@@ -44,7 +40,9 @@ class BaseTest(TestInterface):
         """
         Test Metadata
         """
-        response = self.client.get_metadata(credentials=self.credentials)
+        response = self.client.get_metadata(
+            credentials=self.test_workflow_args["credentials"]
+        )
         self.assertEqual(response, self.expected_api_responses["metadata"])
 
     @pytest.mark.order(4)
@@ -53,7 +51,8 @@ class BaseTest(TestInterface):
         Test Preflight Check
         """
         response = self.client.preflight_check(
-            credentials=self.credentials, metadata=self.metadata
+            credentials=self.test_workflow_args["credentials"],
+            metadata=self.test_workflow_args["metadata"],
         )
         self.assertEqual(response, self.expected_api_responses["preflight_check"])
 
@@ -62,28 +61,7 @@ class BaseTest(TestInterface):
         """
         Test running the metadata extraction workflow
         """
-        response = self.client.run_workflow(
-            credentials=self.credentials,
-            metadata=self.metadata,
-            connection=self.connection,
-        )
-        self.assertEqual(response["success"], True)
-        self.assertEqual(response["message"], "Workflow started successfully")
-        workflow_details[self.test_name] = {
-            "workflow_id": response["data"]["workflow_id"],
-            "run_id": response["data"]["run_id"],
-        }
-
-        # Wait for the workflow to complete
-        workflow_status = self.monitor_and_wait_workflow_execution()
-
-        # If worklfow is not completed successfully, raise an exception
-        if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
-            raise WorkflowExecutionError(
-                f"Workflow failed with status: {workflow_status}"
-            )
-
-        logger.info("Workflow completed successfully")
+        self.run_workflow()
 
     @pytest.mark.order(5)
     def test_configuration_get(self):
@@ -102,8 +80,12 @@ class BaseTest(TestInterface):
         )
 
         # Verify that response data contains the expected metadata and connection
-        self.assertEqual(response_data["data"]["connection"], self.connection)
-        self.assertEqual(response_data["data"]["metadata"], self.metadata)
+        self.assertEqual(
+            response_data["data"]["connection"], self.test_workflow_args["connection"]
+        )
+        self.assertEqual(
+            response_data["data"]["metadata"], self.test_workflow_args["metadata"]
+        )
 
     @pytest.mark.order(6)
     def test_configuration_update(self):
@@ -111,8 +93,11 @@ class BaseTest(TestInterface):
         Test configuration update
         """
         update_payload = {
-            "connection": self.connection,
-            "metadata": {**self.metadata, "temp-table-regex": "^temp_.*"},
+            "connection": self.test_workflow_args["connection"],
+            "metadata": {
+                **self.test_workflow_args["metadata"],
+                "temp-table-regex": "^temp_.*",
+            },
         }
         response = requests.post(
             f"{self.client.host}/workflows/v1/config/{workflow_details[self.test_name]['workflow_id']}",
@@ -220,7 +205,10 @@ class BaseTest(TestInterface):
         try:
             response = self.client._post(
                 "/check",
-                data={"credentials": invalid_credentials, "metadata": self.metadata},
+                data={
+                    "credentials": invalid_credentials,
+                    "metadata": self.test_workflow_args["metadata"],
+                },
             )
             if response.status_code == 200:
                 response_data = response.json()
@@ -254,8 +242,8 @@ class BaseTest(TestInterface):
                 "/start",
                 data={
                     "credentials": invalid_credentials,
-                    "metadata": self.metadata,
-                    "connection": self.connection,
+                    "metadata": self.test_workflow_args["metadata"],
+                    "connection": self.test_workflow_args["connection"],
                 },
             )
             if response.status_code == 200:
@@ -301,3 +289,9 @@ class BaseTest(TestInterface):
         except requests.exceptions.RequestException:
             # If the request fails with an exception, the test passes
             pass
+
+    def _get_extracted_dir_path(self, expected_file_postfix: str) -> str:
+        """
+        Method to get the extracted directory path
+        """
+        return f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"

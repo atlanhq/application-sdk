@@ -30,6 +30,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.utils import get_workflow_context
 
 
 class MetricType(Enum):
@@ -424,6 +425,8 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
         Raises:
             Exception: If recording fails, logs error and continues
         """
+        labels.update(get_workflow_context().model_dump())
+
         try:
             # Create metric record
             metric_record = MetricRecord(

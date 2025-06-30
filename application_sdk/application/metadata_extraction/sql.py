@@ -1,9 +1,10 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Tuple, Type
 
 from application_sdk.application import BaseApplication
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.clients.utils import get_workflow_client
+from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
@@ -69,21 +70,21 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_workflow(
         self,
-        workflow_classes: List[Type[BaseSQLMetadataExtractionWorkflow]] = [
-            BaseSQLMetadataExtractionWorkflow
-        ],
-        activities_class: Type[
-            BaseSQLMetadataExtractionActivities
-        ] = BaseSQLMetadataExtractionActivities,
+        workflow_and_activities_classes: List[
+            Tuple[
+                Type[BaseSQLMetadataExtractionWorkflow],
+                Type[BaseSQLMetadataExtractionActivities],
+            ]
+        ] = [(BaseSQLMetadataExtractionWorkflow, BaseSQLMetadataExtractionActivities)],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
     ):
         """
         Set up the workflow client and start the worker for SQL metadata extraction.
 
         Args:
-            workflow_classes (List[Type[BaseSQLMetadataExtractionWorkflow]]): List of workflow classes to register. Defaults to [BaseSQLMetadataExtractionWorkflow].
-            activities_class (Type): Activities class to use for workflow activities. Defaults to BaseSQLMetadataExtractionActivities.
+            workflow_and_activities_classes (List[Tuple[Type[BaseSQLMetadataExtractionWorkflow], Type[BaseSQLMetadataExtractionActivities]]]): List of workflow and activities classes to register. Defaults to [(BaseSQLMetadataExtractionWorkflow, BaseSQLMetadataExtractionActivities)].
             worker_daemon_mode (bool): Whether to run the worker in daemon mode. Defaults to True.
             passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to None.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
@@ -92,27 +93,30 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         # load the workflow client
         await self.workflow_client.load()
 
-        # setup sql metadata extraction activities
-        # requires a sql client for source connectivity, handler for preflight checks, transformer for atlas mapping
-        activities = activities_class(
-            sql_client_class=self.client_class,
-            handler_class=self.handler_class,
-            transformer_class=self.transformer_class,
-        )
-
-        # setup and start worker for workflow and activities execution
+        workflow_classes = [
+            workflow_class for workflow_class, _ in workflow_and_activities_classes
+        ]
 
         # Collect all activities from all workflow classes
-        all_activities = []
-        for workflow_class in workflow_classes:
-            all_activities.extend(workflow_class.get_activities(activities))
+        workflow_activities = []
+        for workflow_class, activities_class in workflow_and_activities_classes:
+            workflow_activities.extend(
+                workflow_class.get_activities(
+                    activities_class(
+                        sql_client_class=self.client_class,
+                        handler_class=self.handler_class,
+                        transformer_class=self.transformer_class,
+                    )
+                )
+            )
 
         self.worker = Worker(
             workflow_client=self.workflow_client,
             workflow_classes=workflow_classes,
-            workflow_activities=all_activities,
+            workflow_activities=workflow_activities,
             passthrough_modules=passthrough_modules,
             activity_executor=activity_executor,
+            max_concurrent_activities=max_concurrent_activities,
         )
 
     @observability(logger=logger, metrics=metrics, traces=traces)

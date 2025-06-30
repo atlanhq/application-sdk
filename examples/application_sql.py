@@ -127,8 +127,9 @@ async def application_sql(daemon: bool = True) -> Dict[str, Any]:
     )
 
     await app.setup_workflow(
-        workflow_classes=[BaseSQLMetadataExtractionWorkflow],
-        activities_class=SampleSQLActivities,
+        workflow_and_activities_classes=[
+            (BaseSQLMetadataExtractionWorkflow, SampleSQLActivities)
+        ]
     )
 
     time.sleep(3)

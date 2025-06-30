@@ -30,6 +30,10 @@ def check_record_count_ge(df: pd.DataFrame, *, expected_record_count) -> bool:
         )
 
 
+class WorkflowExecutionError(Exception):
+    """Exception class for raising exceptions during workflow execution"""
+
+
 class TestInterface:
     """Interface for end-to-end tests.
 
@@ -50,9 +54,8 @@ class TestInterface:
     config_file_path: str
     extracted_output_base_path: str
     expected_output_base_path: str
-    credentials: Dict[str, Any]
-    metadata: Dict[str, Any]
-    connection: Dict[str, Any]
+    expected_dir_path: Optional[str] = None
+    test_workflow_args: Dict[str, Any]
     workflow_timeout: Optional[int] = 200
     polling_interval: int = 10
 
@@ -62,16 +65,20 @@ class TestInterface:
         Sets up the class by preparing directory paths and loading configuration.
         """
         cls.prepare_dir_paths()
-        config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
-        cls.expected_api_responses = config["expected_api_responses"]
-        cls.credentials = config["credentials"]
-        cls.metadata = config["metadata"]
-        cls.connection = config["connection"]
+
+        # Load configuration
+        cls.config = load_config_from_yaml(yaml_file_path=cls.config_file_path)
+
+        # Set common configuration
+        cls.expected_api_responses = cls.config.get("expected_api_responses", {})
+        cls.test_workflow_args = cls.config.get("test_workflow_args", {})
+        cls.test_name = cls.config["test_name"]
+
+        # Set up API client
         cls.client = APIServerClient(
-            host=config["server_config"]["server_host"],
-            version=config["server_config"]["server_version"],
+            host=cls.config["server_config"]["server_host"],
+            version=cls.config["server_config"]["server_version"],
         )
-        cls.test_name = config["test_name"]
 
     @abstractmethod
     def test_health_check(self):
@@ -87,60 +94,34 @@ class TestInterface:
         raise NotImplementedError
 
     @abstractmethod
-    def test_auth(self):
-        """Test the authentication functionality.
-
-        This method should verify that the authentication process works correctly,
-        including token generation, validation, and error handling for invalid
-        credentials.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If authentication tests fail.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def test_metadata(self):
-        """Test metadata validation and processing.
-
-        This method should verify that metadata is correctly validated, processed,
-        and stored according to the application's requirements. It should test
-        both valid and invalid metadata scenarios.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If metadata validation tests fail.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
-    def test_preflight_check(self):
-        """Test the preflight check functionality.
-
-        This method should verify that the preflight check process correctly
-        validates all prerequisites before workflow execution, including
-        permissions, resource availability, and configuration.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If preflight check tests fail.
-        """
-        raise NotImplementedError
-
-    @abstractmethod
     def test_run_workflow(self):
-        """Test the workflow execution process.
-
-        This method should verify the complete workflow execution process,
-        including initialization, task execution, error handling, and result
-        validation. It should test both successful and error scenarios.
-
-        Raises:
-            NotImplementedError: If the subclass does not implement this method.
-            AssertionError: If workflow execution tests fail.
+        """
+        Test running the metadata extraction workflow
         """
         raise NotImplementedError
+
+    def run_workflow(self):
+        """
+        Test running the metadata extraction workflow
+        """
+        response = self.client.run_workflow(data=self.test_workflow_args)
+        self.assertEqual(response["success"], True)
+        self.assertEqual(response["message"], "Workflow started successfully")
+        workflow_details[self.test_name] = {
+            "workflow_id": response["data"]["workflow_id"],
+            "run_id": response["data"]["run_id"],
+        }
+
+        # Wait for the workflow to complete
+        workflow_status = self.monitor_and_wait_workflow_execution()
+
+        # If worklfow is not completed successfully, raise an exception
+        if workflow_status != WorkflowExecutionStatus.COMPLETED.name:
+            raise WorkflowExecutionError(
+                f"Workflow failed with status: {workflow_status}"
+            )
+
+        logger.info("Workflow completed successfully")
 
     @classmethod
     def prepare_dir_paths(cls):
@@ -204,7 +185,19 @@ class TestInterface:
             # Wait for the polling interval before checking the status again
             time.sleep(self.polling_interval)
 
-    def _get_normalised_dataframe(self, expected_file_postfix: str) -> "pd.DataFrame":
+    @abstractmethod
+    def _get_extracted_dir_path(self, expected_file_postfix: str) -> str:
+        """
+        Method to get the extracted directory path
+
+        Args:
+            expected_file_postfix (str): Postfix for the expected file
+        Returns:
+            str: Extracted directory path
+        """
+        raise NotImplementedError
+
+    def _get_normalised_dataframe(self, extracted_file_path: str) -> "pd.DataFrame":
         """
         Method to get the normalised dataframe of the extracted data
 
@@ -213,12 +206,11 @@ class TestInterface:
         Returns:
             pd.DataFrame: Normalised dataframe of the extracted data
         """
-        extracted_dir_path = f"{self.extracted_output_base_path}/{workflow_details[self.test_name]['workflow_id']}/{workflow_details[self.test_name]['run_id']}{expected_file_postfix}"
         data = []
 
         # Check if there are json or parquet files in the extracted directory
-        files_list = glob(f"{extracted_dir_path}/*.json") or glob(
-            f"{extracted_dir_path}/*.parquet"
+        files_list = glob(f"{extracted_file_path}/**/*.json", recursive=True) or glob(
+            f"{extracted_file_path}/**/*.parquet", recursive=True
         )
         for f_name in files_list or []:
             if f_name.endswith(".parquet"):
@@ -230,7 +222,7 @@ class TestInterface:
 
         if not data:
             raise FileNotFoundError(
-                f"No data found in the extracted directory: {extracted_dir_path}"
+                f"No data found in the extracted directory: {extracted_file_path}"
             )
         return pd.json_normalize(data)
 
@@ -269,9 +261,11 @@ class TestInterface:
                 .replace(".yml", "")
             )
 
+            extracted_file_path = self._get_extracted_dir_path(expected_file_postfix)
+
             logger.info(f"Validating data for: {expected_file_postfix}")
             # Load the pandera schema from the yaml file
             schema = from_yaml(schema_yaml_file_path)
-            dataframe = self._get_normalised_dataframe(expected_file_postfix)
+            dataframe = self._get_normalised_dataframe(extracted_file_path)
             schema.validate(dataframe, lazy=True)
             logger.info(f"Data Validation for {expected_file_postfix} successful")

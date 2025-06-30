@@ -137,8 +137,9 @@ async def application_sql_miner(daemon: bool = True) -> Dict[str, Any]:
         handler_class=SampleSnowflakeHandler,
     )
     await app.setup_workflow(
-        workflow_classes=[SQLQueryExtractionWorkflow],
-        activities_class=SampleSQLMinerActivities,
+        workflow_and_activities_classes=[
+            (SQLQueryExtractionWorkflow, SampleSQLMinerActivities)
+        ]
     )
 
     time.sleep(3)

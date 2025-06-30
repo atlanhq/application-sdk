@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc14"
+version = "0.1.1rc19"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -23,7 +23,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27.0",
     "psutil>=7.0.0",
     "fastapi[standard]>=0.115.0",
-    "pyatlan==6.2.1",
+    "pyatlan==7.0.1",
     "pydantic>=2.10.6",
     "loguru>=0.7.3",
     "uvloop>=0.21.0",
@@ -99,7 +99,7 @@ examples = [
 [tool.poe.tasks]
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
-start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 3000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components"
+start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components"
 start-temporal = "temporal server start-dev --db-filename /tmp/temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"

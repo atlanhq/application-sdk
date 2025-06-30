@@ -1,5 +1,63 @@
 # Changelog
 
+
+## v0.1.1rc19 (June 26, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc18...v0.1.1rc19
+
+### Features
+
+- Add application-sdk support to write markers during query extraction (#599) (by @Abhishek Agrawal in [1d97e81](https://github.com/atlanhq/application-sdk/commit/1d97e81))
+
+### Bug Fixes
+
+- defaults for fetch_metadata endpoint, simplify handler (#598) (by @Nishchith Shetty in [1c7f0ff](https://github.com/atlanhq/application-sdk/commit/1c7f0ff))
+- switch to debug level for logs outside workflow/activity context (#594) (by @SanilK2108 in [2a56df4](https://github.com/atlanhq/application-sdk/commit/2a56df4))
+
+## v0.1.1rc18 (June 19, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc17...v0.1.1rc18
+
+### Bug Fixes
+
+- setup_workflow method for metadata_extraction (#583) (by @Abhishek Agrawal in [1e00f7e](https://github.com/atlanhq/application-sdk/commit/1e00f7e))
+    - ⚠️ Note : This is a breaking change. Please update your workflows to pass the workflow and activities classes as a tuple.
+
+
+## v0.1.1rc17 (June 18, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc16...v0.1.1rc17
+
+### Features
+
+- observability improvements (#584) (by @SanilK2108 in [cc11cb9](https://github.com/atlanhq/application-sdk/commit/cc11cb9))
+
+## v0.1.1rc16 (June 17, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc15...v0.1.1rc16
+
+### Features
+
+- Improve attribute definitions in yaml templates for SQL transformer (#528) (by @Onkar Ravgan in [be2cbd0](https://github.com/atlanhq/application-sdk/commit/be2cbd0))
+
+### Bug Fixes
+
+- Fetch queries activity in SQLQueryExtractionActivities (#587) (by @Abhishek Agrawal in [708f783](https://github.com/atlanhq/application-sdk/commit/708f783))
+
+
+
+## v0.1.1rc15 (June 16, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc14...v0.1.1rc15
+
+### Features
+
+- add support for event based workflows (#560) (by @SanilK2108 in [27d8a13](https://github.com/atlanhq/application-sdk/commit/27d8a13))
+
+### Bug Fixes
+
+- workflow argument handling in test classes (#582) (by @Mustafa in [01ab925](https://github.com/atlanhq/application-sdk/commit/01ab925))
+
 ## v0.1.1rc14 (June 10, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc13...v0.1.1rc14

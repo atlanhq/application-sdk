@@ -112,7 +112,7 @@ class BaseSQLHandler(HandlerInterface):
 
     async def fetch_metadata(
         self,
-        metadata_type: Optional[MetadataType] = None,
+        metadata_type: Optional[str] = None,
         database: Optional[str] = None,
     ) -> List[Dict[str, str]]:
         """
@@ -129,26 +129,20 @@ class BaseSQLHandler(HandlerInterface):
         if not self.sql_client:
             raise ValueError("SQL client is not defined")
 
-        if metadata_type == MetadataType.ALL:
-            # Use flat mode for backward compatibility
-            result = await self.prepare_metadata()
-            return result
-
-        else:
-            try:
-                if metadata_type == MetadataType.DATABASE:
-                    return await self.fetch_databases()
-                elif metadata_type == MetadataType.SCHEMA:
-                    if not database:
-                        raise ValueError(
-                            "Database must be specified when fetching schemas"
-                        )
-                    return await self.fetch_schemas(database)
-                else:
-                    raise ValueError(f"Invalid metadata type: {metadata_type}")
-            except Exception as e:
-                logger.error(f"Failed to fetch metadata: {str(e)}")
-                raise
+        try:
+            if metadata_type == MetadataType.ALL:
+                return await self.prepare_metadata()
+            elif metadata_type == MetadataType.DATABASE:
+                return await self.fetch_databases()
+            elif metadata_type == MetadataType.SCHEMA:
+                if not database:
+                    raise ValueError("Database must be specified when fetching schemas")
+                return await self.fetch_schemas(database)
+            else:
+                raise ValueError(f"Invalid metadata type: {metadata_type}")
+        except Exception as e:
+            logger.error(f"Failed to fetch metadata: {str(e)}")
+            raise
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
         """Fetch only database information."""
