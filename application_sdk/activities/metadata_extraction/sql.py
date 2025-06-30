@@ -499,9 +499,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         raw_input = raw_input.get_batched_daft_dataframe()
         transformed_output = JsonOutput(
-            output_prefix=output_prefix,
             output_path=output_path,
             output_suffix="transformed",
+            output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )
@@ -571,7 +571,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
         )
-
         upload_stats = await AtlanStorageOutput.migrate_from_objectstore(
             prefix=migration_prefix
         )
