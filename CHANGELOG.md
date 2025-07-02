@@ -1,5 +1,14 @@
 # Changelog
 
+
+## v0.1.1rc21 (July 02, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc20...v0.1.1rc21
+
+### Features
+
+- enable tests and examples on macOS and windows as part of CI (#606) (by @Nishchith Shetty in [e717fa0](https://github.com/atlanhq/application-sdk/commit/e717fa0))
+
 ## v0.1.1rc20 (July 02, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc19...v0.1.1rc20
