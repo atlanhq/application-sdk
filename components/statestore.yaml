@@ -8,4 +8,4 @@ spec:
   metadata:
     # Connection string
     - name: connectionString
-      value: "/tmp/dapr/statestore.db"
+      value: "./local/dapr/statestore.db"
