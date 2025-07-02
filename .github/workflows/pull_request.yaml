@@ -147,12 +147,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12", "3.13"]
         os: [ubuntu-22.04, macOS-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: "./.github/actions/e2e-examples"
         with:
+          operating-system: ${{ matrix.os }}
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           postgres-host: ${{ secrets.POSTGRES_HOST }}
           postgres-password: ${{ secrets.POSTGRES_PASSWORD }}
