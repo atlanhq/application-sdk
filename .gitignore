@@ -163,3 +163,6 @@ docs/reference/*.rst
 
 # Interrogate coverage report
 docstring-cov.md
+
+# local
+local/

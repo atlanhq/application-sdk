@@ -5,11 +5,11 @@ including their initialization, configuration, and execution.
 """
 
 import asyncio
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional, Sequence
 
-import uvloop
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
@@ -18,7 +18,17 @@ from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+
+if sys.platform not in ("win32", "cygwin"):
+    try:
+        import uvloop
+
+        # Use uvloop for performance optimization on supported platforms (not Windows)
+        asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+    except (ImportError, ModuleNotFoundError):
+        # uvloop is not available, use default asyncio
+        logger.warning("uvloop is not available, using default asyncio")
+        pass
 
 
 class Worker:
