@@ -10,6 +10,10 @@ inputs:
     description: "Enable dependency caching"
     required: false
     default: "true"
+  python-version:
+    required: false
+    description: The Python version to use for the action.
+    default: "3.11"
 
 runs:
   using: "composite"
@@ -18,11 +22,11 @@ runs:
       with:
         fetch-depth: 0
 
-    - name: Set up Python 3.11
+    - name: Set up Python
       id: setup-python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
+        python-version: ${{ inputs.python-version }}
 
     - name: Install uv
       uses: astral-sh/setup-uv@v5

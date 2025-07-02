@@ -62,6 +62,7 @@ jobs:
         with:
           github-token: ${{ secrets.ORG_PAT_GITHUB }}
           fail-under: "50"
+          python-version: ${{ matrix.python-version }}
 
   matrix-builder:
     name: Build Test Matrix
