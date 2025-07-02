@@ -24,7 +24,11 @@ def mock_logger():
 
     # Add a mock handler for testing
     mock_handler = mock.MagicMock()
-    test_logger.add(mock_handler, format="{message}")
+
+    def sink(message):
+        mock_handler(message)
+
+    test_logger.add(sink, format="{message}")
 
     return test_logger
 
@@ -276,16 +280,12 @@ async def test_parquet_sink_buffering(mock_parquet_file):
         level_mock = mock.MagicMock()
         level_mock.name = "INFO"  # Set the name attribute directly
 
-        # Create a proper file mock with string path
-        file_mock = mock.MagicMock()
-        file_mock.path = "test.py"
-
         test_message.record = {
             "time": datetime.now(),
             "level": level_mock,
             "extra": {"logger_name": "test_logger"},
             "message": "Test message",
-            "file": file_mock,
+            "file": mock.MagicMock(path="test.py"),
             "line": 1,
             "function": "test_function",
         }
