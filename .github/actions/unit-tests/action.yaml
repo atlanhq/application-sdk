@@ -20,6 +20,10 @@ inputs:
     required: false
     description: The minimum coverage threshold to enforce. Default is 60%.
     default: "50"
+  python-version:
+    required: false
+    description: The Python version to use for the action.
+    default: "3.11"
 
 runs:
   using: "composite"
@@ -27,6 +31,8 @@ runs:
     - uses: actions/checkout@v4
 
     - uses: "./.github/actions/setup-deps"
+      with:
+        python-version: ${{ inputs.python-version }}
 
     - name: Get branch name
       shell: bash

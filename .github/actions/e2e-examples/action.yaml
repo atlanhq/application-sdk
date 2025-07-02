@@ -14,6 +14,9 @@ description: |
   and can serve as reliable reference implementations for SDK users.
 
 inputs:
+  operating-system:
+    required: true
+    description: The operating system to use for the action.
   github-token:
     required: true
     description: The GitHub token to use for the action.
@@ -38,22 +41,46 @@ runs:
   steps:
     - uses: actions/checkout@v4
 
-    - name: Install Dapr CLI
+    - name: Install Dapr CLI (Linux/macOS)
+      if: runner.os != 'Windows'
       shell: bash
       run: |
         wget -q https://raw.githubusercontent.com/dapr/cli/master/install/install.sh -O - | /bin/bash -s 1.14.1
         dapr init --runtime-version 1.13.6 --slim
 
+    - name: Install Dapr CLI (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $script=iwr -useb https://raw.githubusercontent.com/dapr/cli/master/install/install.ps1; $block=[ScriptBlock]::Create($script); invoke-command -ScriptBlock $block -ArgumentList 1.14.1, "$env:USERPROFILE\.dapr\bin\"
+        $env:Path += ";$env:USERPROFILE\.dapr\bin\"
+        dapr init --runtime-version 1.13.6 --slim
+
     - name: Install Temporal CLI and Start Server
+      if: runner.os != 'Windows'
       shell: bash
       run: |
         curl -sSf https://temporal.download/cli.sh | sh
         export PATH="$HOME/.temporalio/bin:$PATH"
-        temporal server start-dev --db-filename /tmp/temporal.db &
-        sleep 10  # Give some time for Temporal to start
+
+    - name: Install Temporal CLI and Start Server (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        # Create a directory for Temporal CLI
+        New-Item -ItemType Directory -Force -Path "$env:USERPROFILE\.temporalio\bin"
+
+        # Download Temporal CLI
+        Invoke-WebRequest -Uri "https://temporal.download/cli/archive/latest?platform=windows&arch=amd64" -OutFile "$env:USERPROFILE\.temporalio\temporal.zip"
+
+        # Extract and install
+        Expand-Archive -Path "$env:USERPROFILE\.temporalio\temporal.zip" -DestinationPath "$env:USERPROFILE\.temporalio\bin" -Force
+
+        # Add to PATH
+        $env:Path += ";$env:USERPROFILE\.temporalio\bin"
 
     - name: Set up Python 3.11
-      uses: actions/setup-python@v1
+      uses: actions/setup-python@v5
       with:
         python-version: "3.11"
 
@@ -65,6 +92,21 @@ runs:
     - name: Install dependencies
       shell: bash
       run: uv sync --all-extras --all-groups
+
+    # Set up PATH for DAPR and Temporal globally
+    - name: Setup PATH for DAPR and Temporal (Linux/macOS)
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "$HOME/.dapr/bin" >> $GITHUB_PATH
+        echo "$HOME/.temporalio/bin" >> $GITHUB_PATH
+
+    - name: Setup PATH for DAPR and Temporal (Windows)
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        echo "$env:USERPROFILE\.dapr\bin" >> $env:GITHUB_PATH
+        echo "$env:USERPROFILE\.temporalio\bin" >> $env:GITHUB_PATH
 
     # Start all services
     - name: Start Platform Services
@@ -90,11 +132,13 @@ runs:
         echo "Workflow status:"
         cat workflow_status.md
 
+        echo "Operating system: **${{ inputs.operating-system }}**" >> workflow_status.md
+
     - name: Comment test results on Pull Request
       if: ${{ !cancelled() && github.event_name == 'pull_request' }}
       uses: mshick/add-pr-comment@v2
       with:
-        message-id: "workflow_status"
+        message-id: "workflow_status_${{ inputs.operating-system }}"
         message-path: "examples/workflow_status.md"
 
     # Stop all services

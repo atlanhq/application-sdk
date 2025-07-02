@@ -19,7 +19,7 @@ async def main():
     await workflow_client.load()
     # run all the examples
 
-    with open("workflow_status.md", "w") as f:
+    with open("workflow_status.md", "w", encoding="utf-8") as f:
         f.write("## 📦 Example workflows test results\n")
         f.write("- This workflow runs all the examples in the `examples` directory.\n")
         f.write("-----------------------------------\n")
@@ -39,10 +39,10 @@ async def main():
         status, time_taken = await run_and_monitor_workflow(example, workflow_client)
         time_taken_formatted = f"{time_taken:.2f} seconds"
 
-        with open("workflow_status.md", "a") as f:
+        with open("workflow_status.md", "a", encoding="utf-8") as f:
             f.write(f"| {example.__name__} | {status} | {time_taken_formatted} |\n")
 
-    with open("workflow_status.md", "a") as f:
+    with open("workflow_status.md", "a", encoding="utf-8") as f:
         f.write(
             "> This is an automatically generated file. Please do not edit directly.\n"
         )
