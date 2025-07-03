@@ -9,12 +9,18 @@ from application_sdk.activities.common.utils import auto_heartbeater, get_workfl
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
+from application_sdk.constants import (
+    APP_TENANT_ID,
+    APPLICATION_NAME,
+    ENABLE_ATLAN_UPLOAD,
+    SQL_QUERIES_PATH,
+)
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.atlan_storage import AtlanStorageOutput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
@@ -136,11 +142,19 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         handler = self.handler_class(sql_client)
         self._state[workflow_id].handler = handler
 
+        # Handle credentials - support both StateStore and direct approaches
         if "credential_guid" in workflow_args:
+            # StateStore approach - load credentials from SecretStore
             credentials = SecretStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
+        elif "credentials" in workflow_args:
+            # Direct approach - use credentials directly from workflow_args
+            credentials = workflow_args["credentials"]
+            await sql_client.load(credentials)
+        else:
+            logger.warning("No credentials found in workflow_args")
 
         self._state[workflow_id].sql_client = sql_client
 
@@ -485,9 +499,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         raw_input = raw_input.get_batched_daft_dataframe()
         transformed_output = JsonOutput(
-            output_prefix=output_prefix,
             output_path=output_path,
             output_suffix="transformed",
+            output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )
@@ -506,3 +520,75 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     )
                 await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
+
+    @activity.defn
+    @auto_heartbeater
+    async def upload_to_atlan(
+        self, workflow_args: Dict[str, Any]
+    ) -> ActivityStatistics:
+        """Upload transformed data to Atlan storage.
+
+        This activity uploads the transformed data from object store to Atlan storage
+        (S3 via Dapr). It only runs if ENABLE_ATLAN_UPLOAD is set to true and the
+        Atlan storage component is available.
+
+        Args:
+            workflow_args (Dict[str, Any]): Workflow configuration containing paths and metadata.
+
+        Returns:
+            ActivityStatistics: Upload statistics or skip statistics if upload is disabled.
+
+        Raises:
+            Exception: If the upload fails when ENABLE_ATLAN_UPLOAD is true.
+        """
+        # Check if Atlan upload is enabled
+        if not ENABLE_ATLAN_UPLOAD:
+            logger.info("Atlan upload activity disabled via configuration")
+            return ActivityStatistics(
+                total_record_count=0, chunk_count=0, typename="atlan-upload-disabled"
+            )
+
+        # Validate workflow arguments
+        _, _, _, workflow_id, workflow_run_id = self._validate_output_args(
+            workflow_args
+        )
+
+        # Check if Atlan storage component is available
+        # if not await AtlanStorageOutput.check_atlan_storage_availability():
+        #     logger.warning("Atlan storage component not available - skipping upload")
+        #     return ActivityStatistics(
+        #         total_record_count=0,
+        #         chunk_count=0,
+        #         typename="atlan-upload-skipped"
+        #     )
+
+        # If atlan_prefix is not provided, use a default based on workflow
+        # if not workflow_args.get("atlan_prefix"):
+        #     atlan_prefix = f"atlan/{workflow_id}/{workflow_run_id}/transformed"
+        #     logger.info(f"Using default Atlan prefix: {atlan_prefix}")
+
+        # Upload data from object store to Atlan storage
+        # Use workflow_id/workflow_run_id as the prefix to migrate specific data
+        migration_prefix = f"{workflow_id}/{workflow_run_id}/"
+        upload_stats = await AtlanStorageOutput.migrate_from_objectstore(
+            prefix=migration_prefix
+        )
+
+        # Log upload statistics
+        logger.info(
+            f"Atlan upload completed: {upload_stats['migrated_files']} files uploaded, "
+            f"{upload_stats['failed_migrations']} failed"
+        )
+
+        if upload_stats["failures"]:
+            logger.warning(
+                f"Upload completed with {len(upload_stats['failures'])} errors"
+            )
+            for failure in upload_stats["failures"]:
+                logger.warning(f"Upload error: {failure}")
+
+        return ActivityStatistics(
+            total_record_count=upload_stats["migrated_files"],
+            chunk_count=upload_stats["total_files"],
+            typename="atlan-upload-completed",
+        )
