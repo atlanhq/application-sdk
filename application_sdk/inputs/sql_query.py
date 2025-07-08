@@ -118,7 +118,8 @@ class SQLQueryInput(Input):
         Returns:
             Union["pd.DataFrame", Iterator["pd.DataFrame"]]: Query results as DataFrame
                 or iterator of DataFrames if chunked.
-        """
+        """ 
+        print("self.engine in _execute_query", self.engine)
         with self.engine.connect() as conn:
             return self._execute_pandas_query(conn)
 
@@ -183,6 +184,7 @@ class SQLQueryInput(Input):
                 async_session = sessionmaker(
                     self.engine, expire_on_commit=False, class_=AsyncSession
                 )
+                print("async_session", async_session)
 
             if async_session:
                 async with async_session() as session:

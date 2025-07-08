@@ -91,7 +91,9 @@ class BaseSQLClient(ClientInterface):
                 connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
+            print("self.engine", self.engine)
             self.connection = self.engine.connect()
+            print("self.connection", self.connection)
         except ClientError as e:
             logger.error(
                 f"{ClientError.SQL_CLIENT_AUTH_ERROR}: Error loading SQL client: {str(e)}"
@@ -288,6 +290,8 @@ class BaseSQLClient(ClientInterface):
         for param in self.DB_CONFIG["required"]:
             if param == "password":
                 param_values[param] = auth_token
+            elif param == "username":
+                param_values[param] = extra.get("username")
             else:
                 value = self.resolved_credentials.get(param) or extra.get(param)
                 if value is None:
