@@ -1,15 +1,10 @@
-import asyncio
 from typing import Any, Dict, List
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from application_sdk.activities.query_extraction.sql import (
-    SQLQueryExtractionActivities,
-)
-from application_sdk.workflows.query_extraction.sql import (
-    SQLQueryExtractionWorkflow,
-)
+from application_sdk.activities.query_extraction.sql import SQLQueryExtractionActivities
+from application_sdk.workflows.query_extraction.sql import SQLQueryExtractionWorkflow
 
 
 @pytest.fixture()
@@ -21,6 +16,7 @@ def workflow() -> SQLQueryExtractionWorkflow:  # type: ignore[return-type]
 # ---------------------------------------------------------------------------
 # Basic object validation
 # ---------------------------------------------------------------------------
+
 
 def test_workflow_initialization(workflow: SQLQueryExtractionWorkflow):
     """Validate default attributes are correctly set on initialization."""
@@ -47,6 +43,7 @@ def test_get_activities():
 # ---------------------------------------------------------------------------
 # run() method behaviour
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.asyncio
 async def test_run_success(monkeypatch: pytest.MonkeyPatch):

@@ -35,7 +35,8 @@ class JsonInput(Input):
             chunk_size (Optional[int]): The chunk size to read the data. If None, uses config value.
         """
         self.path = path
-        self.chunk_size = 100000
+        # If chunk_size is provided, use it; otherwise default to 100,000 rows per batch
+        self.chunk_size = chunk_size if chunk_size is not None else 100000
         self.file_names = file_names
         self.download_file_prefix = download_file_prefix
 
