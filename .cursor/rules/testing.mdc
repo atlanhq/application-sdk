@@ -1,7 +1,5 @@
 ---
-description:
-globs: tests/**/*.py
-alwaysApply: false
+alwaysApply: true
 ---
 # Testing Guidelines
 
