@@ -124,6 +124,7 @@ typeCheckingMode = "standard"
 exclude = [
     "application_sdk/test_utils/**",
     ".github/**",
+    "tests"
 ]
 reportUnknownMemberType = "warning"
 reportAttributeAccessIssue = "warning"
@@ -134,10 +135,21 @@ reportGeneralTypeIssues = "warning"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--strict-markers --disable-warnings"
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+]
 
 [tool.coverage.run]
 omit = [
     "tests/**",
+    "application_sdk/test_utils/**",
 ]
 source = ["application_sdk"]
 
@@ -152,6 +164,8 @@ exclude_lines = [
     "raise ImportError",
 ]
 fail_under = 50
+show_missing = true
+precision = 2
 
 [tool.uv]
 default-groups = ["dev", "test"]
