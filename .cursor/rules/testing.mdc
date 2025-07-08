@@ -1,11 +1,9 @@
 ---
-description:
-globs: tests/**/*.py
-alwaysApply: false
+alwaysApply: true
 ---
 # Testing Guidelines
 
-- Run the unit tests using the command: `uv run pytests tests/`
+- Run the unit tests using the command: `uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics`
 
 
 - **Test Framework**
