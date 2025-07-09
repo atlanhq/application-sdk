@@ -5,7 +5,7 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
-from application_sdk.common.error_codes import CommonError
+from application_sdk.common.error_codes import CommonError, IOError
 from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.statestore import StateStoreOutput
@@ -198,14 +198,18 @@ def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, 
     Returns:
         dict: The updated workflow configuration.
     """
-    extracted_config = get_workflow_config(config_id)
+    try:
+        extracted_config = get_workflow_config(config_id)
+    except IOError as e:
+        logger.debug(
+            f"Error extracting configuration[{config_id}] from state store: {str(e)}"
+        )
+        extracted_config = {}
 
-    for key in extracted_config.keys():
-        if key in config and config[key] is not None:
-            extracted_config[key] = config[key]
+    config.update(extracted_config)
 
-    StateStoreOutput.store_configuration(config_id, extracted_config)
-    return extracted_config
+    StateStoreOutput.store_configuration(config_id, config)
+    return config
 
 
 def read_sql_files(
