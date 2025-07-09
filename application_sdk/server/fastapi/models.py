@@ -162,18 +162,22 @@ class EventWorkflowResponse(WorkflowResponse):
     status: Status = Field(..., description="Status of the workflow")
 
 
-class WorkflowConfigRequest(BaseModel):
-    credential_guid: Optional[str] = Field(
-        default=None, description="Optional GUID field containing database credentials"
+class WorkflowConfigRequest(RootModel[Dict[str, Any]]):
+    root: Dict[str, Any] = Field(
+        ..., description="Root JSON object containing workflow configuration"
     )
-    connection: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Optional JSON field containing connection configuration",
-    )
-    metadata: Optional[Dict[str, Any]] = Field(
-        default=None,
-        description="Optional JSON field containing metadata configuration",
-    )
+
+    # credential_guid: Optional[str] = Field(
+    #     default=None, description="Optional GUID field containing database credentials"
+    # )
+    # connection: Optional[Dict[str, Any]] = Field(
+    #     default=None,
+    #     description="Optional JSON field containing connection configuration",
+    # )
+    # metadata: Optional[Dict[str, Any]] = Field(
+    #     default=None,
+    #     description="Optional JSON field containing metadata configuration",
+    # )
 
 
 class WorkflowConfigResponse(BaseModel):
