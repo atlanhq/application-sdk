@@ -93,7 +93,7 @@ def extract_database_names_from_regex(normalized_regex: str) -> str:
             f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
         )
         # Return a safe default that excludes everything
-        return
+        return "'^$'"
 
 
 def prepare_query(
