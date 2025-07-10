@@ -333,6 +333,7 @@ class TestSQLWorkflowHandler:
         """Test fetching databases with MetadataType.DATABASE and no database"""
         handler.fetch_databases_sql = "SELECT database_name FROM databases"
         handler.database_result_key = "TABLE_CATALOG"
+        handler.metadata_sql = "SELECT database_name, schema_name FROM schemas"
 
         # Mock database query results
         mock_sql_client.run_query.return_value = AsyncIteratorMock(
@@ -357,6 +358,7 @@ class TestSQLWorkflowHandler:
         # Setup
         handler.fetch_databases_sql = "SELECT database_name FROM databases"
         handler.database_result_key = "TABLE_CATALOG"
+        handler.metadata_sql = "SELECT database_name, schema_name FROM schemas"
 
         # Mock database query results
         mock_sql_client.run_query.return_value = AsyncIteratorMock(
