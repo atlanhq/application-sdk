@@ -19,10 +19,13 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
+from application_sdk.clients.auth import AuthManager
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_NAME,
     MAX_CONCURRENT_ACTIVITIES,
+    WORKFLOW_AUTH_ENABLED,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
@@ -209,6 +212,10 @@ class TemporalWorkflowClient(WorkflowClient):
         port: str | None = None,
         application_name: str | None = None,
         namespace: str | None = "default",
+        auth_enabled: bool | None = None,
+        auth_url: str | None = None,
+        client_id: str | None = None,
+        client_secret: str | None = None,
     ):
         """Initialize the Temporal workflow client.
 
@@ -221,6 +228,14 @@ class TemporalWorkflowClient(WorkflowClient):
                 Defaults to environment variable APPLICATION_NAME.
             namespace (str | None, optional): Temporal namespace. Defaults to
                 "default" or environment variable WORKFLOW_NAMESPACE.
+            auth_enabled (bool | None, optional): Whether authentication is enabled. Defaults to
+                environment variable WORKFLOW_AUTH_ENABLED.
+            auth_url (str | None, optional): OAuth2 token endpoint URL. Defaults to
+                environment variable WORKFLOW_AUTH_URL.
+            client_id (str | None, optional): OAuth2 client ID. Defaults to
+                environment variable WORKFLOW_AUTH_CLIENT_ID.
+            client_secret (str | None, optional): OAuth2 client secret. Defaults to
+                environment variable WORKFLOW_AUTH_CLIENT_SECRET.
         """
         self.client = None
         self.worker = None
@@ -232,6 +247,18 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
+        self.auth_manager = AuthManager(
+            application_name=self.application_name,
+            auth_enabled=auth_enabled,
+            auth_url=auth_url,
+            client_id=client_id,
+            client_secret=client_secret,
+        )
+
+        self.auth_enabled = (
+            auth_enabled if auth_enabled is not None else WORKFLOW_AUTH_ENABLED
+        )
+
         logger = get_logger(__name__)
         workflow.logger = logger
         activity.logger = logger
@@ -239,13 +266,16 @@ class TemporalWorkflowClient(WorkflowClient):
     def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
 
-        The task queue name is derived from the application name and is used
-        to route workflow tasks to appropriate workers.
+        The task queue name is derived from the application name and deployment name
+        and is used to route workflow tasks to appropriate workers.
 
         Returns:
-            str: The task queue name, which is the same as the application name.
+            str: The task queue name in format "app_name-deployment_name".
         """
-        return self.application_name
+        if DEPLOYMENT_NAME:
+            return f"{self.application_name}-{DEPLOYMENT_NAME}"
+        else:
+            return self.application_name
 
     def get_connection_string(self) -> str:
         """Get the Temporal server connection string.
@@ -274,22 +304,44 @@ class TemporalWorkflowClient(WorkflowClient):
         """Connect to the Temporal server.
 
         Establishes a connection to the Temporal server using the configured
-        connection string and namespace.
+        connection string and namespace. If authentication is enabled, includes
+        the OAuth2 access token in the connection.
 
         Raises:
             ConnectionError: If connection to the Temporal server fails.
+            ValueError: If authentication is enabled but credentials are missing.
         """
-        self.client = await Client.connect(
-            self.get_connection_string(),
-            namespace=self.namespace,
-        )
+        # Set TLS based on host - disable for localhost/127.0.0.1, enable for others
+        tls_enabled = self.host not in ["127.0.0.1", "localhost"]
+
+        connection_options: Dict[str, Any] = {
+            "target_host": self.get_connection_string(),
+            "namespace": self.namespace,
+            "tls": tls_enabled,
+        }
+
+        if self.auth_enabled:
+            try:
+                token = await self.auth_manager.get_access_token()
+                if token:
+                    connection_options["rpc_metadata"] = {
+                        "authorization": f"Bearer {token}"
+                    }
+            except Exception as e:
+                logger.error(f"Failed to get authentication headers: {e}")
+                raise
+
+        self.client = await Client.connect(**connection_options)
 
     async def close(self) -> None:
         """Close the Temporal client connection.
 
-        Gracefully closes the connection to the Temporal server. This is a
-        no-op if the connection is already closed.
+        Gracefully closes the connection to the Temporal server and clears
+        any authentication tokens. This is a no-op if the connection is
+        already closed.
         """
+        if hasattr(self, "auth_manager"):
+            self.auth_manager.clear_cache()
         return
 
     async def start_workflow(
@@ -310,12 +362,24 @@ class TemporalWorkflowClient(WorkflowClient):
             WorkflowFailureError: If the workflow fails to start.
             ValueError: If the client is not loaded.
         """
+        # Check if credentials should be stored based on credentialSource
+        should_store_credentials = False
         if "credentials" in workflow_args:
-            # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
-                workflow_args["credentials"]
-            )
-            del workflow_args["credentials"]
+            credential_source = workflow_args["credentials"].get("credentialSource", "")
+            should_store_credentials = credential_source == "direct"
+
+            if should_store_credentials:
+                # Only store credentials if credentialSource is "direct"
+                workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
+                    workflow_args["credentials"]
+                )
+                del workflow_args["credentials"]
+            else:
+                # For non-direct credential sources, keep credentials in workflow_args
+                # but don't store them in SecretStore
+                logger.info(
+                    f"Skipping credential storage for credentialSource: {credential_source}"
+                )
 
         workflow_id = workflow_args.get("workflow_id")
         output_prefix = workflow_args.get("output_prefix", "/tmp/output")
@@ -331,19 +395,36 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             )
 
+        # Determine configuration approach based on credential storage
+        if should_store_credentials:
+            # StateStore approach - store configuration and pass only workflow_id with flag
             StateStoreOutput.store_configuration(workflow_id, workflow_args)
-
-            logger.info(f"Created workflow config with ID: {workflow_id}")
+            args = [{"workflow_id": workflow_id, "_use_statestore": True}]
+            logger.info(
+                f"Created workflow config with ID: {workflow_id} (StateStore approach)"
+            )
+        else:
+            # Direct approach - pass full configuration with flag
+            workflow_args["_use_statestore"] = False
+            args = [workflow_args]
+            logger.info(f"Created workflow with ID: {workflow_id} (direct approach)")
 
         try:
-            # Pass the full workflow_args to the workflow
+            # Get task_queue from workflow_args or credentials or use default
+            task_queue = (
+                workflow_args.get("task_queue")
+                or workflow_args.get("credentials", {}).get("task_queue")
+                or self.worker_task_queue
+            )
+
+            # Pass the conditional args to the workflow
             if not self.client:
                 raise ValueError("Client is not loaded")
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
-                args=[{"workflow_id": workflow_id}],
+                args=args,
                 id=workflow_id,
-                task_queue=self.worker_task_queue,
+                task_queue=task_queue,
                 cron_schedule=workflow_args.get("cron_schedule", ""),
                 execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
