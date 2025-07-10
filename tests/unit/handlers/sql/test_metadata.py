@@ -164,7 +164,7 @@ class TestSQLWorkflowHandler:
 
         # Assert
         assert result == databases
-        mock_sql_client.run_query.assert_called_once_with(handler.fetch_databases_sql)
+        mock_sql_client.run_query.assert_called_once_with(handler.metadata_sql)
 
     @pytest.mark.skip(
         reason="Failing due to ValueError: Database must be specified when fetching schemas"
@@ -220,7 +220,7 @@ class TestSQLWorkflowHandler:
 
         result = await handler.fetch_metadata(metadata_type=MetadataType.DATABASE)
         assert result == []
-        mock_sql_client.run_query.assert_called_once_with(handler.fetch_databases_sql)
+        mock_sql_client.run_query.assert_called_once_with(handler.metadata_sql)
 
     @pytest.mark.skip(
         reason="Failing due to ValueError: Database must be specified when fetching schemas"
@@ -272,7 +272,7 @@ class TestSQLWorkflowHandler:
         with pytest.raises(Exception) as exc_info:
             await handler.fetch_metadata(metadata_type=MetadataType.DATABASE)
         assert str(exc_info.value) == "Database query failed"
-        mock_sql_client.run_query.assert_called_once_with(handler.fetch_databases_sql)
+        mock_sql_client.run_query.assert_called_once_with(handler.metadata_sql)
 
     @pytest.mark.asyncio
     async def test_fetch_metadata_flat_mode_without_database(
@@ -333,6 +333,7 @@ class TestSQLWorkflowHandler:
         """Test fetching databases with MetadataType.DATABASE and no database"""
         handler.fetch_databases_sql = "SELECT database_name FROM databases"
         handler.database_result_key = "TABLE_CATALOG"
+        handler.metadata_sql = "SELECT database_name, schema_name FROM schemas"
 
         # Mock database query results
         mock_sql_client.run_query.return_value = AsyncIteratorMock(
@@ -345,7 +346,7 @@ class TestSQLWorkflowHandler:
         # Assert
         assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
         # Verify run_query was called with fetch_databases_sql
-        mock_sql_client.run_query.assert_called_once_with(handler.fetch_databases_sql)
+        mock_sql_client.run_query.assert_called_once_with(handler.metadata_sql)
         assert mock_sql_client.run_query.call_count == 1
         handler.prepare_metadata.assert_not_called()
 
@@ -357,6 +358,7 @@ class TestSQLWorkflowHandler:
         # Setup
         handler.fetch_databases_sql = "SELECT database_name FROM databases"
         handler.database_result_key = "TABLE_CATALOG"
+        handler.metadata_sql = "SELECT database_name, schema_name FROM schemas"
 
         # Mock database query results
         mock_sql_client.run_query.return_value = AsyncIteratorMock(
@@ -371,7 +373,7 @@ class TestSQLWorkflowHandler:
         # Assert
         assert result == [{"TABLE_CATALOG": "db1"}, {"TABLE_CATALOG": "db2"}]
         # Verify run_query was called with fetch_databases_sql (ignoring database parameter)
-        mock_sql_client.run_query.assert_called_once_with(handler.fetch_databases_sql)
+        mock_sql_client.run_query.assert_called_once_with(handler.metadata_sql)
         assert mock_sql_client.run_query.call_count == 1
         handler.prepare_metadata.assert_not_called()
 

@@ -145,14 +145,14 @@ class BaseSQLHandler(HandlerInterface):
             raise
 
     async def fetch_databases(self) -> List[Dict[str, str]]:
-        """Fetch only database information."""
+        """Fetch only database information using metadata_sql."""
         if not self.sql_client:
             raise ValueError("SQL Client not defined")
-        if self.fetch_databases_sql is None:
-            raise ValueError("fetch_databases_sql is not defined")
+        if self.metadata_sql is None:
+            raise ValueError("metadata_sql is not defined")
 
         databases = []
-        async for batch in self.sql_client.run_query(self.fetch_databases_sql):
+        async for batch in self.sql_client.run_query(self.metadata_sql):
             for row in batch:
                 databases.append(
                     {self.database_result_key: row[self.database_result_key]}
