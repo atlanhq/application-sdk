@@ -2,8 +2,20 @@ import asyncio
 import glob
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Awaitable,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 from application_sdk.common.error_codes import CommonError
 from application_sdk.inputs.statestore import StateStoreInput
@@ -13,6 +25,75 @@ from application_sdk.outputs.statestore import StateStoreOutput
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+
+
+def extract_database_names_from_regex(normalized_regex: str) -> str:
+    """
+    Extract database names from normalized regex patterns and return a regex string suitable for SQL queries.
+
+    This function parses regex patterns like 'dev\\.external_schema$|wide_world_importers\\.bronze_sales$'
+    or 'dev\\.*|wide_world_importers\\.*' to extract the database names, and returns a regex string
+    like '^(dev|wide_world_importers)$' for use in SQL queries.
+
+    Args:
+        normalized_regex (str): The normalized regex pattern containing database.schema patterns
+
+    Returns:
+        str: A regex string in the format ^(name1|name2|...)$ or '^$' if no names are found.
+
+    Examples:
+        >>> extract_database_names_from_regex('dev\\.external_schema$|wide_world_importers\\.bronze_sales$')
+        '^(dev|wide_world_importers)$'
+        >>> extract_database_names_from_regex('dev\\.*|wide_world_importers\\.*')
+        '^(dev|wide_world_importers)$'
+        >>> extract_database_names_from_regex('^$')
+        '^$'
+
+    Raises:
+        CommonError: If the input is invalid or processing fails
+    """
+    try:
+        if not normalized_regex or not isinstance(normalized_regex, str):
+            logger.warning("Invalid normalized_regex input: empty or non-string value")
+            return "'^$'"
+
+        database_names: Set[str] = set()
+
+        # Split by | to get individual patterns
+        patterns = normalized_regex.split("|")
+
+        for pattern in patterns:
+            try:
+                # Skip empty patterns
+                if not pattern or not pattern.strip():
+                    continue
+
+                # Split by \\. to get database name (first part)
+                # The \\. represents an escaped dot in the regex
+                parts = pattern.split("\\.")
+                if parts:
+                    db_name = parts[0].strip()
+                    if db_name and db_name not in (".*", "^$"):
+                        # Validate database name format
+                        if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
+                            database_names.add(db_name)
+                        else:
+                            logger.warning(f"Invalid database name format: {db_name}")
+
+            except Exception as e:
+                logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
+                continue
+
+        if not database_names:
+            return "'^$'"
+        return f"'^({'|'.join(sorted(database_names))})$'"
+
+    except Exception as e:
+        logger.error(
+            f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
+        )
+        # Return a safe default that excludes everything
+        return
 
 
 def prepare_query(
@@ -67,12 +148,19 @@ def prepare_query(
             include_filter, exclude_filter
         )
 
+        # Extract database names from the normalized regex patterns
+        include_databases = extract_database_names_from_regex(normalized_include_regex)
+        exclude_databases = extract_database_names_from_regex(normalized_exclude_regex)
+
+        # Use sets directly for SQL query formatting
         exclude_empty_tables = workflow_args.get("metadata", {}).get(
             "exclude_empty_tables", False
         )
         exclude_views = workflow_args.get("metadata", {}).get("exclude_views", False)
 
         return query.format(
+            include_databases=include_databases,
+            exclude_databases=exclude_databases,
             normalized_include_regex=normalized_include_regex,
             normalized_exclude_regex=normalized_exclude_regex,
             temp_table_regex_sql=temp_table_regex_sql,

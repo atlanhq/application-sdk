@@ -152,7 +152,7 @@ class BaseSQLHandler(HandlerInterface):
             raise ValueError("fetch_databases_sql is not defined")
 
         databases = []
-        async for batch in self.sql_client.run_query(self.fetch_databases_sql):
+        async for batch in self.sql_client.run_query(self.fetch_metadata):
             for row in batch:
                 databases.append(
                     {self.database_result_key: row[self.database_result_key]}
