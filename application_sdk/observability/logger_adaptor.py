@@ -200,6 +200,13 @@ logging.basicConfig(
     level=logging.getLevelNamesMapping()[LOG_LEVEL], handlers=[InterceptHandler()]
 )
 
+DEPENDENCY_LOGGERS = ["daft_io.stats", "tracing.span"]
+
+# Configure external dependency loggers to reduce noise
+for logger_name in DEPENDENCY_LOGGERS:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
+
+
 # Add these constants
 SEVERITY_MAPPING = {
     "DEBUG": SeverityNumber.DEBUG,
