@@ -152,9 +152,8 @@ def prepare_query(
         include_databases = extract_database_names_from_regex(normalized_include_regex)
         exclude_databases = extract_database_names_from_regex(normalized_exclude_regex)
 
-        if include_databases == "'^$'" and exclude_databases == "'^$'":
+        if include_databases == "'^$'":
             include_databases = "'.*'"
-            exclude_databases = "'^$'"
 
         # Use sets directly for SQL query formatting
         exclude_empty_tables = workflow_args.get("metadata", {}).get(
