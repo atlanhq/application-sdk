@@ -1,0 +1,54 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# Code Review Guidelines
+
+When asked to perform a code review for a module, class or function.
+
+## Code Style
+
+Ensure the code adheres to the development standards outlined in [standards.mdc](mdc:.cursor/rules/standards.mdc):
+
+
+## Tests
+
+All code changes must include appropriate tests as defined in [testing.mdc](mdc:.cursor/rules/testing.mdc):
+
+
+## Documentation
+
+Verify documentation standards from [standards.mdc](mdc:.cursor/rules/standards.mdc) and [documentation.mdc](mdc:.cursor/rules/documentation.mdc):
+
+
+## API Semantics
+
+- **Interface Design**
+    - Clear and consistent API contracts
+    - Proper input validation and output formatting
+    - Backward compatibility considerations
+    - Appropriate HTTP status codes and responses
+
+- **Data Flow**
+    - Proper handling of inputs, transformations, and outputs
+    - Validation of data at boundaries
+    - Consistent data structures and formats
+
+## Contributing Guide
+Please ensure the change adheres to the pull request guidelines in [CONTRIBUTING.md](mdc:CONTRIBUTING.md):
+
+## Review Checklist
+
+- Code follows [standards.mdc](mdc:.cursor/rules/standards.mdc) style guidelines
+- Tests follow [testing.mdc](mdc:.cursor/rules/testing.mdc) requirements
+- Logging uses [logging.mdc](mdc:.cursor/rules/logging.mdc) standards
+- Documentation is updated per [documentation.mdc](mdc:.cursor/rules/documentation.mdc)
+- PR follows [CONTRIBUTING.md](mdc:CONTRIBUTING.md) guidelines
+- Security considerations addressed
+- Performance implications considered
+- Resource management properly handled
+- Error handling is comprehensive
+- API contracts are clear and consistent
+
+Refer to the [CONTRIBUTING.md](mdc:CONTRIBUTING.md) for guidelines for contributors
