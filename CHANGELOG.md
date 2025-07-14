@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1rc22 (July 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc21...v0.1.1rc22
+
+### Bug Fixes
+
+- suppress daft dependency loggers (#611) (by @Nishchith Shetty in [3e379d4](https://github.com/atlanhq/application-sdk/commit/3e379d4))
+
+
 
 ## v0.1.1rc21 (July 10, 2025)
 
