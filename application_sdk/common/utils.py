@@ -53,7 +53,7 @@ def extract_database_names_from_include_regex(normalized_regex: str) -> str:
         CommonError: If the input is invalid or processing fails
     """
     try:
-        if not normalized_regex or normalized_regex == '^$' or normalized_regex == '.*':
+        if not normalized_regex or normalized_regex == "^$" or normalized_regex == ".*":
             return "'.*'"
 
         database_names: Set[str] = set()

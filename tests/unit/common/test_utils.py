@@ -228,13 +228,13 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         """Test extracting database names from regex with empty input"""
         result = extract_database_names_from_include_regex("")
 
-        assert result == "'^$'"
+        assert result == "'.*'"
 
     def test_extract_database_names_from_include_regex_with_none_input(self) -> None:
         """Test extracting database names from regex with None input"""
         result = extract_database_names_from_include_regex(None)  # type: ignore
 
-        assert result == "'^$'"
+        assert result == "'.*'"
 
     def test_extract_database_names_from_include_regex_with_non_string_input(
         self,
@@ -242,7 +242,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         """Test extracting database names from regex with non-string input"""
         result = extract_database_names_from_include_regex(123)  # type: ignore
 
-        assert result == "'^$'"
+        assert result == "'.*'"
 
     def test_extract_database_names_from_include_regex_with_empty_patterns(
         self,
