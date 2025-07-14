@@ -30,6 +30,8 @@ load_dotenv(dotenv_path=".env")
 # Application Constants
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+#: Name of the deployment, used to distinguish between different deployments of the same application
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "atlan")
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server
@@ -62,6 +64,16 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 )
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
+#: Whether Temporal authentication is enabled
+WORKFLOW_AUTH_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+)
+#: OAuth2 token endpoint URL for Temporal authentication
+WORKFLOW_AUTH_URL = os.getenv("ATLAN_WORKFLOW_AUTH_URL", "")
+#: OAuth2 client ID for Temporal authentication
+WORKFLOW_AUTH_CLIENT_ID = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_ID", "")
+#: OAuth2 client secret for Temporal authentication
+WORKFLOW_AUTH_CLIENT_SECRET = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_SECRET", "")
 
 # Workflow Constants
 #: Timeout duration for activity heartbeats
@@ -86,6 +98,10 @@ SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+#: Name of the Atlan storage component in DAPR
+ATLAN_STORAGE_NAME = os.getenv("ATLAN_STORAGE_NAME", "atlan-storage")
+#: Whether to enable Atlan storage upload
+ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
