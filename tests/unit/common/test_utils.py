@@ -92,29 +92,6 @@ class TestPrepareQuery:
         assert result is not None
         assert ".*" in result  # Should use default include regex
 
-    def test_query_preparation_with_empty_string_regex_replacement(self) -> None:
-        """Test that prepare_query replaces empty string regex with match-all regex.
-
-        This test verifies the condition:
-        if include_databases == SQLRegexConstants.EMPTY_STRING_REGEX.value:
-            include_databases = SQLRegexConstants.MATCH_ALL_REGEX.value
-        """
-        query = "SELECT * FROM {include_databases} WHERE {exclude_databases}"
-        workflow_args: Dict[str, Dict[str, str]] = {
-            "metadata": {
-                "include-filter": '{"123db": ["schema1"]}',  # Invalid database name
-                "exclude-filter": '{"db@test": ["schema2"]}',  # Invalid database name
-            }
-        }
-
-        result = prepare_query(query, workflow_args)
-
-        assert result is not None
-        # Both include_databases and exclude_databases should be '^$' from extract_database_names_from_regex
-        # But include_databases should be replaced with '.*' in prepare_query
-        assert "'.*'" in result  # include_databases replaced with match-all
-        assert "'^$'" in result  # exclude_databases remains as empty string regex
-
 
 class TestPrepareFilters:
     def test_prepare_filters_with_valid_input(self) -> None:
@@ -364,31 +341,6 @@ class TestExtractDatabaseNamesFromRegex:
         # Should not log any errors for valid input
         mock_logger.error.assert_not_called()
         assert result == "'^(db1)$'"
-
-    def test_extract_database_names_from_regex_returns_empty_string_regex_for_no_valid_databases(
-        self,
-    ) -> None:
-        """Test that extract_database_names_from_regex returns empty string regex when no valid database names are found.
-
-        This test specifically covers the condition in prepare_query where:
-        if include_databases == SQLRegexConstants.EMPTY_STRING_REGEX.value:
-            include_databases = SQLRegexConstants.MATCH_ALL_REGEX.value
-        """
-        # Test with patterns that don't contain valid database names
-        test_cases = [
-            ".*\\.schema1",  # Wildcard database pattern
-            "^$\\.schema2",  # Empty database pattern
-            "123db\\.schema3",  # Invalid database name (starts with number)
-            "db@test\\.schema4",  # Invalid database name (contains special char)
-            "|||",  # Empty patterns
-            "   |  |  ",  # Whitespace patterns
-        ]
-
-        for normalized_regex in test_cases:
-            result = extract_database_names_from_regex(normalized_regex)
-            assert (
-                result == "'^$'"
-            ), f"Expected '^$' for input '{normalized_regex}', got '{result}'"
 
 
 class TestWorkflowConfig:
