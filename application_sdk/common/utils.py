@@ -4,6 +4,7 @@ import json
 import os
 import re
 from concurrent.futures import ThreadPoolExecutor
+from enum import Enum
 from typing import (
     Any,
     Awaitable,
@@ -25,6 +26,15 @@ from application_sdk.outputs.statestore import StateStoreOutput
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
+
+
+class SQLRegexConstants(Enum):
+    """
+    Constants for SQL regex
+    """
+
+    EMPTY_STRING_REGEX = r"'^$'"
+    MATCH_ALL_REGEX = r"'.*'"
 
 
 def extract_database_names_from_regex(normalized_regex: str) -> str:
@@ -152,9 +162,8 @@ def prepare_query(
         include_databases = extract_database_names_from_regex(normalized_include_regex)
         exclude_databases = extract_database_names_from_regex(normalized_exclude_regex)
 
-        if include_databases == "'^$'" and exclude_databases == "'^$'":
-            include_databases = "'.*'"
-            exclude_databases = "'^$'"
+        if include_databases == SQLRegexConstants.EMPTY_STRING_REGEX.value:
+            include_databases = SQLRegexConstants.MATCH_ALL_REGEX.value
 
         # Use sets directly for SQL query formatting
         exclude_empty_tables = workflow_args.get("metadata", {}).get(
