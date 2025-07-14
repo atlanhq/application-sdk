@@ -1,5 +1,14 @@
 # Changelog
 
+## v0.1.1rc22 (July 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc21...v0.1.1rc22
+
+### Bug Fixes
+
+- include databases in common/utils (#612) (by @Abhishek Agrawal in [4a79fac](https://github.com/atlanhq/application-sdk/commit/4a79fac))
+
+
 
 ## v0.1.1rc21 (July 10, 2025)
 
