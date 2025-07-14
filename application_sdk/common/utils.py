@@ -53,9 +53,8 @@ def extract_database_names_from_include_regex(normalized_regex: str) -> str:
         CommonError: If the input is invalid or processing fails
     """
     try:
-        if not normalized_regex or not isinstance(normalized_regex, str):
-            logger.warning("Invalid normalized_regex input: empty or non-string value")
-            return "'^$'"
+        if not normalized_regex or normalized_regex == '^$' or normalized_regex == '.*':
+            return "'.*'"
 
         database_names: Set[str] = set()
 
@@ -121,9 +120,11 @@ def extract_database_names_from_exclude_regex(normalized_regex: str) -> str:
         CommonError: If the input is invalid or processing fails
     """
     try:
-        if not normalized_regex or not isinstance(normalized_regex, str):
-            logger.warning("Invalid normalized_regex input: empty or non-string value")
+        if not normalized_regex or normalized_regex == "^$":
             return "'^$'"
+
+        if normalized_regex == ".*":
+            return "'.*'"
 
         database_names: Set[str] = set()
 
@@ -139,18 +140,19 @@ def extract_database_names_from_exclude_regex(normalized_regex: str) -> str:
                 # Split by \\. to get database name and schema part
                 # The \\. represents an escaped dot in the regex
                 parts = pattern.split("\\.")
-                if len(parts) >= 2:
-                    db_name = parts[0].strip()
-                    schema_part = parts[1].strip()
-
-                    # Only extract database name if the schema part is a wildcard (.*)
-                    # This indicates all schemas of this database are selected
-                    if db_name and db_name not in (".*", "^$") and schema_part == ".*":
-                        # Validate database name format
-                        if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
-                            database_names.add(db_name)
-                        else:
-                            logger.warning(f"Invalid database name format: {db_name}")
+                if len(parts) < 2:
+                    logger.warning(f"Invalid database name format: {pattern}")
+                    continue
+                db_name = parts[0].strip()
+                schema_part = parts[1].strip()
+                # Only extract database name if the schema part is a wildcard (*)
+                # This indicates all schemas of this database are selected
+                if db_name and db_name not in (".*", "^$") and schema_part == "*":
+                    # Validate database name format
+                    if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
+                        database_names.add(db_name)
+                    else:
+                        logger.warning(f"Invalid database name format: {db_name}")
 
             except Exception as e:
                 logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
