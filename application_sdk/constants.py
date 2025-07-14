@@ -87,6 +87,9 @@ OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 
+# Temporary Path (used to store intermediate files)
+TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

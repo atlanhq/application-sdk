@@ -1,13 +1,14 @@
 """State store for the application."""
 
 import json
+import os
 from typing import Any, Dict
 
-from dapr.clients import DaprClient
 from temporalio import activity
 
 from application_sdk.common.error_codes import IOError
-from application_sdk.constants import STATE_STORE_NAME
+from application_sdk.constants import APPLICATION_NAME, TEMPORARY_PATH
+from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -16,11 +17,11 @@ activity.logger = logger
 
 class StateStoreInput:
     @classmethod
-    def get_state(cls, key: str) -> Dict[str, Any]:
+    def get_state(cls, workflow_id: str) -> Dict[str, Any]:
         """Get state from the store.
 
         Args:
-            key: The key to retrieve the state for.
+            workflow_id: The key to retrieve the state for.
 
         Returns:
             Dict[str, Any]: The retrieved state data.
@@ -28,21 +29,37 @@ class StateStoreInput:
         Raises:
             ValueError: If no state is found for the given key.
             IOError: If there's an error with the Dapr client operations.
+
+        Example:
+            ```python
+            from application_sdk.inputs.statestore import StateStoreInput
+
+            state = StateStoreInput.get_state("wf-123")
+            print(state)
+            # {'test': 'test'}
+            ```
         """
+        state = {}
+        state_file_path = f"apps/{APPLICATION_NAME}/data/{workflow_id}/state.json"
+
         try:
-            with DaprClient() as client:
-                state = client.get_state(store_name=STATE_STORE_NAME, key=key)
-                if not state.data:
-                    raise IOError(
-                        f"{IOError.STATE_STORE_ERROR}: State not found for key: {key}"
-                    )
-                return json.loads(state.data)
-        except IOError as e:
-            logger.error(
-                f"{IOError.STATE_STORE_ERROR}: Failed to extract state: {str(e)}",
-                error_code=IOError.STATE_STORE_ERROR.code,
+            local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
+            ObjectStoreInput.download_file_from_object_store(
+                download_file_prefix=TEMPORARY_PATH,
+                file_path=local_state_file_path,
             )
-            raise  # Re-raise the exception after logging
+
+            with open(local_state_file_path, "r") as file:
+                state = json.load(file)
+
+        except Exception as e:
+            if "file not found" in str(e).lower():
+                pass
+            else:
+                logger.error(f"Failed to extract state: {str(e)}")
+                raise
+
+        return state
 
     @classmethod
     def extract_configuration(cls, config_id: str) -> Dict[str, Any]:
