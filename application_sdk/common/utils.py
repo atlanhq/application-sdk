@@ -33,8 +33,8 @@ class SQLRegexConstants(Enum):
     Constants for SQL regex
     """
 
-    EMPTY_STRING_REGEX = r"^$"
-    MATCH_ALL_REGEX = r".*"
+    EMPTY_STRING_REGEX = r"'^$'"
+    MATCH_ALL_REGEX = r"'.*'"
 
 
 def extract_database_names_from_regex(normalized_regex: str) -> str:
