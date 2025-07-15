@@ -184,7 +184,9 @@ class TestCredentialUtils:
         mock_response.secret = {"username": "test", "password": "secret"}
         mock_client.get_secret.return_value = mock_response
 
-        result = await SecretStoreInput.fetch_secret("test-component", "test-key")
+        result = await SecretStoreInput.fetch_secret(
+            "test-key", component_name="test-component"
+        )
 
         # Verify the result
         assert result == {"username": "test", "password": "secret"}
@@ -201,7 +203,9 @@ class TestCredentialUtils:
         mock_client.get_secret.side_effect = Exception("Connection failed")
 
         with pytest.raises(Exception, match="Connection failed"):
-            await SecretStoreInput.fetch_secret("test-component", "test-key")
+            await SecretStoreInput.fetch_secret(
+                "test-key", component_name="test-component"
+            )
 
     @pytest.mark.asyncio
     @patch("application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret")

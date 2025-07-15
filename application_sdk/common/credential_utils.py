@@ -43,7 +43,9 @@ async def resolve_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
             )
 
         # Fetch and apply secret using SecretStoreInput
-        secret_data = await SecretStoreInput.fetch_secret(credential_source, secret_key)
+        secret_data = await SecretStoreInput.fetch_secret(
+            secret_key=secret_key, component_name=credential_source
+        )
         return SecretStoreInput.apply_secret_values(credentials, secret_data)
 
     except Exception as e:
