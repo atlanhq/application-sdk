@@ -17,10 +17,8 @@ from typing import (
     Union,
 )
 
-from application_sdk.common.error_codes import CommonError, IOError
-from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.common.error_codes import CommonError
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.statestore import StateStoreOutput
 
 logger = get_logger(__name__)
 
@@ -266,42 +264,6 @@ def normalize_filters(
                 normalized_filter_list.append(f"{db}\\.{sch}")
 
     return normalized_filter_list
-
-
-def get_workflow_config(config_id: str) -> Dict[str, Any]:
-    """Gets the workflow configuration from the state store using config id.
-
-    Args:
-        config_id: The configuration ID to retrieve.
-
-    Returns:
-        dict: The workflow configuration.
-    """
-    return StateStoreInput.extract_configuration(config_id)
-
-
-def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Updates the workflow configuration.
-
-    Args:
-        config_id: The configuration ID to update.
-        config: The new configuration dictionary.
-
-    Returns:
-        dict: The updated workflow configuration.
-    """
-    try:
-        extracted_config = get_workflow_config(config_id)
-    except IOError as e:
-        logger.debug(
-            f"Error extracting configuration[{config_id}] from state store: {str(e)}"
-        )
-        extracted_config = {}
-
-    config.update(extracted_config)
-
-    StateStoreOutput.store_configuration(config_id, config)
-    return config
 
 
 def read_sql_files(

@@ -129,7 +129,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
             credentials = await SecretStoreInput.fetch_secret(
-                secret_key=f"credential_{workflow_args['credential_guid']}"
+                secret_key=workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
 

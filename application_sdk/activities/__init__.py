@@ -183,7 +183,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
 
         try:
             # This already handles the Dapr call internally
-            return StateStoreInput.extract_configuration(workflow_id)
+            return StateStoreInput.get_state(workflow_id, "workflow")
         except Exception as e:
             logger.error(
                 f"Failed to retrieve workflow configuration for {workflow_id}: {str(e)}",

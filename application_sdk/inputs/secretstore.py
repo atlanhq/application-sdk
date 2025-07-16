@@ -7,13 +7,31 @@ from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
-from application_sdk.constants import SECRET_STORE_NAME
+from application_sdk.constants import LOCAL_DEVELOPMENT, SECRET_STORE_NAME
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
 class SecretStoreInput:
+    @classmethod
+    def get_secret(
+        cls, secret_key: str, component_name: str = SECRET_STORE_NAME
+    ) -> Dict[str, Any]:
+        """Get secret from the Dapr component."""
+        try:
+            with DaprClient() as client:
+                dapr_secret_object = client.get_secret(
+                    store_name=component_name, key=secret_key
+                )
+                return cls._process_secret_data(dapr_secret_object.secret)
+        except Exception as e:
+            logger.error(
+                f"Failed to fetch secret using component {component_name}: {str(e)}"
+            )
+            raise
+
     @classmethod
     async def fetch_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
@@ -31,9 +49,13 @@ class SecretStoreInput:
             Exception: If secret fetching fails
         """
         try:
-            with DaprClient() as client:
-                secret = client.get_secret(store_name=component_name, key=secret_key)
-                return cls._process_secret_data(secret.secret)
+            secret = {}
+            if not LOCAL_DEVELOPMENT:
+                secret = cls.get_secret(secret_key, component_name)
+
+            credential_config = StateStoreInput.get_state(secret_key, "credential")
+            secret.update(credential_config)
+            return secret
         except Exception as e:
             logger.error(
                 f"Failed to fetch secret using component {component_name}: {str(e)}"
@@ -95,25 +117,3 @@ class SecretStoreInput:
                     result_data["extra"][key] = secret_data[value]
 
         return result_data
-
-    # @classmethod
-    # def extract_credentials(cls, credential_guid: str) -> Dict[str, Any]:
-    #     """Extract credentials from the state store using the credential GUID.
-
-    #     Args:
-    #         credential_guid: The unique identifier for the credentials.
-
-    #     Returns:
-    #         Dict[str, Any]: The credentials if found.
-
-    #     Raises:
-    #         ValueError: If the credential_guid is invalid or credentials are not found.
-    #         Exception: If there's an error with the Dapr client operations.
-
-    #     Examples:
-    #         >>> SecretStoreInput.extract_credentials("1234567890")
-    #         {"username": "admin", "password": "password"}
-    #     """
-    #     if not credential_guid:
-    #         raise ValueError("Invalid credential GUID provided.")
-    #     return cls.(f"credential_{credential_guid}")

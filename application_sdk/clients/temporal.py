@@ -312,7 +312,7 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
+            workflow_args["credential_guid"] = await SecretStoreOutput.save_secret(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
@@ -331,7 +331,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             )
 
-            StateStoreOutput.store_configuration(workflow_id, workflow_args)
+            await StateStoreOutput.save_state_object(
+                id=workflow_id, value=workflow_args, type="workflow"
+            )
 
             logger.info(f"Created workflow config with ID: {workflow_id}")
 

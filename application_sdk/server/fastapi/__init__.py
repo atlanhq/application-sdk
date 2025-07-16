@@ -12,7 +12,6 @@ from fastapi.templating import Jinja2Templates
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.common.utils import get_workflow_config, update_workflow_config
 from application_sdk.constants import (
     APP_DASHBOARD_HOST,
     APP_DASHBOARD_PORT,
@@ -26,9 +25,11 @@ from application_sdk.constants import (
 )
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
+from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
+from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
@@ -587,16 +588,19 @@ class APIServer(ServerInterface):
             )
             raise e
 
-    def get_workflow_config(self, config_id: str) -> WorkflowConfigResponse:
+    def get_workflow_config(
+        self, config_id: str, type: str = "workflow"
+    ) -> WorkflowConfigResponse:
         """Retrieve workflow configuration by ID.
 
         Args:
-            config_id (str): The ID of the workflow configuration to retrieve.
+            config_id (str): The ID of the configuration to retrieve.
+            type (str): The type of the configuration to retrieve.
 
         Returns:
             WorkflowConfigResponse: Response containing the workflow configuration.
         """
-        config = get_workflow_config(config_id)
+        config = StateStoreInput.get_state(config_id, type)
         return WorkflowConfigResponse(
             success=True,
             message="Workflow configuration fetched successfully",
@@ -658,8 +662,8 @@ class APIServer(ServerInterface):
             )
             raise e
 
-    def update_workflow_config(
-        self, config_id: str, body: WorkflowConfigRequest
+    async def update_workflow_config(
+        self, config_id: str, body: WorkflowConfigRequest, type: str = "workflow"
     ) -> WorkflowConfigResponse:
         """Update workflow configuration.
 
@@ -670,8 +674,9 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the updated configuration.
         """
-        # note: it's assumed that the preflight check is successful if the config is being updated
-        config = update_workflow_config(config_id, body.model_dump())
+        config = await StateStoreOutput.save_state_object(
+            id=config_id, value=body.model_dump(), type=type
+        )
         return WorkflowConfigResponse(
             success=True,
             message="Workflow configuration updated successfully",
