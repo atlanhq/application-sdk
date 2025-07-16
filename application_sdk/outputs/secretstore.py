@@ -4,6 +4,7 @@ import uuid
 from typing import Any, Dict
 
 from application_sdk.constants import LOCAL_DEVELOPMENT
+from application_sdk.inputs.statestore import StateType
 from application_sdk.outputs.statestore import StateStoreOutput
 
 
@@ -30,7 +31,7 @@ class SecretStoreOutput:
             # In production, dapr doesn't support creating secrets.
             credential_guid = str(uuid.uuid4())
             await StateStoreOutput.save_state_object(
-                id=credential_guid, value=config, type="credential"
+                id=credential_guid, value=config, type=StateType.CREDENTIALS
             )
             return credential_guid
         else:

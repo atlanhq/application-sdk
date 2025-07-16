@@ -28,6 +28,7 @@ from application_sdk.constants import (
     WORKFLOW_NAMESPACE,
     WORKFLOW_PORT,
 )
+from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
     ApplicationEventNames,
@@ -332,7 +333,7 @@ class TemporalWorkflowClient(WorkflowClient):
             )
 
             await StateStoreOutput.save_state_object(
-                id=workflow_id, value=workflow_args, type="workflow"
+                id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
 
             logger.info(f"Created workflow config with ID: {workflow_id}")

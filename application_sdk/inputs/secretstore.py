@@ -8,7 +8,7 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 
 from application_sdk.constants import LOCAL_DEVELOPMENT, SECRET_STORE_NAME
-from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -53,7 +53,9 @@ class SecretStoreInput:
             if not LOCAL_DEVELOPMENT:
                 secret = cls.get_secret(secret_key, component_name)
 
-            credential_config = StateStoreInput.get_state(secret_key, "credential")
+            credential_config = StateStoreInput.get_state(
+                secret_key, StateType.CREDENTIALS
+            )
             secret.update(credential_config)
             return secret
         except Exception as e:

@@ -25,7 +25,7 @@ from application_sdk.constants import (
 )
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
-from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.observability.observability import DuckDBUI
@@ -589,7 +589,7 @@ class APIServer(ServerInterface):
             raise e
 
     def get_workflow_config(
-        self, config_id: str, type: str = "workflow"
+        self, config_id: str, type: str = "workflows"
     ) -> WorkflowConfigResponse:
         """Retrieve workflow configuration by ID.
 
@@ -600,7 +600,10 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the workflow configuration.
         """
-        config = StateStoreInput.get_state(config_id, type)
+        if not StateType.is_member(type):
+            raise ValueError(f"Invalid type {type} for state store")
+
+        config = StateStoreInput.get_state(config_id, StateType(type))
         return WorkflowConfigResponse(
             success=True,
             message="Workflow configuration fetched successfully",
@@ -663,7 +666,7 @@ class APIServer(ServerInterface):
             raise e
 
     async def update_workflow_config(
-        self, config_id: str, body: WorkflowConfigRequest, type: str = "workflow"
+        self, config_id: str, body: WorkflowConfigRequest, type: str = "workflows"
     ) -> WorkflowConfigResponse:
         """Update workflow configuration.
 
@@ -674,8 +677,11 @@ class APIServer(ServerInterface):
         Returns:
             WorkflowConfigResponse: Response containing the updated configuration.
         """
+        if not StateType.is_member(type):
+            raise ValueError(f"Invalid type {type} for state store")
+
         config = await StateStoreOutput.save_state_object(
-            id=config_id, value=body.model_dump(), type=type
+            id=config_id, value=body.model_dump(), type=StateType(type)
         )
         return WorkflowConfigResponse(
             success=True,

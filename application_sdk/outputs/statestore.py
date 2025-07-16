@@ -7,7 +7,7 @@ from typing import Any, Dict
 from temporalio import activity
 
 from application_sdk.constants import APPLICATION_NAME, TEMPORARY_PATH
-from application_sdk.inputs.statestore import STATE_TYPES, StateStoreInput
+from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -17,7 +17,7 @@ activity.logger = logger
 
 class StateStoreOutput:
     @classmethod
-    async def save_state(cls, key: str, value: Any, id: str, type: str) -> None:
+    async def save_state(cls, key: str, value: Any, id: str, type: StateType) -> None:
         """Save state to the store.
 
         Args:
@@ -36,12 +36,9 @@ class StateStoreOutput:
             # {'test': 'test'}
             ```
         """
-        if type not in STATE_TYPES:
-            raise ValueError(f"Invalid type {type} for state store")
-
         # get the current state from object store
-        current_state = StateStoreInput.get_state(id, type)
-        state_path = f"apps/{APPLICATION_NAME}/{type}/{id}/config.json"
+        current_state = StateStoreInput.get_state(id, StateType(type))
+        state_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
 
         try:
             # update the state with the new value
@@ -65,7 +62,7 @@ class StateStoreOutput:
 
     @classmethod
     async def save_state_object(
-        cls, id: str, value: Dict[str, Any], type: str
+        cls, id: str, value: Dict[str, Any], type: StateType
     ) -> Dict[str, Any]:
         """Save the entire state object to the object store.
 
@@ -88,12 +85,9 @@ class StateStoreOutput:
             await StateStoreOutput.save_state_object("wf-123", {"test": "test"}, "workflow")
             ```
         """
-        if type not in STATE_TYPES:
-            raise ValueError(f"Invalid type {type} for state store")
-
         # get the current state from object store
         current_state = StateStoreInput.get_state(id, type)
-        state_path = f"apps/{APPLICATION_NAME}/{type}/{id}/config.json"
+        state_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
 
         try:
             # update the state with the new value

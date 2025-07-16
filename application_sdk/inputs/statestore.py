@@ -2,6 +2,7 @@
 
 import json
 import os
+from enum import Enum
 from typing import Any, Dict
 
 from temporalio import activity
@@ -13,12 +14,19 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 activity.logger = logger
 
-STATE_TYPES = ["workflow", "credential"]
+
+class StateType(Enum):
+    WORKFLOWS = "workflows"
+    CREDENTIALS = "credentials"
+
+    @classmethod
+    def is_member(cls, type: str) -> bool:
+        return type in cls._value2member_map_
 
 
 class StateStoreInput:
     @classmethod
-    def get_state(cls, id: str, type: str) -> Dict[str, Any]:
+    def get_state(cls, id: str, type: StateType) -> Dict[str, Any]:
         """Get state from the store.
 
         Args:
@@ -42,10 +50,7 @@ class StateStoreInput:
             ```
         """
 
-        if type not in STATE_TYPES:
-            raise ValueError(f"Invalid type {type} for state store")
-
-        state_file_path = f"apps/{APPLICATION_NAME}/{type}/{id}/config.json"
+        state_file_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
         state = {}
 
         try:
@@ -59,7 +64,9 @@ class StateStoreInput:
                 state = json.load(file)
 
         except Exception as e:
-            if "file not found" in str(e).lower():
+            # FIXME: this needs to be better handled
+            # local error message is "file not found", while in object store it is "object not found"
+            if "not found" in str(e).lower():
                 pass
             else:
                 logger.error(f"Failed to extract state: {str(e)}")
