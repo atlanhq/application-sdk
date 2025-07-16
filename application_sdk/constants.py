@@ -48,6 +48,15 @@ SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
 
 
+# Output Path Constants
+#: Output path format for workflows (example: objectstore://bucket/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
+WORKFLOW_OUTPUT_PATH_FORMAT = os.getenv(
+    "ATLAN_WORKFLOW_OUTPUT_PATH_FORMAT",
+    "apps/{application_name}/workflows/{workflow_id}/{run_id}",
+)
+# Temporary Path (used to store intermediate files)
+TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+
 # Workflow Client Constants
 #: Host address for the Temporal server
 WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
@@ -90,8 +99,6 @@ OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 
-# Temporary Path (used to store intermediate files)
-TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
