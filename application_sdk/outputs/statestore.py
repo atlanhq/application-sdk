@@ -28,16 +28,12 @@ class StateStoreOutput:
             Exception: If there's an error with the Dapr client operations.
 
         Example:
-            ```python
-            from application_sdk.outputs.statestore import StateStoreOutput
+            >>> from application_sdk.outputs.statestore import StateStoreOutput
 
-            await StateStoreOutput.save_state("test", {"test": "test"}, "wf-123")
-
-            # {'test': 'test'}
-            ```
+            >>> await StateStoreOutput.save_state("test", {"test": "test"}, "wf-123")
         """
         # get the current state from object store
-        current_state = StateStoreInput.get_state(id, StateType(type))
+        current_state = StateStoreInput.get_state(id, type)
         state_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
 
         try:
@@ -79,11 +75,8 @@ class StateStoreOutput:
             Exception: If there's an error with the Dapr client operations.
 
         Example:
-            ```python
-            from application_sdk.outputs.statestore import StateStoreOutput
-
-            await StateStoreOutput.save_state_object("wf-123", {"test": "test"}, "workflow")
-            ```
+            >>> from application_sdk.outputs.statestore import StateStoreOutput
+            >>> await StateStoreOutput.save_state_object("wf-123", {"test": "test"}, "workflow")
         """
         # get the current state from object store
         current_state = StateStoreInput.get_state(id, type)

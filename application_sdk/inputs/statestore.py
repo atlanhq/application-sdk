@@ -41,13 +41,11 @@ class StateStoreInput:
             IOError: If there's an error with the Dapr client operations.
 
         Example:
-            ```python
-            from application_sdk.inputs.statestore import StateStoreInput
+            >>> from application_sdk.inputs.statestore import StateStoreInput
 
-            state = StateStoreInput.get_state("wf-123")
-            print(state)
-            # {'test': 'test'}
-            ```
+            >>> state = StateStoreInput.get_state("wf-123")
+            >>> print(state)
+            {'test': 'test'}
         """
 
         state_file_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
@@ -64,9 +62,11 @@ class StateStoreInput:
                 state = json.load(file)
 
         except Exception as e:
-            # FIXME: this needs to be better handled
             # local error message is "file not found", while in object store it is "object not found"
             if "not found" in str(e).lower():
+                logger.debug(
+                    f"No state found for {type.value} with id '{id}', returning empty dict"
+                )
                 pass
             else:
                 logger.error(f"Failed to extract state: {str(e)}")

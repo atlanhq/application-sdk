@@ -167,18 +167,6 @@ class WorkflowConfigRequest(RootModel[Dict[str, Any]]):
         ..., description="Root JSON object containing workflow configuration"
     )
 
-    # credential_guid: Optional[str] = Field(
-    #     default=None, description="Optional GUID field containing database credentials"
-    # )
-    # connection: Optional[Dict[str, Any]] = Field(
-    #     default=None,
-    #     description="Optional JSON field containing connection configuration",
-    # )
-    # metadata: Optional[Dict[str, Any]] = Field(
-    #     default=None,
-    #     description="Optional JSON field containing metadata configuration",
-    # )
-
 
 class WorkflowConfigResponse(BaseModel):
     success: bool = Field(

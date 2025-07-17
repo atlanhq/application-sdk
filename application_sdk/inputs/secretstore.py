@@ -19,7 +19,15 @@ class SecretStoreInput:
     def get_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
     ) -> Dict[str, Any]:
-        """Get secret from the Dapr component."""
+        """Get secret from the Dapr component.
+
+        Args:
+            secret_key: Key of the secret to fetch
+            component_name: Name of the Dapr component to fetch from
+
+        Returns:
+            Dict with processed secret data
+        """
         try:
             with DaprClient() as client:
                 dapr_secret_object = client.get_secret(
