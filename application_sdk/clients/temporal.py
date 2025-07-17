@@ -1,9 +1,10 @@
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Optional, Sequence, Type
+from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Type
 
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
+from temporalio.service import ServiceCallRequest, ServiceCallResponse
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import (
     ActivityInboundInterceptor,
@@ -50,6 +51,52 @@ TEMPORAL_NOT_FOUND_FAILURE = (
 )
 
 
+class TokenRefreshInterceptor:
+    """RPC-level interceptor for automatic token refresh.
+
+    This interceptor ensures that all RPC calls to Temporal have a fresh
+    authentication token, automatically refreshing tokens when needed.
+    """
+
+    def __init__(self, auth_manager: AuthManager):
+        """Initialize the token refresh interceptor.
+
+        Args:
+            auth_manager: The authentication manager to use for token refresh.
+        """
+        self.auth_manager = auth_manager
+
+    async def __call__(
+        self,
+        request: ServiceCallRequest,
+        next_call: Callable[[ServiceCallRequest], Awaitable[ServiceCallResponse]],
+    ) -> ServiceCallResponse:
+        """Intercept all RPC calls and ensure fresh token.
+
+        This method is called for every RPC call to Temporal and ensures
+        that the request includes a valid authentication token.
+
+        Args:
+            request: The RPC request being made.
+            next_call: The next interceptor or actual RPC call.
+
+        Returns:
+            ServiceCallResponse: The response from the RPC call.
+        """
+        if self.auth_manager.is_auth_enabled():
+            try:
+                # Get fresh token for each RPC call - AuthManager handles caching
+                token = await self.auth_manager.get_access_token()
+                if token:
+                    request.rpc_metadata = request.rpc_metadata or {}
+                    request.rpc_metadata["authorization"] = f"Bearer {token}"
+            except Exception as e:
+                logger.error(f"Failed to refresh token for RPC call: {e}")
+                # Continue with existing token - let the call fail if needed
+
+        return await next_call(request)
+
+
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
 
@@ -71,7 +118,6 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
             event_name=ApplicationEventNames.ACTIVITY_START.value,
             data={},
         )
-
         EventStore.publish_event(event)
 
         output = None
@@ -120,6 +166,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     data={},
                 )
             )
+
         output = None
         try:
             output = await super().execute_workflow(input)
@@ -189,11 +236,12 @@ class EventInterceptor(Interceptor):
 
 
 class TemporalWorkflowClient(WorkflowClient):
-    """Temporal-specific implementation of WorkflowClient.
+    """Temporal-specific implementation of WorkflowClient with automatic token refresh.
 
     This class provides an implementation of the WorkflowClient interface for
     the Temporal workflow engine. It handles connection management, workflow
-    execution, and worker creation specific to Temporal.
+    execution, and worker creation specific to Temporal. The client now includes
+    automatic token refresh capabilities to handle long-running workflows.
 
     Attributes:
         client: Temporal client instance.
@@ -297,11 +345,12 @@ class TemporalWorkflowClient(WorkflowClient):
         return self.namespace
 
     async def load(self) -> None:
-        """Connect to the Temporal server.
+        """Connect to the Temporal server with automatic token refresh.
 
         Establishes a connection to the Temporal server using the configured
         connection string and namespace. If authentication is enabled, includes
-        the OAuth2 access token in the connection.
+        the OAuth2 access token in the connection and sets up automatic token
+        refresh for all RPC calls.
 
         Raises:
             ConnectionError: If connection to the Temporal server fails.
@@ -315,13 +364,20 @@ class TemporalWorkflowClient(WorkflowClient):
 
         if self.auth_enabled:
             try:
+                # Get initial token
                 token = await self.auth_manager.get_access_token()
                 if token:
                     connection_options["rpc_metadata"] = {
                         "authorization": f"Bearer {token}"
                     }
+
+                # Add RPC-level interceptor for automatic token refresh
+                connection_options["rpc_interceptors"] = [
+                    TokenRefreshInterceptor(self.auth_manager)
+                ]
+
             except Exception as e:
-                logger.error(f"Failed to get authentication headers: {e}")
+                logger.error(f"Failed to get authentication token: {e}")
                 raise
 
         self.client = await Client.connect(**connection_options)
@@ -333,14 +389,39 @@ class TemporalWorkflowClient(WorkflowClient):
         any authentication tokens. This is a no-op if the connection is
         already closed.
         """
+        if self.client:
+            try:
+                await self.client.close()
+            except Exception as e:
+                logger.warning(f"Error closing client connection: {e}")
+
         if hasattr(self, "auth_manager"):
             self.auth_manager.clear_cache()
-        return
+
+    async def ensure_valid_connection(self) -> None:
+        """Ensure the client has a valid connection with fresh token.
+
+        This method checks if the current authentication token is still valid
+        and reconnects if the token has expired. This is used as a safeguard
+        for client operations to prevent failures due to expired tokens.
+
+        Raises:
+            ConnectionError: If reconnection fails.
+            ValueError: If authentication is enabled but credentials are missing.
+        """
+        if not self.auth_enabled:
+            return
+
+        # Check if we need to reconnect due to token expiry
+        if not await self.auth_manager.is_token_valid():
+            logger.info("Token expired, reconnecting...")
+            await self.close()
+            await self.load()
 
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
     ) -> Dict[str, Any]:
-        """Start a workflow execution.
+        """Start a workflow execution with token validation.
 
         Args:
             workflow_args (Dict[str, Any]): Arguments for the workflow.
@@ -355,6 +436,8 @@ class TemporalWorkflowClient(WorkflowClient):
             WorkflowFailureError: If the workflow fails to start.
             ValueError: If the client is not loaded.
         """
+        # Ensure we have a valid connection before starting
+        await self.ensure_valid_connection()
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
             workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
@@ -367,7 +450,6 @@ class TemporalWorkflowClient(WorkflowClient):
         if not workflow_id:
             # if workflow_id is not provided, create a new one
             workflow_id = workflow_args.get("argo_workflow_name", str(uuid.uuid4()))
-
             workflow_args.update(
                 {
                     "application_name": self.application_name,
@@ -377,13 +459,12 @@ class TemporalWorkflowClient(WorkflowClient):
             )
 
             StateStoreOutput.store_configuration(workflow_id, workflow_args)
-
             logger.info(f"Created workflow config with ID: {workflow_id}")
-
         try:
             # Pass the full workflow_args to the workflow
             if not self.client:
                 raise ValueError("Client is not loaded")
+
             handle = await self.client.start_workflow(
                 workflow_class,  # type: ignore
                 args=[{"workflow_id": workflow_id}],
@@ -392,8 +473,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 cron_schedule=workflow_args.get("cron_schedule", ""),
                 execution_timeout=WORKFLOW_MAX_TIMEOUT_HOURS,
             )
-            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
 
+            logger.info(f"Workflow started: {handle.id} {handle.result_run_id}")
             return {
                 "workflow_id": handle.id,
                 "run_id": handle.result_run_id,
@@ -413,8 +494,11 @@ class TemporalWorkflowClient(WorkflowClient):
         Raises:
             ValueError: If the client is not loaded.
         """
+        await self.ensure_valid_connection()
+
         if not self.client:
             raise ValueError("Client is not loaded")
+
         try:
             workflow_handle = self.client.get_workflow_handle(
                 workflow_id, run_id=run_id
@@ -494,6 +578,8 @@ class TemporalWorkflowClient(WorkflowClient):
             ValueError: If the client is not loaded.
             Exception: If there's an error getting the workflow status.
         """
+        await self.ensure_valid_connection()
+
         if not self.client:
             raise ValueError("Client is not loaded")
 
