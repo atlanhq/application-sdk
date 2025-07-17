@@ -54,6 +54,7 @@ async def test_run_success(monkeypatch: pytest.MonkeyPatch):
 
     fake_workflow_args: Dict[str, Any] = {
         "output_prefix": "s3://bucket/prefix",
+        "output_path": "s3://bucket/prefix/apps/sql-connector/workflows/wf-123/run-123",
         "miner_args": {"chunk_size": 1000},
     }
 
@@ -100,10 +101,7 @@ async def test_run_success(monkeypatch: pytest.MonkeyPatch):
     assert mock_exec_activity.call_count == len(query_batches)
 
     # Validate the arguments passed to fetch_queries contain the computed output_path
-    expected_output_path = (
-        f"{fake_workflow_args['output_prefix']}/"
-        f"{workflow_config['workflow_id']}/run-123"
-    )
+    expected_output_path = fake_workflow_args["output_path"]
 
     for call, expected_batch in zip(mock_exec_activity.call_args_list, query_batches):
         # First positional arg should be the activity function reference
