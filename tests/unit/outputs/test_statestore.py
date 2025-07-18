@@ -80,7 +80,7 @@ async def test_store_credentials_success(
 ) -> None:
     mock_dapr_output_client.reset_mock()  # Reset mock between examples
     with patch("uuid.uuid4", return_value="test-uuid"):
-        result = await SecretStoreOutput.store_credentials(config)
+        result = await SecretStoreOutput.save_secret(config)
 
     assert result == "test-uuid"
     mock_dapr_output_client.save_state.assert_called_once_with(
@@ -99,4 +99,4 @@ async def test_store_credentials_failure(
     mock_dapr_output_client.save_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        await SecretStoreOutput.store_credentials(config)
+        await SecretStoreOutput.save_secret(config)

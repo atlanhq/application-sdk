@@ -11,7 +11,7 @@ from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
-from application_sdk.constants import APPLICATION_NAME, WORKFLOW_OUTPUT_PATH_FORMAT
+from application_sdk.constants import APPLICATION_NAME, WORKFLOW_OUTPUT_PATH_TEMPLATE
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -56,16 +56,16 @@ def get_workflow_run_id() -> str:
 def build_output_path() -> str:
     """Build a standardized output path for workflow artifacts.
 
-    This method creates a consistent output path format across all workflows using the WORKFLOW_OUTPUT_PATH_FORMAT constant.
+    This method creates a consistent output path format across all workflows using the WORKFLOW_OUTPUT_PATH_TEMPLATE constant.
 
     Returns:
         str: The standardized output path.
 
     Example:
         >>> build_output_path()
-        "apps/appName/workflows/wf-123/run-456"
+        "artifacts/apps/appName/workflows/wf-123/run-456"
     """
-    return WORKFLOW_OUTPUT_PATH_FORMAT.format(
+    return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
         application_name=APPLICATION_NAME,
         workflow_id=get_workflow_id(),
         run_id=get_workflow_run_id(),

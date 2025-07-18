@@ -49,13 +49,23 @@ LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "tr
 
 
 # Output Path Constants
-#: Output path format for workflows (example: objectstore://bucket/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
-WORKFLOW_OUTPUT_PATH_FORMAT = os.getenv(
-    "ATLAN_WORKFLOW_OUTPUT_PATH_FORMAT",
-    "apps/{application_name}/workflows/{workflow_id}/{run_id}",
+#: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
+WORKFLOW_OUTPUT_PATH_TEMPLATE = (
+    "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}"
 )
+
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+
+# State Store Constants
+#: Path template for state store files (example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json)
+STATE_STORE_PATH_TEMPLATE = (
+    "persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json"
+)
+
+# Observability Constants
+#: Directory for storing observability data
+OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -133,10 +143,6 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 
-# Observability Constants
-#: Directory for storing observability data
-OBSERVABILITY_DIR = os.environ.get("ATLAN_OBSERVABILITY_DIR", "/tmp/observability")
-
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
 LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
@@ -146,7 +152,6 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_DIR = os.environ.get("ATLAN_LOG_DIR", "/tmp/observability")
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # Hive Partitioning Configuration
 ENABLE_HIVE_PARTITIONING = (

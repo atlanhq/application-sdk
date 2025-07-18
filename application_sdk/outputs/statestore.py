@@ -6,8 +6,12 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.constants import APPLICATION_NAME, TEMPORARY_PATH
-from application_sdk.inputs.statestore import StateStoreInput, StateType
+from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.inputs.statestore import (
+    StateStoreInput,
+    StateType,
+    build_state_store_path,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -34,13 +38,13 @@ class StateStoreOutput:
         """
         # get the current state from object store
         current_state = StateStoreInput.get_state(id, type)
-        state_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
+        state_file_path = build_state_store_path(id, type)
 
         try:
             # update the state with the new value
             current_state[key] = value
 
-            local_state_file_path = os.path.join(TEMPORARY_PATH, state_path)
+            local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
             os.makedirs(os.path.dirname(local_state_file_path), exist_ok=True)
 
             # save the state to a local file
@@ -80,13 +84,13 @@ class StateStoreOutput:
         """
         # get the current state from object store
         current_state = StateStoreInput.get_state(id, type)
-        state_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
+        state_file_path = build_state_store_path(id, type)
 
         try:
             # update the state with the new value
             current_state.update(value)
 
-            local_state_file_path = os.path.join(TEMPORARY_PATH, state_path)
+            local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
             os.makedirs(os.path.dirname(local_state_file_path), exist_ok=True)
 
             # save the state to a local file

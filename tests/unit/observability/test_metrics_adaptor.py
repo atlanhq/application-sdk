@@ -37,7 +37,6 @@ def create_metrics_adapter() -> Generator[AtlanMetricsAdapter, None, None]:
             "METRICS_FLUSH_INTERVAL_SECONDS": "1",
             "METRICS_RETENTION_DAYS": "7",
             "METRICS_CLEANUP_ENABLED": "true",
-            "OBSERVABILITY_DIR": "/tmp/observability",
             "METRICS_FILE_NAME": "metrics.parquet",
         },
     ):

@@ -54,7 +54,7 @@ async def test_run_success(monkeypatch: pytest.MonkeyPatch):
 
     fake_workflow_args: Dict[str, Any] = {
         "output_prefix": "s3://bucket/prefix",
-        "output_path": "s3://bucket/prefix/apps/sql-connector/workflows/wf-123/run-123",
+        "output_path": "s3://bucket/prefix/artifacts/apps/sql-connector/workflows/wf-123/run-123",
         "miner_args": {"chunk_size": 1000},
     }
 

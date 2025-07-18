@@ -1,5 +1,13 @@
+import os
+
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
+
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    OBSERVABILITY_DIR,
+    TEMPORARY_PATH,
+)
 
 
 class WorkflowContext(BaseModel):
@@ -15,6 +23,20 @@ class WorkflowContext(BaseModel):
     activity_id: str = Field(init=False, default="")
     activity_type: str = Field(init=False, default="")
     workflow_run_id: str = Field(init=False, default="")
+
+
+def get_observability_dir() -> str:
+    """Build the observability path.
+
+    Args:
+        path: The path to build the observability path from.
+
+    Returns:
+        str: The built observability path.
+    """
+    return os.path.join(
+        TEMPORARY_PATH, OBSERVABILITY_DIR.format(application_name=APPLICATION_NAME)
+    )
 
 
 def get_workflow_context() -> WorkflowContext:
