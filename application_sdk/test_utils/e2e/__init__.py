@@ -143,9 +143,6 @@ class TestInterface:
                 f"Schema base path not found: {cls.schema_base_path}"
             )
 
-        # Prepare the extracted output base path
-        cls.extracted_output_base_path = "/tmp/output"
-
     def monitor_and_wait_workflow_execution(self) -> str:
         """
         Method to monitor the workflow execution

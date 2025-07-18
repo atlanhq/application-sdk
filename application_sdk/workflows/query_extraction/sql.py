@@ -97,11 +97,6 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             backoff_coefficient=2,
         )
 
-        workflow_run_id = workflow.info().run_id
-        output_prefix = workflow_args["output_prefix"]
-        output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
-        workflow_args["output_path"] = output_path
-
         results: List[Dict[str, Any]] = await workflow.execute_activity_method(
             self.activities_cls.get_query_batches,
             workflow_args,

@@ -64,6 +64,11 @@ Choose your platform-specific setup guide to install all required dependencies:
    uv run poe stop-deps
    ```
 
+5. (optional) run the unit tests:
+   ```bash
+   uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics
+   ```
+
 ## Step 3: Advanced Configuration (Optional)
 
 > [!NOTE]

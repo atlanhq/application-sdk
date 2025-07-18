@@ -35,7 +35,6 @@ def create_traces_adapter() -> Generator[AtlanTracesAdapter, None, None]:
             "TRACES_FLUSH_INTERVAL_SECONDS": "1",
             "TRACES_RETENTION_DAYS": "7",
             "TRACES_CLEANUP_ENABLED": "true",
-            "OBSERVABILITY_DIR": "/tmp/observability",
             "TRACES_FILE_NAME": "traces.parquet",
         },
     ):
