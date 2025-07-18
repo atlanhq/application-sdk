@@ -7,7 +7,11 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.constants import APPLICATION_NAME, TEMPORARY_PATH
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    STATE_STORE_PATH_TEMPLATE,
+    TEMPORARY_PATH,
+)
 from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -22,6 +26,25 @@ class StateType(Enum):
     @classmethod
     def is_member(cls, type: str) -> bool:
         return type in cls._value2member_map_
+
+
+def build_state_store_path(id: str, state_type: StateType) -> str:
+    """Build the state file path for the given id and type.
+
+    Args:
+        id: The unique identifier for the state.
+        state_type: The type of state (workflows, credentials, etc.).
+
+    Returns:
+        str: The constructed state file path.
+
+    Example:
+        >>> build_state_store_path("wf-123", "workflows")
+        'persistent-artifacts/apps/my-app/workflows/wf-123/config.json'
+    """
+    return STATE_STORE_PATH_TEMPLATE.format(
+        application_name=APPLICATION_NAME, state_type=state_type.value, id=id
+    )
 
 
 class StateStoreInput:
@@ -48,7 +71,7 @@ class StateStoreInput:
             {'test': 'test'}
         """
 
-        state_file_path = f"apps/{APPLICATION_NAME}/{type.value}/{id}/config.json"
+        state_file_path = build_state_store_path(id, type)
         state = {}
 
         try:

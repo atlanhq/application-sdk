@@ -90,7 +90,7 @@ class ObjectStoreInput:
             download_file_prefix (str): The base path to calculate relative paths from.
                 example: /tmp/output
             file_path (str): The full path to where the file should be downloaded.
-                example: /tmp/output/apps/myapp/data/wf-123/state.json
+                example: /tmp/output/persistent-artifacts/apps/myapp/data/wf-123/state.json
 
         Raises:
             Exception: If there's an error downloading the file from the object store.

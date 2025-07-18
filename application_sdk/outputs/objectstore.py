@@ -25,7 +25,7 @@ class ObjectStoreOutput:
             output_prefix (str): The base path to calculate relative paths from.
                 example: /tmp/output
             file_path (str): The full path to the file to be pushed.
-                example: /tmp/output/apps/myapp/data/wf-123/state.json
+                example: /tmp/output/persistent-artifacts/apps/myapp/data/wf-123/state.json
 
         Raises:
             IOError: If there's an error reading the file.
