@@ -1,17 +1,15 @@
 import os
 from pathlib import Path
 from typing import Dict, List, Union
-from unittest.mock import Mock, mock_open, patch
+from unittest.mock import mock_open, patch
 
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import (
     extract_database_names_from_regex,
-    get_workflow_config,
     normalize_filters,
     prepare_filters,
     prepare_query,
     read_sql_files,
-    update_workflow_config,
 )
 
 
@@ -341,51 +339,6 @@ class TestExtractDatabaseNamesFromRegex:
         # Should not log any errors for valid input
         mock_logger.error.assert_not_called()
         assert result == "'^(db1)$'"
-
-
-class TestWorkflowConfig:
-    @patch("application_sdk.common.utils.StateStoreInput.get_state")
-    def test_get_workflow_config(self, mock_get_state: Mock) -> None:
-        """Test getting workflow configuration"""
-        expected_config = {"key": "value"}
-        mock_get_state.return_value = expected_config
-
-        # Call the function
-        result = get_workflow_config("test_config_id")
-
-        # Assertions
-        assert result == expected_config
-        mock_get_state.assert_called_once_with("config_test_config_id")
-
-    @patch("application_sdk.common.utils.StateStoreInput.extract_configuration")
-    @patch("application_sdk.common.utils.StateStoreOutput.store_configuration")
-    def test_update_workflow_config(self, mock_store: Mock, mock_extract: Mock) -> None:
-        """Test updating workflow configuration"""
-        existing_config = {"key1": "value1", "key2": "value2"}
-        update_config = {"key1": "new_value", "key3": "value3"}
-        mock_extract.return_value = existing_config
-
-        result = update_workflow_config("test_config_id", update_config)
-
-        expected_config = {"key1": "new_value", "key2": "value2"}
-        assert result == expected_config
-        mock_store.assert_called_once_with("test_config_id", expected_config)
-
-    @patch("application_sdk.common.utils.StateStoreInput.extract_configuration")
-    @patch("application_sdk.common.utils.StateStoreOutput.store_configuration")
-    def test_update_workflow_config_with_none_values(
-        self, mock_store: Mock, mock_extract: Mock
-    ) -> None:
-        """Test updating workflow configuration with None values"""
-        existing_config = {"key1": "value1", "key2": "value2"}
-        update_config = {"key1": None, "key2": "new_value"}
-        mock_extract.return_value = existing_config
-
-        result = update_workflow_config("test_config_id", update_config)
-
-        expected_config = {"key1": "value1", "key2": "new_value"}
-        assert result == expected_config
-        mock_store.assert_called_once_with("test_config_id", expected_config)
 
 
 def test_read_sql_files_with_multiple_files(tmp_path: Path):
