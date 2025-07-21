@@ -119,6 +119,7 @@ class TestObjectStoreInput:
         mock_client.invoke_binding.assert_called_once_with(
             binding_name=OBJECT_STORE_NAME,
             operation=ObjectStoreInput.OBJECT_GET_OPERATION,
+            data=None,
             binding_metadata={"key": "test.txt", "fileName": "test.txt"},
         )
 

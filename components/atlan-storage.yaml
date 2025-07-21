@@ -7,10 +7,10 @@ spec:
   version: v1
   metadata:
     - name: accessKey
-      value: "{{clientid}}"
+      value: "{{clientId}}"
     - name: secretKey
-      value: "{{secret}}"
+      value: "{{clientSecret}}"
     - name: endpoint
-      value: "{{tenant.atlan.com/api/s3proxy}}"
+      value: "tenant.atlan.com/api/s3proxy"
     - name: forcePathStyle
       value: "true"
