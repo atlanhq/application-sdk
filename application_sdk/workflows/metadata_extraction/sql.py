@@ -203,22 +203,14 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             # Let the base workflow handle the hybrid approach and preflight check
             await super().run(workflow_config)
 
-            # For the direct approach, use workflow_config as workflow_args
-            # For the StateStore approach, we need to retrieve it again
-            use_statestore = workflow_config.get("_use_statestore", False)
-
-            if use_statestore:
-                # StateStore approach - retrieve workflow configuration from state store
-                workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
-                    self.activities_cls.get_workflow_args,
-                    workflow_config,
-                    retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
-                    start_to_close_timeout=self.default_start_to_close_timeout,
-                    heartbeat_timeout=self.default_heartbeat_timeout,
-                )
-            else:
-                # Direct approach - use passed configuration directly
-                workflow_args = workflow_config
+            # StateStore approach - retrieve workflow configuration from state store
+            workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
+                self.activities_cls.get_workflow_args,
+                workflow_config,
+                retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
 
             workflow_run_id = workflow.info().run_id
             workflow_args["workflow_run_id"] = workflow_run_id

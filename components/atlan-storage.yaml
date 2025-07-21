@@ -1,0 +1,16 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: atlan-storage
+spec:
+  type: bindings.aws.s3
+  version: v1
+  metadata:
+    - name: accessKey
+      value: "{{clientid}}"
+    - name: secretKey
+      value: "{{secret}}"
+    - name: endpoint
+      value: "{{tenant.atlan.com/api/s3proxy}}"
+    - name: forcePathStyle
+      value: "true"
