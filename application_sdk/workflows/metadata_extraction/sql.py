@@ -15,7 +15,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import APPLICATION_NAME, ENABLE_ATLAN_UPLOAD
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -59,7 +59,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
-        return [
+        # Base activities that always run
+        base_activities: List[Any] = [
             activities.preflight_check,
             activities.get_workflow_args,
             activities.fetch_databases,
@@ -69,6 +70,15 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_procedures,
             activities.transform_data,
         ]
+
+        # Conditionally add Atlan upload activity
+        if ENABLE_ATLAN_UPLOAD:
+            base_activities.append(activities.upload_to_atlan)
+            logger.info("Atlan upload activity enabled")
+        else:
+            logger.info("Atlan upload activity disabled - running in internal mode")
+
+        return base_activities
 
     async def fetch_and_transform(
         self,
@@ -222,6 +232,23 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ]
 
             await asyncio.gather(*fetch_and_transforms)
+
+            # Execute the upload_to_atlan activity if enabled
+            if ENABLE_ATLAN_UPLOAD:
+                logger.info(f"Starting Atlan upload for workflow {workflow_id}")
+                workflow_args["typename"] = "atlan-upload"
+                await workflow.execute_activity_method(
+                    self.activities_cls.upload_to_atlan,
+                    args=[workflow_args],
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=self.default_start_to_close_timeout,
+                    heartbeat_timeout=self.default_heartbeat_timeout,
+                )
+                logger.info(f"Atlan upload completed for workflow {workflow_id}")
+            else:
+                logger.info(
+                    f"Atlan upload skipped for workflow {workflow_id} (disabled)"
+                )
 
             logger.info(f"Extraction workflow completed for {workflow_id}")
             workflow_success = True
