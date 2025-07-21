@@ -43,8 +43,8 @@ class AuthManager:
             application_name: Application name for secret key generation
             auth_enabled: Whether authentication is enabled
             auth_url: OAuth2 token endpoint URL
-            client_id: OAuth2 client ID (fallback if secret store fails)
-            client_secret: OAuth2 client secret (fallback if secret store fails)
+            client_id: OAuth2 client ID (primary source, falls back to secret store)
+            client_secret: OAuth2 client secret (primary source, falls back to secret store)
         """
         self.application_name = application_name
         self.auth_enabled = (
@@ -52,9 +52,9 @@ class AuthManager:
         )
         self.auth_url = auth_url if auth_url else WORKFLOW_AUTH_URL
 
-        # Fallback credentials from environment/constructor
-        self._fallback_client_id = client_id if client_id else WORKFLOW_AUTH_CLIENT_ID
-        self._fallback_client_secret = (
+        # Environment-based credentials from environment variables/constructor
+        self._env_client_id = client_id if client_id else WORKFLOW_AUTH_CLIENT_ID
+        self._env_client_secret = (
             client_secret if client_secret else WORKFLOW_AUTH_CLIENT_SECRET
         )
 
@@ -66,7 +66,7 @@ class AuthManager:
     async def _get_credentials(self) -> Dict[str, str]:
         """Get credentials using the standardized approach.
 
-        Tries secret store first, falls back to environment variables.
+        Tries environment variables first, falls back to secret store.
 
         Returns:
             Dict containing client_id and client_secret
@@ -74,40 +74,46 @@ class AuthManager:
         Raises:
             ValueError: If credentials cannot be obtained from any source
         """
+
+        logger.debug("Fetching credentials for token refresh")
+
         # Return cached credentials if available
         if self._cached_credentials:
             return self._cached_credentials
 
-        # Try secret store first
-        credentials = await self._fetch_app_credentials_from_store()
+        # Try environment variables/constructor params first
+        if self._env_client_id and self._env_client_secret:
+            logger.info("Using credentials from environment variables")
+            credentials = {
+                "client_id": self._env_client_id,
+                "client_secret": self._env_client_secret,
+            }
+        else:
+            # Fall back to secret store
+            credentials = await self._fetch_app_credentials_from_store()
 
-        # Fall back to environment variables/constructor params
-        if not credentials:
-            if self._fallback_client_id and self._fallback_client_secret:
-                logger.info("Using fallback credentials from environment variables")
-                credentials = {
-                    "client_id": self._fallback_client_id,
-                    "client_secret": self._fallback_client_secret,
-                }
-            else:
+            if not credentials:
                 app_name = self.application_name.lower().replace("-", "_")
                 raise ValueError(
                     f"OAuth2 credentials not found for application '{self.application_name}'. "
                     f"Expected either:\n"
-                    f"1. Secret store with key 'atlan-deployment-secrets' containing: "
-                    f"{app_name}_client_id, {app_name}_client_secret\n"
-                    f"2. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET"
+                    f"1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET\n"
+                    f"2. Secret store with key 'atlan-deployment-secrets' containing: "
+                    f"{app_name}_client_id, {app_name}_client_secret"
                 )
 
         # Cache the credentials
         self._cached_credentials = credentials
         return credentials
 
-    async def get_access_token(self) -> str:
+    async def get_access_token(self, force_refresh: bool = False) -> str:
         """Get a valid access token, refreshing if necessary.
 
         The token contains all scopes configured for this application in the OAuth2 provider
         and can be used for multiple services (Temporal, API Gateway, Analytics, etc.).
+
+        Args:
+            force_refresh: If True, forces token refresh regardless of expiry
 
         Returns:
             str: A valid access token
@@ -122,13 +128,18 @@ class AuthManager:
         if not self.auth_url:
             raise ValueError("Auth URL is required when auth is enabled")
 
-        # Return existing token if it's still valid (with 30s buffer)
+        # Return existing token if it's still valid (with 30s buffer) and not forcing refresh
         current_time = time.time()
-        if self._access_token and current_time < self._token_expiry - 30:
+        if (
+            not force_refresh
+            and self._access_token
+            and current_time < self._token_expiry - 30
+        ):
             return self._access_token
 
         # Get credentials and refresh token
         credentials = await self._get_credentials()
+        logger.info("Refreshing OAuth2 token")
 
         async with aiohttp.ClientSession() as session:
             async with session.post(
@@ -143,11 +154,15 @@ class AuthManager:
                 if response.status != 200:
                     # Clear cached credentials on auth failure in case they're stale
                     self._cached_credentials = None
-                    raise Exception(f"Failed to refresh token: {await response.text()}")
+                    error_text = await response.text()
+                    raise Exception(
+                        f"Failed to refresh token (HTTP {response.status}): {error_text}"
+                    )
 
                 token_data = await response.json()
                 self._access_token = token_data["access_token"]
                 self._token_expiry = current_time + token_data["expires_in"]
+
                 assert self._access_token is not None
                 return self._access_token
 
@@ -188,6 +203,25 @@ class AuthManager:
         current_time = time.time()
         return current_time < self._token_expiry - 30  # 30s buffer
 
+    def get_token_expiry_time(self) -> Optional[float]:
+        """Get the expiry time of the current token.
+
+        Returns:
+            Optional[float]: Unix timestamp of token expiry, or None if no token
+        """
+        return self._token_expiry if self._access_token else None
+
+    def get_time_until_expiry(self) -> Optional[float]:
+        """Get the time remaining until token expires.
+
+        Returns:
+            Optional[float]: Seconds until expiry, or None if no token
+        """
+        if not self._access_token or not self._token_expiry:
+            return None
+
+        return max(0, self._token_expiry - time.time())
+
     async def refresh_token(self) -> str:
         """Force refresh the access token.
 
@@ -197,11 +231,7 @@ class AuthManager:
         Returns:
             str: New access token
         """
-        # Clear cached token to force refresh
-        self._access_token = None
-        self._token_expiry = 0
-
-        return await self.get_access_token()
+        return await self.get_access_token(force_refresh=True)
 
     async def _fetch_app_credentials_from_store(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""

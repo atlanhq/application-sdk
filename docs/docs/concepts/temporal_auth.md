@@ -26,8 +26,9 @@ Provides automatic Dapr component discovery and secret retrieval:
 
 ### Key Features
 
-1. **Automatic Token Management**
-   - Automatic token refresh with 30-second expiry buffer
+1. **Dynamic Token Management**
+   - Intelligent token refresh with dynamic interval calculation based on token expiry
+   - Automatic token refresh at 80% of token lifetime (minimum 5 minutes, maximum 30 minutes)
    - Intelligent token caching to reduce auth server load
    - Graceful handling of token refresh failures
 
@@ -50,17 +51,17 @@ Configure authentication using these environment variables:
 
 ```bash
 # Authentication settings
-WORKFLOW_AUTH_ENABLED=true
-WORKFLOW_AUTH_URL=https://your-oauth-provider.com/oauth/token
+ATLAN_WORKFLOW_AUTH_ENABLED=true
+ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-provider.com/oauth/token
 
-# Fallback credentials (use secret store for production)
-WORKFLOW_AUTH_CLIENT_ID=your_client_id
-WORKFLOW_AUTH_CLIENT_SECRET=your_client_secret
+# Primary credentials (environment variables take precedence)
+ATLAN_WORKFLOW_AUTH_CLIENT_ID=your_client_id
+ATLAN_WORKFLOW_AUTH_CLIENT_SECRET=your_client_secret
 
 # Temporal connection settings
-WORKFLOW_HOST=temporal.your-domain.com
-WORKFLOW_PORT=7233
-WORKFLOW_NAMESPACE=default
+ATLAN_WORKFLOW_HOST=temporal.your-domain.com
+ATLAN_WORKFLOW_PORT=7233
+ATLAN_WORKFLOW_NAMESPACE=default
 ```
 
 ### Secret Store Configuration
@@ -162,9 +163,10 @@ async with aiohttp.ClientSession() as session:
 - Configuration loaded from constructor parameters and environment variables
 
 ### 2. Credential Discovery (Automatic)
+- **Environment Variables**: First checks for credentials in environment variables
+- **Secret Store Fallback**: Falls back to Dapr secret stores if environment variables not available
 - **Secret Store Discovery**: Uses Dapr metadata API to find available secret stores
 - **Credential Retrieval**: Attempts to fetch app-specific credentials from secret store
-- **Environment Fallback**: Falls back to environment variables if secret store unavailable
 - **Credential Caching**: Caches discovered credentials for subsequent use
 
 ### 3. Token Acquisition
@@ -176,8 +178,10 @@ async with aiohttp.ClientSession() as session:
 - Includes Bearer token in gRPC metadata for Temporal server authentication
 - Automatic token refresh on subsequent operations
 
-### 5. Token Refresh (Automatic)
-- Monitors token expiry and refreshes proactively (30-second buffer)
+### 5. Dynamic Token Refresh (Automatic)
+- Calculates optimal refresh interval based on token expiry time
+- Refreshes at 80% of token lifetime (minimum 5 minutes, maximum 30 minutes)
+- Recalculates interval on each refresh to adapt to changing token lifetimes
 - Handles refresh failures by clearing credential cache and retrying
 - Supports credential rotation without application restart
 
@@ -193,7 +197,7 @@ try:
 except ValueError as e:
     # Credential configuration issues
     if "OAuth2 credentials not found" in str(e):
-        logger.error("Check secret store or environment variables")
+        logger.error("Check environment variables first, then secret store")
     else:
         logger.error(f"Configuration error: {e}")
 
@@ -228,8 +232,8 @@ async def connect_with_retry(client, max_retries=3):
 ## Best Practices
 
 ### 1. Credential Management
-- **Production**: Always use Dapr secret stores
-- **Development**: Environment variables acceptable for testing
+- **Production**: Use environment variables for primary credentials, Dapr secret stores as fallback
+- **Development**: Environment variables for testing and development
 - **Security**: Never commit credentials to version control
 - **Rotation**: Implement regular credential rotation
 
@@ -261,14 +265,14 @@ kubectl get components  # Verify Dapr secret store component
 kubectl logs <your-pod> | grep "secret store"
 
 # Check environment variables
-echo $WORKFLOW_AUTH_CLIENT_ID
-echo $WORKFLOW_AUTH_CLIENT_SECRET
+echo $ATLAN_WORKFLOW_AUTH_CLIENT_ID
+echo $ATLAN_WORKFLOW_AUTH_CLIENT_SECRET
 ```
 
 **Symptom**: Token refresh failures
 ```bash
 # Verify auth URL accessibility
-curl -X POST $WORKFLOW_AUTH_URL \
+curl -X POST $ATLAN_WORKFLOW_AUTH_URL \
   -d "grant_type=client_credentials&client_id=...&client_secret=..."
 
 # Check credential validity in secret store
@@ -297,7 +301,7 @@ kubectl logs dapr-sidecar-container
 **Symptom**: gRPC connection failures
 ```bash
 # Verify Temporal server accessibility
-telnet $WORKFLOW_HOST $WORKFLOW_PORT
+telnet $ATLAN_WORKFLOW_HOST $ATLAN_WORKFLOW_PORT
 
 # Check if token is being included in requests
 # Enable debug logging to see gRPC metadata
@@ -321,7 +325,7 @@ class AuthManager:
     ) -> None:
         """Initialize OAuth2 token manager."""
 
-    async def get_access_token(self) -> str:
+    async def get_access_token(self, force_refresh: bool = False) -> str:
         """Get valid access token, refreshing if necessary."""
 
     async def get_authenticated_headers(self) -> Dict[str, str]:
@@ -329,6 +333,12 @@ class AuthManager:
 
     async def is_token_valid(self) -> bool:
         """Check if current token is valid (not expired)."""
+
+    def get_token_expiry_time(self) -> Optional[float]:
+        """Get the expiry time of the current token."""
+
+    def get_time_until_expiry(self) -> Optional[float]:
+        """Get the time remaining until token expires."""
 
     async def refresh_token(self) -> str:
         """Force refresh the access token."""
@@ -382,6 +392,7 @@ class TemporalWorkflowClient(WorkflowClient):
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = None,
         activity_executor: Optional[ThreadPoolExecutor] = None,
+        auto_start_token_refresh: bool = True,
     ) -> Worker:
         """Create Temporal worker with authenticated client."""
 ```
@@ -436,10 +447,10 @@ await client.load()  # Authentication handled automatically
 Update your environment configuration:
 ```bash
 # Add these new variables
-WORKFLOW_AUTH_ENABLED=true
-WORKFLOW_AUTH_URL=https://your-oauth-server.com/oauth/token
+ATLAN_WORKFLOW_AUTH_ENABLED=true
+ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-server.com/oauth/token
 
 # Keep existing (now fallback) variables
-WORKFLOW_AUTH_CLIENT_ID=your_client_id
-WORKFLOW_AUTH_CLIENT_SECRET=your_client_secret
+ATLAN_WORKFLOW_AUTH_CLIENT_ID=your_client_id
+ATLAN_WORKFLOW_AUTH_CLIENT_SECRET=your_client_secret
 ```

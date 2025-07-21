@@ -42,8 +42,9 @@ async def test_load(mock_connect: AsyncMock, temporal_client: TemporalWorkflowCl
 
     # Verify that Client.connect was called with the correct parameters
     mock_connect.assert_called_once_with(
-        temporal_client.get_connection_string(),
+        target_host=temporal_client.get_connection_string(),
         namespace=temporal_client.get_namespace(),
+        tls=False,
     )
 
     # Check that client is set

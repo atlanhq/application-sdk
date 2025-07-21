@@ -86,6 +86,10 @@ async def test_credential_discovery_from_secret_store(
     auth_manager: AuthManager, mock_dapr_client: MagicMock
 ) -> None:
     """Test credential discovery from secret store."""
+    # Clear environment credentials to force secret store fallback
+    auth_manager._env_client_id = ""
+    auth_manager._env_client_secret = ""
+
     # Mock component discovery
     mock_metadata = MagicMock()
     mock_metadata.registered_components = [
