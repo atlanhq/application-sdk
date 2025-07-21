@@ -24,11 +24,11 @@ logger = get_logger(__name__)
 class AzureStorageClient(ClientInterface):
     """
     Azure Storage client for metadata extraction.
-    
+
     This client supports both Azure Blob Storage and Azure Data Lake Storage Gen2,
     with authentication via Azure credentials and support for both public endpoints
     and private links.
-    
+
     Attributes:
         credential (TokenCredential): Azure credential instance
         _blob_clients (Dict[str, BlobServiceClient]): Cache of blob service clients
@@ -40,11 +40,11 @@ class AzureStorageClient(ClientInterface):
     # Service types
     SERVICE_TYPE_BLOB = "blob"
     SERVICE_TYPE_GEN2 = "gen2"
-    
+
     # Network configuration types
     NETWORK_CONFIG_PUBLIC = "public_endpoint"
     NETWORK_CONFIG_PRIVATE = "private_link"
-    
+
     # URL templates
     AZURE_BLOB_URL_TEMPLATE = "https://{account_name}.blob.core.windows.net"
     AZURE_DATALAKE_URL_TEMPLATE = "https://{account_name}.dfs.core.windows.net"
@@ -88,13 +88,13 @@ class AzureStorageClient(ClientInterface):
         """
         try:
             logger.info("Loading Azure Storage client...")
-            
+
             # Test the credential
             await self._test_credential()
-            
+
             self._connection_health = True
             logger.info("Azure Storage client loaded successfully")
-            
+
         except ClientAuthenticationError as e:
             logger.error(f"Azure Storage authentication failed: {str(e)}")
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
@@ -109,34 +109,32 @@ class AzureStorageClient(ClientInterface):
         """Close Azure Storage connections and clean up resources."""
         try:
             logger.info("Closing Azure Storage client...")
-            
+
             # Close blob clients
             for client in self._blob_clients.values():
                 await self._close_client(client)
-            
+
             # Close data lake clients
             for client in self._datalake_clients.values():
                 await self._close_client(client)
-            
+
             # Clear caches
             self._blob_clients.clear()
             self._datalake_clients.clear()
-            
+
             # Shutdown executor
             self._executor.shutdown(wait=True)
-            
+
             # Reset connection health
             self._connection_health = False
-            
+
             logger.info("Azure Storage client closed successfully")
-            
+
         except Exception as e:
             logger.error(f"Error closing Azure Storage client: {str(e)}")
 
     async def get_service_client(
-        self, 
-        storage_account_name: str, 
-        private_link: Optional[str] = None
+        self, storage_account_name: str, private_link: Optional[str] = None
     ) -> tuple[Union[BlobServiceClient, DataLakeServiceClient], str]:
         """
         Get Azure service client for a storage account.
@@ -167,44 +165,44 @@ class AzureStorageClient(ClientInterface):
             # Try to create Data Lake Gen2 client first
             try:
                 client = DataLakeServiceClient(
-                    account_url=account_url,
-                    credential=self.credential
+                    account_url=account_url, credential=self.credential
                 )
-                
+
                 # Test the connection
                 await self._test_datalake_client(client)
-                
+
                 self._datalake_clients[storage_account_name] = client
                 logger.debug(f"Using Data Lake Gen2 client for {storage_account_name}")
                 return client, self.SERVICE_TYPE_GEN2
-                
+
             except AzureError:
                 # Fallback to Blob Storage
                 blob_url = self.AZURE_BLOB_URL_TEMPLATE.format(
                     account_name=storage_account_name
                 )
-                
+
                 client = BlobServiceClient(
-                    account_url=blob_url,
-                    credential=self.credential
+                    account_url=blob_url, credential=self.credential
                 )
-                
+
                 # Test the connection
                 await self._test_blob_client(client)
-                
+
                 self._blob_clients[storage_account_name] = client
                 logger.debug(f"Using Blob Storage client for {storage_account_name}")
                 return client, self.SERVICE_TYPE_BLOB
 
         except Exception as e:
-            logger.error(f"Failed to create service client for {storage_account_name}: {e}")
+            logger.error(
+                f"Failed to create service client for {storage_account_name}: {e}"
+            )
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
 
     async def list_containers(
-        self, 
+        self,
         storage_account_name: str,
         container_prefix: str = "",
-        private_link: Optional[str] = None
+        private_link: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         List containers in a storage account.
@@ -224,12 +222,12 @@ class AzureStorageClient(ClientInterface):
             client, service_type = await self.get_service_client(
                 storage_account_name, private_link
             )
-            
+
             if service_type == self.SERVICE_TYPE_GEN2:
                 return await self._list_datalake_containers(client, container_prefix)
             else:
                 return await self._list_blob_containers(client, container_prefix)
-                
+
         except Exception as e:
             logger.error(f"Failed to list containers: {str(e)}")
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
@@ -241,7 +239,7 @@ class AzureStorageClient(ClientInterface):
         object_prefix: str = "",
         include_folders: bool = False,
         batch_size: int = 1000,
-        private_link: Optional[str] = None
+        private_link: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         List objects in a container.
@@ -264,7 +262,7 @@ class AzureStorageClient(ClientInterface):
             client, service_type = await self.get_service_client(
                 storage_account_name, private_link
             )
-            
+
             if service_type == self.SERVICE_TYPE_GEN2:
                 return await self._list_datalake_objects(
                     client, container_name, object_prefix, include_folders, batch_size
@@ -273,7 +271,7 @@ class AzureStorageClient(ClientInterface):
                 return await self._list_blob_objects(
                     client, container_name, object_prefix, include_folders, batch_size
                 )
-                
+
         except Exception as e:
             logger.error(f"Failed to list objects: {str(e)}")
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
@@ -283,7 +281,7 @@ class AzureStorageClient(ClientInterface):
         storage_account_name: str,
         container_name: str,
         object_name: str,
-        private_link: Optional[str] = None
+        private_link: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Get object properties.
@@ -304,7 +302,7 @@ class AzureStorageClient(ClientInterface):
             client, service_type = await self.get_service_client(
                 storage_account_name, private_link
             )
-            
+
             if service_type == self.SERVICE_TYPE_GEN2:
                 return await self._get_datalake_object_properties(
                     client, container_name, object_name
@@ -313,7 +311,7 @@ class AzureStorageClient(ClientInterface):
                 return await self._get_blob_object_properties(
                     client, container_name, object_name
                 )
-                
+
         except Exception as e:
             logger.error(f"Failed to get object properties: {str(e)}")
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
@@ -330,13 +328,13 @@ class AzureStorageClient(ClientInterface):
             "connection_health": self._connection_health,
             "blob_clients": len(self._blob_clients),
             "datalake_clients": len(self._datalake_clients),
-            "overall_health": False
+            "overall_health": False,
         }
-        
+
         if not self._connection_health:
             health_status["status"] = "unhealthy"
             return health_status
-        
+
         # Test credential if available
         if self.credential:
             try:
@@ -349,9 +347,9 @@ class AzureStorageClient(ClientInterface):
                 health_status["status"] = "unhealthy"
         else:
             health_status["status"] = "unknown"
-        
+
         health_status["overall_health"] = health_status.get("credential_health", False)
-        
+
         return health_status
 
     async def _test_credential(self) -> None:
@@ -360,7 +358,7 @@ class AzureStorageClient(ClientInterface):
             await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 self.credential.get_token,
-                "https://storage.azure.com/.default"
+                "https://storage.azure.com/.default",
             )
         except Exception as e:
             raise ClientAuthenticationError(f"Credential test failed: {str(e)}")
@@ -369,8 +367,7 @@ class AzureStorageClient(ClientInterface):
         """Test blob client connection."""
         try:
             await asyncio.get_event_loop().run_in_executor(
-                self._executor,
-                client.get_service_properties
+                self._executor, client.get_service_properties
             )
         except Exception as e:
             raise AzureError(f"Blob client test failed: {str(e)}")
@@ -379,69 +376,82 @@ class AzureStorageClient(ClientInterface):
         """Test data lake client connection."""
         try:
             await asyncio.get_event_loop().run_in_executor(
-                self._executor,
-                client.get_service_properties
+                self._executor, client.get_service_properties
             )
         except Exception as e:
             raise AzureError(f"Data Lake client test failed: {str(e)}")
 
     async def _list_blob_containers(
-        self, 
-        client: BlobServiceClient, 
-        container_prefix: str
+        self, client: BlobServiceClient, container_prefix: str
     ) -> List[Dict[str, Any]]:
         """List blob containers."""
         try:
+
             def _list_containers_sync():
                 containers = []
-                for container in client.list_containers(name_starts_with=container_prefix):
-                    containers.append({
-                        "name": container.name,
-                        "last_modified": container.last_modified,
-                        "etag": container.etag,
-                        "lease_status": container.lease_status,
-                        "lease_state": container.lease_state,
-                        "public_access": container.public_access,
-                        "has_immutability_policy": container.has_immutability_policy,
-                        "has_legal_hold": container.has_legal_hold,
-                        "metadata": container.metadata
-                    })
+                for container in client.list_containers(
+                    name_starts_with=container_prefix
+                ):
+                    containers.append(
+                        {
+                            "name": container.name,
+                            "last_modified": container.last_modified,
+                            "etag": container.etag,
+                            "lease_status": container.lease_status,
+                            "lease_state": container.lease_state,
+                            "public_access": container.public_access,
+                            "has_immutability_policy": container.has_immutability_policy,
+                            "has_legal_hold": container.has_legal_hold,
+                            "metadata": container.metadata,
+                        }
+                    )
                 return containers
-            
+
             # Run the synchronous operation in a thread pool
             loop = asyncio.get_event_loop()
-            containers = await loop.run_in_executor(self._executor, _list_containers_sync)
+            containers = await loop.run_in_executor(
+                self._executor, _list_containers_sync
+            )
             return containers
         except Exception as e:
             logger.error(f"Failed to list blob containers: {str(e)}")
             raise
 
     async def _list_datalake_containers(
-        self, 
-        client: DataLakeServiceClient, 
-        container_prefix: str
+        self, client: DataLakeServiceClient, container_prefix: str
     ) -> List[Dict[str, Any]]:
         """List data lake containers."""
         try:
+
             def _list_containers_sync():
                 containers = []
-                for container in client.list_file_systems(name_starts_with=container_prefix):
-                    containers.append({
-                        "name": container.name,
-                        "last_modified": container.last_modified,
-                        "etag": container.etag,
-                        "lease_status": getattr(container, 'lease_status', None),
-                        "lease_state": getattr(container, 'lease_state', None),
-                        "public_access": getattr(container, 'public_access', None),
-                        "has_immutability_policy": getattr(container, 'has_immutability_policy', None),
-                        "has_legal_hold": getattr(container, 'has_legal_hold', None),
-                        "metadata": getattr(container, 'metadata', {})
-                    })
+                for container in client.list_file_systems(
+                    name_starts_with=container_prefix
+                ):
+                    containers.append(
+                        {
+                            "name": container.name,
+                            "last_modified": container.last_modified,
+                            "etag": container.etag,
+                            "lease_status": getattr(container, "lease_status", None),
+                            "lease_state": getattr(container, "lease_state", None),
+                            "public_access": getattr(container, "public_access", None),
+                            "has_immutability_policy": getattr(
+                                container, "has_immutability_policy", None
+                            ),
+                            "has_legal_hold": getattr(
+                                container, "has_legal_hold", None
+                            ),
+                            "metadata": getattr(container, "metadata", {}),
+                        }
+                    )
                 return containers
-            
+
             # Run the synchronous operation in a thread pool
             loop = asyncio.get_event_loop()
-            containers = await loop.run_in_executor(self._executor, _list_containers_sync)
+            containers = await loop.run_in_executor(
+                self._executor, _list_containers_sync
+            )
             return containers
         except Exception as e:
             logger.error(f"Failed to list data lake containers: {str(e)}")
@@ -453,47 +463,49 @@ class AzureStorageClient(ClientInterface):
         container_name: str,
         object_prefix: str,
         include_folders: bool,
-        batch_size: int
+        batch_size: int,
     ) -> List[Dict[str, Any]]:
         """List blob objects."""
         try:
+
             def _list_objects_sync():
                 objects = []
                 container_client = client.get_container_client(container_name)
-                
+
                 for blob in container_client.list_blobs(
-                    name_starts_with=object_prefix,
-                    include=['metadata']
+                    name_starts_with=object_prefix, include=["metadata"]
                 ):
-                    objects.append({
-                        "name": blob.name,
-                        "size": blob.size,
-                        "last_modified": blob.last_modified,
-                        "etag": blob.etag,
-                        "content_type": blob.content_settings.content_type,
-                        "content_encoding": blob.content_settings.content_encoding,
-                        "content_language": blob.content_settings.content_language,
-                        "content_disposition": blob.content_settings.content_disposition,
-                        "cache_control": blob.content_settings.cache_control,
-                        "lease_status": blob.lease_status,
-                        "lease_state": blob.lease_state,
-                        "lease_duration": blob.lease_duration,
-                        "copy_id": blob.copy_id,
-                        "copy_source": blob.copy_source,
-                        "copy_progress": blob.copy_progress,
-                        "copy_completion_time": blob.copy_completion_time,
-                        "copy_status": blob.copy_status,
-                        "copy_status_description": blob.copy_status_description,
-                        "server_encrypted": blob.server_encrypted,
-                        "incremental_copy": blob.incremental_copy,
-                        "metadata": blob.metadata
-                    })
-                    
+                    objects.append(
+                        {
+                            "name": blob.name,
+                            "size": blob.size,
+                            "last_modified": blob.last_modified,
+                            "etag": blob.etag,
+                            "content_type": blob.content_settings.content_type,
+                            "content_encoding": blob.content_settings.content_encoding,
+                            "content_language": blob.content_settings.content_language,
+                            "content_disposition": blob.content_settings.content_disposition,
+                            "cache_control": blob.content_settings.cache_control,
+                            "lease_status": blob.lease_status,
+                            "lease_state": blob.lease_state,
+                            "lease_duration": blob.lease_duration,
+                            "copy_id": blob.copy_id,
+                            "copy_source": blob.copy_source,
+                            "copy_progress": blob.copy_progress,
+                            "copy_completion_time": blob.copy_completion_time,
+                            "copy_status": blob.copy_status,
+                            "copy_status_description": blob.copy_status_description,
+                            "server_encrypted": blob.server_encrypted,
+                            "incremental_copy": blob.incremental_copy,
+                            "metadata": blob.metadata,
+                        }
+                    )
+
                     if len(objects) >= batch_size:
                         break
-                        
+
                 return objects
-            
+
             # Run the synchronous operation in a thread pool
             loop = asyncio.get_event_loop()
             objects = await loop.run_in_executor(self._executor, _list_objects_sync)
@@ -508,35 +520,37 @@ class AzureStorageClient(ClientInterface):
         container_name: str,
         object_prefix: str,
         include_folders: bool,
-        batch_size: int
+        batch_size: int,
     ) -> List[Dict[str, Any]]:
         """List data lake objects."""
         try:
+
             def _list_objects_sync():
                 objects = []
                 file_system_client = client.get_file_system_client(container_name)
-                
+
                 for path in file_system_client.get_paths(
-                    path=object_prefix,
-                    recursive=True
+                    path=object_prefix, recursive=True
                 ):
-                    objects.append({
-                        "name": path.name,
-                        "size": path.content_length,
-                        "last_modified": path.last_modified,
-                        "etag": path.etag,
-                        "owner": path.owner,
-                        "group": path.group,
-                        "permissions": path.permissions,
-                        "is_directory": path.is_directory,
-                        "encryption_context": path.encryption_context
-                    })
-                    
+                    objects.append(
+                        {
+                            "name": path.name,
+                            "size": path.content_length,
+                            "last_modified": path.last_modified,
+                            "etag": path.etag,
+                            "owner": path.owner,
+                            "group": path.group,
+                            "permissions": path.permissions,
+                            "is_directory": path.is_directory,
+                            "encryption_context": path.encryption_context,
+                        }
+                    )
+
                     if len(objects) >= batch_size:
                         break
-                        
+
                 return objects
-            
+
             # Run the synchronous operation in a thread pool
             loop = asyncio.get_event_loop()
             objects = await loop.run_in_executor(self._executor, _list_objects_sync)
@@ -546,19 +560,15 @@ class AzureStorageClient(ClientInterface):
             raise
 
     async def _get_blob_object_properties(
-        self,
-        client: BlobServiceClient,
-        container_name: str,
-        object_name: str
+        self, client: BlobServiceClient, container_name: str, object_name: str
     ) -> Dict[str, Any]:
         """Get blob object properties."""
         try:
             blob_client = client.get_blob_client(container_name, object_name)
             properties = await asyncio.get_event_loop().run_in_executor(
-                self._executor,
-                blob_client.get_blob_properties
+                self._executor, blob_client.get_blob_properties
             )
-            
+
             return {
                 "name": properties.name,
                 "size": properties.size,
@@ -580,36 +590,34 @@ class AzureStorageClient(ClientInterface):
                 "copy_status_description": properties.copy_status_description,
                 "server_encrypted": properties.server_encrypted,
                 "incremental_copy": properties.incremental_copy,
-                "metadata": properties.metadata
+                "metadata": properties.metadata,
             }
         except Exception as e:
             logger.error(f"Failed to get blob object properties: {str(e)}")
             raise
 
     async def _get_datalake_object_properties(
-        self,
-        client: DataLakeServiceClient,
-        container_name: str,
-        object_name: str
+        self, client: DataLakeServiceClient, container_name: str, object_name: str
     ) -> Dict[str, Any]:
         """Get data lake object properties."""
         try:
             file_client = client.get_file_client(container_name, object_name)
             properties = await asyncio.get_event_loop().run_in_executor(
-                self._executor,
-                file_client.get_file_properties
+                self._executor, file_client.get_file_properties
             )
-            
+
             return {
                 "name": properties.name,
-                "size": getattr(properties, 'content_length', getattr(properties, 'size', None)),
+                "size": getattr(
+                    properties, "content_length", getattr(properties, "size", None)
+                ),
                 "last_modified": properties.last_modified,
                 "etag": properties.etag,
-                "owner": getattr(properties, 'owner', None),
-                "group": getattr(properties, 'group', None),
-                "permissions": getattr(properties, 'permissions', None),
-                "is_directory": getattr(properties, 'is_directory', None),
-                "encryption_context": getattr(properties, 'encryption_context', None)
+                "owner": getattr(properties, "owner", None),
+                "group": getattr(properties, "group", None),
+                "permissions": getattr(properties, "permissions", None),
+                "is_directory": getattr(properties, "is_directory", None),
+                "encryption_context": getattr(properties, "encryption_context", None),
             }
         except Exception as e:
             logger.error(f"Failed to get data lake object properties: {str(e)}")
@@ -618,10 +626,9 @@ class AzureStorageClient(ClientInterface):
     async def _close_client(self, client: Any) -> None:
         """Close a service client."""
         try:
-            if hasattr(client, 'close'):
+            if hasattr(client, "close"):
                 await asyncio.get_event_loop().run_in_executor(
-                    self._executor,
-                    client.close
+                    self._executor, client.close
                 )
         except Exception as e:
-            logger.warning(f"Error closing client: {str(e)}") 
+            logger.warning(f"Error closing client: {str(e)}")

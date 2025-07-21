@@ -9,8 +9,8 @@ import asyncio
 from typing import Any, Dict, Optional
 
 from azure.core.credentials import TokenCredential
-from azure.identity import ClientSecretCredential
 from azure.core.exceptions import ClientAuthenticationError
+from azure.identity import ClientSecretCredential
 
 from application_sdk.common.error_codes import CommonError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -21,10 +21,10 @@ logger = get_logger(__name__)
 class AzureAuthProvider:
     """
     Azure authentication provider for handling Service Principal authentication.
-    
+
     This class provides a unified interface for creating Azure credentials
     using Service Principal authentication with Azure SDK.
-    
+
     Supported authentication method:
     - service_principal: Using client ID, client secret, and tenant ID
     """
@@ -56,23 +56,21 @@ class AzureAuthProvider:
         """
         try:
             logger.debug(f"Creating Azure credential with auth type: {auth_type}")
-            
+
             if auth_type.lower() != "service_principal":
                 raise CommonError(
                     f"{CommonError.CREDENTIALS_PARSE_ERROR}: "
                     f"Only 'service_principal' authentication is supported. "
                     f"Received: {auth_type}"
                 )
-            
+
             return await self._create_service_principal_credential(credentials)
-                    
+
         except ClientAuthenticationError:
             raise
         except Exception as e:
             logger.error(f"Failed to create Azure credential: {str(e)}")
-            raise CommonError(
-                f"{CommonError.CREDENTIALS_PARSE_ERROR}: {str(e)}"
-            )
+            raise CommonError(f"{CommonError.CREDENTIALS_PARSE_ERROR}: {str(e)}")
 
     async def _create_service_principal_credential(
         self, credentials: Optional[Dict[str, Any]]
@@ -97,7 +95,9 @@ class AzureAuthProvider:
 
         tenant_id = credentials.get("tenant_id") or credentials.get("tenantId")
         client_id = credentials.get("client_id") or credentials.get("clientId")
-        client_secret = credentials.get("client_secret") or credentials.get("clientSecret")
+        client_secret = credentials.get("client_secret") or credentials.get(
+            "clientSecret"
+        )
 
         if not all([tenant_id, client_id, client_secret]):
             raise CommonError(
@@ -107,13 +107,18 @@ class AzureAuthProvider:
             )
 
         logger.debug(f"Creating service principal credential for tenant: {tenant_id}")
-        
+
+        # Ensure all values are strings
+        tenant_id_str = str(tenant_id) if tenant_id else ""
+        client_id_str = str(client_id) if client_id else ""
+        client_secret_str = str(client_secret) if client_secret else ""
+
         return await asyncio.get_event_loop().run_in_executor(
             None,
             ClientSecretCredential,
-            tenant_id,
-            client_id,
-            client_secret
+            tenant_id_str,
+            client_id_str,
+            client_secret_str,
         )
 
     async def validate_credential(self, credential: TokenCredential) -> bool:
@@ -128,21 +133,19 @@ class AzureAuthProvider:
         """
         try:
             logger.debug("Validating Azure credential")
-            
+
             # Try to get a token for Azure Management API
             token = await asyncio.get_event_loop().run_in_executor(
-                None,
-                credential.get_token,
-                "https://management.azure.com/.default"
+                None, credential.get_token, "https://management.azure.com/.default"
             )
-            
+
             if token and token.token:
                 logger.debug("Azure credential validation successful")
                 return True
             else:
                 logger.warning("Azure credential validation failed: No token received")
                 return False
-                
+
         except Exception as e:
             logger.error(f"Azure credential validation failed: {str(e)}")
             return False
@@ -154,4 +157,4 @@ class AzureAuthProvider:
         Returns:
             list[str]: List of supported authentication types.
         """
-        return ["service_principal"] 
+        return ["service_principal"]
