@@ -51,6 +51,14 @@ TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
 
+# Common localhost addresses for development
+LOCALHOST_ADDRESSES = {
+    "127.0.0.1",  # IPv4 localhost
+    "localhost",  # Standard localhost hostname
+    "::1",  # IPv6 localhost
+    "0.0.0.0",  # IPv4 any address (common in development)
+}
+
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -220,6 +228,7 @@ class TemporalWorkflowClient(WorkflowClient):
         auth_url: str | None = None,
         client_id: str | None = None,
         client_secret: str | None = None,
+        tls_enabled: bool | None = None,
     ):
         """Initialize the Temporal workflow client.
 
@@ -240,6 +249,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 environment variable WORKFLOW_AUTH_CLIENT_ID.
             client_secret (str | None, optional): OAuth2 client secret. Defaults to
                 environment variable WORKFLOW_AUTH_CLIENT_SECRET.
+            tls_enabled (bool | None, optional): Explicit TLS configuration override.
+                If None, TLS will be automatically determined based on the host address.
+                If True, TLS will always be enabled. If False, TLS will always be disabled.
         """
         self.client = None
         self.worker = None
@@ -250,6 +262,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.host = host if host else WORKFLOW_HOST
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
+        self.tls_enabled = tls_enabled
 
         self.auth_manager = AuthManager(
             application_name=self.application_name,
@@ -307,6 +320,34 @@ class TemporalWorkflowClient(WorkflowClient):
             str: The Temporal namespace.
         """
         return self.namespace
+
+    def _should_enable_tls(
+        self, host: str, explicit_tls: Optional[bool] = None
+    ) -> bool:
+        """Determine if TLS should be enabled for the connection.
+
+        Args:
+            host (str): The host address to connect to.
+            explicit_tls (Optional[bool]): Explicit TLS configuration override.
+                If provided, this value takes precedence over automatic detection.
+
+        Returns:
+            bool: True if TLS should be enabled, False otherwise.
+        """
+        # If explicit TLS configuration is provided, use it
+        if explicit_tls is not None:
+            logger.info(f"Using explicit TLS configuration: {explicit_tls}")
+            return explicit_tls
+
+        # Simple check for common localhost addresses
+        is_local = host.lower() in LOCALHOST_ADDRESSES
+
+        if is_local:
+            logger.info(f"Detected local development address '{host}', disabling TLS")
+            return False
+        else:
+            logger.info(f"Detected remote address '{host}', enabling TLS")
+            return True
 
     def _calculate_refresh_interval(self) -> int:
         """Calculate the optimal token refresh interval based on token expiry.
@@ -383,7 +424,7 @@ class TemporalWorkflowClient(WorkflowClient):
             ConnectionError: If connection to the Temporal server fails.
             ValueError: If authentication is enabled but credentials are missing.
         """
-        tls_enabled = self.host not in ["127.0.0.1", "localhost"]
+        tls_enabled = self._should_enable_tls(self.host, self.tls_enabled)
 
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),

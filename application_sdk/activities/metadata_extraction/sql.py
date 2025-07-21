@@ -142,19 +142,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         handler = self.handler_class(sql_client)
         self._state[workflow_id].handler = handler
 
-        # Handle credentials - support both StateStore and direct approaches
         if "credential_guid" in workflow_args:
-            # StateStore approach - load credentials from SecretStore
             credentials = SecretStoreInput.extract_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
-        elif "credentials" in workflow_args:
-            # Direct approach - use credentials directly from workflow_args
-            credentials = workflow_args["credentials"]
-            await sql_client.load(credentials)
-        else:
-            logger.warning("No credentials found in workflow_args")
 
         self._state[workflow_id].sql_client = sql_client
 
