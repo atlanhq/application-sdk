@@ -149,12 +149,3 @@ class AzureAuthProvider:
         except Exception as e:
             logger.error(f"Azure credential validation failed: {str(e)}")
             return False
-
-    def get_supported_auth_types(self) -> list[str]:
-        """
-        Get list of supported authentication types.
-
-        Returns:
-            list[str]: List of supported authentication types.
-        """
-        return ["service_principal"]

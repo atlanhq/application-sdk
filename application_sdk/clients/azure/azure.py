@@ -15,7 +15,6 @@ from azure.core.exceptions import AzureError, ClientAuthenticationError
 
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.azure.azure_auth import AzureAuthProvider
-from application_sdk.clients.azure.azure_services import AzureStorageClient
 from application_sdk.common.credential_utils import resolve_credentials
 from application_sdk.common.error_codes import ClientError
 from application_sdk.observability.logger_adaptor import get_logger
@@ -28,7 +27,7 @@ class AzureClient(ClientInterface):
     Main Azure client for the application-sdk framework.
 
     This client provides a unified interface for connecting to and interacting
-    with Azure Storage services. It supports Service Principal authentication
+    with Azure services. It supports Service Principal authentication
     and provides service-specific subclients for different Azure services.
 
     Attributes:
@@ -136,38 +135,13 @@ class AzureClient(ClientInterface):
         except Exception as e:
             logger.error(f"Error closing Azure client: {str(e)}")
 
-    async def get_storage_client(self) -> AzureStorageClient:
-        """
-        Get Azure Storage service client.
-
-        Returns:
-            AzureStorageClient: Configured Azure Storage client.
-
-        Raises:
-            ClientError: If client is not loaded or storage client creation fails.
-        """
-        if not self._connection_health:
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: Client not loaded")
-
-        if "storage" not in self._services:
-            try:
-                self._services["storage"] = AzureStorageClient(
-                    credential=self.credential, **self._kwargs
-                )
-                await self._services["storage"].load(self.resolved_credentials)
-            except Exception as e:
-                logger.error(f"Failed to create storage client: {str(e)}")
-                raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
-
-        return self._services["storage"]
-
     async def get_service_client(self, service_type: str) -> Any:
         """
         Get a service client by type.
 
         Args:
             service_type (str): Type of service client to retrieve.
-                Supported values: 'storage'.
+                Currently no services are supported.
 
         Returns:
             Any: The requested service client.
@@ -176,14 +150,7 @@ class AzureClient(ClientInterface):
             ValueError: If service_type is not supported.
             ClientError: If client creation fails.
         """
-        service_mapping = {
-            "storage": self.get_storage_client,
-        }
-
-        if service_type not in service_mapping:
-            raise ValueError(f"Unsupported service type: {service_type}")
-
-        return await service_mapping[service_type]()
+        raise ValueError(f"Unsupported service type: {service_type}")
 
     async def health_check(self) -> Dict[str, Any]:
         """
