@@ -241,7 +241,7 @@ class AuthManager:
 
         try:
             secret_data = await SecretStoreInput.fetch_secret(
-                component_name, "atlan-deployment-secrets"
+                "atlan-deployment-secrets", component_name
             )
 
             # Auth-specific key generation
