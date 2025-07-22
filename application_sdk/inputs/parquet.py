@@ -130,7 +130,7 @@ class ParquetInput(Input):
                 path = self.path
             if self.input_prefix and path:
                 await self.download_files(path)
-            return daft.read_parquet(f"{path}/*.parquet")
+            return daft.read_parquet(f"{path}/**/*.parquet")
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) using daft: {str(e)}"

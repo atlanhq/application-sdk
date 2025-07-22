@@ -197,18 +197,13 @@ class ParquetOutput(Output):
             self.total_record_count += row_count
 
             # Generate file path using path_gen function
-            file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
-
-            # Use method parameter if provided, otherwise fall back to class variable
-            cols_to_partition = (
-                partition_cols if partition_cols is not None else self.partition_cols
-            )
+            file_path = f"{self.output_path}"
 
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
                 file_path,
                 write_mode=self.write_mode,
-                partition_cols=cols_to_partition,
+                partition_cols=self.partition_cols,  # Use class variable
             )
 
             # Record metrics for successful write
@@ -219,7 +214,9 @@ class ParquetOutput(Output):
                 labels={
                     "type": "daft",
                     "mode": self.write_mode,
-                    "partitioned": "true" if cols_to_partition else "false",
+                    "partitioned": "true"
+                    if self.partition_cols
+                    else "false",  # Use class variable here too
                 },
                 description="Number of records written to Parquet files from daft DataFrame",
             )
@@ -232,7 +229,9 @@ class ParquetOutput(Output):
                 labels={
                     "type": "daft",
                     "mode": self.write_mode,
-                    "partitioned": "true" if cols_to_partition else "false",
+                    "partitioned": "true"
+                    if self.partition_cols
+                    else "false",  # And here
                 },
                 description="Number of chunks written to Parquet files",
             )
@@ -249,7 +248,9 @@ class ParquetOutput(Output):
                     "type": "daft",
                     "mode": self.write_mode,
                     "error": str(e),
-                    "partitioned": "true" if cols_to_partition else "false",
+                    "partitioned": "true"
+                    if self.partition_cols
+                    else "false",  # And here
                 },
                 description="Number of errors while writing to Parquet files",
             )
