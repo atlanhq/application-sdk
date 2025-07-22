@@ -32,6 +32,7 @@ from application_sdk.constants import (
     WORKFLOW_NAMESPACE,
     WORKFLOW_PORT,
 )
+from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
     ApplicationEventNames,
@@ -266,10 +267,6 @@ class TemporalWorkflowClient(WorkflowClient):
 
         self.auth_manager = AuthManager(
             application_name=self.application_name,
-            auth_enabled=auth_enabled,
-            auth_url=auth_url,
-            client_id=client_id,
-            client_secret=client_secret,
         )
 
         self.auth_enabled = (
@@ -355,9 +352,6 @@ class TemporalWorkflowClient(WorkflowClient):
         Returns:
             int: Refresh interval in seconds
         """
-        if not self.auth_enabled:
-            return 15 * 60  # Default 15 minutes if auth disabled
-
         # Try to get token expiry time
         expiry_time = self.auth_manager.get_token_expiry_time()
         if expiry_time:
@@ -511,13 +505,12 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = SecretStoreOutput.store_credentials(
+            workflow_args["credential_guid"] = await SecretStoreOutput.save_secret(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
 
         workflow_id = workflow_args.get("workflow_id")
-        output_prefix = workflow_args.get("output_prefix", "/tmp/output")
         if not workflow_id:
             # if workflow_id is not provided, create a new one
             workflow_id = workflow_args.get("argo_workflow_name", str(uuid.uuid4()))
@@ -525,11 +518,12 @@ class TemporalWorkflowClient(WorkflowClient):
                 {
                     "application_name": self.application_name,
                     "workflow_id": workflow_id,
-                    "output_prefix": output_prefix,
                 }
             )
 
-            StateStoreOutput.store_configuration(workflow_id, workflow_args)
+            await StateStoreOutput.save_state_object(
+                id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
+            )
             logger.info(f"Created workflow config with ID: {workflow_id}")
         try:
             # Pass the full workflow_args to the workflow

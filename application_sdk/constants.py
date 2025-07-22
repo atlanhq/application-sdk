@@ -31,7 +31,7 @@ load_dotenv(dotenv_path=".env")
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
-DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "atlan")
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", None)
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server
@@ -46,6 +46,28 @@ APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 #: Path to the SQL queries directory
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
+#: Whether to use local development mode (used for instance to fetch secrets from the local state store)
+LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
+
+
+# Output Path Constants
+#: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
+WORKFLOW_OUTPUT_PATH_TEMPLATE = (
+    "artifacts/apps/{application_name}/workflows/{workflow_id}/{run_id}"
+)
+
+# Temporary Path (used to store intermediate files)
+TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
+
+# State Store Constants
+#: Path template for state store files (example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json)
+STATE_STORE_PATH_TEMPLATE = (
+    "persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json"
+)
+
+# Observability Constants
+#: Directory for storing observability data
+OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
 
 # Workflow Client Constants
 #: Host address for the Temporal server
@@ -106,6 +128,7 @@ ATLAN_STORAGE_NAME = os.getenv("ATLAN_STORAGE_NAME", "atlan-storage")
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 
+
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -139,10 +162,6 @@ OTEL_QUEUE_SIZE = int(os.getenv("OTEL_QUEUE_SIZE", "2048"))
 #: AWS Session Name
 AWS_SESSION_NAME = os.getenv("AWS_SESSION_NAME", "temp-session")
 
-# Observability Constants
-#: Directory for storing observability data
-OBSERVABILITY_DIR = os.environ.get("ATLAN_OBSERVABILITY_DIR", "/tmp/observability")
-
 # Log batching configuration
 LOG_BATCH_SIZE = int(os.environ.get("ATLAN_LOG_BATCH_SIZE", 100))
 LOG_FLUSH_INTERVAL_SECONDS = int(os.environ.get("ATLAN_LOG_FLUSH_INTERVAL_SECONDS", 10))
@@ -152,7 +171,6 @@ LOG_RETENTION_DAYS = int(os.environ.get("ATLAN_LOG_RETENTION_DAYS", 30))
 LOG_CLEANUP_ENABLED = bool(os.environ.get("ATLAN_LOG_CLEANUP_ENABLED", False))
 
 # Log Location configuration
-LOG_DIR = os.environ.get("ATLAN_LOG_DIR", "/tmp/observability")
 LOG_FILE_NAME = os.environ.get("ATLAN_LOG_FILE_NAME", "log.parquet")
 # Hive Partitioning Configuration
 ENABLE_HIVE_PARTITIONING = (

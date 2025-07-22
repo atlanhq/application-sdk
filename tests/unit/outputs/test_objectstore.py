@@ -97,8 +97,9 @@ class TestObjectStoreOutput:
 
 class TestObjectStoreInput:
     @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("os.makedirs")
     def test_download_file_from_object_store_success(
-        self, mock_dapr_client: MagicMock
+        self, mock_makedirs: MagicMock, mock_dapr_client: MagicMock
     ) -> None:
         # Setup
         mock_client = MagicMock()
@@ -126,8 +127,9 @@ class TestObjectStoreInput:
         mock_file().write.assert_called_once_with(b"test content")
 
     @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("os.makedirs")
     def test_download_file_from_object_store_error(
-        self, mock_dapr_client: MagicMock
+        self, mock_makedirs: MagicMock, mock_dapr_client: MagicMock
     ) -> None:
         # Setup
         mock_client = MagicMock()

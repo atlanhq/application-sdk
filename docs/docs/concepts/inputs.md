@@ -70,12 +70,10 @@ async def fetch_tables(self, workflow_args: Dict[str, Any]):
 
 Used to retrieve configuration and secrets, often during the initialization phase of workflows or activities. These are class-based and use Dapr client internally.
 
-*   **`SecretStoreInput.extract_credentials(credential_guid)`**: Retrieves credentials associated with a GUID from the state store (key format: `credential_{guid}`).
 *   **`StateStoreInput.extract_configuration(config_id)`**: Retrieves workflow configuration associated with an ID from the state store (key format: `config_{id}`).
 *   **`StateStoreInput.get_state(key)`**: Retrieves arbitrary data for a given key from the state store.
 *   **Common Usage:**
     *   `extract_configuration` is used by the base `Workflow.run` method to load arguments.
-    *   `extract_credentials` is used by activities (e.g., in `_set_state`) to get credentials needed to load clients.
 
 ```python
 # Within an Activity's _set_state method

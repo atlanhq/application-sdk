@@ -1,6 +1,19 @@
 # Changelog
 
 
+## v0.1.1rc22 (July 21, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc21...v0.1.1rc22
+
+### Features
+
+- use object store as state store, path update and fixes (#618) (by @Nishchith Shetty in [d439cb4](https://github.com/atlanhq/application-sdk/commit/d439cb4))
+
+### Bug Fixes
+
+- suppress daft dependency loggers (#611) (by @Nishchith Shetty in [3e379d4](https://github.com/atlanhq/application-sdk/commit/3e379d4))
+
+
 ## v0.1.1rc21 (July 10, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc20...v0.1.1rc21

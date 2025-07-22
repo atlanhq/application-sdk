@@ -14,7 +14,6 @@ from pydantic import BaseModel
 
 from application_sdk.constants import (
     ENABLE_OTLP_TRACES,
-    OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -30,6 +29,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.observability.utils import get_observability_dir
 
 
 class TraceRecord(BaseModel):
@@ -94,7 +94,7 @@ class AtlanTracesAdapter(AtlanObservability[TraceRecord]):
             flush_interval=TRACES_FLUSH_INTERVAL_SECONDS,
             retention_days=TRACES_RETENTION_DAYS,
             cleanup_enabled=TRACES_CLEANUP_ENABLED,
-            data_dir=OBSERVABILITY_DIR,
+            data_dir=get_observability_dir(),
             file_name=TRACES_FILE_NAME,
         )
 

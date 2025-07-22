@@ -21,11 +21,18 @@ def temporal_client() -> TemporalWorkflowClient:
 
 @pytest.fixture
 def mock_dapr_output_client() -> Generator[Mock, None, None]:
-    with patch("application_sdk.outputs.statestore.DaprClient") as mock_client:
-        mock_instance = mock_client.return_value
-        mock_instance.__enter__.return_value = mock_instance
-        mock_instance.__exit__.return_value = None
-        yield mock_instance
+    with patch(
+        "application_sdk.clients.temporal.StateStoreOutput"
+    ) as mock_state_output, patch(
+        "application_sdk.inputs.statestore.StateStoreInput.get_state"
+    ) as mock_get_state, patch(
+        "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
+    ) as mock_push_file:
+        mock_state_output.save_state = AsyncMock()
+        mock_state_output.save_state_object = AsyncMock()
+        mock_get_state.return_value = {}  # Return empty state
+        mock_push_file.return_value = None  # Mock the push file operation
+        yield mock_state_output
 
 
 @patch(
@@ -51,6 +58,7 @@ async def test_load(mock_connect: AsyncMock, temporal_client: TemporalWorkflowCl
     assert temporal_client.client == mock_client
 
 
+@patch("application_sdk.outputs.secretstore.LOCAL_DEVELOPMENT", True)
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -88,11 +96,14 @@ async def test_start_workflow(
 
     # Assertions
     mock_client.start_workflow.assert_called_once()
-    assert mock_dapr_output_client.save_state.call_count == 2  # Expect two calls
+    assert (
+        mock_dapr_output_client.save_state_object.call_count == 1
+    )  # Expect one call when workflow_id not provided
     assert result["workflow_id"] == "test_workflow_id"
     assert result["run_id"] == "test_run_id"
 
 
+@patch("application_sdk.outputs.secretstore.LOCAL_DEVELOPMENT", True)
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -145,12 +156,12 @@ async def test_start_workflow_with_workflow_id(
 
     # Assertions
     mock_client.start_workflow.assert_called_once()
-    mock_dapr_output_client.save_state.assert_called_once()
-    assert "workflow_id" in result
+    mock_dapr_output_client.save_state_object.assert_not_called()  # Should not be called when workflow_id is provided
     assert result["workflow_id"] == "test_workflow_id"
     assert result["run_id"] == "test_run_id"
 
 
+@patch("application_sdk.outputs.secretstore.LOCAL_DEVELOPMENT", True)
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -183,7 +194,7 @@ async def test_start_workflow_failure(
     with pytest.raises(Exception, match="Simulated failure"):
         await temporal_client.start_workflow(workflow_args, workflow_class)
     mock_client.start_workflow.assert_called_once()
-    mock_dapr_output_client.save_state.assert_called()
+    mock_dapr_output_client.save_state_object.assert_called()
 
 
 @patch("application_sdk.clients.temporal.Worker")

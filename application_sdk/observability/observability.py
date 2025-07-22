@@ -20,10 +20,11 @@ from application_sdk.constants import (
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
     OBJECT_STORE_NAME,
-    OBSERVABILITY_DIR,
     STATE_STORE_NAME,
+    TEMPORARY_PATH,
     TRACES_FILE_NAME,
 )
+from application_sdk.observability.utils import get_observability_dir
 
 
 class LogRecord(BaseModel):
@@ -440,8 +441,8 @@ class AtlanObservability(Generic[T], ABC):
                 with open(parquet_path, "rb") as f:
                     file_content = f.read()
                     metadata = {
-                        "key": os.path.relpath(parquet_path, self.data_dir),
-                        "blobName": os.path.relpath(parquet_path, self.data_dir),
+                        "key": os.path.relpath(parquet_path, TEMPORARY_PATH),
+                        "blobName": os.path.relpath(parquet_path, TEMPORARY_PATH),
                         "fileName": os.path.basename(parquet_path),
                     }
                     with DaprClient() as client:
@@ -614,9 +615,10 @@ class AtlanObservability(Generic[T], ABC):
 class DuckDBUI:
     """Class to handle DuckDB UI functionality."""
 
-    def __init__(self, db_path="/tmp/observability/observability.db"):
+    def __init__(self):
         """Initialize the DuckDB UI handler."""
-        self.db_path = db_path
+        self.observability_dir = get_observability_dir()
+        self.db_path = self.observability_dir + "/observability.db"
         self._duckdb_ui_con = None
 
     def _is_duckdb_ui_running(self, host="0.0.0.0", port=4213):
@@ -628,10 +630,10 @@ class DuckDBUI:
             result = sock.connect_ex((host, port))
             return result == 0
 
-    def start_ui(self, db_path=OBSERVABILITY_DIR):
+    def start_ui(self):
         """Start DuckDB UI and create views for Hive partitioned parquet files."""
         if not self._is_duckdb_ui_running():
-            os.makedirs(OBSERVABILITY_DIR, exist_ok=True)
+            os.makedirs(self.observability_dir, exist_ok=True)
             con = duckdb.connect(self.db_path)
 
             def process_partitioned_files(directory, prefix=""):
@@ -660,7 +662,7 @@ class DuckDBUI:
 
             # Process each type of data
             for data_type in ["logs", "metrics", "traces"]:
-                data_dir = os.path.join(OBSERVABILITY_DIR, data_type)
+                data_dir = os.path.join(self.observability_dir, data_type)
                 if os.path.exists(data_dir):
                     process_partitioned_files(data_dir, data_type)
 

@@ -6,6 +6,7 @@ from typing import Dict, Optional
 import aiohttp
 
 from application_sdk.constants import (
+    APPLICATION_NAME,
     WORKFLOW_AUTH_CLIENT_ID,
     WORKFLOW_AUTH_CLIENT_SECRET,
     WORKFLOW_AUTH_ENABLED,
@@ -29,34 +30,21 @@ class AuthManager:
     that the application needs to access.
     """
 
-    def __init__(
-        self,
-        application_name: str,
-        auth_enabled: bool | None = None,
-        auth_url: str | None = None,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-    ):
+    def __init__(self, application_name: str | None = None):
         """Initialize the OAuth2 token manager.
 
         Args:
-            application_name: Application name for secret key generation
-            auth_enabled: Whether authentication is enabled
-            auth_url: OAuth2 token endpoint URL
-            client_id: OAuth2 client ID (primary source, falls back to secret store)
-            client_secret: OAuth2 client secret (primary source, falls back to secret store)
+            application_name: Application name for secret key generation (optional)
         """
-        self.application_name = application_name
-        self.auth_enabled = (
-            auth_enabled if auth_enabled is not None else WORKFLOW_AUTH_ENABLED
+        self.application_name = (
+            application_name if application_name else APPLICATION_NAME
         )
-        self.auth_url = auth_url if auth_url else WORKFLOW_AUTH_URL
+        self.auth_enabled = WORKFLOW_AUTH_ENABLED
+        self.auth_url = WORKFLOW_AUTH_URL
 
-        # Environment-based credentials from environment variables/constructor
-        self._env_client_id = client_id if client_id else WORKFLOW_AUTH_CLIENT_ID
-        self._env_client_secret = (
-            client_secret if client_secret else WORKFLOW_AUTH_CLIENT_SECRET
-        )
+        # Environment-based credentials (will fall back to secret store if empty)
+        self._env_client_id = WORKFLOW_AUTH_CLIENT_ID
+        self._env_client_secret = WORKFLOW_AUTH_CLIENT_SECRET
 
         # Cached data
         self._cached_credentials: Optional[Dict[str, str]] = None
@@ -241,7 +229,7 @@ class AuthManager:
 
         try:
             secret_data = await SecretStoreInput.fetch_secret(
-                component_name, "atlan-deployment-secrets"
+                "atlan-deployment-secrets", component_name
             )
 
             # Auth-specific key generation
