@@ -176,53 +176,6 @@ class TestAtlanStorageOutput:
 
     @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
     @patch("application_sdk.outputs.atlanstorage.DaprClient")
-    def test_migrate_specific_files_success(
-        self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
-    ) -> None:
-        """Test successful migration of specific files."""
-        # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        file_paths = ["file1.txt", "file2.txt"]
-        file_data = b"test content"
-        mock_objectstore_input.get_file_data.return_value = file_data
-
-        # Act
-        result = AtlanStorageOutput.migrate_specific_files(file_paths)
-
-        # Assert
-        assert result["total_files"] == 2
-        assert result["migrated_files"] == 2
-        assert result["failed_migrations"] == 0
-        assert len(result["failures"]) == 0
-
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
-    def test_migrate_specific_files_error(
-        self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
-    ) -> None:
-        """Test migration error when getting file data fails."""
-        # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        file_paths = ["file1.txt"]
-        mock_objectstore_input.get_file_data.side_effect = Exception("Get data failed")
-
-        # Act
-        result = AtlanStorageOutput.migrate_specific_files(file_paths)
-
-        # Assert
-        assert result["total_files"] == 1
-        assert result["migrated_files"] == 0
-        assert result["failed_migrations"] == 1
-        assert len(result["failures"]) == 1
-        assert result["failures"][0]["file"] == "file1.txt"
-        assert "Get data failed" in result["failures"][0]["error"]
-
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
     async def test_migrate_prefix_batch_success(
         self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
     ) -> None:

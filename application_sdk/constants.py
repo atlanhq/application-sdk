@@ -93,7 +93,7 @@ WORKFLOW_AUTH_ENABLED = (
 #: OAuth2 token endpoint URL for Temporal authentication
 WORKFLOW_AUTH_URL = (
     os.getenv("ATLAN_WORKFLOW_AUTH_URL")
-    or f"https://{WORKFLOW_HOST.replace('-temporal', '').replace('..', '.').replace('--', '-').strip('.-')}/auth/realms/default/protocol/openid-connect/token"
+    or f"https://{WORKFLOW_HOST.replace('-temporal', '')}/auth/realms/default/protocol/openid-connect/token"
 )
 #: OAuth2 client ID for Temporal authentication (primary source, falls back to fetching from secret store)
 WORKFLOW_AUTH_CLIENT_ID = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_ID", "")
