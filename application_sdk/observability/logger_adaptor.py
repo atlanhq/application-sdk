@@ -24,7 +24,6 @@ from application_sdk.constants import (
     LOG_FLUSH_INTERVAL_SECONDS,
     LOG_LEVEL,
     LOG_RETENTION_DAYS,
-    OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_BATCH_SIZE,
     OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -36,7 +35,10 @@ from application_sdk.constants import (
     SERVICE_VERSION,
 )
 from application_sdk.observability.observability import AtlanObservability
-from application_sdk.observability.utils import get_workflow_context
+from application_sdk.observability.utils import (
+    get_observability_dir,
+    get_workflow_context,
+)
 
 
 class LogExtraModel(BaseModel):
@@ -252,7 +254,7 @@ class AtlanLoggerAdapter(AtlanObservability[LogRecordModel]):
             flush_interval=LOG_FLUSH_INTERVAL_SECONDS,
             retention_days=LOG_RETENTION_DAYS,
             cleanup_enabled=LOG_CLEANUP_ENABLED,
-            data_dir=OBSERVABILITY_DIR,
+            data_dir=get_observability_dir(),
             file_name=LOG_FILE_NAME,
         )
         self.logger_name = logger_name

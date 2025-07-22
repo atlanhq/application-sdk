@@ -210,10 +210,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 backoff_coefficient=2,
             )
 
-            output_prefix = workflow_args["output_prefix"]
-            output_path = f"{output_prefix}/{workflow_id}/{workflow_run_id}"
-            workflow_args["output_path"] = output_path
-
             fetch_functions = self.get_fetch_functions()
 
             fetch_and_transforms = [
