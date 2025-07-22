@@ -1,5 +1,5 @@
 import os
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional
 
 from temporalio import activity
 
@@ -19,22 +19,22 @@ if TYPE_CHECKING:
 class ParquetOutput(Output):
     """Output handler for writing data to Parquet files.
 
-    This class handles writing DataFrames to Parquet files with support for chunking
-    and automatic uploading to object store.
+    This class handles writing DataFrames to Parquet files with support for chunking,
+    partitioning, and automatic uploading to object store.
 
     Attributes:
         output_path (str): Base path where Parquet files will be written.
         output_prefix (str): Prefix for files when uploading to object store.
         output_suffix (str): Suffix for output files.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
-        mode (str): Write mode for parquet files ("append" or "overwrite").
+        write_mode (str): Write mode for parquet files ("append" or "overwrite").
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks created.
         chunk_start (Optional[int]): Starting index for chunk numbering.
-        path_gen (Callable): Function to generate file paths.
         start_marker (Optional[str]): Start marker for query extraction.
         end_marker (Optional[str]): End marker for query extraction.
+        partition_cols (Optional[List[str]]): Default columns to partition by.
     """
 
     def __init__(
@@ -50,6 +50,7 @@ class ParquetOutput(Output):
         chunk_start: Optional[int] = None,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
+        partition_cols: Optional[List[str]] = None,
     ):
         """Initialize the Parquet output handler.
 
@@ -58,18 +59,18 @@ class ParquetOutput(Output):
             output_suffix (str): Suffix for output files.
             output_prefix (str): Prefix for files when uploading to object store.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
-            mode (str, optional): Write mode for parquet files. Defaults to "append".
+            write_mode (str, optional): Write mode for parquet files. Defaults to "append".
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
             chunk_count (int, optional): Initial chunk count. Defaults to 0.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
-            path_gen (Callable, optional): Function to generate file paths.
-                Defaults to path_gen function.
             start_marker (Optional[str], optional): Start marker for query extraction.
                 Defaults to None.
             end_marker (Optional[str], optional): End marker for query extraction.
                 Defaults to None.
+            partition_cols (Optional[List[str]], optional): Default columns to partition by.
+                Can be overridden in write operations. Defaults to None.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -82,6 +83,7 @@ class ParquetOutput(Output):
         self.chunk_start = chunk_start
         self.start_marker = start_marker
         self.end_marker = end_marker
+        self.partition_cols = partition_cols
         self.metrics = get_metrics()
 
         # Create output directory
@@ -172,11 +174,18 @@ class ParquetOutput(Output):
             logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
             raise
 
-    async def write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def write_daft_dataframe(
+        self,
+        dataframe: "daft.DataFrame",  # noqa: F821
+        partition_cols: Optional[list[str]] = None,
+    ):
         """Write a daft DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
+            partition_cols (Optional[list[str]], optional): List of column names to partition by.
+                If provided, overrides the default partition columns set in the constructor.
+                Defaults to None which will use the class-level partition_cols if set.
         """
         try:
             row_count = dataframe.count_rows()
@@ -190,10 +199,16 @@ class ParquetOutput(Output):
             # Generate file path using path_gen function
             file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
 
+            # Use method parameter if provided, otherwise fall back to class variable
+            cols_to_partition = (
+                partition_cols if partition_cols is not None else self.partition_cols
+            )
+
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
                 file_path,
                 write_mode=self.write_mode,
+                partition_cols=cols_to_partition,
             )
 
             # Record metrics for successful write
@@ -201,7 +216,11 @@ class ParquetOutput(Output):
                 name="parquet_write_records",
                 value=row_count,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "daft", "mode": self.write_mode},
+                labels={
+                    "type": "daft",
+                    "mode": self.write_mode,
+                    "partitioned": "true" if cols_to_partition else "false",
+                },
                 description="Number of records written to Parquet files from daft DataFrame",
             )
 
@@ -210,7 +229,11 @@ class ParquetOutput(Output):
                 name="parquet_chunks_written",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "daft", "mode": self.write_mode},
+                labels={
+                    "type": "daft",
+                    "mode": self.write_mode,
+                    "partitioned": "true" if cols_to_partition else "false",
+                },
                 description="Number of chunks written to Parquet files",
             )
 
@@ -222,7 +245,12 @@ class ParquetOutput(Output):
                 name="parquet_write_errors",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "daft", "mode": self.write_mode, "error": str(e)},
+                labels={
+                    "type": "daft",
+                    "mode": self.write_mode,
+                    "error": str(e),
+                    "partitioned": "true" if cols_to_partition else "false",
+                },
                 description="Number of errors while writing to Parquet files",
             )
             logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
