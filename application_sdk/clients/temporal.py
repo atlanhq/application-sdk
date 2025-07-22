@@ -319,21 +319,23 @@ class TemporalWorkflowClient(WorkflowClient):
 
         workflow_id = workflow_args.get("workflow_id")
         output_prefix = workflow_args.get("output_prefix", "/tmp/output")
+        
         if not workflow_id:
             # if workflow_id is not provided, create a new one
             workflow_id = workflow_args.get("argo_workflow_name", str(uuid.uuid4()))
 
-            workflow_args.update(
-                {
-                    "application_name": self.application_name,
-                    "workflow_id": workflow_id,
-                    "output_prefix": output_prefix,
-                }
-            )
+        # Always store the full configuration in the state store, regardless of whether
+        # workflow_id was provided or generated
+        workflow_args.update(
+            {
+                "application_name": self.application_name,
+                "workflow_id": workflow_id,
+                "output_prefix": output_prefix,
+            }
+        )
 
-            StateStoreOutput.store_configuration(workflow_id, workflow_args)
-
-            logger.info(f"Created workflow config with ID: {workflow_id}")
+        StateStoreOutput.store_configuration(workflow_id, workflow_args)
+        logger.info(f"Stored workflow config with ID: {workflow_id}")
 
         try:
             # Pass the full workflow_args to the workflow

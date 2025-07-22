@@ -8,7 +8,6 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
-
 async def resolve_credentials(credentials: Dict[str, Any]) -> Dict[str, Any]:
     """
     Resolve credentials based on credential source.
