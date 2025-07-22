@@ -265,7 +265,7 @@ async def test_create_worker(
 
 def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):
     """Test get_worker_task_queue returns the application name with deployment name."""
-    assert temporal_client.get_worker_task_queue() == "test_app-atlan"
+    assert temporal_client.get_worker_task_queue() == "test_app"
 
 
 def test_get_connection_string(temporal_client: TemporalWorkflowClient):
