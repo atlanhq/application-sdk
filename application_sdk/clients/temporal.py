@@ -254,10 +254,6 @@ class TemporalWorkflowClient(WorkflowClient):
 
         self.auth_manager = AuthManager(
             application_name=self.application_name,
-            auth_enabled=auth_enabled,
-            auth_url=auth_url,
-            client_id=client_id,
-            client_secret=client_secret,
         )
 
         self.auth_enabled = (
@@ -315,9 +311,6 @@ class TemporalWorkflowClient(WorkflowClient):
         Returns:
             int: Refresh interval in seconds
         """
-        if not self.auth_enabled:
-            return 15 * 60  # Default 15 minutes if auth disabled
-
         # Try to get token expiry time
         expiry_time = self.auth_manager.get_token_expiry_time()
         if expiry_time:

@@ -3,7 +3,6 @@
 import collections.abc
 import copy
 import json
-import time
 from typing import Any, Dict, Optional
 
 from dapr.clients import DaprClient
@@ -16,10 +15,6 @@ logger = get_logger(__name__)
 
 
 class SecretStoreInput:
-    _cache_ttl = 300  # 5 minutes cache TTL
-    _discovered_component = None
-    _discovery_time = 0
-
     @classmethod
     def get_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
@@ -134,7 +129,7 @@ class SecretStoreInput:
         return result_data
 
     @classmethod
-    def discover_secret_component(cls, use_cache: bool = True) -> Optional[str]:
+    def discover_secret_component(cls) -> Optional[str]:
         """Discover which secret store component is available using Dapr metadata API.
 
         Uses the official Dapr component pattern where all secret stores have
@@ -143,15 +138,6 @@ class SecretStoreInput:
         Returns:
             Name of the discovered secret component, or None if none found
         """
-        # Check cache first
-        if use_cache:
-            current_time = time.time()
-            if (
-                cls._discovered_component
-                and current_time - cls._discovery_time < cls._cache_ttl
-            ):
-                return cls._discovered_component
-
         logger.info(
             "Discovering available secret store components via Dapr metadata..."
         )
@@ -166,11 +152,6 @@ class SecretStoreInput:
                         logger.info(
                             f"Discovered secret store component: {comp.name} (type: {comp.type})"
                         )
-
-                        # Cache the result
-                        cls._discovered_component = comp.name
-                        cls._discovery_time = time.time()
-
                         return comp.name
 
                 # Log available component types for debugging
@@ -185,9 +166,3 @@ class SecretStoreInput:
         except Exception as e:
             logger.warning(f"Failed to discover secret store components: {e}")
             return None
-
-    @classmethod
-    def clear_discovery_cache(cls) -> None:
-        """Clear the component discovery cache."""
-        cls._discovered_component = None
-        cls._discovery_time = 0

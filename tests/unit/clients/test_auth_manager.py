@@ -13,13 +13,15 @@ from application_sdk.clients.auth import AuthManager
 @pytest.fixture
 def auth_manager() -> AuthManager:
     """Create an AuthManager instance for testing."""
-    return AuthManager(
-        application_name="test-app",
-        auth_enabled=True,
-        auth_url="http://auth.test/token",
-        client_id="test-client",
-        client_secret="test-secret",
-    )
+    # Mock the constants at the module level where they're imported
+    with patch("application_sdk.clients.auth.WORKFLOW_AUTH_ENABLED", True), patch(
+        "application_sdk.clients.auth.WORKFLOW_AUTH_URL", "http://auth.test/token"
+    ), patch(
+        "application_sdk.clients.auth.WORKFLOW_AUTH_CLIENT_ID", "test-client"
+    ), patch("application_sdk.clients.auth.WORKFLOW_AUTH_CLIENT_SECRET", "test-secret"):
+        return AuthManager(
+            application_name="test-app",
+        )
 
 
 @pytest.fixture
@@ -105,7 +107,17 @@ async def test_credential_discovery_from_secret_store(
     }
     mock_dapr_client.get_secret.return_value = mock_secret
 
-    with patch("aiohttp.ClientSession.post") as mock_post:
+    # Mock the secret store discovery and fetching
+    with patch(
+        "application_sdk.inputs.secretstore.SecretStoreInput.discover_secret_component",
+        return_value="aws-secrets",
+    ), patch(
+        "application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret",
+        return_value={
+            "test_app_client_id": "discovered-client",
+            "test_app_client_secret": "discovered-secret",
+        },
+    ), patch("aiohttp.ClientSession.post") as mock_post:
         mock_response = AsyncMock()
         mock_response.status = 200
         mock_response.json = AsyncMock(
@@ -139,12 +151,13 @@ async def test_credential_fallback_to_env(auth_manager: AuthManager) -> None:
 @pytest.mark.asyncio
 async def test_credential_discovery_failure(auth_manager: AuthManager) -> None:
     """Test credential discovery failure handling."""
-    # Create an auth manager without fallback credentials
+    # Create an auth manager without fallback credentials by clearing env vars
     auth_manager_no_fallback = AuthManager(
         application_name="test-app",
-        auth_enabled=True,
-        auth_url="http://auth.test/token",
     )
+    # Clear environment credentials to force secret store fallback
+    auth_manager_no_fallback._env_client_id = ""
+    auth_manager_no_fallback._env_client_secret = ""
 
     with patch(
         "application_sdk.inputs.secretstore.SecretStoreInput.discover_secret_component"
