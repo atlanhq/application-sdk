@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, Callable, List, Optional, Type
 
@@ -32,6 +33,7 @@ from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
+    ConfigMapResponse,
     EventWorkflowRequest,
     EventWorkflowResponse,
     EventWorkflowTrigger,
@@ -95,6 +97,8 @@ class APIServer(ServerInterface):
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
 
+    frontend_assets_path: str = "static"
+
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
 
@@ -107,6 +111,7 @@ class APIServer(ServerInterface):
         workflow_client: Optional[WorkflowClient] = None,
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
+        has_configmap: bool = False,
     ):
         """Initialize the FastAPI application.
 
@@ -121,6 +126,7 @@ class APIServer(ServerInterface):
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
+        self.has_configmap = has_configmap
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -177,6 +183,20 @@ class APIServer(ServerInterface):
         except Exception as e:
             logger.warning(str(e))
 
+    def frontend_home(self, request: Request) -> HTMLResponse:
+        frontend_html_path = os.path.join(
+            self.frontend_assets_path,
+            "index.html",
+        )
+
+        if not os.path.exists(frontend_html_path) or not self.has_configmap:
+            return self.fallback_home(request)
+
+        with open(frontend_html_path, "r", encoding="utf-8") as file:
+            contents = file.read()
+
+        return HTMLResponse(content=contents)
+
     def register_routers(self):
         """Register all routers with the FastAPI application.
 
@@ -195,7 +215,7 @@ class APIServer(ServerInterface):
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-    async def home(self, request: Request) -> HTMLResponse:
+    def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
             "index.html",
             {
@@ -290,6 +310,31 @@ class APIServer(ServerInterface):
                     status=EventWorkflowResponse.Status.DROP,
                 )
 
+        # Create a closure for the get_configmap function that captures workflow_class
+        async def get_configmap_handler(config_map_id: str) -> ConfigMapResponse:
+            try:
+                # Call the getConfigmap method on the workflow class
+                config_map_data = await workflow_class.get_configmap(config_map_id)
+
+                return ConfigMapResponse(
+                    success=True,
+                    message="Configuration map fetched successfully",
+                    data=config_map_data,
+                )
+            except NotImplementedError:
+                return ConfigMapResponse(
+                    success=False,
+                    message="getConfigmap method not implemented in workflow",
+                    data={},
+                )
+            except Exception as e:
+                logger.error(f"Error fetching configuration map: {e}")
+                return ConfigMapResponse(
+                    success=False,
+                    message=f"Failed to fetch configuration map: {str(e)}",
+                    data={},
+                )
+
         for trigger in triggers:
             # Set the workflow class on the trigger
             trigger.workflow_class = workflow_class
@@ -317,6 +362,16 @@ class APIServer(ServerInterface):
 
                 self.app.include_router(self.events_router, prefix="/events/v1")
 
+        # Register the configmap route for this workflow
+        self.workflow_router.add_api_route(
+            "/configmap/{config_map_id}",
+            get_configmap_handler,
+            methods=["GET"],
+            response_model=ConfigMapResponse,
+        )
+
+        self.app.include_router(self.workflow_router, prefix="/workflows/v1")
+
     def register_routes(self):
         """
         Method to register the routes for the FastAPI application
@@ -328,7 +383,6 @@ class APIServer(ServerInterface):
             methods=["GET"],
             response_class=RedirectResponse,
         )
-
         self.workflow_router.add_api_route(
             "/auth",
             self.test_auth,
@@ -390,7 +444,24 @@ class APIServer(ServerInterface):
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
-        self.app.get("/")(self.home)
+        self.app.get("/")(self.frontend_home)
+
+        if os.path.exists(os.path.join(self.frontend_assets_path, "_nuxt")):
+            self.app.mount(
+                "/_nuxt",
+                StaticFiles(directory=os.path.join(self.frontend_assets_path, "_nuxt")),
+                name="frontend_assets",
+            )
+
+        if os.path.exists(os.path.join(self.frontend_assets_path, "_fonts")):
+            self.app.mount(
+                "/_fonts",
+                StaticFiles(
+                    directory=os.path.join(self.frontend_assets_path, "_fonts")
+                ),
+                name="frontend_fonts",
+            )
+
         # Mount static files
         self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
 

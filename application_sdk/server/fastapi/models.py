@@ -195,6 +195,33 @@ class WorkflowConfigResponse(BaseModel):
         }
 
 
+class ConfigMapResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: Dict[str, Any] = Field(..., description="Configuration map object")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Configuration map fetched successfully",
+                "data": {
+                    "config_map_id": "pikachu-config-001",
+                    "name": "Pikachu Configuration",
+                    "settings": {
+                        "electric_type": True,
+                        "level": 25,
+                        "moves": ["Thunderbolt", "Quick Attack"],
+                    },
+                },
+            }
+        }
+
+
 class WorkflowTrigger(BaseModel):
     workflow_class: Optional[Type[WorkflowInterface]] = None
     model_config = {"arbitrary_types_allowed": True}
