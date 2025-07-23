@@ -59,6 +59,18 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         """
         raise NotImplementedError("Workflow get_activities method not implemented")
 
+    @staticmethod
+    async def get_configmap(config_map_id: str) -> Dict[str, Any]:
+        """Get a configuration map by its ID.
+
+        Args:
+            config_map_id (str): The ID of the configuration map to retrieve.
+
+        Returns:
+            Dict[str, Any]: The configuration map object. Returns empty dict by default.
+        """
+        return {}
+
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
         """Run the workflow with the given configuration.
