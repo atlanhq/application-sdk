@@ -21,7 +21,7 @@ The `BaseTest` class provides a base implementation for end-to-end testing of wo
 The class requires several properties to be defined:
 
 - `config_file_path`: Path to configuration file
-- `extracted_output_base_path`: Base path for extracted output
+- `extracted_output_base_path`: Base path for extracted output, to be set in the override file
 - `schema_base_path`: Base path for schema files
 - `credentials`: Dictionary containing authentication credentials
 - `metadata`: Dictionary containing metadata

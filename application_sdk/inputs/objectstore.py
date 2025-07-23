@@ -88,11 +88,16 @@ class ObjectStoreInput:
 
         Args:
             download_file_prefix (str): The base path to calculate relative paths from.
+                example: /tmp/output
             file_path (str): The full path to where the file should be downloaded.
+                example: /tmp/output/persistent-artifacts/apps/myapp/data/wf-123/state.json
 
         Raises:
             Exception: If there's an error downloading the file from the object store.
         """
+        if not os.path.exists(os.path.dirname(file_path)):
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
+
         with DaprClient() as client:
             relative_path = os.path.relpath(file_path, download_file_prefix)
             metadata = {"key": relative_path, "fileName": relative_path}

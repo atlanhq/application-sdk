@@ -18,9 +18,7 @@ from typing import (
 )
 
 from application_sdk.common.error_codes import CommonError
-from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.statestore import StateStoreOutput
 
 logger = get_logger(__name__)
 
@@ -340,38 +338,6 @@ def normalize_filters(
                 normalized_filter_list.append(f"{db}\\.{sch}")
 
     return normalized_filter_list
-
-
-def get_workflow_config(config_id: str) -> Dict[str, Any]:
-    """Gets the workflow configuration from the state store using config id.
-
-    Args:
-        config_id: The configuration ID to retrieve.
-
-    Returns:
-        dict: The workflow configuration.
-    """
-    return StateStoreInput.extract_configuration(config_id)
-
-
-def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Updates the workflow configuration.
-
-    Args:
-        config_id: The configuration ID to update.
-        config: The new configuration dictionary.
-
-    Returns:
-        dict: The updated workflow configuration.
-    """
-    extracted_config = get_workflow_config(config_id)
-
-    for key in extracted_config.keys():
-        if key in config and config[key] is not None:
-            extracted_config[key] = config[key]
-
-    StateStoreOutput.store_configuration(config_id, extracted_config)
-    return extracted_config
 
 
 def read_sql_files(
