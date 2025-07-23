@@ -30,15 +30,13 @@ class AuthManager:
     that the application needs to access.
     """
 
-    def __init__(self, application_name: str | None = None):
+    def __init__(self):
         """Initialize the OAuth2 token manager.
 
         Args:
             application_name: Application name for secret key generation (optional)
         """
-        self.application_name = (
-            application_name if application_name else APPLICATION_NAME
-        )
+        self.application_name = APPLICATION_NAME
         self.auth_enabled = WORKFLOW_AUTH_ENABLED
         self.auth_url = WORKFLOW_AUTH_URL
 
@@ -46,8 +44,10 @@ class AuthManager:
         self._env_client_id = WORKFLOW_AUTH_CLIENT_ID
         self._env_client_secret = WORKFLOW_AUTH_CLIENT_SECRET
 
-        # Cached data
-        self._cached_credentials: Optional[Dict[str, str]] = None
+        # Secret store credentials (cached after first fetch)
+        self.credentials: Optional[Dict[str, str]] = None
+
+        # Token data
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0
 
@@ -65,34 +65,35 @@ class AuthManager:
 
         logger.debug("Fetching credentials for token refresh")
 
-        # Return cached credentials if available
-        if self._cached_credentials:
-            return self._cached_credentials
+        # Return credentials if available
+        if self.credentials:
+            return self.credentials
 
-        # Try environment variables/constructor params first
+        # Try environment variables first
         if self._env_client_id and self._env_client_secret:
             logger.info("Using credentials from environment variables")
-            credentials = {
+            self.credentials = {
                 "client_id": self._env_client_id,
                 "client_secret": self._env_client_secret,
             }
-        else:
-            # Fall back to secret store
-            credentials = await self._fetch_app_credentials_from_store()
+            return self.credentials
 
-            if not credentials:
-                app_name = self.application_name.lower().replace("-", "_")
-                raise ValueError(
-                    f"OAuth2 credentials not found for application '{self.application_name}'. "
-                    f"Expected either:\n"
-                    f"1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET\n"
-                    f"2. Secret store with key 'atlan-deployment-secrets' containing: "
-                    f"{app_name}_client_id, {app_name}_client_secret"
-                )
+        # Fall back to secret store
+        credentials = await self._fetch_app_credentials_from_store()
+        if not credentials:
+            app_name = self.application_name.lower().replace("-", "_")
+            raise ValueError(
+                f"OAuth2 credentials not found for application '{self.application_name}'. "
+                f"Expected either:\n"
+                f"1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET\n"
+                f"2. Secret store with key 'atlan-deployment-secrets' containing: "
+                f"{app_name}_client_id, {app_name}_client_secret"
+            )
 
-        # Cache the credentials
-        self._cached_credentials = credentials
-        return credentials
+        # Store the credentials from secret store
+        self.credentials = credentials
+        logger.info("Using credentials from secret store")
+        return self.credentials
 
     async def get_access_token(self, force_refresh: bool = False) -> str:
         """Get a valid access token, refreshing if necessary.
@@ -141,7 +142,7 @@ class AuthManager:
             ) as response:
                 if response.status != 200:
                     # Clear cached credentials on auth failure in case they're stale
-                    self._cached_credentials = None
+                    self.credentials = None
                     error_text = await response.text()
                     raise Exception(
                         f"Failed to refresh token (HTTP {response.status}): {error_text}"
@@ -253,7 +254,7 @@ class AuthManager:
         credential discovery and token refresh on next access.
         Useful for credential rotation scenarios.
         """
-        self._cached_credentials = None
+        self.credentials = None
         self._access_token = None
         self._token_expiry = 0
 

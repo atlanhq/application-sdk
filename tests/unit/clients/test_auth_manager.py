@@ -18,10 +18,10 @@ def auth_manager() -> AuthManager:
         "application_sdk.clients.auth.WORKFLOW_AUTH_URL", "http://auth.test/token"
     ), patch(
         "application_sdk.clients.auth.WORKFLOW_AUTH_CLIENT_ID", "test-client"
-    ), patch("application_sdk.clients.auth.WORKFLOW_AUTH_CLIENT_SECRET", "test-secret"):
-        return AuthManager(
-            application_name="test-app",
-        )
+    ), patch(
+        "application_sdk.clients.auth.WORKFLOW_AUTH_CLIENT_SECRET", "test-secret"
+    ), patch("application_sdk.clients.auth.APPLICATION_NAME", "test-app"):
+        return AuthManager()
 
 
 @pytest.fixture
@@ -152,9 +152,8 @@ async def test_credential_fallback_to_env(auth_manager: AuthManager) -> None:
 async def test_credential_discovery_failure(auth_manager: AuthManager) -> None:
     """Test credential discovery failure handling."""
     # Create an auth manager without fallback credentials by clearing env vars
-    auth_manager_no_fallback = AuthManager(
-        application_name="test-app",
-    )
+    with patch("application_sdk.clients.auth.APPLICATION_NAME", "test-app"):
+        auth_manager_no_fallback = AuthManager()
     # Clear environment credentials to force secret store fallback
     auth_manager_no_fallback._env_client_id = ""
     auth_manager_no_fallback._env_client_secret = ""
@@ -276,13 +275,13 @@ async def test_refresh_token(auth_manager: AuthManager) -> None:
 def test_clear_cache(auth_manager: AuthManager) -> None:
     """Test cache clearing."""
     # Set some cached values
-    auth_manager._cached_credentials = {"test": "credentials"}
+    auth_manager.credentials = {"client_id": "test", "client_secret": "credentials"}
     auth_manager._access_token = "test-token"
     auth_manager._token_expiry = time.time() + 3600
 
     auth_manager.clear_cache()
 
-    assert auth_manager._cached_credentials is None
+    assert auth_manager.credentials is None
     assert auth_manager._access_token is None
     assert auth_manager._token_expiry == 0
 
@@ -352,7 +351,7 @@ async def test_token_refresh_clears_credential_cache_on_failure(
 ) -> None:
     """Test that credential cache is cleared on auth failure."""
     # Set cached credentials
-    auth_manager._cached_credentials = {
+    auth_manager.credentials = {
         "client_id": "cached",
         "client_secret": "cached",
     }
@@ -367,4 +366,4 @@ async def test_token_refresh_clears_credential_cache_on_failure(
             await auth_manager.get_access_token()
 
         # Credential cache should be cleared
-        assert auth_manager._cached_credentials is None
+        assert auth_manager.credentials is None

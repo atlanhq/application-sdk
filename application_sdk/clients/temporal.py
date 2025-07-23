@@ -217,10 +217,6 @@ class TemporalWorkflowClient(WorkflowClient):
         port: str | None = None,
         application_name: str | None = None,
         namespace: str | None = "default",
-        auth_enabled: bool | None = None,
-        auth_url: str | None = None,
-        client_id: str | None = None,
-        client_secret: str | None = None,
     ):
         """Initialize the Temporal workflow client.
 
@@ -233,14 +229,6 @@ class TemporalWorkflowClient(WorkflowClient):
                 Defaults to environment variable APPLICATION_NAME.
             namespace (str | None, optional): Temporal namespace. Defaults to
                 "default" or environment variable WORKFLOW_NAMESPACE.
-            auth_enabled (bool | None, optional): Whether authentication is enabled. Defaults to
-                environment variable WORKFLOW_AUTH_ENABLED.
-            auth_url (str | None, optional): OAuth2 token endpoint URL. Defaults to
-                environment variable WORKFLOW_AUTH_URL.
-            client_id (str | None, optional): OAuth2 client ID. Defaults to
-                environment variable WORKFLOW_AUTH_CLIENT_ID.
-            client_secret (str | None, optional): OAuth2 client secret. Defaults to
-                environment variable WORKFLOW_AUTH_CLIENT_SECRET.
         """
         self.client = None
         self.worker = None
@@ -252,13 +240,9 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
-        self.auth_manager = AuthManager(
-            application_name=self.application_name,
-        )
+        self.auth_manager = AuthManager()
 
-        self.auth_enabled = (
-            auth_enabled if auth_enabled is not None else WORKFLOW_AUTH_ENABLED
-        )
+        self.auth_enabled = WORKFLOW_AUTH_ENABLED
 
         # Token refresh configuration - will be determined dynamically
         self._token_refresh_interval: Optional[int] = None
