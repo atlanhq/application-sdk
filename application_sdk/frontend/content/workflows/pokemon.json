@@ -1,0 +1,434 @@
+{
+    "name": "PokéShift",
+    "logo": "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png",
+    "config": {
+        "properties": {
+            "connection": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                    "widget": "connection",
+                    "label": "",
+                    "placeholder": "Poké Center Connection"
+                }
+            },
+            "publish-mode": {
+                "type": "string",
+                "enum": ["production", "test", "dev"],
+                "default": "production",
+                "enumNames": ["Elite Four Challenge", "Gym Battle", "Training Mode"],
+                "ui": {
+                    "widget": "select",
+                    "label": "Battle Mode",
+                    "grid": 4,
+                    "placeholder": "Choose Your Battle"
+                }
+            },
+            "credentials-fetch-strategy": {
+                "type": "string",
+                "enum": ["k8s_secret", "credential_guid"],
+                "default": "credential_guid",
+                "enumNames": ["Secret Potion", "Trainer ID"],
+                "ui": {
+                    "widget": "select",
+                    "label": "Trainer License Type",
+                    "placeholder": "License Verification Method"
+                }
+            },
+            "credential-guid": {
+                "type": "string",
+                "ui": {
+                    "widget": "credential",
+                    "label": "",
+                    "credentialType": "atlan-connectors-redshift",
+                    "placeholder": "Trainer ID Number",
+                    "hidden": false
+                }
+            },
+            "credential-kube-secret-name": {
+                "type": "string",
+                "ui": {
+                    "label": "Secret Potion Name",
+                    "placeholder": "Secret Potion Identifier",
+                    "hidden": true
+                }
+            },
+            "atlas-auth-type": {
+                "type": "string",
+                "enum": ["internal", "apikey"],
+                "default": "internal",
+                "enumNames": ["Professor Oak", "Gym Leader Key"],
+                "ui": {
+                    "widget": "select",
+                    "label": "Pokédex Authentication Type",
+                    "placeholder": "Authentication Method",
+                    "hidden": true
+                }
+            },
+            "temp-table-regex": {
+                "type": "string",
+                "required": false,
+                "default": "",
+                "ui": {
+                    "label": "Wild Pokémon Exclusion Pattern",
+                    "feedback": true,
+                    "help": "Pattern to ignore temporary Pokémon habitats. Defaults to empty string",
+                    "placeholder": ".*_WILD|.*_TEMP|WILD.*|TEMP.*",
+                    "grid": 4
+                }
+            },
+            "runtime-properties": {
+                "type": "object",
+                "ui": {
+                    "label": "Adventure Runtime Properties",
+                    "hidden": true
+                }
+            },
+            "include-filter": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array"
+                },
+                "ui": {
+                    "widget": "sqltree",
+                    "label": "Catch These Pokémon",
+                    "sql": "show atlan schemas",
+                    "credential": "credential-guid",
+                    "schemaExcludePattern": ["pg_*", "information_*"],
+                    "description": "Only selected regions and habitats will have their Pokémon captured.",
+                    "grid": 4
+                }
+            },
+            "exclude-filter": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array"
+                },
+                "ui": {
+                    "widget": "sqltree",
+                    "sql": "show atlan schemas",
+                    "credential": "credential-guid",
+                    "schemaExcludePattern": ["pg_*", "information_*"],
+                    "label": "Release These Pokémon",
+                    "description": "Selected regions and habitats will have their Pokémon released back to the wild.",
+                    "grid": 4
+                }
+            },
+            "extraction-method": {
+                "type": "string",
+                "enum": ["direct", "s3"],
+                "default": "direct",
+                "enumNames": ["Wild Encounter", "Safari Zone"],
+                "ui": {
+                    "widget": "radio",
+                    "hidden": false,
+                    "label": "Pokémon Capture Method",
+                    "help": "Determines how you'll encounter Pokémon. 'Wild Encounter' means direct exploration in the wild. 'Safari Zone' means finding Pokémon data in the Safari Zone storage.",
+                    "placeholder": "Wild Encounter",
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please select a valid Pokémon capture strategy"
+                        }
+                    ]
+                }
+            },
+            "preflight-check": {
+                "type": "string",
+                "ui": {
+                    "widget": "sage",
+                    "config": [
+                        {
+                            "id": 1,
+                            "name": "schemasCheck",
+                            "extraUrlParam": "",
+                            "optional": false,
+                            "title": "Regions and Routes",
+                            "loaderText": "Checking access to regions and routes"
+                        },
+                        {
+                            "id": 2,
+                            "name": "tablesMetadataCheck",
+                            "extraUrlParam": "",
+                            "optional": false,
+                            "title": "Pokémon Data Access",
+                            "loaderText": "Checking Pokédex data access permissions"
+                        },
+                        {
+                            "id": 3,
+                            "name": "externalTablesMetadataCheck",
+                            "extraUrlParam": "",
+                            "optional": true,
+                            "title": "Legendary Pokémon Data",
+                            "loaderText": "Checking legendary Pokémon data access permissions"
+                        }
+                    ]
+                }
+            },
+            "preflight-check-s3": {
+                "type": "string",
+                "ui": {
+                    "widget": "sage",
+                    "config": [
+                        {
+                            "id": 1,
+                            "name": "S3Check",
+                            "extraUrlParam": "",
+                            "optional": false,
+                            "title": "Safari Zone Pass",
+                            "loaderText": "Checking Safari Zone access credentials"
+                        }
+                    ]
+                }
+            },
+            "use-source-schema-filtering": {
+                "type": "string",
+                "enum": ["true", "false"],
+                "default": "false",
+                "enumNames": ["Caught", "Released"],
+                "ui": {
+                    "widget": "radio",
+                    "label": "Enable Regional Pokédex Filtering",
+                    "grid": 4,
+                    "help": "Enable or Disable region-level filtering. Only Pokémon from selected regions will be captured.",
+                    "hidden": false
+                }
+            },
+            "use-jdbc-internal-methods": {
+                "type": "string",
+                "enum": ["true", "false"],
+                "default": "true",
+                "enumNames": ["Caught", "Released"],
+                "ui": {
+                    "widget": "radio",
+                    "label": "Use Advanced Poké Ball Technology",
+                    "grid": 4,
+                    "help": "Enable or Disable advanced capture methods for Pokémon data extraction.",
+                    "hidden": true
+                }
+            },
+            "advanced-config": {
+                "type": "string",
+                "enum": ["default", "custom"],
+                "default": "default",
+                "required": true,
+                "enumNames": ["Poké Ball", "Master Ball"],
+                "ui": {
+                    "widget": "radio",
+                    "hidden": false,
+                    "label": "Trainer Equipment Level",
+                    "help": "Choose your trainer equipment level for Pokémon capture",
+                    "placeholder": "Equipment Level",
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please select a valid equipment configuration"
+                        }
+                    ]
+                }
+            },
+            "cross-connection": {
+                "type": "boolean",
+                "default": false,
+                "ui": {
+                    "hidden": false,
+                    "label": "Multi-Region Trading",
+                    "help": "Enable trading and searching for Pokémon across all available regions instead of just the selected region. Defaults to false.",
+                    "grid": 4,
+                    "start": 1
+                }
+            },
+            "control-config-strategy": {
+                "type": "string",
+                "enum": ["default", "custom"],
+                "default": "default",
+                "required": true,
+                "enumNames": ["Standard Pokédex", "Research Lab"],
+                "ui": {
+                    "widget": "radio",
+                    "hidden": false,
+                    "label": "Research Configuration",
+                    "help": "Controls experimental research features for advanced Pokémon studies",
+                    "placeholder": "Research Mode",
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please select a valid research configuration"
+                        }
+                    ]
+                }
+            },
+            "control-config": {
+                "type": "string",
+                "ui": {
+                    "label": "Research Lab Settings",
+                    "help": "Custom JSON configuration for experimental Pokémon research features",
+                    "placeholder": "{\"legendary_mode\":true}",
+                    "hidden": false,
+                    "default": "{}"
+                }
+            },
+            "metadata-s3-bucket": {
+                "type": "string",
+                "required": true,
+                "default": "",
+                "ui": {
+                    "hidden": false,
+                    "label": "Safari Zone Name",
+                    "placeholder": "my_safari_zone",
+                    "feedback": true,
+                    "help": "Name of the Safari Zone that contains the stored Pokémon data files.",
+                    "grid": 4
+                }
+            },
+            "metadata-s3-prefix": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                    "hidden": false,
+                    "label": "Habitat Path",
+                    "placeholder": "route_to_habitat",
+                    "feedback": true,
+                    "help": "The path within the Safari Zone to the specific habitat, including the route.",
+                    "grid": 4,
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please enter a valid habitat path"
+                        }
+                    ]
+                }
+            },
+            "metadata-s3-region": {
+                "type": "string",
+                "required": false,
+                "default": "",
+                "ui": {
+                    "hidden": false,
+                    "label": "Safari Zone Region",
+                    "placeholder": "kanto_region",
+                    "feedback": true,
+                    "help": "The name of the region where the Safari Zone is located.",
+                    "grid": 4
+                }
+            }
+        },
+        "anyOf": [
+            {
+                "properties": {
+                    "extraction-method": {
+                        "const": "direct"
+                    }
+                },
+                "required": [
+                    "credential-guid",
+                    "exclude-filter",
+                    "include-filter",
+                    "temp-table-regex",
+                    "preflight-check"
+                ]
+            },
+            {
+                "properties": {
+                    "extraction-method": {
+                        "const": "s3"
+                    }
+                },
+                "required": [
+                    "metadata-s3-bucket",
+                    "metadata-s3-prefix",
+                    "metadata-s3-region",
+                    "preflight-check-s3"
+                ]
+            },
+            {
+                "properties": {
+                    "credentials-fetch-strategy": {
+                        "const": "k8s_secret"
+                    }
+                },
+                "required": ["credential-kube-secret-name"]
+            },
+            {
+                "properties": {
+                    "extraction-method": {
+                        "const": "direct"
+                    },
+                    "credentials-fetch-strategy": {
+                        "const": "credential_guid"
+                    }
+                },
+                "required": ["credential-guid"]
+            },
+            {
+                "properties": {
+                    "advanced-config": {
+                        "const": "custom"
+                    }
+                },
+                "required": [
+                    "cross-connection",
+                    "use-jdbc-internal-methods",
+                    "use-source-schema-filtering"
+                ]
+            },
+            {
+                "properties": {
+                    "advanced-config": {
+                        "const": "custom"
+                    }
+                },
+                "required": ["control-config-strategy"]
+            },
+            {
+                "properties": {
+                    "advanced-config": {
+                        "const": "custom"
+                    },
+                    "control-config-strategy": {
+                        "const": "custom"
+                    }
+                },
+                "required": ["control-config"]
+            }
+        ],
+        "steps": [
+            {
+                "id": "credential",
+                "title": "Trainer License",
+                "description": "Trainer Credentials & Capture Method",
+                "properties": [
+                    "extraction-method",
+                    "credential-guid",
+                    "metadata-s3-bucket",
+                    "metadata-s3-prefix",
+                    "metadata-s3-region"
+                ]
+            },
+            {
+                "id": "connection",
+                "title": "Poké Center",
+                "description": "Poké Center Connection Details",
+                "properties": ["connection"]
+            },
+            {
+                "id": "metadata",
+                "title": "Pokédex Configuration",
+                "description": "Pokémon Data Collection Settings",
+                "properties": [
+                    "include-filter",
+                    "exclude-filter",
+                    "temp-table-regex",
+                    "advanced-config",
+                    "cross-connection",
+                    "control-config-strategy",
+                    "control-config",
+                    "use-jdbc-internal-methods",
+                    "use-source-schema-filtering",
+                    "preflight-check",
+                    "preflight-check-s3"
+                ]
+            }
+        ]
+    }
+}
