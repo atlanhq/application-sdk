@@ -96,18 +96,13 @@ class TestObjectStoreOutput:
 
 
 class TestObjectStoreInput:
-    @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("application_sdk.inputs.objectstore.ObjectStoreInput.get_file_data")
     @patch("os.makedirs")
     def test_download_file_from_object_store_success(
-        self, mock_makedirs: MagicMock, mock_dapr_client: MagicMock
+        self, mock_makedirs: MagicMock, mock_get_file_data: MagicMock
     ) -> None:
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_response.data = b"test content"
-        mock_client.invoke_binding.return_value = mock_response
+        mock_get_file_data.return_value = b"test content"
 
         mock_file = mock_open()
 
@@ -117,25 +112,16 @@ class TestObjectStoreInput:
             )
 
         # Assertions
-        mock_client.invoke_binding.assert_called_once_with(
-            binding_name=OBJECT_STORE_NAME,
-            operation=ObjectStoreInput.OBJECT_GET_OPERATION,
-            data=None,
-            binding_metadata={"key": "test.txt", "fileName": "test.txt"},
-        )
-
+        mock_get_file_data.assert_called_once_with("test.txt")
         mock_file().write.assert_called_once_with(b"test content")
 
-    @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("application_sdk.inputs.objectstore.ObjectStoreInput.get_file_data")
     @patch("os.makedirs")
     def test_download_file_from_object_store_error(
-        self, mock_makedirs: MagicMock, mock_dapr_client: MagicMock
+        self, mock_makedirs: MagicMock, mock_get_file_data: MagicMock
     ) -> None:
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        mock_client.invoke_binding.side_effect = Exception("Test download error")
+        mock_get_file_data.side_effect = Exception("Test download error")
 
         with pytest.raises(Exception, match="Test download error"):
             ObjectStoreInput.download_file_from_object_store(

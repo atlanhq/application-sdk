@@ -563,7 +563,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
         )
-        upload_stats = await AtlanStorageOutput.migrate_from_objectstore(
+        upload_stats = await AtlanStorageOutput.migrate_from_objectstore_to_atlan(
             prefix=migration_prefix
         )
 

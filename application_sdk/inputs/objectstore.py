@@ -126,16 +126,13 @@ class ObjectStoreInput:
             os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
         relative_path = os.path.relpath(file_path, download_file_prefix)
-        metadata = {"key": relative_path, "fileName": relative_path}
 
         try:
-            response_data = cls._invoke_dapr_binding(
-                operation=cls.OBJECT_GET_OPERATION, metadata=metadata
-            )
+            # Use get_file_data to retrieve the file bytes
+            response_data = cls.get_file_data(relative_path)
 
-            # check if response.data is in binary format
-            write_mode = "wb" if isinstance(response_data, bytes) else "w"
-            with open(file_path, write_mode) as f:
+            # Write the bytes to the local file
+            with open(file_path, "wb") as f:
                 f.write(response_data)
 
             logger.info(f"Successfully downloaded file: {relative_path}")
@@ -144,30 +141,6 @@ class ObjectStoreInput:
                 f"Error downloading file {relative_path} to object store: {str(e)}"
             )
             raise e
-
-    @classmethod
-    def _extract_path_from_prefix(cls, absolute_path: str, prefix: str) -> str:
-        """
-        Extract the path starting from the given prefix.
-
-        Args:
-            absolute_path: Full path returned by Dapr list operation
-            prefix: The prefix used in the list operation
-
-        Returns:
-            str: Path starting from the prefix
-
-        Example:
-            absolute_path = '/private/tmp/dapr/objectstore/aac273c6-8728-4a4a-953f-94cbef28bf04/0197ab76-60e3-7ac1-86bf-98e3831a808e/raw/column/statistics.json.ignore'
-            prefix = 'aac273c6-8728-4a4a-953f-94cbef28bf04/0197ab76-60e3-7ac1-86bf-98e3831a808e'
-            returns = 'aac273c6-8728-4a4a-953f-94cbef28bf04/0197ab76-60e3-7ac1-86bf-98e3831a808e/raw/column/statistics.json.ignore'
-        """
-        # Find where the prefix starts in the absolute path
-        prefix_index = absolute_path.find(prefix)
-        if prefix_index != -1:
-            return absolute_path[prefix_index:]
-
-        return os.path.basename(absolute_path)
 
     @classmethod
     def list_all_files(cls, prefix: str = "") -> List[str]:
@@ -249,10 +222,20 @@ class ObjectStoreInput:
                 else:
                     return []
 
-            relative_paths = [
-                cls._extract_path_from_prefix(absolute_path, prefix)
-                for absolute_path in file_list
-            ]
+            relative_paths: List[str] = []
+            for absolute_path in file_list:
+                # Ensure absolute_path is a string
+                if not isinstance(absolute_path, str):
+                    logger.warning(f"Skipping non-string path: {absolute_path}")
+                    continue
+
+                # Extract the path starting from the given prefix
+                # Find where the prefix starts in the absolute path
+                prefix_index = absolute_path.find(prefix)
+                if prefix_index != -1:
+                    relative_paths.append(absolute_path[prefix_index:])
+                else:
+                    relative_paths.append(os.path.basename(absolute_path))
 
             logger.debug(f"Found {len(relative_paths)} files with prefix: {prefix}")
             return relative_paths
@@ -284,7 +267,6 @@ class ObjectStoreInput:
             response_data = cls._invoke_dapr_binding(
                 operation=cls.OBJECT_GET_OPERATION, metadata=metadata, data=data
             )
-
             if not response_data:
                 raise Exception(f"No data received for file: {file_path}")
 
