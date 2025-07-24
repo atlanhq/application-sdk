@@ -398,7 +398,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If marker file writing or object store upload fails
         """
-        output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+        output_path = workflow_args["output_path"].rsplit("/", 1)[0]
         logger.info(f"Writing marker file to {output_path}")
         marker_file_path = os.path.join(output_path, "markerfile")
 
@@ -436,7 +436,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             Exception: If marker file reading fails (logged as warning, not re-raised)
         """
         try:
-            output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+            output_path = workflow_args["output_path"].rsplit("/", 1)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
             logger.info(f"Downloading marker file from {marker_file_path}")
 
@@ -485,7 +485,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         current_marker = self.read_marker(workflow_args)
         if current_marker:
-            miner_args.miner_start_time_epoch = current_marker
+            miner_args.current_marker = current_marker
 
         queries_sql_query = self.fetch_queries_sql.format(
             database_name_cleaned=miner_args.database_name_cleaned,
