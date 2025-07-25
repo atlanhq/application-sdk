@@ -208,7 +208,7 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         # Get lock configuration
         lock_name = lock_config.get("lock_name", lock_config.get("activity_name", ""))
         max_locks = lock_config.get("max_locks", 5)
-        start_to_close_timeout = input.get("start_to_close_timeout")
+        start_to_close_timeout = int(input.get("start_to_close_timeout"))
 
         while True:  # Keep trying until we get a lock
             slot = random.randint(0, max_locks - 1)
@@ -220,7 +220,7 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
                     store_name=LOCK_STORE_NAME,
                     resource_id=lock_id,
                     lock_owner=owner_id,
-                    expiry_in_seconds=int(start_to_close_timeout.total_seconds()),
+                    expiry_in_seconds=start_to_close_timeout,
                 ) as lock:
                     if lock.success:
                         logger.info(f"Lock acquired {slot}, starting activity")
