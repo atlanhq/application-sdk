@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional
 
 from dapr.clients import DaprClient
 
+from application_sdk.constants import LOCK_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -86,7 +87,6 @@ class LockManager:
         max_locks: Optional[int] = None,
         resource_prefix: Optional[str] = None,
         lock_ttl_seconds: int = 50,
-        component_name: str = "lockstore",
     ) -> None:
         """Initialize the LockManager.
 
@@ -96,7 +96,6 @@ class LockManager:
             max_locks: Required for SEMAPHORE mode. Number of available locks.
             resource_prefix: Required for RESOURCE mode. Prefix for resource lock IDs.
             lock_ttl_seconds: Time-to-live for locks in seconds. Defaults to 50.
-            component_name: Name of the Dapr lock store component. Defaults to "lockstore".
 
         Raises:
             ValueError: If required mode-specific parameters are missing.
@@ -104,7 +103,7 @@ class LockManager:
         self.mode = mode
         self.tenant_id = tenant_id
         self.lock_ttl = lock_ttl_seconds
-        self.component_name = component_name
+        self.component_name = LOCK_STORE_NAME
 
         if mode == LockingMode.SEMAPHORE:
             if not max_locks:
@@ -129,7 +128,7 @@ class LockManager:
             resource_id: (RESOURCE mode) Identifier of the resource to lock.
 
         Returns:
-            Optional[Dict]: Lock information if acquired, None if not acquired.
+            Optional[Dict[str, Any]]: Lock information if acquired, None if not acquired.
 
         Raises:
             ValueError: If resource_id is missing in RESOURCE mode.
@@ -172,7 +171,7 @@ class LockManager:
             activity_id: Identifier of the requesting activity.
 
         Returns:
-            Optional[Dict]: Acquired lock information or None.
+            Optional[Dict[str, Any]]: Lock information if acquired, None if not acquired.
 
         Raises:
             Exception: If lock acquisition fails.
@@ -201,7 +200,7 @@ class LockManager:
                         lock_id=lock_id,
                         owner_id=owner_id,
                     ).__dict__
-                    logger.info(f"lock acquired {lock} {lock_id} {owner_id}")
+                    logger.info(f"Lock acquired {lock} {lock_id} {owner_id}")
                     return lock_info
 
             except Exception as e:
@@ -224,7 +223,7 @@ class LockManager:
             activity_id: Identifier of the requesting activity.
 
         Returns:
-            List[Dict]: Single-item list containing resource lock information.
+            Optional[Dict[str, Any]]: Resource lock information or None.
 
         Raises:
             Exception: If resource lock acquisition fails.
@@ -245,7 +244,7 @@ class LockManager:
                 lock_info = LockInfo(
                     lock_id=lock_id, owner_id=owner_id, resource_id=resource_id
                 ).__dict__
-                logger.info(f"Resource locked {resource_id} {lock_id} {owner_id}")
+                logger.info(f"Lock acquired {resource_id} {lock_id} {owner_id}")
                 return lock_info
 
             logger.info(f"Failed to acquire resource lock {resource_id} {lock_id}")
