@@ -7,9 +7,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def try_lock_simple(
-    max_locks: int = 5, ttl_seconds: int = 50, lock_name: Optional[str] = None
-):
+def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
     """Decorator to mark activities that require distributed locking.
 
     This decorator stores lock configuration that will be used by the workflow interceptor
@@ -17,13 +15,12 @@ def try_lock_simple(
 
     Args:
         max_locks: Maximum number of concurrent locks allowed
-        ttl_seconds: Time-to-live for each lock in seconds
         lock_name: Optional custom name for the lock (defaults to activity name)
 
     Example:
         ```python
         @activity.defn
-        @try_lock_simple(max_locks=3, ttl_seconds=30)
+        @needs_lock(max_locks=3)
         async def my_activity(ctx, input: str) -> str:
             return process_with_lock(input)
         ```
@@ -34,7 +31,6 @@ def try_lock_simple(
             {
                 "needs_lock": True,
                 "max_locks": max_locks,
-                "ttl": ttl_seconds,
                 "activity_name": func.__name__,
                 "lock_name": lock_name,
             }
