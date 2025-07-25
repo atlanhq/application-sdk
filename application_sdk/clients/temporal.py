@@ -1,7 +1,12 @@
+import asyncio
+import json
+import os
+import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Sequence, Type
 
+from dapr.clients import DaprClient
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
@@ -10,9 +15,11 @@ from temporalio.worker import (
     ExecuteActivityInput,
     ExecuteWorkflowInput,
     Interceptor,
+    StartActivityInput,
     Worker,
     WorkflowInboundInterceptor,
     WorkflowInterceptorClassInput,
+    WorkflowOutboundInterceptor,
 )
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
@@ -22,6 +29,7 @@ from temporalio.worker.workflow_sandbox import (
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
+    LOCK_STORE_NAME,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -185,6 +193,51 @@ class EventInterceptor(Interceptor):
             Optional[Type[WorkflowInboundInterceptor]]: The workflow interceptor class.
         """
         return EventWorkflowInboundInterceptor
+
+
+class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
+    async def start_activity(self, input: StartActivityInput) -> Any:
+        # Try to get lock config from context
+        lock_config = json.loads(os.environ.get("lock_config", {}))
+        if lock_config:
+            logger.info(f"Found lock config in context: {lock_config}")
+            # Here we'll add lock logic later using lock_config
+
+        if not lock_config.get("needs_lock", False):
+            return await self.next.start_activity(input)
+
+        while True:  # Keep trying until we get a lock
+            slot = random.randint(0, 4)  # Try random slot from 0-4
+            lock_id = f"{APPLICATION_NAME}:slot:{slot}"
+            owner_id = f"{APPLICATION_NAME}:workflow:{workflow.info().workflow_id}"
+
+            with DaprClient() as client:
+                with client.try_lock(
+                    store_name=LOCK_STORE_NAME,
+                    resource_id=lock_id,
+                    lock_owner=owner_id,
+                    expiry_in_seconds=50,
+                ) as lock:
+                    if lock.success:
+                        logger.info(f"Lock acquired {slot}, starting activity")
+                        return await self.next.start_activity(input)
+                    else:
+                        logger.info(f"Lock not acquired {slot}, retrying")
+
+            await workflow.sleep(random.uniform(0, 0.5))
+            logger.info(f"No lock for slot {slot}, retrying")
+
+
+class LockWorkflowInboundInterceptor(WorkflowInboundInterceptor):
+    def init(self, outbound: WorkflowOutboundInterceptor) -> None:
+        self.next.init(LockWorkflowOutboundInterceptor(outbound))
+
+
+class LockInterceptor(Interceptor):
+    def workflow_interceptor_class(
+        self, input: WorkflowInterceptorClassInput
+    ) -> Optional[Type[WorkflowInboundInterceptor]]:
+        return LockWorkflowInboundInterceptor
 
 
 class TemporalWorkflowClient(WorkflowClient):
@@ -424,7 +477,10 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
-            interceptors=[EventInterceptor()],
+            interceptors=[
+                EventInterceptor(),  # Keep existing event interceptor
+                LockInterceptor(),  # Add our lock interceptor
+            ],
         )
 
     async def get_workflow_run_status(
