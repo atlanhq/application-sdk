@@ -1,7 +1,7 @@
 import random
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from dapr.clients import DaprClient
 
@@ -120,7 +120,7 @@ class LockManager:
         workflow_id: str,
         activity_id: str,
         resource_id: Optional[str] = None,
-    ) -> Optional[Dict]:
+    ) -> Optional[Dict[str, Any]]:
         """Acquire a single lock based on the configured mode.
 
         Args:
@@ -160,7 +160,9 @@ class LockManager:
             locks = self._acquire_resource(resource_id, workflow_id, activity_id)
             return locks
 
-    def _acquire_semaphore(self, workflow_id: str, activity_id: str) -> Optional[Dict]:
+    def _acquire_semaphore(
+        self, workflow_id: str, activity_id: str
+    ) -> Optional[Dict[str, Any]]:
         """Internal method to acquire a single lock in SEMAPHORE mode.
 
         Uses random lock selection for fair distribution.
@@ -170,7 +172,7 @@ class LockManager:
             activity_id: Identifier of the requesting activity.
 
         Returns:
-            Optional[LockInfo]: Acquired lock information or None.
+            Optional[Dict]: Acquired lock information or None.
 
         Raises:
             Exception: If lock acquisition fails.
@@ -213,7 +215,7 @@ class LockManager:
 
     def _acquire_resource(
         self, resource_id: str, workflow_id: str, activity_id: str
-    ) -> Optional[Dict]:
+    ) -> Optional[Dict[str, Any]]:
         """Internal method to acquire a resource lock.
 
         Args:
@@ -256,7 +258,7 @@ class LockManager:
             )
             raise
 
-    def release_lock(self, lock_info: Dict) -> bool:
+    def release_lock(self, lock_info: Dict[str, Any]) -> bool:
         """Release an acquired lock.
 
         Works for both SEMAPHORE and RESOURCE modes.
