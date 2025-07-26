@@ -228,7 +228,7 @@ class AuthManager:
             return None
 
         try:
-            secret_data = await SecretStoreInput.fetch_secret(
+            secret_data = SecretStoreInput.get_secret(
                 "atlan-deployment-secrets", component_name
             )
 

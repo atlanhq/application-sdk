@@ -19,10 +19,10 @@ from application_sdk.constants import (
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
-    OBJECT_STORE_NAME,
     STATE_STORE_NAME,
     TEMPORARY_PATH,
     TRACES_FILE_NAME,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.observability.utils import get_observability_dir
 
@@ -447,7 +447,7 @@ class AtlanObservability(Generic[T], ABC):
                     }
                     with DaprClient() as client:
                         client.invoke_binding(
-                            binding_name=OBJECT_STORE_NAME,
+                            binding_name=UPSTREAM_OBJECT_STORE_NAME,
                             operation="create",
                             data=file_content,
                             binding_metadata=metadata,
@@ -560,7 +560,7 @@ class AtlanObservability(Generic[T], ABC):
                             # Delete from object store
                             with DaprClient() as client:
                                 client.invoke_binding(
-                                    binding_name=OBJECT_STORE_NAME,
+                                    binding_name=UPSTREAM_OBJECT_STORE_NAME,
                                     operation="delete",
                                     data=b"",
                                     binding_metadata={

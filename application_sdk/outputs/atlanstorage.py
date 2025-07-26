@@ -5,6 +5,10 @@ from typing import Any, Dict, List
 from dapr.clients import DaprClient
 from temporalio import activity
 
+from application_sdk.constants import (
+    DEPLOYMENT_OBJECT_STORE_NAME,
+    UPSTREAM_OBJECT_STORE_NAME,
+)
 from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -16,7 +20,6 @@ activity.logger = logger
 class AtlanStorageOutput:
     """Handles upload operations to Atlan storage and migration from objectstore."""
 
-    ATLAN_STORE_NAME = "atlan-storage"  # The S3 binding name
     OBJECT_CREATE_OPERATION = "create"
 
     @classmethod
@@ -36,7 +39,7 @@ class AtlanStorageOutput:
                 metadata = {"key": file_path, "fileName": file_path}
 
                 client.invoke_binding(
-                    binding_name=cls.ATLAN_STORE_NAME,
+                    binding_name=UPSTREAM_OBJECT_STORE_NAME,
                     operation=cls.OBJECT_CREATE_OPERATION,
                     data=file_data,
                     binding_metadata=metadata,
@@ -69,7 +72,9 @@ class AtlanStorageOutput:
             )
 
             # Get list of all files to migrate from objectstore
-            files_to_migrate = ObjectStoreInput.list_all_files(prefix)
+            files_to_migrate = ObjectStoreInput.list_all_files(
+                prefix, object_store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            )
 
             total_files = len(files_to_migrate)
             logger.info(f"Found {total_files} files to migrate")
@@ -83,7 +88,7 @@ class AtlanStorageOutput:
                     "failures": [],
                     "prefix": prefix,
                     "source": "objectstore",
-                    "destination": cls.ATLAN_STORE_NAME,
+                    "destination": UPSTREAM_OBJECT_STORE_NAME,
                 }
 
             if total_files > 0:
@@ -101,7 +106,9 @@ class AtlanStorageOutput:
 
                 try:
                     # Get file data from objectstore
-                    file_data = ObjectStoreInput.get_file_data(file_path)
+                    file_data = ObjectStoreInput.get_file_data(
+                        file_path, object_store_name=DEPLOYMENT_OBJECT_STORE_NAME
+                    )
 
                     # Upload to Atlan storage
                     cls.upload_file(file_path, file_data)
@@ -120,7 +127,7 @@ class AtlanStorageOutput:
                 "failures": failed_migrations,
                 "prefix": prefix,
                 "source": "objectstore",
-                "destination": cls.ATLAN_STORE_NAME,
+                "destination": UPSTREAM_OBJECT_STORE_NAME,
             }
 
             logger.info(f"Migration completed: {migration_summary}")

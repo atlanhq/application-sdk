@@ -8,7 +8,7 @@ import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.constants import OBJECT_STORE_NAME
+from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -21,7 +21,11 @@ class ObjectStoreInput:
 
     @classmethod
     def _invoke_dapr_binding(
-        cls, operation: str, metadata: Dict[str, str], data: Optional[bytes] = None
+        cls,
+        operation: str,
+        metadata: Dict[str, str],
+        data: Optional[bytes] = None,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> bytes:
         """
         Common method to invoke Dapr binding operations.
@@ -40,7 +44,7 @@ class ObjectStoreInput:
         try:
             with DaprClient() as client:
                 response = client.invoke_binding(
-                    binding_name=OBJECT_STORE_NAME,
+                    binding_name=object_store_name,
                     operation=operation,
                     data=data,
                     binding_metadata=metadata,
@@ -55,6 +59,7 @@ class ObjectStoreInput:
         cls,
         download_file_prefix: str,
         file_path: str,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """
         Downloads all files from the object store for a given prefix.
@@ -74,7 +79,9 @@ class ObjectStoreInput:
             try:
                 # Assuming the object store binding supports a "list" operation
                 response_data = cls._invoke_dapr_binding(
-                    operation=cls.OBJECT_LIST_OPERATION, metadata=metadata
+                    operation=cls.OBJECT_LIST_OPERATION,
+                    metadata=metadata,
+                    object_store_name=object_store_name,
                 )
                 file_list = orjson.loads(response_data.decode("utf-8"))
             except Exception as e:
@@ -95,7 +102,7 @@ class ObjectStoreInput:
                     file_path, os.path.basename(relative_path)
                 )
                 cls.download_file_from_object_store(
-                    download_file_prefix, local_file_path
+                    download_file_prefix, local_file_path, object_store_name
                 )
 
             logger.info(
@@ -110,6 +117,7 @@ class ObjectStoreInput:
         cls,
         download_file_prefix: str,
         file_path: str,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Downloads a single file from the object store.
 
@@ -129,7 +137,7 @@ class ObjectStoreInput:
 
         try:
             # Use get_file_data to retrieve the file bytes
-            response_data = cls.get_file_data(relative_path)
+            response_data = cls.get_file_data(relative_path, object_store_name)
 
             # Write the bytes to the local file
             with open(file_path, "wb") as f:
@@ -143,7 +151,9 @@ class ObjectStoreInput:
             raise e
 
     @classmethod
-    def list_all_files(cls, prefix: str = "") -> List[str]:
+    def list_all_files(
+        cls, prefix: str = "", object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
+    ) -> List[str]:
         """
         List all files in the object store under a given prefix.
 
@@ -166,7 +176,10 @@ class ObjectStoreInput:
 
             data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else None
             response_data = cls._invoke_dapr_binding(
-                operation=cls.OBJECT_LIST_OPERATION, metadata=metadata, data=data
+                operation=cls.OBJECT_LIST_OPERATION,
+                metadata=metadata,
+                data=data,
+                object_store_name=object_store_name,
             )
 
             if not response_data:
@@ -247,7 +260,9 @@ class ObjectStoreInput:
             raise e
 
     @classmethod
-    def get_file_data(cls, file_path: str) -> bytes:
+    def get_file_data(
+        cls, file_path: str, object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
+    ) -> bytes:
         """
         Get raw file data from the object store.
 
@@ -265,7 +280,10 @@ class ObjectStoreInput:
             data = json.dumps({"key": file_path}).encode("utf-8") if file_path else None
 
             response_data = cls._invoke_dapr_binding(
-                operation=cls.OBJECT_GET_OPERATION, metadata=metadata, data=data
+                operation=cls.OBJECT_GET_OPERATION,
+                metadata=metadata,
+                data=data,
+                object_store_name=object_store_name,
             )
             if not response_data:
                 raise Exception(f"No data received for file: {file_path}")

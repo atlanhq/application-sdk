@@ -194,7 +194,7 @@ class TestCredentialUtils:
         # Mock the state store response
         mock_get_state.return_value = {"additional_key": "additional_value"}
 
-        result = await SecretStoreInput.fetch_secret(
+        result = SecretStoreInput.get_secret(
             "test-key", component_name="test-component"
         )
 
@@ -229,9 +229,7 @@ class TestCredentialUtils:
         mock_get_state.return_value = {}
 
         with pytest.raises(Exception, match="Connection failed"):
-            await SecretStoreInput.fetch_secret(
-                "test-key", component_name="test-component"
-            )
+            SecretStoreInput.get_secret("test-key", component_name="test-component")
 
     @pytest.mark.asyncio
     @patch("application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret")

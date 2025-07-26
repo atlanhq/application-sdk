@@ -230,23 +230,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
             await asyncio.gather(*fetch_and_transforms)
 
-            # Execute the upload_to_atlan activity if enabled
-            if ENABLE_ATLAN_UPLOAD:
-                logger.info(f"Starting Atlan upload for workflow {workflow_id}")
-                workflow_args["typename"] = "atlan-upload"
-                await workflow.execute_activity_method(
-                    self.activities_cls.upload_to_atlan,
-                    args=[workflow_args],
-                    retry_policy=retry_policy,
-                    start_to_close_timeout=self.default_start_to_close_timeout,
-                    heartbeat_timeout=self.default_heartbeat_timeout,
-                )
-                logger.info(f"Atlan upload completed for workflow {workflow_id}")
-            else:
-                logger.info(
-                    f"Atlan upload skipped for workflow {workflow_id} (disabled)"
-                )
-
             logger.info(f"Extraction workflow completed for {workflow_id}")
             workflow_success = True
         except Exception as e:
@@ -269,6 +252,26 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 description="Total execution time of SQL metadata extraction workflow in seconds",
                 unit="s",
             )
+
+    async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
+        """Run the exit activity for the workflow."""
+        # Execute the upload_to_atlan activity if enabled
+        workflow_id = workflow_args["workflow_id"]
+        retry_policy = RetryPolicy(
+            maximum_attempts=6,
+            backoff_coefficient=2,
+        )
+        if ENABLE_ATLAN_UPLOAD:
+            workflow_args["typename"] = "atlan-upload"
+            await workflow.execute_activity_method(
+                self.activities_cls.upload_to_atlan,
+                args=[workflow_args],
+                retry_policy=retry_policy,
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
+        else:
+            logger.info(f"Atlan upload skipped for workflow {workflow_id} (disabled)")
 
     def get_fetch_functions(
         self,

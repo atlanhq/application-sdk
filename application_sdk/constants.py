@@ -120,11 +120,11 @@ STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the object store component in DAPR
-OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
+DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
+#: Name of the object store component in DAPR
+UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
-#: Name of the Atlan storage component in DAPR
-ATLAN_STORAGE_NAME = os.getenv("ATLAN_STORAGE_NAME", "atlan-storage")
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 
