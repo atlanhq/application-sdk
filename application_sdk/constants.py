@@ -74,6 +74,10 @@ OBSERVABILITY_DIR = "artifacts/apps/{application_name}/observability"
 WORKFLOW_HOST = os.getenv("ATLAN_WORKFLOW_HOST", "localhost")
 #: Port number for the Temporal server
 WORKFLOW_PORT = os.getenv("ATLAN_WORKFLOW_PORT", "7233")
+#: Whether to use TLS for the Temporal server
+WORKFLOW_TLS_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
+)
 #: Namespace for Temporal workflows
 WORKFLOW_NAMESPACE = os.getenv("ATLAN_WORKFLOW_NAMESPACE", "default")
 #: Host address for the Temporal UI
