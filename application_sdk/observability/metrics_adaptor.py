@@ -19,7 +19,6 @@ from application_sdk.constants import (
     METRICS_FILE_NAME,
     METRICS_FLUSH_INTERVAL_SECONDS,
     METRICS_RETENTION_DAYS,
-    OBSERVABILITY_DIR,
     OTEL_BATCH_DELAY_MS,
     OTEL_EXPORTER_OTLP_ENDPOINT,
     OTEL_EXPORTER_TIMEOUT_SECONDS,
@@ -30,7 +29,10 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
-from application_sdk.observability.utils import get_workflow_context
+from application_sdk.observability.utils import (
+    get_observability_dir,
+    get_workflow_context,
+)
 
 
 class MetricType(Enum):
@@ -165,7 +167,7 @@ class AtlanMetricsAdapter(AtlanObservability[MetricRecord]):
             flush_interval=METRICS_FLUSH_INTERVAL_SECONDS,
             retention_days=METRICS_RETENTION_DAYS,
             cleanup_enabled=METRICS_CLEANUP_ENABLED,
-            data_dir=OBSERVABILITY_DIR,
+            data_dir=get_observability_dir(),
             file_name=METRICS_FILE_NAME,
         )
 
