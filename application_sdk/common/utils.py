@@ -25,34 +25,33 @@ logger = get_logger(__name__)
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
-def extract_database_names_from_include_regex(normalized_regex: str) -> str:
+def _extract_database_names_from_regex_common(
+    normalized_regex: str,
+    regex_type: str,
+    empty_default: str,
+    dot_star_default: str,
+    require_wildcard_schema: bool = False,
+) -> str:
     """
-    Extract database names from normalized regex patterns and return a regex string suitable for SQL queries.
-
-    This function parses regex patterns like 'dev\\.external_schema$|wide_world_importers\\.bronze_sales$'
-    or 'dev\\.*|wide_world_importers\\.*' to extract the database names, and returns a regex string
-    like '^(dev|wide_world_importers)$' for use in SQL queries.
+    Common implementation for extracting database names from regex patterns.
 
     Args:
         normalized_regex (str): The normalized regex pattern containing database.schema patterns
+        regex_type (str): Type of regex processing ("include" or "exclude")
+        empty_default (str): Default value to return for empty/null inputs
+        dot_star_default (str): Default value to return for ".*" pattern
+        require_wildcard_schema (bool): Whether to only extract database names for wildcard schemas
 
     Returns:
-        str: A regex string in the format ^(name1|name2|...)$ or '^$' if no names are found.
-
-    Examples:
-        >>> extract_database_names_from_regex('dev\\.external_schema$|wide_world_importers\\.bronze_sales$')
-        '^(dev|wide_world_importers)$'
-        >>> extract_database_names_from_regex('dev\\.*|wide_world_importers\\.*')
-        '^(dev|wide_world_importers)$'
-        >>> extract_database_names_from_regex('^$')
-        '^$'
-
-    Raises:
-        CommonError: If the input is invalid or processing fails
+        str: A regex string in the format ^(name1|name2|...)$ or default values
     """
     try:
-        if not normalized_regex or normalized_regex == "^$" or normalized_regex == ".*":
-            return "'.*'"
+        # Handle special cases based on regex type
+        if not normalized_regex or normalized_regex == "^$":
+            return empty_default
+
+        if normalized_regex == ".*":
+            return dot_star_default
 
         database_names: Set[str] = set()
 
@@ -65,32 +64,85 @@ def extract_database_names_from_include_regex(normalized_regex: str) -> str:
                 if not pattern or not pattern.strip():
                     continue
 
-                # Split by \\. to get database name (first part)
+                # Split by \\. to get database name and schema part
                 # The \\. represents an escaped dot in the regex
                 parts = pattern.split("\\.")
-                if parts:
+
+                # Handle different validation requirements
+                if require_wildcard_schema:
+                    # For exclude regex, we need at least 2 parts and schema must be wildcard
+                    if len(parts) < 2:
+                        logger.warning(f"Invalid database name format: {pattern}")
+                        continue
                     db_name = parts[0].strip()
-                    if db_name and db_name not in (".*", "^$"):
-                        # Validate database name format
-                        if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
-                            database_names.add(db_name)
-                        else:
-                            logger.warning(f"Invalid database name format: {db_name}")
+                    schema_part = parts[1].strip()
+                    # Only extract database name if the schema part is a wildcard (*)
+                    if not (
+                        db_name and db_name not in (".*", "^$") and schema_part == "*"
+                    ):
+                        continue
+                else:
+                    # For include regex, we just need the database name
+                    if not parts:
+                        continue
+                    db_name = parts[0].strip()
+                    if not (db_name and db_name not in (".*", "^$")):
+                        continue
+
+                # Validate database name format
+                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
+                    database_names.add(db_name)
+                else:
+                    logger.warning(f"Invalid database name format: {db_name}")
 
             except Exception as e:
                 logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
                 continue
 
         if not database_names:
-            return "'.*'"
+            return empty_default
         return f"'^({'|'.join(sorted(database_names))})$'"
 
     except Exception as e:
         logger.error(
-            f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
+            f"Error extracting database names from {regex_type} regex '{normalized_regex}': {str(e)}"
         )
-        # Return a safe default that excludes everything
-        return "'.*'"
+        # Return appropriate default based on regex type
+        return empty_default
+
+
+def extract_database_names_from_include_regex(normalized_regex: str) -> str:
+    """
+    Extract database names from normalized regex patterns and return a regex string suitable for SQL queries.
+
+    This function parses regex patterns like 'dev\\.external_schema$|wide_world_importers\\.bronze_sales$'
+    or 'dev\\.*|wide_world_importers\\.*' to extract the database names, and returns a regex string
+    like '^(dev|wide_world_importers)$' for use in SQL queries.
+
+    Args:
+        normalized_regex (str): The normalized regex pattern containing database.schema patterns
+
+    Returns:
+        str: A regex string in the format ^(name1|name2|...)$ or '.*' if no names are found.
+
+    Examples:
+        >>> extract_database_names_from_include_regex('dev\\.external_schema$|wide_world_importers\\.bronze_sales$')
+        '^(dev|wide_world_importers)$'
+        >>> extract_database_names_from_include_regex('dev\\.*|wide_world_importers\\.*')
+        '^(dev|wide_world_importers)$'
+        >>> extract_database_names_from_include_regex('^$')
+        '.*'
+
+    Raises:
+        CommonError: If the input is invalid or processing fails
+    """
+    return _extract_database_names_from_regex_common(
+        normalized_regex=normalized_regex,
+        regex_type="include",
+        empty_default="'.*'",
+        dot_star_default="'.*'",
+        require_wildcard_schema=False,
+    )
 
 
 def extract_database_names_from_exclude_regex(normalized_regex: str) -> str:
@@ -117,55 +169,13 @@ def extract_database_names_from_exclude_regex(normalized_regex: str) -> str:
     Raises:
         CommonError: If the input is invalid or processing fails
     """
-    try:
-        if not normalized_regex or normalized_regex == "^$":
-            return "'^$'"
-
-        if normalized_regex == ".*":
-            return "'.*'"
-
-        database_names: Set[str] = set()
-
-        # Split by | to get individual patterns
-        patterns = normalized_regex.split("|")
-
-        for pattern in patterns:
-            try:
-                # Skip empty patterns
-                if not pattern or not pattern.strip():
-                    continue
-
-                # Split by \\. to get database name and schema part
-                # The \\. represents an escaped dot in the regex
-                parts = pattern.split("\\.")
-                if len(parts) < 2:
-                    logger.warning(f"Invalid database name format: {pattern}")
-                    continue
-                db_name = parts[0].strip()
-                schema_part = parts[1].strip()
-                # Only extract database name if the schema part is a wildcard (*)
-                # This indicates all schemas of this database are selected
-                if db_name and db_name not in (".*", "^$") and schema_part == "*":
-                    # Validate database name format
-                    if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
-                        database_names.add(db_name)
-                    else:
-                        logger.warning(f"Invalid database name format: {db_name}")
-
-            except Exception as e:
-                logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
-                continue
-
-        if not database_names:
-            return "'^$'"
-        return f"'^({'|'.join(sorted(database_names))})$'"
-
-    except Exception as e:
-        logger.error(
-            f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
-        )
-        # Return a safe default that excludes everything
-        return "'^$'"
+    return _extract_database_names_from_regex_common(
+        normalized_regex=normalized_regex,
+        regex_type="exclude",
+        empty_default="'^$'",
+        dot_star_default="'.*'",
+        require_wildcard_schema=True,
+    )
 
 
 def prepare_query(
