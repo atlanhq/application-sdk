@@ -1,17 +1,18 @@
-import json
-import os
 from typing import Callable, Optional
 
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+LOCK_METADATA_KEY = "__lock_metadata__"
+
 
 def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
     """Decorator to mark activities that require distributed locking.
 
-    This decorator stores lock configuration that will be used by the workflow interceptor
-    to acquire locks before executing activities.
+    This decorator attaches lock configuration directly to the activity
+    definition that will be used by the workflow interceptor to acquire
+    locks before executing activities.
 
     Args:
         max_locks: Maximum number of concurrent locks allowed
@@ -27,14 +28,16 @@ def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
     """
 
     def decorator(func: Callable) -> Callable:
-        os.environ["lock_config"] = json.dumps(
-            {
-                "needs_lock": True,
-                "max_locks": max_locks,
-                "activity_name": func.__name__,
-                "lock_name": lock_name,
-            }
-        )
+        # Store lock metadata directly on the function object
+        metadata = {
+            "is_needs_lock": True,
+            "max_locks": max_locks,
+            "lock_name": lock_name or func.__name__,
+        }
+
+        # Attach metadata to the function
+        setattr(func, LOCK_METADATA_KEY, metadata)
+
         return func
 
     return decorator
