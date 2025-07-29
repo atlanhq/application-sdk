@@ -188,7 +188,10 @@ class ParquetOutput(Output):
             self.total_record_count += row_count
 
             # Generate file path using path_gen function
-            file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
+            if self.start_marker and self.end_marker:
+                file_path = self.output_path
+            else:
+                file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
 
             # Write the dataframe to parquet using daft
             dataframe.write_parquet(
