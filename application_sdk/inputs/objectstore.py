@@ -162,93 +162,46 @@ class ObjectStoreInput:
             Exception: If there's an error listing files from the object store.
         """
         try:
-            # Prepare metadata for listing
-            metadata = {}
-            if prefix:
-                metadata["prefix"] = prefix
-                # Also try fileName as some bindings might use this
-                metadata["fileName"] = prefix
-
+            # this takes care of listing from all type of storage - local as well as object stores
+            metadata = {"prefix": prefix, "fileName": prefix} if prefix else {}
             data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else None
+
             response_data = cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION, metadata=metadata, data=data
             )
 
             if not response_data:
-                logger.info(f"No files found in object store with prefix: {prefix}")
                 return []
 
-            decoded_data = response_data.decode("utf-8")
-            if not decoded_data.strip():
-                logger.info(f"Empty response from object store for prefix: {prefix}")
+            file_list = orjson.loads(response_data.decode("utf-8"))
+
+            # Extract paths based on response type
+            if isinstance(file_list, list):
+                paths = file_list
+            elif isinstance(file_list, dict) and "Contents" in file_list:
+                paths = [item["Key"] for item in file_list["Contents"] if "Key" in item]
+            elif isinstance(file_list, dict):
+                paths = file_list.get("files") or file_list.get("keys") or []
+            else:
                 return []
 
-            file_list = orjson.loads(decoded_data)
-
-            # Log what we actually received
-            logger.info(
-                f"Object store response type: {type(file_list)}, content: {file_list}"
-            )
-
-            if not isinstance(file_list, list):
-                logger.error(f"Expected list from object store, got {type(file_list)}")
-                # Try to handle dict response - some object stores return dict with different keys
-                if isinstance(file_list, dict):
-                    if "files" in file_list:
-                        file_list = file_list["files"]
-                        logger.info(f"Extracted files from dict response: {file_list}")
-                    elif "keys" in file_list:
-                        file_list = file_list["keys"]
-                        logger.info(f"Extracted keys from dict response: {file_list}")
-                    elif "Contents" in file_list:
-                        # S3-style response with Contents array of objects
-                        contents = file_list["Contents"]
-                        if isinstance(contents, list):
-                            # Extract the 'Key' field from each object in the Contents array
-                            file_list = [
-                                item.get("Key", "")
-                                for item in contents
-                                if isinstance(item, dict) and "Key" in item
-                            ]
-                            logger.info(
-                                f"Extracted keys from S3 Contents response: {file_list}"
-                            )
-                        else:
-                            logger.error(f"Contents is not a list: {contents}")
-                            return []
-                    else:
-                        logger.error(
-                            f"Dict response doesn't contain 'files', 'keys', or 'Contents': {file_list}"
-                        )
-                        logger.error(
-                            f"Available keys in response: {list(file_list.keys()) if isinstance(file_list, dict) else 'Not a dict'}"
-                        )
-                        return []
-                else:
-                    return []
-
-            relative_paths: List[str] = []
-            for absolute_path in file_list:
-                # Ensure absolute_path is a string
-                if not isinstance(absolute_path, str):
-                    logger.warning(f"Skipping non-string path: {absolute_path}")
+            valid_list = []
+            for path in paths:
+                if not isinstance(path, str):
+                    logger.warning(f"Skipping non-string path: {path}")
                     continue
+                valid_list.append(
+                    path[path.find(prefix) :]
+                    if prefix and prefix in path
+                    else os.path.basename(path)
+                    if prefix
+                    else path
+                )
 
-                # Extract the path starting from the given prefix
-                # Find where the prefix starts in the absolute path
-                prefix_index = absolute_path.find(prefix)
-                if prefix_index != -1:
-                    relative_paths.append(absolute_path[prefix_index:])
-                else:
-                    relative_paths.append(os.path.basename(absolute_path))
-
-            logger.debug(f"Found {len(relative_paths)} files with prefix: {prefix}")
-            return relative_paths
+            return valid_list
 
         except Exception as e:
-            logger.error(
-                f"Error listing files in object store with prefix {prefix}: {str(e)}"
-            )
+            logger.error(f"Error listing files with prefix {prefix}: {str(e)}")
             raise e
 
     @classmethod
