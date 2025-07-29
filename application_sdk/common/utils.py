@@ -49,7 +49,7 @@ def _extract_database_names_from_regex_common(
             return empty_default
 
         if normalized_regex == ".*":
-            return ".*"
+            return "'.*'"
 
         database_names: Set[str] = set()
 
