@@ -48,6 +48,7 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 #: Whether to use local development mode (used for instance to fetch secrets from the local state store)
 LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
+
 #: Whether to enable TLS for Temporal client connections
 WORKFLOW_TLS_ENABLED = (
     os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
@@ -60,6 +61,12 @@ DEPLOYMENT_SECRET_NAME = os.getenv(
 DEPLOYMENT_SECRET_COMPONENT = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_COMPONENT", "atlan-deployment-secret-component"
 )
+
+#: Whether the application is deployed externally (true for external, false for internal)
+IS_EXTERNAL_DEPLOYMENT = (
+    os.getenv("ATLAN_APP_DEPLOYMENT_LOCATION", "internal").lower() == "external"
+)
+
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
@@ -145,6 +152,8 @@ SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+#: Name of the HTTP binding component in DAPR
+HTTP_BINDING_NAME = os.getenv("HTTP_BINDING_NAME", "http-binding")
 
 
 # Logger Constants

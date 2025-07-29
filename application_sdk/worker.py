@@ -16,6 +16,12 @@ from temporalio.worker import Worker as TemporalWorker
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.eventstore import (
+    ApplicationEventNames,
+    Event,
+    EventStore,
+    EventTypes,
+)
 
 logger = get_logger(__name__)
 
@@ -108,6 +114,30 @@ class Worker:
             max_workers=max_concurrent_activities or 5,
             thread_name_prefix="activity-pool-",
         )
+
+        # Publish worker creation event
+        if self.workflow_client:
+            worker_creation_event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.WORKER_CREATED.value,
+                data={
+                    "application_name": self.workflow_client.application_name,
+                    "task_queue": self.workflow_client.worker_task_queue,
+                    "namespace": self.workflow_client.namespace,
+                    "host": self.workflow_client.host,
+                    "port": self.workflow_client.port,
+                    "connection_string": self.workflow_client.get_connection_string(),
+                    "max_concurrent_activities": max_concurrent_activities,
+                    "workflow_count": len(workflow_classes),
+                    "activity_count": len(workflow_activities),
+                    "passthrough_modules": list(passthrough_modules),
+                },
+            )
+
+            EventStore.publish_event(worker_creation_event)
+            logger.info(
+                f"Published worker creation event for application: {self.workflow_client.application_name}, task_queue: {self.workflow_client.worker_task_queue}"
+            )
 
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
