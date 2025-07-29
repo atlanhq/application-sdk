@@ -85,9 +85,6 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
         logger.info("Starting workflow execution")
 
         try:
-            workflow_run_id = workflow.info().run_id
-            workflow_args["workflow_run_id"] = workflow_run_id
-
             retry_policy = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
 
             await workflow.execute_activity_method(

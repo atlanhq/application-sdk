@@ -24,6 +24,7 @@ from application_sdk.activities.common.utils import (
     auto_heartbeater,
     build_output_path,
     get_workflow_id,
+    get_workflow_run_id,
 )
 from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.constants import TEMPORARY_PATH
@@ -183,7 +184,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         Raises:
             IOError: If configuration cannot be retrieved from state store
         """
-        workflow_id = workflow_config.get("workflow_id")
+        workflow_id = workflow_config.get("workflow_id", get_workflow_id())
         if not workflow_id:
             raise ValueError("workflow_id is required in workflow_config")
 
@@ -196,6 +197,8 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_args["output_path"] = os.path.join(
                 workflow_args["output_prefix"], build_output_path()
             )
+            workflow_args["workflow_id"] = workflow_id
+            workflow_args["workflow_run_id"] = get_workflow_run_id()
             return workflow_args
 
         except Exception as e:
