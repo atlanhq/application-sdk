@@ -201,8 +201,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
+                chunk_size=None,
             )
-            sql_input = await sql_input.get_daft_dataframe()
+            sql_input = await sql_input.get_dataframe()
 
             raw_output = ParquetOutput(
                 output_prefix=workflow_args["output_prefix"],
@@ -212,7 +213,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 start_marker=workflow_args["start_marker"],
                 end_marker=workflow_args["end_marker"],
             )
-            await raw_output.write_daft_dataframe(sql_input)
+            await raw_output.write_dataframe(sql_input)
 
             logger.info(
                 f"Query fetch completed, {raw_output.total_record_count} records processed",
