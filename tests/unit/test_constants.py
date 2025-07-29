@@ -1,5 +1,7 @@
 """Tests for constants module."""
 
+from urllib.parse import urlparse
+
 from application_sdk.constants import WORKFLOW_AUTH_URL, WORKFLOW_HOST
 
 
@@ -12,10 +14,8 @@ class TestWorkflowAuthUrl:
         # The actual logic is simple: just remove '-temporal' from the hostname
 
         # Test with -temporal suffix
-        assert (
-            "my-app.example.com" in WORKFLOW_AUTH_URL
-            or "localhost" in WORKFLOW_AUTH_URL
-        )
+        parsed = urlparse(WORKFLOW_AUTH_URL)
+        assert parsed.hostname in ("my-app.example.com", "localhost")
 
         # The URL should be properly formatted
         assert WORKFLOW_AUTH_URL.startswith("https://")
