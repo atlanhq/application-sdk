@@ -29,7 +29,6 @@ def _extract_database_names_from_regex_common(
     normalized_regex: str,
     regex_type: str,
     empty_default: str,
-    dot_star_default: str,
     require_wildcard_schema: bool = False,
 ) -> str:
     """
@@ -39,7 +38,6 @@ def _extract_database_names_from_regex_common(
         normalized_regex (str): The normalized regex pattern containing database.schema patterns
         regex_type (str): Type of regex processing ("include" or "exclude")
         empty_default (str): Default value to return for empty/null inputs
-        dot_star_default (str): Default value to return for ".*" pattern
         require_wildcard_schema (bool): Whether to only extract database names for wildcard schemas
 
     Returns:
@@ -51,7 +49,7 @@ def _extract_database_names_from_regex_common(
             return empty_default
 
         if normalized_regex == ".*":
-            return dot_star_default
+            return ".*"
 
         database_names: Set[str] = set()
 
@@ -140,7 +138,6 @@ def extract_database_names_from_include_regex(normalized_regex: str) -> str:
         normalized_regex=normalized_regex,
         regex_type="include",
         empty_default="'.*'",
-        dot_star_default="'.*'",
         require_wildcard_schema=False,
     )
 
@@ -173,7 +170,6 @@ def extract_database_names_from_exclude_regex(normalized_regex: str) -> str:
         normalized_regex=normalized_regex,
         regex_type="exclude",
         empty_default="'^$'",
-        dot_star_default="'.*'",
         require_wildcard_schema=True,
     )
 
