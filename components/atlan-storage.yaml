@@ -12,5 +12,9 @@ spec:
       value: "{{clientSecret}}"
     - name: endpoint
       value: "https://{{tenant}}.atlan.com/api/blobstorage"
+    - name: bucket
+      value: "atlan-default-bucket"
     - name: forcePathStyle
       value: "true"
+    - name: region
+      value: "us-east-1"
