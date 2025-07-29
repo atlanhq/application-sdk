@@ -17,7 +17,10 @@ class ObjectStoreOutput:
 
     @classmethod
     async def push_file_to_object_store(
-        cls, output_prefix: str, file_path: str
+        cls,
+        output_prefix: str,
+        file_path: str,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Pushes a single file to the object store.
 
@@ -48,7 +51,7 @@ class ObjectStoreOutput:
 
             try:
                 client.invoke_binding(
-                    binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
+                    binding_name=object_store_name,
                     operation=cls.OBJECT_CREATE_OPERATION,
                     data=file_content,
                     binding_metadata=metadata,
@@ -62,7 +65,10 @@ class ObjectStoreOutput:
 
     @classmethod
     async def push_files_to_object_store(
-        cls, output_prefix: str, input_files_path: str
+        cls,
+        output_prefix: str,
+        input_files_path: str,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Pushes files from a directory to the object store.
 
@@ -87,7 +93,9 @@ class ObjectStoreOutput:
             for root, _, files in os.walk(input_files_path):
                 for file in files:
                     file_path = os.path.join(root, file)
-                    await cls.push_file_to_object_store(output_prefix, file_path)
+                    await cls.push_file_to_object_store(
+                        output_prefix, file_path, object_store_name
+                    )
 
             logger.info(
                 f"Completed pushing data from {input_files_path} to object store"

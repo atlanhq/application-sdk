@@ -231,7 +231,7 @@ class AtlanAuthClient:
     async def _fetch_app_credentials_from_store(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
         try:
-            secret_data = await SecretStoreInput.fetch_secret(
+            secret_data = SecretStoreInput.get_secret(
                 DEPLOYMENT_SECRET_NAME, DEPLOYMENT_SECRET_COMPONENT
             )
 

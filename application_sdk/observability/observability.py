@@ -440,10 +440,11 @@ class AtlanObservability(Generic[T], ABC):
                 # Upload to object store
                 with open(parquet_path, "rb") as f:
                     file_content = f.read()
+                    relative_path = os.path.relpath(parquet_path, TEMPORARY_PATH)
                     metadata = {
-                        "key": os.path.relpath(parquet_path, TEMPORARY_PATH),
-                        "blobName": os.path.relpath(parquet_path, TEMPORARY_PATH),
-                        "fileName": os.path.basename(parquet_path),
+                        "key": relative_path,
+                        "blobName": relative_path,
+                        "fileName": relative_path,
                     }
                     with DaprClient() as client:
                         client.invoke_binding(

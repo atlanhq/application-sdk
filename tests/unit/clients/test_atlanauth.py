@@ -85,7 +85,7 @@ async def test_credential_discovery_from_secret_store(
 
     # Mock the secret fetching
     with patch(
-        "application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret",
+        "application_sdk.inputs.secretstore.SecretStoreInput.get_secret",
         return_value={
             "test_app_client_id": "discovered-client",
             "test_app_client_secret": "discovered-secret",
@@ -127,7 +127,7 @@ async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> Non
     auth_client_no_fallback._env_client_secret = ""
 
     with patch(
-        "application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret",
+        "application_sdk.inputs.secretstore.SecretStoreInput.get_secret",
         side_effect=Exception("Secret not found"),
     ):
         with pytest.raises(ClientError, match="OAuth2 credentials not found"):

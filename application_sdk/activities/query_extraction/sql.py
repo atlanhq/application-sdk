@@ -9,10 +9,11 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.credential_utils import get_credentials
+from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.objectstore import ObjectStoreInput
-from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -128,9 +129,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_id = get_workflow_id()
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
-            credentials = await SecretStoreInput.fetch_secret(
-                secret_key=workflow_args["credential_guid"]
-            )
+            credentials = get_credentials(workflow_args["credential_guid"])
             await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
@@ -413,7 +412,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         logger.info(f"Last marker: {last_marker}")
         await ObjectStoreOutput.push_file_to_object_store(
-            workflow_args["output_prefix"], marker_file_path
+            workflow_args["output_prefix"],
+            marker_file_path,
+            object_store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
         logger.info(f"Marker file written to {marker_file_path}")
 
@@ -443,7 +444,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             os.makedirs(workflow_args["output_prefix"], exist_ok=True)
 
             ObjectStoreInput.download_file_from_object_store(
-                workflow_args["output_prefix"], marker_file_path
+                workflow_args["output_prefix"],
+                marker_file_path,
+                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
             logger.info(f"Output prefix: {workflow_args['output_prefix']}")

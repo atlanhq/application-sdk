@@ -131,7 +131,7 @@ class TestCredentialUtils:
         assert result == credentials
 
     @pytest.mark.asyncio
-    @patch("application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret")
+    @patch("application_sdk.inputs.secretstore.SecretStoreInput.get_secret")
     async def test_resolve_credentials_with_secret_store(
         self, mock_fetch_secret: AsyncMock
     ):
@@ -194,7 +194,7 @@ class TestCredentialUtils:
         # Mock the state store response
         mock_get_state.return_value = {"additional_key": "additional_value"}
 
-        result = await SecretStoreInput.fetch_secret(
+        result = await SecretStoreInput.get_secret(
             "test-key", component_name="test-component"
         )
 
@@ -229,12 +229,12 @@ class TestCredentialUtils:
         mock_get_state.return_value = {}
 
         with pytest.raises(Exception, match="Connection failed"):
-            await SecretStoreInput.fetch_secret(
+            await SecretStoreInput.get_secret(
                 "test-key", component_name="test-component"
             )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.inputs.secretstore.SecretStoreInput.fetch_secret")
+    @patch("application_sdk.inputs.secretstore.SecretStoreInput.get_secret")
     async def test_resolve_credentials_fetch_error(self, mock_fetch_secret: Mock):
         """Test resolving credentials when fetch_secret fails."""
         mock_fetch_secret.side_effect = Exception("Dapr connection failed")
