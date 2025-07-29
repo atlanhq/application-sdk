@@ -48,7 +48,18 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 #: Whether to use local development mode (used for instance to fetch secrets from the local state store)
 LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
-
+#: Whether to enable TLS for Temporal client connections
+WORKFLOW_TLS_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
+)
+#: Name of the deployment secrets in the secret store
+DEPLOYMENT_SECRET_NAME = os.getenv(
+    "ATLAN_DEPLOYMENT_SECRET_NAME", "atlan-deployment-secrets"
+)
+#: Name of the secret store component for deployment secrets
+DEPLOYMENT_SECRET_COMPONENT = os.getenv(
+    "ATLAN_DEPLOYMENT_SECRET_COMPONENT", "atlan-deployment-secret-component"
+)
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})

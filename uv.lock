@@ -134,6 +134,7 @@ name = "atlan-application-sdk"
 version = "0.1.1rc22"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "duckdb" },
     { name = "duckdb-engine" },
     { name = "fastapi", extra = ["standard"] },
@@ -205,6 +206,7 @@ test = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
     { name = "duckdb", specifier = ">=1.1.3" },

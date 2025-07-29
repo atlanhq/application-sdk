@@ -20,7 +20,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients.auth import AuthManager
+from application_sdk.clients.atlanauth import AtlanAuthClient
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -31,6 +31,7 @@ from application_sdk.constants import (
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
     WORKFLOW_PORT,
+    WORKFLOW_TLS_ENABLED,
 )
 from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
@@ -225,11 +226,6 @@ class TemporalWorkflowClient(WorkflowClient):
         port: str | None = None,
         application_name: str | None = None,
         namespace: str | None = "default",
-        auth_enabled: bool | None = None,
-        auth_url: str | None = None,
-        client_id: str | None = None,
-        client_secret: str | None = None,
-        tls_enabled: bool | None = None,
     ):
         """Initialize the Temporal workflow client.
 
@@ -242,17 +238,6 @@ class TemporalWorkflowClient(WorkflowClient):
                 Defaults to environment variable APPLICATION_NAME.
             namespace (str | None, optional): Temporal namespace. Defaults to
                 "default" or environment variable WORKFLOW_NAMESPACE.
-            auth_enabled (bool | None, optional): Whether authentication is enabled. Defaults to
-                environment variable WORKFLOW_AUTH_ENABLED.
-            auth_url (str | None, optional): OAuth2 token endpoint URL. Defaults to
-                environment variable WORKFLOW_AUTH_URL.
-            client_id (str | None, optional): OAuth2 client ID. Defaults to
-                environment variable WORKFLOW_AUTH_CLIENT_ID.
-            client_secret (str | None, optional): OAuth2 client secret. Defaults to
-                environment variable WORKFLOW_AUTH_CLIENT_SECRET.
-            tls_enabled (bool | None, optional): Explicit TLS configuration override.
-                If None, TLS will be automatically determined based on the host address.
-                If True, TLS will always be enabled. If False, TLS will always be disabled.
         """
         self.client = None
         self.worker = None
@@ -263,15 +248,10 @@ class TemporalWorkflowClient(WorkflowClient):
         self.host = host if host else WORKFLOW_HOST
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
-        self.tls_enabled = tls_enabled
 
-        self.auth_manager = AuthManager(
-            application_name=self.application_name,
-        )
+        self.auth_manager = AtlanAuthClient()
 
-        self.auth_enabled = (
-            auth_enabled if auth_enabled is not None else WORKFLOW_AUTH_ENABLED
-        )
+        self.auth_enabled = WORKFLOW_AUTH_ENABLED
 
         # Token refresh configuration - will be determined dynamically
         self._token_refresh_interval: Optional[int] = None
@@ -418,12 +398,10 @@ class TemporalWorkflowClient(WorkflowClient):
             ConnectionError: If connection to the Temporal server fails.
             ValueError: If authentication is enabled but credentials are missing.
         """
-        tls_enabled = self._should_enable_tls(self.host, self.tls_enabled)
-
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
-            "tls": tls_enabled,
+            "tls": WORKFLOW_TLS_ENABLED,
         }
 
         if self.auth_enabled:

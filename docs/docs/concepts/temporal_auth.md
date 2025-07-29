@@ -8,9 +8,9 @@ The Application SDK provides a robust OAuth2-based authentication system for Tem
 
 ## Authentication Components
 
-### AuthManager
+### AtlanAuthClient
 
-The `AuthManager` class is the core component that handles all authentication operations:
+The `AtlanAuthClient` class is the core component that handles all authentication operations:
 
 - **Token Management**: Acquisition, refresh, and caching of OAuth2 access tokens
 - **Credential Discovery**: Automatic discovery from secret stores with environment variable fallback
@@ -138,10 +138,10 @@ await worker.run()
 ### Manual Token Management
 
 ```python
-from application_sdk.clients.auth import AuthManager
+from application_sdk.clients.atlanauth import AtlanAuthClient
 
-# Create auth manager directly
-auth_manager = AuthManager(
+# Create auth client directly
+auth_client = AtlanAuthClient(
     application_name="postgres-extraction",
     auth_enabled=True,
     auth_url="https://auth.company.com/oauth/token"
@@ -159,7 +159,7 @@ async with aiohttp.ClientSession() as session:
 ## Authentication Flow
 
 ### 1. Client Initialization
-- `TemporalWorkflowClient` creates an `AuthManager` instance
+- `TemporalWorkflowClient` creates an `AtlanAuthClient` instance
 - Configuration loaded from constructor parameters and environment variables
 
 ### 2. Credential Discovery (Automatic)
@@ -309,10 +309,10 @@ telnet $ATLAN_WORKFLOW_HOST $ATLAN_WORKFLOW_PORT
 
 ## API Reference
 
-### AuthManager
+### AtlanAuthClient
 
 ```python
-class AuthManager:
+class AtlanAuthClient:
     """OAuth2 token manager for cloud service authentication."""
 
     def __init__(
