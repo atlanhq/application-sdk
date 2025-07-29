@@ -3,7 +3,7 @@
 import collections.abc
 import copy
 import json
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
@@ -127,42 +127,3 @@ class SecretStoreInput:
                     result_data["extra"][key] = secret_data[value]
 
         return result_data
-
-    @classmethod
-    def discover_secret_component(cls) -> Optional[str]:
-        """Discover which secret store component is available using Dapr metadata API.
-
-        Uses the official Dapr component pattern where all secret stores have
-        type starting with 'secretstores.'
-
-        Returns:
-            Name of the discovered secret component, or None if none found
-        """
-        logger.info(
-            "Discovering available secret store components via Dapr metadata..."
-        )
-
-        try:
-            with DaprClient() as client:
-                metadata_response = client.get_metadata()
-
-                # Filter for secret store components using official Dapr pattern
-                for comp in metadata_response.registered_components:
-                    if comp.type.startswith("secretstores."):
-                        logger.info(
-                            f"Discovered secret store component: {comp.name} (type: {comp.type})"
-                        )
-                        return comp.name
-
-                # Log available component types for debugging
-                available_types = [
-                    comp.type for comp in metadata_response.registered_components
-                ]
-                logger.warning(
-                    f"No secret store components found. Available component types: {available_types}"
-                )
-                return None
-
-        except Exception as e:
-            logger.warning(f"Failed to discover secret store components: {e}")
-            return None

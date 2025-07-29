@@ -5,8 +5,11 @@ from typing import Dict, Optional
 
 import aiohttp
 
+from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
+    DEPLOYMENT_SECRET_COMPONENT,
+    DEPLOYMENT_SECRET_NAME,
     WORKFLOW_AUTH_CLIENT_ID,
     WORKFLOW_AUTH_CLIENT_SECRET,
     WORKFLOW_AUTH_ENABLED,
@@ -18,7 +21,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-class AuthManager:
+class AtlanAuthClient:
     """OAuth2 token manager for cloud service authentication.
 
     Currently supports Temporal authentication. Future versions will support:
@@ -82,12 +85,8 @@ class AuthManager:
         credentials = await self._fetch_app_credentials_from_store()
         if not credentials:
             app_name = self.application_name.lower().replace("-", "_")
-            raise ValueError(
-                f"OAuth2 credentials not found for application '{self.application_name}'. "
-                f"Expected either:\n"
-                f"1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET\n"
-                f"2. Secret store with key 'atlan-deployment-secrets' containing: "
-                f"{app_name}_client_id, {app_name}_client_secret"
+            raise ClientError(
+                f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. Expected either: 1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET 2. Secret store with key 'atlan-deployment-secrets' containing: {app_name}_client_id, {app_name}_client_secret"
             )
 
         # Store the credentials from secret store
@@ -95,27 +94,29 @@ class AuthManager:
         logger.info("Using credentials from secret store")
         return self.credentials
 
-    async def get_access_token(self, force_refresh: bool = False) -> str:
+    async def get_access_token(self, force_refresh: bool = False) -> Optional[str]:
         """Get a valid access token, refreshing if necessary.
 
         The token contains all scopes configured for this application in the OAuth2 provider
-        and can be used for multiple services (Temporal, API Gateway, Analytics, etc.).
+        and can be used for multiple services (Temporal, Data transfer, etc.).
 
         Args:
             force_refresh: If True, forces token refresh regardless of expiry
 
         Returns:
-            str: A valid access token
+            Optional[str]: A valid access token, or None if authentication is disabled
 
         Raises:
             ValueError: If authentication is disabled or credentials are missing
-            Exception: If token refresh fails
+            AtlanAuthError: If token refresh fails
         """
         if not self.auth_enabled:
-            return ""
+            return None
 
         if not self.auth_url:
-            raise ValueError("Auth URL is required when auth is enabled")
+            raise ClientError(
+                f"{ClientError.AUTH_CONFIG_ERROR}: Auth URL is required when auth is enabled"
+            )
 
         # Return existing token if it's still valid (with 30s buffer) and not forcing refresh
         current_time = time.time()
@@ -140,19 +141,22 @@ class AuthManager:
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             ) as response:
-                if response.status != 200:
-                    # Clear cached credentials on auth failure in case they're stale
-                    self.credentials = None
+                if not response.ok:
+                    # Clear cached credentials and token on auth failure in case they're stale
+                    self.clear_cache()
                     error_text = await response.text()
-                    raise Exception(
-                        f"Failed to refresh token (HTTP {response.status}): {error_text}"
+                    raise ClientError(
+                        f"{ClientError.AUTH_TOKEN_REFRESH_ERROR}: Failed to refresh token (HTTP {response.status}): {error_text}"
                     )
 
                 token_data = await response.json()
                 self._access_token = token_data["access_token"]
                 self._token_expiry = current_time + token_data["expires_in"]
 
-                assert self._access_token is not None
+                if self._access_token is None:
+                    raise ClientError(
+                        f"{ClientError.AUTH_TOKEN_REFRESH_ERROR}: Received null access token from server"
+                    )
                 return self._access_token
 
     async def get_authenticated_headers(self) -> Dict[str, str]:
@@ -165,8 +169,8 @@ class AuthManager:
             Dict[str, str]: Headers dictionary with Authorization header
 
         Examples:
-            >>> auth_manager = AuthManager("user-management")
-            >>> headers = await auth_manager.get_authenticated_headers()
+            >>> auth_client = AtlanAuthClient("user-management")
+            >>> headers = await auth_client.get_authenticated_headers()
             >>> # Use headers for any HTTP request
             >>> async with aiohttp.ClientSession() as session:
             ...     await session.get("https://api.company.com/users", headers=headers)
@@ -175,6 +179,8 @@ class AuthManager:
             return {}
 
         token = await self.get_access_token()
+        if token is None:
+            return {}
         return {"Authorization": f"Bearer {token}"}
 
     async def is_token_valid(self) -> bool:
@@ -211,26 +217,22 @@ class AuthManager:
 
         return max(0, self._token_expiry - time.time())
 
-    async def refresh_token(self) -> str:
+    async def refresh_token(self) -> Optional[str]:
         """Force refresh the access token.
 
         This method forces a token refresh regardless of current token validity.
         Useful for credential rotation scenarios.
 
         Returns:
-            str: New access token
+            Optional[str]: New access token, or None if authentication is disabled
         """
         return await self.get_access_token(force_refresh=True)
 
     async def _fetch_app_credentials_from_store(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
-        component_name = SecretStoreInput.discover_secret_component()
-        if not component_name:
-            return None
-
         try:
             secret_data = await SecretStoreInput.fetch_secret(
-                "atlan-deployment-secrets", component_name
+                DEPLOYMENT_SECRET_NAME, DEPLOYMENT_SECRET_COMPONENT
             )
 
             # Auth-specific key generation
@@ -257,19 +259,3 @@ class AuthManager:
         self.credentials = None
         self._access_token = None
         self._token_expiry = 0
-
-    def get_application_name(self) -> str:
-        """Get the application name.
-
-        Returns:
-            str: Application name used for credential discovery
-        """
-        return self.application_name
-
-    def is_auth_enabled(self) -> bool:
-        """Check if authentication is enabled.
-
-        Returns:
-            bool: True if authentication is enabled
-        """
-        return self.auth_enabled

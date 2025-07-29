@@ -20,7 +20,7 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients.auth import AuthManager
+from application_sdk.clients.atlanauth import AtlanAuthClient
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -31,6 +31,7 @@ from application_sdk.constants import (
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
     WORKFLOW_PORT,
+    WORKFLOW_TLS_ENABLED,
 )
 from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
@@ -240,7 +241,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
-        self.auth_manager = AuthManager()
+        self.auth_manager = AtlanAuthClient()
 
         self.auth_enabled = WORKFLOW_AUTH_ENABLED
 
@@ -361,12 +362,10 @@ class TemporalWorkflowClient(WorkflowClient):
             ConnectionError: If connection to the Temporal server fails.
             ValueError: If authentication is enabled but credentials are missing.
         """
-        tls_enabled = self.host not in ["127.0.0.1", "localhost"]
-
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
-            "tls": tls_enabled,
+            "tls": WORKFLOW_TLS_ENABLED,
         }
 
         if self.auth_enabled:
