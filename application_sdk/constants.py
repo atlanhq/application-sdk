@@ -130,14 +130,20 @@ USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "tru
 STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
-#: Name of the object store component in DAPR
-OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
+#: Name of the deployment object store component in DAPR
+DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
+#: Name of the upstream object store component in DAPR
+UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "atlan-storage")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
-#: Name of the Atlan storage component in DAPR
-ATLAN_STORAGE_NAME = os.getenv("ATLAN_STORAGE_NAME", "atlan-storage")
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+
+# Dapr Client Configuration
+#: Maximum gRPC message length in bytes for Dapr client (default: 16MB)
+DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
+    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "16777216")
+)
 
 
 # Logger Constants

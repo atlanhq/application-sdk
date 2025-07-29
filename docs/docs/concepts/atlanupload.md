@@ -30,8 +30,8 @@ The Atlan upload activity (`upload_to_atlan`) is a new step in the SQL metadata 
 The Atlan upload functionality is controlled by the following environment variables:
 
 - `ENABLE_ATLAN_UPLOAD`: Set to `true` to enable the Atlan upload activity (default: `false`)
-- `ATLAN_STORAGE_NAME`: Name of the Dapr component for Atlan storage (default: `atlan-storage`)
-- `OBJECT_STORE_NAME`: Name of the Dapr component for object store (default: `objectstore`)
+- `UPSTREAM_OBJECT_STORE_NAME`: Name of the Dapr component for upstream object store (default: `objectstore`)
+- `DEPLOYMENT_OBJECT_STORE_NAME`: Name of the Dapr component for deployment object store (default: `objectstore`)
 
 ### Example Configuration
 
@@ -39,11 +39,11 @@ The Atlan upload functionality is controlled by the following environment variab
 # Enable Atlan upload
 export ENABLE_ATLAN_UPLOAD=true
 
-# Customize Atlan storage component name (optional)
-export ATLAN_STORAGE_NAME=my-atlan-storage
+# Customize upstream object store component name (optional)
+export UPSTREAM_OBJECT_STORE_NAME=my-upstream-objectstore
 
-# Customize object store component name (optional)
-export OBJECT_STORE_NAME=my-objectstore
+# Customize deployment object store component name (optional)
+export DEPLOYMENT_OBJECT_STORE_NAME=my-deployment-objectstore
 ```
 
 ## Architecture
@@ -109,15 +109,15 @@ If not specified, the default prefix is: `atlan/{workflow_id}/{workflow_run_id}/
 
 ## Dapr Component Configuration
 
-### Atlan Storage Component
+### Upstream Object Store Component
 
-Create a Dapr component configuration file (`components/atlan-storage.yaml`):
+Create a Dapr component configuration file (`components/upstream-objectstore.yaml`):
 
 ```yaml
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: atlan-storage
+  name: upstream-objectstore
 spec:
   type: bindings.aws.s3
   version: v1
@@ -134,15 +134,15 @@ spec:
       value: "true"
 ```
 
-### Object Store Component
+### Deployment Object Store Component
 
-Ensure you have an object store component configured:
+Ensure you have a deployment object store component configured:
 
 ```yaml
 apiVersion: dapr.io/v1alpha1
 kind: Component
 metadata:
-  name: objectstore
+  name: deployment-objectstore
 spec:
   type: bindings.localstorage
   version: v1
@@ -305,8 +305,8 @@ If you're upgrading from a previous version of the Application SDK:
    ```
 
 3. **Configure Dapr components** - Ensure you have the required components:
-   - `atlan-storage` component for S3 uploads
-   - `objectstore` component for local storage
+   - `upstream-objectstore` component for S3 uploads
+   - `deployment-objectstore` component for local storage
    - `aws-secrets` component for AWS credentials
 
 4. **Verify configuration** - The upload activity will automatically:
@@ -323,8 +323,8 @@ If you were previously manually uploading data to Atlan:
 2. **Configure environment variables**:
    ```bash
    export ENABLE_ATLAN_UPLOAD=true
-   export ATLAN_STORAGE_NAME=atlan-storage
-   export OBJECT_STORE_NAME=objectstore
+   export UPSTREAM_OBJECT_STORE_NAME=upstream-objectstore
+export DEPLOYMENT_OBJECT_STORE_NAME=deployment-objectstore
    ```
 
 3. **The workflow will now automatically upload** after the transform step

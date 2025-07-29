@@ -8,12 +8,14 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.dataframe_utils import is_empty_dataframe
+from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import (
     APP_TENANT_ID,
     APPLICATION_NAME,
     ENABLE_ATLAN_UPLOAD,
     SQL_QUERIES_PATH,
+    TEMPORARY_PATH,
 )
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
@@ -531,7 +533,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             ActivityStatistics: Upload statistics or skip statistics if upload is disabled.
 
         Raises:
-            Exception: If the upload fails when ENABLE_ATLAN_UPLOAD is true.
+            ValueError: If workflow_id or workflow_run_id are missing.
+            ActivityError: If the upload fails with any migration errors when ENABLE_ATLAN_UPLOAD is true.
         """
         # Check if Atlan upload is enabled
         if not ENABLE_ATLAN_UPLOAD:
@@ -559,7 +562,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # Upload data from object store to Atlan storage
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data
-        migration_prefix = f"{workflow_id}/{workflow_run_id}/"
+        migration_prefix = os.path.relpath(workflow_args["output_path"], TEMPORARY_PATH)
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
         )
@@ -569,19 +572,24 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # Log upload statistics
         logger.info(
-            f"Atlan upload completed: {upload_stats['migrated_files']} files uploaded, "
-            f"{upload_stats['failed_migrations']} failed"
+            f"Atlan upload completed: {upload_stats.migrated_files} files uploaded, "
+            f"{upload_stats.failed_migrations} failed"
         )
 
-        if upload_stats["failures"]:
-            logger.warning(
-                f"Upload completed with {len(upload_stats['failures'])} errors"
+        if upload_stats.failures:
+            logger.error(f"Upload failed with {len(upload_stats.failures)} errors")
+            for failure in upload_stats.failures:
+                logger.error(f"Upload error: {failure}")
+
+            # Mark activity as failed when there are upload failures
+            raise ActivityError(
+                f"{ActivityError.ATLAN_UPLOAD_ERROR}: Atlan upload failed with {len(upload_stats.failures)} errors. "
+                f"Failed migrations: {upload_stats.failed_migrations}, "
+                f"Total files: {upload_stats.total_files}"
             )
-            for failure in upload_stats["failures"]:
-                logger.warning(f"Upload error: {failure}")
 
         return ActivityStatistics(
-            total_record_count=upload_stats["migrated_files"],
-            chunk_count=upload_stats["total_files"],
+            total_record_count=upload_stats.migrated_files,
+            chunk_count=upload_stats.total_files,
             typename="atlan-upload-completed",
         )

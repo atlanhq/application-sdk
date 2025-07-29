@@ -53,14 +53,6 @@ TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
 
-# Common localhost addresses for development
-LOCALHOST_ADDRESSES = {
-    "127.0.0.1",  # IPv4 localhost
-    "localhost",  # Standard localhost hostname
-    "::1",  # IPv6 localhost
-    "0.0.0.0",  # IPv4 any address (common in development)
-}
-
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor for tracking activity execution events.
@@ -297,34 +289,6 @@ class TemporalWorkflowClient(WorkflowClient):
             str: The Temporal namespace.
         """
         return self.namespace
-
-    def _should_enable_tls(
-        self, host: str, explicit_tls: Optional[bool] = None
-    ) -> bool:
-        """Determine if TLS should be enabled for the connection.
-
-        Args:
-            host (str): The host address to connect to.
-            explicit_tls (Optional[bool]): Explicit TLS configuration override.
-                If provided, this value takes precedence over automatic detection.
-
-        Returns:
-            bool: True if TLS should be enabled, False otherwise.
-        """
-        # If explicit TLS configuration is provided, use it
-        if explicit_tls is not None:
-            logger.info(f"Using explicit TLS configuration: {explicit_tls}")
-            return explicit_tls
-
-        # Simple check for common localhost addresses
-        is_local = host.lower() in LOCALHOST_ADDRESSES
-
-        if is_local:
-            logger.info(f"Detected local development address '{host}', disabling TLS")
-            return False
-        else:
-            logger.info(f"Detected remote address '{host}', enabling TLS")
-            return True
 
     def _calculate_refresh_interval(self) -> int:
         """Calculate the optimal token refresh interval based on token expiry.

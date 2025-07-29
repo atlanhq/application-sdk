@@ -8,7 +8,10 @@ import orjson
 from dapr.clients import DaprClient
 from temporalio import activity
 
-from application_sdk.constants import OBJECT_STORE_NAME
+from application_sdk.constants import (
+    DAPR_MAX_GRPC_MESSAGE_LENGTH,
+    DEPLOYMENT_OBJECT_STORE_NAME,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -38,9 +41,11 @@ class ObjectStoreInput:
             Exception: If there's an error with the Dapr binding operation
         """
         try:
-            with DaprClient() as client:
+            with DaprClient(
+                max_grpc_message_length=DAPR_MAX_GRPC_MESSAGE_LENGTH
+            ) as client:
                 response = client.invoke_binding(
-                    binding_name=OBJECT_STORE_NAME,
+                    binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
                     operation=operation,
                     data=data,
                     binding_metadata=metadata,

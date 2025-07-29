@@ -11,6 +11,6 @@ spec:
     - name: secretKey
       value: "{{clientSecret}}"
     - name: endpoint
-      value: "tenant.atlan.com/api/s3proxy"
+      value: "https://{{tenant}}.atlan.com/api/blobstorage"
     - name: forcePathStyle
       value: "true"
