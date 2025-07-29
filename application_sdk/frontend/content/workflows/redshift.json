@@ -1,0 +1,434 @@
+{
+    "name": "Redshift",
+    "logo": "https://assets.atlan.com/assets/redshift.svg",
+    "config": {
+        "properties": {
+            "connection": {
+                "type": "string",
+                "required": false,
+                "ui": {
+                    "widget": "connection",
+                    "label": "",
+                    "placeholder": "Connection Name"
+                }
+            },
+            "publish-mode": {
+                "type": "string",
+                "enum": ["production", "test", "dev"],
+                "default": "production",
+                "enumNames": ["Production", "Test", "Development"],
+                "ui": {
+                    "widget": "select",
+                    "label": "Run Mode",
+                    "grid": 4,
+                    "placeholder": "Connection Mode"
+                }
+            },
+            "credentials-fetch-strategy": {
+                "type": "string",
+                "enum": ["k8s_secret", "credential_guid"],
+                "default": "credential_guid",
+                "enumNames": ["k8s Secret Key", "Credential Guid"],
+                "ui": {
+                    "widget": "select",
+                    "label": "Credential Type",
+                    "placeholder": "Credential Type"
+                }
+            },
+            "credential-guid": {
+                "type": "string",
+                "ui": {
+                    "widget": "credential",
+                    "label": "",
+                    "credentialType": "atlan-connectors-redshift",
+                    "placeholder": "Credential Guid",
+                    "hidden": false
+                }
+            },
+            "credential-kube-secret-name": {
+                "type": "string",
+                "ui": {
+                    "label": "Credential Secret Name",
+                    "placeholder": "Credential Secret Name",
+                    "hidden": true
+                }
+            },
+            "atlas-auth-type": {
+                "type": "string",
+                "enum": ["internal", "apikey"],
+                "default": "internal",
+                "enumNames": ["Internal", "API Key"],
+                "ui": {
+                    "widget": "select",
+                    "label": "Atlas Authentication Type",
+                    "placeholder": "Atlas Authentication Type",
+                    "hidden": true
+                }
+            },
+            "temp-table-regex": {
+                "type": "string",
+                "required": false,
+                "default": "",
+                "ui": {
+                    "label": "Exclude regex for tables & views",
+                    "feedback": true,
+                    "help": "Regex of tables & views to ignore. Defaults to empty string",
+                    "placeholder": ".*_TMP|.*_TEMP|TMP.*|TEMP.*",
+                    "grid": 4
+                }
+            },
+            "runtime-properties": {
+                "type": "object",
+                "ui": {
+                    "label": "Run time properties",
+                    "hidden": true
+                }
+            },
+            "include-filter": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array"
+                },
+                "ui": {
+                    "widget": "sqltree",
+                    "label": "Include Metadata",
+                    "sql": "show atlan schemas",
+                    "credential": "credential-guid",
+                    "schemaExcludePattern": ["pg_*", "information_*"],
+                    "description": "Only selected databases and schemas will be extracted.",
+                    "grid": 4
+                }
+            },
+            "exclude-filter": {
+                "type": "object",
+                "additionalProperties": {
+                    "type": "array"
+                },
+                "ui": {
+                    "widget": "sqltree",
+                    "sql": "show atlan schemas",
+                    "credential": "credential-guid",
+                    "schemaExcludePattern": ["pg_*", "information_*"],
+                    "label": "Exclude Metadata",
+                    "description": "Selected databases and schemas wont be extracted.",
+                    "grid": 4
+                }
+            },
+            "extraction-method": {
+                "type": "string",
+                "enum": ["direct", "s3"],
+                "default": "direct",
+                "enumNames": ["Direct", "Offline"],
+                "ui": {
+                    "widget": "radio",
+                    "hidden": false,
+                    "heading": "Extraction method",
+                    "help": "Determines the method the package will use to extract metadata. 'Direct' means package will directly connect to the database. 'S3' means package will fetch metadata from S3 bucket.",
+                    "placeholder": "Direct",
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please select a valid metadata extraction strategy"
+                        }
+                    ],
+                    "grid": 8,
+                    "start": 1,
+                    "end": 8
+                }
+            },
+            "preflight-check": {
+                "type": "string",
+                "ui": {
+                    "widget": "sage",
+                    "config": [
+                        {
+                            "id": 1,
+                            "name": "schemasCheck",
+                            "extraUrlParam": "",
+                            "optional": false,
+                            "title": "Databases and schemas",
+                            "loaderText": "Checking databases/schemas permissions"
+                        },
+                        {
+                            "id": 2,
+                            "name": "tablesMetadataCheck",
+                            "extraUrlParam": "",
+                            "optional": false,
+                            "title": "Tables metadata",
+                            "loaderText": "Checking tables full metadata permission"
+                        },
+                        {
+                            "id": 3,
+                            "name": "externalTablesMetadataCheck",
+                            "extraUrlParam": "",
+                            "optional": true,
+                            "title": "External tables metadata",
+                            "loaderText": "Checking external tables full metadata permission"
+                        }
+                    ]
+                }
+            },
+            "preflight-check-s3": {
+                "type": "string",
+                "ui": {
+                    "widget": "sage",
+                    "config": [
+                        {
+                            "id": 1,
+                            "name": "S3Check",
+                            "extraUrlParam": "",
+                            "optional": false,
+                            "title": "Bucket credentials",
+                            "loaderText": "Checking bucket credentials"
+                        }
+                    ]
+                }
+            },
+            "use-source-schema-filtering": {
+                "type": "string",
+                "enum": ["true", "false"],
+                "default": "false",
+                "enumNames": ["True", "False"],
+                "ui": {
+                    "widget": "radio",
+                    "label": "Enable Source Level Filtering",
+                    "grid": 4,
+                    "help": "Enable or Disable Schema Level Filtering on source. Schemas selected in the include filter will be fetched.",
+                    "hidden": false
+                }
+            },
+            "use-jdbc-internal-methods": {
+                "type": "string",
+                "enum": ["true", "false"],
+                "default": "true",
+                "enumNames": ["True", "False"],
+                "ui": {
+                    "widget": "radio",
+                    "label": "Use JDBC Internal Methods",
+                    "grid": 4,
+                    "help": "Enable or Disable JDBC internal methods for data extraction.",
+                    "hidden": true
+                }
+            },
+            "advanced-config": {
+                "type": "string",
+                "enum": ["default", "custom"],
+                "default": "default",
+                "required": true,
+                "enumNames": ["Default", "Advanced"],
+                "ui": {
+                    "widget": "radio",
+                    "hidden": false,
+                    "label": "Advanced Config",
+                    "help": "Set advanced configuration of the crawler",
+                    "placeholder": "Advanced Config",
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please select a valid configuration"
+                        }
+                    ]
+                }
+            },
+            "cross-connection": {
+                "type": "boolean",
+                "default": false,
+                "ui": {
+                    "hidden": false,
+                    "label": "Cross Connection",
+                    "help": "Enable searching for lineage across all available connections on Atlan instead of the selected connection. Defaults to false.",
+                    "grid": 4,
+                    "start": 1
+                }
+            },
+            "control-config-strategy": {
+                "type": "string",
+                "enum": ["default", "custom"],
+                "default": "default",
+                "required": true,
+                "enumNames": ["Default", "Custom"],
+                "ui": {
+                    "widget": "radio",
+                    "hidden": false,
+                    "label": "Control Config",
+                    "help": "Controls custom experimental feature flags for the crawler",
+                    "placeholder": "Control Config",
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please select a valid configuration"
+                        }
+                    ]
+                }
+            },
+            "control-config": {
+                "type": "string",
+                "ui": {
+                    "label": "Custom Config",
+                    "help": "Custom JSON config controlling experimental feature flags for the crawler",
+                    "placeholder": "{\"feature_x\":true}",
+                    "hidden": false,
+                    "default": "{}"
+                }
+            },
+            "metadata-s3-bucket": {
+                "type": "string",
+                "required": true,
+                "default": "",
+                "ui": {
+                    "hidden": false,
+                    "label": "Bucket Name",
+                    "placeholder": "my_bucket_name",
+                    "feedback": true,
+                    "help": "Name of the bucket/storage that contains the extracted metadata files.",
+                    "grid": 4
+                }
+            },
+            "metadata-s3-prefix": {
+                "type": "string",
+                "required": true,
+                "ui": {
+                    "hidden": false,
+                    "label": "Bucket Prefix",
+                    "placeholder": "path_to_file",
+                    "feedback": true,
+                    "help": "The prefix is everything after the bucket/storage name, including the `path`.",
+                    "grid": 4,
+                    "rules": [
+                        {
+                            "required": true,
+                            "message": "Please enter a valid bucket prefix"
+                        }
+                    ]
+                }
+            },
+            "metadata-s3-region": {
+                "type": "string",
+                "required": false,
+                "default": "",
+                "ui": {
+                    "hidden": false,
+                    "label": "Bucket Region",
+                    "placeholder": "region_name",
+                    "feedback": true,
+                    "help": "The name of the region if applicable.",
+                    "grid": 4
+                }
+            }
+        },
+        "anyOf": [
+            {
+                "properties": {
+                    "extraction-method": {
+                        "const": "direct"
+                    }
+                },
+                "required": [
+                    "credential-guid",
+                    "exclude-filter",
+                    "include-filter",
+                    "temp-table-regex",
+                    "preflight-check"
+                ]
+            },
+            {
+                "properties": {
+                    "extraction-method": {
+                        "const": "s3"
+                    }
+                },
+                "required": [
+                    "metadata-s3-bucket",
+                    "metadata-s3-prefix",
+                    "metadata-s3-region",
+                    "preflight-check-s3"
+                ]
+            },
+            {
+                "properties": {
+                    "credentials-fetch-strategy": {
+                        "const": "k8s_secret"
+                    }
+                },
+                "required": ["credential-kube-secret-name"]
+            },
+            {
+                "properties": {
+                    "extraction-method": {
+                        "const": "direct"
+                    },
+                    "credentials-fetch-strategy": {
+                        "const": "credential_guid"
+                    }
+                },
+                "required": ["credential-guid"]
+            },
+            {
+                "properties": {
+                    "advanced-config": {
+                        "const": "custom"
+                    }
+                },
+                "required": [
+                    "cross-connection",
+                    "use-jdbc-internal-methods",
+                    "use-source-schema-filtering"
+                ]
+            },
+            {
+                "properties": {
+                    "advanced-config": {
+                        "const": "custom"
+                    }
+                },
+                "required": ["control-config-strategy"]
+            },
+            {
+                "properties": {
+                    "advanced-config": {
+                        "const": "custom"
+                    },
+                    "control-config-strategy": {
+                        "const": "custom"
+                    }
+                },
+                "required": ["control-config"]
+            }
+        ],
+        "steps": [
+            {
+                "id": "credential",
+                "title": "Credential",
+                "description": "Credential Details",
+                "properties": [
+                    "extraction-method",
+                    "credential-guid",
+                    "metadata-s3-bucket",
+                    "metadata-s3-prefix",
+                    "metadata-s3-region"
+                ]
+            },
+            {
+                "id": "connection",
+                "title": "Connection",
+                "description": "Connection Details",
+                "properties": ["connection"]
+            },
+            {
+                "id": "metadata",
+                "title": "Metadata",
+                "description": "Metadata",
+                "properties": [
+                    "temp-table-regex",
+                    "cross-connection",
+                    "control-config-strategy",
+                    "control-config",
+                    "use-jdbc-internal-methods",
+                    "use-source-schema-filtering",
+                    "preflight-check",
+                    "preflight-check-s3"
+                ]
+            }
+        ]
+    }
+}

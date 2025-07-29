@@ -16,9 +16,24 @@ export default defineNuxtConfig({
     '@vueuse/nuxt'
   ],
 
+
+
+  app: {
+    pageTransition: {
+      name: 'page',
+      mode: 'out-in'
+    }
+  },
+
   alias: {
     'styled-system': resolve('./styled-system')
   },
+
+  components: {
+    global: true,
+    dirs: ['~/components'],
+  },
+
 
   css: [
     '~/assets/css/global.css',

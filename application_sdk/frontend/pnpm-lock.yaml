@@ -50,6 +50,9 @@ importers:
       radash:
         specifier: ^12.1.1
         version: 12.1.1
+      typescript:
+        specifier: ^5.8.3
+        version: 5.8.3
       vue:
         specifier: ^3.5.17
         version: 3.5.18(typescript@5.8.3)
