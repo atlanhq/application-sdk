@@ -201,9 +201,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
 
-            workflow_run_id = workflow.info().run_id
-            workflow_args["workflow_run_id"] = workflow_run_id
-
             logger.info(f"Starting extraction workflow for {workflow_id}")
             retry_policy = RetryPolicy(
                 maximum_attempts=6,
