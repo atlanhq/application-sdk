@@ -1,4 +1,3 @@
-import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Sequence, Type
@@ -192,13 +191,70 @@ class EventInterceptor(Interceptor):
         return EventWorkflowInboundInterceptor
 
 
+async def create_auth_service_client(
+    auth_manager: AtlanAuthClient, **connection_options
+):
+    """Factory function to create an auth-aware service client.
+
+    This function uses Client.connect() to create a proper service client, then
+    enhances it with automatic token refresh via health check monkey patching.
+
+    Args:
+        auth_manager: The authentication manager instance
+        **connection_options: Same options as Client.connect()
+
+    Returns:
+        ServiceClient: An enhanced service client with auth refresh
+    """
+
+    # Use Client.connect() to create the service client properly
+    temp_client = await Client.connect(**connection_options)
+    service_client = temp_client.service_client
+
+    # Don't close the temp client yet - we need to keep the service client alive
+    # Just clear the reference to avoid confusion
+    temp_client = None
+
+    # Monkey patch the check_health method for token refresh
+    original_check_health = service_client.check_health
+
+    async def auth_check_health(*args, **kwargs):
+        logger.info("🔍 MONKEY PATCH CALLED: Health check intercepted!")
+        if auth_manager.auth_enabled:
+            try:
+                token = await auth_manager.get_access_token()
+                if token:
+                    service_client.update_rpc_metadata(
+                        {"authorization": f"Bearer {token}"}
+                    )
+                    logger.info(
+                        "✅ Updated service client metadata during health check"
+                    )
+                else:
+                    logger.warning("⚠️ No token available during health check")
+            except Exception as e:
+                logger.warning(f"❌ Token refresh failed during health check: {e}")
+
+        result = await original_check_health(*args, **kwargs)
+        logger.info(f"🏥 Health check completed with result: {result}")
+        return result
+
+    # Replace the method and verify it worked
+    service_client.check_health = auth_check_health
+    logger.info(f"🔧 Monkey patch applied to {type(service_client).__name__}")
+
+    return service_client
+
+
 class TemporalWorkflowClient(WorkflowClient):
-    """Temporal-specific implementation of WorkflowClient with simple token refresh.
+    """Temporal-specific implementation of WorkflowClient with health check-based token refresh.
 
     This class provides an implementation of the WorkflowClient interface for
     the Temporal workflow engine. It handles connection management, workflow
-    execution, and worker creation specific to Temporal. The client uses a
-    simple token refresh mechanism that updates client.rpc_metadata periodically.
+    execution, and worker creation specific to Temporal.
+
+    Token refresh is handled automatically through Temporal's health check mechanism
+    (every 30 seconds by default) rather than using a separate background thread.
 
     Attributes:
         client: Temporal client instance.
@@ -208,8 +264,7 @@ class TemporalWorkflowClient(WorkflowClient):
         host (str): Temporal server host.
         port (str): Temporal server port.
         namespace (str): Temporal namespace.
-        _token_refresh_task: Background task for token refresh.
-        _token_refresh_interval: Interval in seconds for token refresh.
+        auth_manager (AtlanAuthClient): Authentication manager instance.
     """
 
     def __init__(
@@ -242,12 +297,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
         self.auth_manager = AtlanAuthClient()
-
         self.auth_enabled = WORKFLOW_AUTH_ENABLED
-
-        # Token refresh configuration - will be determined dynamically
-        self._token_refresh_interval: Optional[int] = None
-        self._token_refresh_task: Optional[asyncio.Task] = None
 
         logger = get_logger(__name__)
         workflow.logger = logger
@@ -290,53 +340,18 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         return self.namespace
 
-    async def _token_refresh_loop(self) -> None:
-        """Background loop that refreshes the authentication token dynamically."""
-        if not self.auth_enabled or not self.client:
-            return
-
-        while True:
-            try:
-                # Recalculate refresh interval each time in case token expiry changes
-                refresh_interval = self.auth_manager.calculate_refresh_interval()
-
-                await asyncio.sleep(refresh_interval)
-
-                # Get fresh token
-                token = await self.auth_manager.get_access_token()
-                if token:
-                    # Update client metadata - this works even while worker is running
-                    self.client.rpc_metadata = {"authorization": f"Bearer {token}"}
-                    logger.info("Updated client RPC metadata with fresh token")
-
-                    # Update our stored refresh interval for next iteration
-                    self._token_refresh_interval = (
-                        self.auth_manager.calculate_refresh_interval()
-                    )
-                else:
-                    logger.warning(
-                        "Failed to get fresh token - keeping existing metadata"
-                    )
-
-            except asyncio.CancelledError:
-                logger.info("Token refresh loop cancelled")
-                break
-            except Exception as e:
-                logger.error(f"Error in token refresh loop: {e}")
-                # Continue the loop even if there's an error, but wait a bit
-                await asyncio.sleep(60)  # Wait 1 minute before retrying
-
     async def load(self) -> None:
-        """Connect to the Temporal server and start token refresh if needed.
+        """Connect to the Temporal server using custom ServiceClient with token refresh.
 
-        Establishes a connection to the Temporal server using the configured
-        connection string and namespace. If authentication is enabled, sets up
-        automatic token refresh using rpc_metadata updates.
+        Establishes a connection to the Temporal server using a custom ServiceClient
+        that automatically refreshes authentication tokens during health checks.
 
         Raises:
             ConnectionError: If connection to the Temporal server fails.
             ValueError: If authentication is enabled but credentials are missing.
         """
+
+        # Prepare connection options (same as Client.connect())
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
@@ -351,58 +366,51 @@ class TemporalWorkflowClient(WorkflowClient):
                     connection_options["rpc_metadata"] = {
                         "authorization": f"Bearer {token}"
                     }
-                    logger.info("Added initial auth token to client connection")
+                    logger.info("Added initial auth token to connection")
                 else:
                     logger.warning(
                         "No initial token available - connecting without auth"
                     )
-
             except Exception as e:
                 logger.error(f"Failed to get authentication token: {e}")
                 raise
 
-        # Create the client
-        self.client = await Client.connect(**connection_options)
+        # Create auth-aware service client using factory
+        service_client = await create_auth_service_client(
+            auth_manager=self.auth_manager, **connection_options
+        )
 
-        # Start token refresh loop if auth is enabled
-        if self.auth_enabled and self.client:
-            # Calculate initial refresh interval based on token expiry
-            self._token_refresh_interval = (
-                self.auth_manager.calculate_refresh_interval()
-            )
-            self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
+        # Create the client using the enhanced service client
+        self.client = Client(service_client=service_client)
+
+        if self.client and hasattr(self.client, "service_client"):
             logger.info(
-                f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
+                "🧪 TESTING: About to force a health check just to check if health check is working..."
             )
+            try:
+                result = await self.client.service_client.check_health()
+                logger.info(f"🧪 TESTING: Forced health check result: {result}")
+            except Exception as e:
+                logger.error(f"🧪 TESTING: Forced health check failed: {e}")
+
+        logger.info("Connected to Temporal with auth-aware service client")
 
     async def close(self) -> None:
-        """Close the Temporal client connection and stop token refresh.
+        """Close the Temporal client connection.
 
-        Gracefully closes the connection to the Temporal server, stops the
-        token refresh loop, and clears any authentication tokens.
+        Gracefully closes the connection to the Temporal server and clears
+        any authentication tokens.
         """
-        # Cancel token refresh task
-        if self._token_refresh_task:
-            self._token_refresh_task.cancel()
-            try:
-                await self._token_refresh_task
-            except asyncio.CancelledError:
-                pass
-            self._token_refresh_task = None
-            logger.info("Stopped token refresh loop")
-
-        # Close client connection
         if self.client:
             try:
                 await self.client.close()
+                logger.info("Closed Temporal client connection")
             except Exception as e:
                 logger.warning(f"Error closing client connection: {e}")
 
         # Clear auth cache
         if hasattr(self, "auth_manager"):
             self.auth_manager.clear_cache()
-
-    # Remove the run_worker_with_token_refresh method since it's not needed anymore
 
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
@@ -497,9 +505,8 @@ class TemporalWorkflowClient(WorkflowClient):
         passthrough_modules: Sequence[str],
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
         activity_executor: Optional[ThreadPoolExecutor] = None,
-        auto_start_token_refresh: bool = True,
     ) -> Worker:
-        """Create a Temporal worker with automatic token refresh.
+        """Create a Temporal worker.
 
         Args:
             activities (Sequence[CallableType]): Activity functions to register.
@@ -507,8 +514,7 @@ class TemporalWorkflowClient(WorkflowClient):
             passthrough_modules (Sequence[str]): Modules to pass through to the sandbox.
             max_concurrent_activities (int | None): Maximum number of concurrent activities.
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
-            auto_start_token_refresh (bool): Whether to automatically start token refresh.
-                Set to False if you've already started it via load().
+
         Returns:
             Worker: The created worker instance.
 
@@ -523,20 +529,6 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor = ThreadPoolExecutor(
                 max_workers=max_concurrent_activities or 5,
                 thread_name_prefix="activity-pool-",
-            )
-
-        # Start token refresh if not already started and auth is enabled
-        if (
-            auto_start_token_refresh
-            and self.auth_enabled
-            and not self._token_refresh_task
-        ):
-            self._token_refresh_interval = (
-                self.auth_manager.calculate_refresh_interval()
-            )
-            self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
-            logger.info(
-                f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
             )
 
         return Worker(
