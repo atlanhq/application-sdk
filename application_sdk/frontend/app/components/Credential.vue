@@ -4,7 +4,7 @@
     import { useForm } from '@tanstack/vue-form'
     import { FormInjectionKey } from '~/constants/workflows'
     import { buildCredentialBody } from '~/utils/buildCredentialBody'
-    import { crush } from 'radash'
+    import { crush, omit } from 'radash'
 
     const FormItem = defineAsyncComponent(
         () => import('~/components/DynamicForm.vue')
@@ -25,14 +25,35 @@
             )
     )
 
+    const formState = form.useStore((state) =>
+        omit(state.values, ['credential_guid_body'])
+    )
+
+    watch(
+        formState,
+        (updatedFormState) => {
+            if (updatedFormState) {
+                form.setFieldValue(
+                    'credential_guid_body',
+                    buildCredentialBody(
+                        crush(updatedFormState),
+                        property.id,
+                        property.ui?.credentialType,
+                        undefined
+                    )
+                )
+            }
+        },
+        {
+            immediate: true,
+        }
+    )
+
     watch(
         data,
         (updatedData) => {
             Object.entries(
-                getDefaultValuesFromConfigMap(
-                    updatedData.data.config,
-                    property.id
-                )
+                getDefaultValuesFromConfigMap(updatedData.data.config)
             ).forEach(([key, value]) => {
                 if (!form.state.values[`${property.id}.${key}`]) {
                     form.setFieldValue(`${property.id}.${key}`, value)

@@ -7,7 +7,7 @@ export function getDefaultValuesFromConfigMap(
         if (value.default) {
             defaultValues[key] = value.default
         } else if (value.properties) {
-            defaultValues[key] = getDefaultValuesFromConfigMap(value, key)
+            defaultValues[key] = getDefaultValuesFromConfigMap(value)
         }
     })
 

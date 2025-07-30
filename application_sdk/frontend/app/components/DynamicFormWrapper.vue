@@ -2,6 +2,7 @@
     import { useForm } from '@tanstack/vue-form'
     import { FormInjectionKey } from '~/constants/workflows'
     import { getDefaultValuesFromConfigMap } from '~/utils/getDefaultValuesFromConfigMap'
+    import { pick } from 'radash'
 
     const props = defineProps<{
         configMap: Record<string, unknown>
@@ -18,7 +19,18 @@
     provide(FormInjectionKey, form)
 
     async function validate() {
-        return formRefEl.value.validate()
+        try {
+            const formValues = await formRefEl.value.validate()
+
+            return props.currentStep
+                ? pick(formValues, [
+                      ...props.currentStep.properties,
+                      'credential_guid_body',
+                  ])
+                : formValues
+        } catch (_error) {
+            throw _error
+        }
     }
 
     defineExpose({

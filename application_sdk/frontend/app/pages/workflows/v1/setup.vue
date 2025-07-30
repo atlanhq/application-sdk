@@ -1,6 +1,6 @@
 <script setup lang="ts">
     // libraries
-    import { Heading, Link, Stepper, Button } from '@atlanhq/atlantis'
+    import { Heading, Link, Stepper, Button, toast } from '@atlanhq/atlantis'
 
     const { data: fetchedWorkflowTemplate } = await useAsyncData(
         'workflow',
@@ -50,25 +50,40 @@
             if (currentStep.value === steps.value.length) {
                 // Submit workflow with collected form data
                 try {
-                    const workflowResponse = await $fetch(
-                        'http://localhost:8000/workflows/v1/start',
+                    await $fetch('http://localhost:8000/workflows/v1/start', {
+                        method: 'POST',
+                        body: {
+                            ...formState.value,
+                            connection: {
+                                connection_name: 'test-connection',
+                                connection_qualified_name: `default/${workflowTemplate.value.id}/${Math.round(new Date().getTime() / 1000)}`,
+                            },
+                            credential: formValues.credential_guid_body,
+                        },
+                    })
+
+                    toast.success('Workflow started successfully!', {
+                        placement: 'top',
+                    })
+
+                    currentStep.value = 1
+                } catch (apiError) {
+                    toast.failed(
+                        'Failed to start workflow: ' + apiError.message,
                         {
-                            method: 'POST',
-                            body: formState.value,
+                            placement: 'top',
                         }
                     )
-
-                    if (workflowResponse.success) {
-                        //
-                    } else {
-                        //
-                    }
-                } catch (apiError) {
-                    //
                 }
+
+                return
             }
 
             currentStep.value = currentStep.value + 1
+        } catch (error) {
+            toast.failed('Failed to validate form: ' + error.message, {
+                placement: 'top',
+            })
         } finally {
             isValidating.value = false
         }

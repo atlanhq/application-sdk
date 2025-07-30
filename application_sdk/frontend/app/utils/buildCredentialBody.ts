@@ -4,7 +4,6 @@ export const buildCredentialBody = (
     configName,
     name
 ) => {
-    console.log('formState', formState)
     const extra = {}
     const authType = formState[`${propertyId}.auth-type`]
     const connector = formState[`${propertyId}.connector`]

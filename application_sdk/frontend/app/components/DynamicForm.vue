@@ -3,7 +3,7 @@
     import { getFieldValidators } from '~/utils/getFieldValidators'
     import { FormInjectionKey } from '~/constants/workflows'
     import { useForm } from '@tanstack/vue-form'
-    import { crush } from 'radash'
+    import { crush, pick } from 'radash'
 
     const { configMap, baseKey, currentStep } = defineProps<{
         configMap: Record<string, unknown>
@@ -202,7 +202,7 @@
     async function validate() {
         await form.handleSubmit()
 
-        if (!form.state.isFormValid) {
+        if (!form.state.isValid) {
             throw new Error('Form is invalid')
         }
 
