@@ -263,7 +263,7 @@ class TemporalWorkflowClient(WorkflowClient):
             str: The task queue name in format "app_name-deployment_name".
         """
         if DEPLOYMENT_NAME:
-            return f"{self.application_name}-{DEPLOYMENT_NAME}"
+            return f"atlan-{self.application_name}-{DEPLOYMENT_NAME}"
         else:
             return self.application_name
 
