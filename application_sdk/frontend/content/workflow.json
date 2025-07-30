@@ -16,7 +16,11 @@
                 "type": "string",
                 "enum": ["production", "test", "dev"],
                 "default": "production",
-                "enumNames": ["Elite Four Challenge", "Gym Battle", "Training Mode"],
+                "enumNames": [
+                    "Elite Four Challenge",
+                    "Gym Battle",
+                    "Training Mode"
+                ],
                 "ui": {
                     "widget": "select",
                     "label": "Battle Mode",
@@ -404,12 +408,6 @@
                     "metadata-s3-prefix",
                     "metadata-s3-region"
                 ]
-            },
-            {
-                "id": "connection",
-                "title": "Poké Center",
-                "description": "Poké Center Connection Details",
-                "properties": ["connection"]
             },
             {
                 "id": "metadata",

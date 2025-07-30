@@ -4,17 +4,17 @@ const { resolve } = createResolver(import.meta.url)
 
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
-  compatibilityDate: '2025-07-15',
-  devtools: { enabled: true },
+    compatibilityDate: '2025-07-15',
+    devtools: { enabled: true },
 
-  modules: [
-    '@nuxt/content',
-    '@nuxt/eslint',
-    '@nuxt/fonts',
-    '@nuxt/scripts',
-    '@nuxt/test-utils',
-    '@vueuse/nuxt'
-  ],
+    modules: [
+        '@nuxt/content',
+        '@nuxt/eslint',
+        '@nuxt/fonts',
+        '@nuxt/scripts',
+        '@nuxt/test-utils',
+        '@vueuse/nuxt',
+    ],
 
 
 
@@ -25,9 +25,9 @@ export default defineNuxtConfig({
     }
   },
 
-  alias: {
-    'styled-system': resolve('./styled-system')
-  },
+    alias: {
+        'styled-system': resolve('./styled-system'),
+    },
 
   components: {
     global: true,
@@ -35,16 +35,15 @@ export default defineNuxtConfig({
   },
 
 
-  css: [
-    '~/assets/css/global.css',
-    '@atlanhq/atlantis/dist/styles.css',
-  ],
+    css: ['~/assets/css/global.css', '@atlanhq/atlantis/dist/styles.css'],
 
-  postcss: {
-    plugins: {
-      tailwindcss: {},
-      autoprefixer: {},
-      '@pandacss/dev/postcss': {},
-    }
-  }
+    postcss: {
+        plugins: {
+            tailwindcss: {},
+            autoprefixer: {},
+            '@pandacss/dev/postcss': {},
+        },
+    },
+
+    ssr: false,
 })

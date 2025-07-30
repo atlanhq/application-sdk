@@ -10,4 +10,24 @@ export default {
         extend: {},
     },
     plugins: [],
+    safelist: [
+        {
+            pattern: /col-span-.+/,
+        },
+        {
+            pattern: /col-start-.+/,
+        },
+        {
+            pattern: /col-end-.+/,
+        },
+        {
+            pattern: /row-span-.+/,
+        },
+        {
+            pattern: /grid-cols-.+/,
+        },
+        'shadow-rc',
+        'col-auto',
+        'row-auto',
+    ],
 } satisfies Config

@@ -1,5 +1,6 @@
 import type { InjectionKey, Ref } from 'vue'
+import type { useForm } from '@tanstack/vue-form'
 
-export const FormStateInjectionKey = Symbol('formState') as InjectionKey<
-    Ref<Record<string, unknown>>
+export const FormInjectionKey = Symbol('form') as InjectionKey<
+    ReturnType<typeof useForm>
 >

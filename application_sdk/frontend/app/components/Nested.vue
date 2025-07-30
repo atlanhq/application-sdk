@@ -1,20 +1,14 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import type { NestedWidget } from '~/types/workflows'
+    const FormItem = defineAsyncComponent(
+        () => import('~/components/DynamicForm.vue')
+    )
 
-const { property, propertyId } = defineProps<{
-    property: NestedWidget
-    propertyId: string
-}>()
-
-const configMap = computed(() => ({
-    properties: property
-}))
+    const { property } = defineProps<{
+        property: Record<string, unknown>
+        modelValue: string | undefined
+    }>()
 </script>
 
 <template>
-        <DynamicForm 
-            :config-map="configMap" 
-            :base-key="propertyId" 
-        />
+    <FormItem :configMap="property" :baseKey="property.id" />
 </template>

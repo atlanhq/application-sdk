@@ -2,9 +2,10 @@
     import { Segmented } from '@atlanhq/atlantis'
     import type { RadioWidget } from '~/types/workflows'
 
-    const { property } = defineProps<{ property: RadioWidget }>()
-
-    const modelValue = defineModel<string>({ default: '' })
+    const { property, field } = defineProps<{
+        property: RadioWidget
+        field: unknown
+    }>()
 
     const radioOptions = computed(() => {
         if (property.enum && property.enumNames) {
@@ -19,6 +20,10 @@
 
 <template>
     <div>
-        <Segmented v-model="modelValue" :options="radioOptions" />
+        <Segmented
+            :modelValue="field.state.value"
+            :options="radioOptions"
+            @update:modelValue="field.handleChange"
+        />
     </div>
 </template>

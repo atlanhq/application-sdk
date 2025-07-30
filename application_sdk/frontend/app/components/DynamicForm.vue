@@ -1,27 +1,24 @@
 <script setup lang="ts">
-    import { FormStateInjectionKey } from '~/constants/workflows'
-    import { Label, Heading } from '@atlanhq/atlantis'
-    import { sift, construct } from 'radash'
+    import { Label } from '@atlanhq/atlantis'
+    import { getFieldValidators } from '~/utils/getFieldValidators'
+    import { FormInjectionKey } from '~/constants/workflows'
+    import { useForm } from '@tanstack/vue-form'
+    import { crush } from 'radash'
 
     const { configMap, baseKey, currentStep } = defineProps<{
         configMap: Record<string, unknown>
         baseKey?: string
-        currentStep?: Record<string, unknown>
+        currentStep?: {}
     }>()
 
-    const modelValue = defineModel<Record<string, unknown>>({ default: {} })
-    const formState = inject(FormStateInjectionKey)
+    const form = inject(FormInjectionKey) as ReturnType<typeof useForm>
 
-    const getCol = (grid = 8, start?: number, end?: number) => {
-        let _grid = grid
+    const formState = form.useStore((state) => crush(state.values))
 
-        if (!grid) {
-            _grid = 8
-        }
-
-        let c = `col-span-${_grid}`
+    const getCol = (grid: number = 8, start, end) => {
+        let c = `col-span-${grid}`
         if (start) c += ` col-start-${start}`
-        if (end) c += ` col-end-${end}`
+        if (end) c += ` col-start-${start}`
 
         return c
     }
@@ -34,72 +31,31 @@
         return name
     }
 
-    const setDefaultValue = () => {
-        if (configMap?.properties && formState?.value) {
-            const properties = configMap.properties as Record<string, Record<string, unknown>>
-            Object.keys(properties).forEach((key) => {
-                const property = properties[key]
-                if (property) {
-                    const propertyName = getName(key)
-                    
-                    if (formState.value && [undefined, null].includes(formState.value[propertyName] as null | undefined)) {
-                        let defaultValue
-                        if (['boolean', 'number'].includes(property.type as string)) {
-                            defaultValue = property.default
-                        } else {
-                            defaultValue = property.default?.toString()
-                        }
-                        
-                        // Set in formState
-                        formState.value[propertyName] = defaultValue
-                        
-                        // Also set in modelValue for Atlantis components
-                        if (modelValue.value && defaultValue !== undefined) {
-                            modelValue.value[propertyName] = defaultValue
-                        }
-                    }
-                }
-            })
-        }
-    }
-
-    // Use Nuxt lifecycle hook instead of Vue's onBeforeMount
-    onMounted(() => {
-        setDefaultValue()
-    })
-
     const finalConfigMap = computed(() => {
         const clonedConfigMap = JSON.parse(JSON.stringify(configMap))
 
         if (clonedConfigMap.anyOf) {
-            clonedConfigMap.anyOf.forEach((item: Record<string, unknown>) => {
-                const required = item.required as string[]
-                required.forEach((i: string) => {
+            clonedConfigMap.anyOf.forEach((item) => {
+                item.required.forEach((i) => {
                     if (
                         clonedConfigMap.properties &&
                         clonedConfigMap.properties[i]
                     ) {
-                        const property = clonedConfigMap.properties[i] as Record<string, unknown>
-                        property.ui = {
-                            ...(property.ui as Record<string, unknown> || {}),
-                            hidden: true
-                        }
+                        clonedConfigMap.properties[i].ui.hidden = true
                     }
                 })
             })
 
-            const findMatch: Record<string, unknown>[] = []
+            const findMatch = []
 
-            clonedConfigMap.anyOf.forEach((item: Record<string, unknown>) => {
-                const properties = item.properties as Record<string, unknown>
-                const loopStop = Object.keys(properties).every((i: string) => {
+            clonedConfigMap.anyOf.forEach((item) => {
+                const loopStop = Object.keys(item.properties).every((i) => {
                     if (
-                        formState?.value?.[getName(i)]?.toString() ===
-                        (properties[i] as Record<string, unknown>)?.const?.toString()
+                        formState.value[getName(i)]?.toString() ===
+                        item.properties[i]?.const?.toString()
                     ) {
                         return true
                     }
-                    return false
                 })
                 if (loopStop) {
                     findMatch.push(item)
@@ -107,18 +63,13 @@
             })
 
             if (findMatch.length > 0) {
-                findMatch.forEach((i: Record<string, unknown>) => {
-                    const required = i.required as string[]
-                    required.forEach((i: string) => {
+                findMatch.forEach((i) => {
+                    i.required.forEach((i) => {
                         if (
                             clonedConfigMap.properties &&
                             clonedConfigMap.properties[i]
                         ) {
-                            const property = clonedConfigMap.properties[i] as Record<string, unknown>
-                            property.ui = {
-                                ...(property.ui as Record<string, unknown> || {}),
-                                hidden: false
-                            }
+                            clonedConfigMap.properties[i].ui.hidden = false
                         }
                     })
                 })
@@ -129,49 +80,23 @@
     })
 
     const getPropertyFromConfigMap = (key: string) => {
-        const property = finalConfigMap.value?.properties?.[key] as Record<string, unknown>
+        const property = finalConfigMap.value?.properties[key]
 
         let baseObj = {
             id: getName(key),
             name: getName(key),
         }
 
-        if (property?.type === 'conditional') {
+        if (property.type === 'conditional') {
             const { conditions, ...rest } = property
-            const matchingCondition = (conditions as Record<string, unknown>[])?.find((condition: Record<string, unknown>) => {
-                if (condition.filter) {
-                    const sanitisedFormValue = {} as Record<string, unknown>
-                    const allKeys = Object.keys(formState?.value || {})
-
-                    Object.entries(formState?.value || {}).forEach(
-                        ([_key, _value]) => {
-                            if (
-                                _key.includes('.') ||
-                                allKeys.every((objectKey) =>
-                                    objectKey === _key
-                                        ? true
-                                        : !objectKey.startsWith(_key)
-                                )
-                            ) {
-                                sanitisedFormValue[_key] = _value
-                            }
-                        }
-                    )
-
-                    return (
-                        [construct(sanitisedFormValue)].filter(
-                            (item) => (sift as unknown as (filter: Record<string, unknown>) => (item: unknown) => boolean)(condition.filter as Record<string, unknown>)(item)
-                        ).length > 0
-                    )
-                }
-
+            const matchingCondition = conditions?.find((condition) => {
                 if (condition.regex) {
-                    return new RegExp(condition.regex as string).test(
-                        formState?.value?.[condition.property as string] as string
+                    return new RegExp(condition.regex).test(
+                        formState.value[condition.property]
                     )
                 }
 
-                return formState?.value?.[condition.property as string] === condition.value
+                return formState.value[condition.property] === condition.value
             })
 
             baseObj = {
@@ -187,47 +112,41 @@
     }
 
     const list = computed(() => {
-        const temp: Record<string, unknown>[] = []
+        {
+            const temp = []
 
-        if (finalConfigMap.value?.properties) {
-            if (currentStep?.properties) {
-                const properties = currentStep.properties as string[]
-                properties.forEach((key: string) => {
-                    const found = Object.keys(
-                        finalConfigMap?.value?.properties || {}
-                    ).find((k) => k === key)
-                    if (found) {
-                        const property = finalConfigMap.value?.properties?.[key] as Record<string, unknown>
-                        if (!(property?.ui as Record<string, unknown>)?.hidden) {
-                            temp.push(getPropertyFromConfigMap(key))
+            if (finalConfigMap.value?.properties) {
+                if (currentStep?.properties) {
+                    currentStep.properties.forEach((key) => {
+                        const found = Object.keys(
+                            finalConfigMap?.value?.properties
+                        ).find((k) => k === key)
+                        if (found) {
+                            if (
+                                !finalConfigMap.value?.properties[key].ui
+                                    ?.hidden
+                            ) {
+                                temp.push(getPropertyFromConfigMap(key))
+                            }
                         }
-                    }
-                })
-            } else {
-                Object.keys(finalConfigMap?.value?.properties || {}).forEach(
-                    (key: string) => {
-                        const property = finalConfigMap.value?.properties?.[key] as Record<string, unknown>
-                        if (!(property?.ui as Record<string, unknown>)?.hidden) {
-                            temp.push(getPropertyFromConfigMap(key))
+                    })
+                } else {
+                    Object.keys(finalConfigMap?.value?.properties).forEach(
+                        (key) => {
+                            if (
+                                !finalConfigMap.value?.properties[key].ui
+                                    ?.hidden
+                            ) {
+                                temp.push(getPropertyFromConfigMap(key))
+                            }
                         }
-                    }
-                )
+                    )
+                }
             }
+
+            return temp
         }
-
-        return temp
     })
-
-    const staticWidgets = [
-        'header',
-        'divider',
-        'evaluate',
-        'FivetranPrerequisites',
-        'FivetranNoSupportedConnections',
-        'CloudProvider',
-        'InfoBanner',
-        'FivetranDeprecationWarning',
-    ]
 
     const compoundWidgets = [
         'credential',
@@ -241,13 +160,12 @@
         'JDBCUrlGroup',
     ]
 
-    const componentName = (property: Record<string, unknown>): string => {
-        if (!(property.ui as Record<string, unknown>)?.widget) {
+    const componentName = (property) => {
+        if (!property.ui?.widget) {
             switch (property.type) {
                 case 'string':
-                    return 'Input'
                 case 'number':
-                    return 'InputNumber'
+                    return resolveComponent('Input')
                 case 'boolean':
                     return 'Boolean'
                 case 'array':
@@ -259,76 +177,115 @@
                 case 'banner':
                     return 'Banner'
                 default:
-                    return 'Input'
+                    return resolveComponent('Input')
             }
         } else {
-            switch ((property.ui as Record<string, unknown>)?.widget) {
+            switch (property.ui?.widget) {
                 case 'divider':
                     return 'a-divider'
                 case 'header':
                     return 'h5'
+                case 'credential':
+                    return resolveComponent('Credential')
+                case 'nested':
+                    return resolveComponent('Nested')
+                case 'input':
+                    return resolveComponent('Input')
+                case 'select':
+                    return resolveComponent('Select')
                 default:
-                    return (property.ui as Record<string, unknown>).widget as string
+                    return property.ui.widget
             }
         }
     }
+
+    async function validate() {
+        await form.handleSubmit()
+
+        if (!form.state.isFormValid) {
+            throw new Error('Form is invalid')
+        }
+
+        return form.state.values
+    }
+
+    defineExpose({
+        validate,
+    })
 </script>
 
 <template>
-    <div class="grid grid-cols-8 gap-x-4">
+    <div class="grid grid-cols-8 gap-x-4 gap-y-4">
         <template v-for="property in list" :key="`${property.id}`">
             <div
-                v-if="!(property.ui as Record<string, unknown>)?.hidden"
+                v-if="!property.ui?.hidden"
                 :class="
                     getCol(
-                        (property.ui as Record<string, unknown>)?.grid as number,
-                        (property.ui as Record<string, unknown>)?.start as number,
-                        (property.ui as Record<string, unknown>)?.end as number
+                        property.ui?.grid,
+                        property.ui?.start,
+                        property.ui?.end
                     )
                 "
             >
-                <!-- Compound Widgets -->
-                <Component
-                    :is="componentName(property)"
-                    v-if="compoundWidgets.includes(componentName(property))"
-                    v-model="modelValue[(property.id as string)]"
-                    :property="property"
-                />
-
-                <!-- Static Widgets -->
-                <Component
-                    :is="componentName(property)"
-                    v-else-if="staticWidgets.includes((property.ui as Record<string, unknown>)?.widget as string)"
-                    :class="(property.ui as Record<string, unknown>)?.class"
-                    :style="(property.ui as Record<string, unknown>)?.style"
-                    :property="property"
+                <form.Field
+                    v-if="compoundWidgets.includes(property?.ui?.widget)"
+                    :name="property.id"
+                    :validators="getFieldValidators(property)"
                 >
-                    {{ (property.ui as Record<string, unknown>)?.label }}
-                </Component>
+                    <template v-slot="{ field }">
+                        <Component
+                            :is="componentName(property)"
+                            :field="field"
+                            :property="property"
+                        />
 
-                <div v-else>
-                    <!-- Render heading or label -->
-                    <Heading 
-                        v-if="(property.ui as Record<string, unknown>)?.heading" 
-                        as="h2" 
-                        size="lg" 
-                        class="mb-4 col-span-8"
-                    >
-                        {{ (property.ui as Record<string, unknown>)?.heading }}
-                    </Heading>
-                    
-                    <Label v-else-if="(property.ui as Record<string, unknown>)?.label">
-                        {{ (property.ui as Record<string, unknown>)?.label }}
-                    </Label>
+                        <span
+                            v-if="
+                                field.state.meta.isTouched &&
+                                !field.state.meta.isValid
+                            "
+                            class="text-red-500 text-xs"
+                        >
+                            {{ field.state.meta.errors.join(', ') }}
+                        </span>
+                    </template>
+                </form.Field>
 
-                    <Component
-                        :is="componentName(property)"
-                        v-model="modelValue[(property.id as string)]"
-                        :base-key="baseKey"
-                        :property="property"
-                        :disabled="(property.ui as Record<string, unknown>)?.disabled"
-                    />
-                </div>
+                <form.Field
+                    v-else
+                    :name="property.id"
+                    :validators="getFieldValidators(property)"
+                >
+                    <template v-slot="{ field }">
+                        <Label v-if="property.ui?.label">
+                            {{ property.ui?.label }}
+
+                            <span
+                                v-if="property?.required"
+                                class="text-red-500"
+                            >
+                                *
+                            </span>
+                        </Label>
+
+                        <Component
+                            :is="componentName(property)"
+                            :field="field"
+                            :baseKey="baseKey"
+                            :property="property"
+                        />
+
+                        <span
+                            v-if="
+                                field.state.meta.isTouched &&
+                                !field.state.meta.isValid
+                            "
+                            class="text-red-500 text-xs"
+                        >
+                            {{ field.state.meta.errors.join(', ') }}
+                        </span>
+                    </template>
+                </form.Field>
             </div>
         </template>
     </div>

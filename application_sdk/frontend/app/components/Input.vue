@@ -1,23 +1,24 @@
 <script setup lang="ts">
-import { Input } from '@atlanhq/atlantis'
-import type { InputWidget } from '~/types/workflows'
+    import { Input } from '@atlanhq/atlantis'
+    import type { InputWidget } from '~/types/workflows'
 
-const { property, disabled } = defineProps<{
-    property: InputWidget & { ui: Record<string, unknown> }
-    disabled?: boolean
-}>()
+    const { property, disabled, field } = defineProps<{
+        property: InputWidget & { ui: Record<string, unknown> }
+        disabled?: boolean
+        field: unknown
+    }>()
 
-const modelValue = defineModel<string>()
-
-const componentProps = computed(() => property.ui)
-</script> 
+    const componentProps = computed(() => property.ui)
+</script>
 
 <template>
-        <Input
-            v-model="modelValue"
-            v-bind="componentProps"
-            :disabled="property.BYOCdisabled || disabled"
-            variant="default"
-            state="idle"
-        />
+    <Input
+        :modelValue="field.state.value"
+        v-bind="componentProps"
+        :disabled="property.BYOCdisabled || disabled"
+        variant="default"
+        state="idle"
+        @update:modelValue="field.handleChange"
+        @blur="field.handleBlur"
+    />
 </template>

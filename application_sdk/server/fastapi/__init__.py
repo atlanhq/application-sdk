@@ -1,28 +1,19 @@
+import os
 import time
 from typing import Any, Callable, List, Optional, Type
 
 # Import with full paths to avoid naming conflicts
 from fastapi import status
 from fastapi.applications import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
 from uvicorn import Config, Server
 
 from application_sdk.clients.workflow import WorkflowClient
-from application_sdk.constants import (
-    APP_DASHBOARD_HOST,
-    APP_DASHBOARD_PORT,
-    APP_HOST,
-    APP_PORT,
-    APP_TENANT_ID,
-    APPLICATION_NAME,
-    EVENT_STORE_NAME,
-    WORKFLOW_UI_HOST,
-    WORKFLOW_UI_PORT,
-)
+from application_sdk.constants import APP_HOST, APP_PORT, EVENT_STORE_NAME
 from application_sdk.docgen import AtlanDocsGenerator
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.statestore import StateStoreInput, StateType
@@ -34,6 +25,7 @@ from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
+    ConfigMapResponse,
     EventWorkflowRequest,
     EventWorkflowResponse,
     EventWorkflowTrigger,
@@ -90,7 +82,6 @@ class APIServer(ServerInterface):
     dapr_router: APIRouter
     events_router: APIRouter
     handler: Optional[HandlerInterface]
-    templates: Jinja2Templates
     duckdb_ui: DuckDBUI
 
     docs_directory_path: str = "docs"
@@ -106,7 +97,6 @@ class APIServer(ServerInterface):
         lifespan=None,
         handler: Optional[HandlerInterface] = None,
         workflow_client: Optional[WorkflowClient] = None,
-        frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
     ):
         """Initialize the FastAPI application.
@@ -119,7 +109,6 @@ class APIServer(ServerInterface):
         # First, set the instance variables
         self.handler = handler
         self.workflow_client = workflow_client
-        self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
 
@@ -143,10 +132,18 @@ class APIServer(ServerInterface):
         # Add middleware
         self.app.add_middleware(LogMiddleware)
         self.app.add_middleware(MetricsMiddleware)
+        self.app.add_middleware(
+            CORSMiddleware,
+            allow_credentials=True,
+            allow_origins=["*"],
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
         # Register routers and setup docs
         self.register_routers()
         self.setup_atlan_docs()
+        self.setup_frontend_static_files()
 
         # Initialize parent class
         super().__init__(handler)
@@ -178,6 +175,39 @@ class APIServer(ServerInterface):
         except Exception as e:
             logger.warning(str(e))
 
+    def setup_frontend_static_files(self):
+        """Set up static file serving for Nuxt.js generated assets.
+
+        Mounts the Nuxt.js .output/public directory to serve static assets
+        like CSS, JS, and other resources referenced by the HTML.
+        """
+        frontend_public_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "frontend",
+            ".output",
+            "public",
+        )
+
+        if os.path.exists(frontend_public_path):
+            self.app.mount(
+                "/_nuxt",
+                StaticFiles(directory=os.path.join(frontend_public_path, "_nuxt")),
+                name="frontend_assets",
+            )
+            # Mount other static assets if they exist
+            for static_dir in ["_fonts", "__nuxt_content"]:
+                static_path = os.path.join(frontend_public_path, static_dir)
+                if os.path.exists(static_path):
+                    self.app.mount(
+                        f"/{static_dir}",
+                        StaticFiles(directory=static_path),
+                        name=f"frontend_{static_dir.replace('_', '')}",
+                    )
+        else:
+            logger.warning(
+                f"Frontend public directory not found at: {frontend_public_path}"
+            )
+
     def register_routers(self):
         """Register all routers with the FastAPI application.
 
@@ -197,20 +227,26 @@ class APIServer(ServerInterface):
         self.app.include_router(self.events_router, prefix="/events/v1")
 
     async def home(self, request: Request) -> HTMLResponse:
-        return self.templates.TemplateResponse(
+        """Serve the Nuxt.js generated HTML file."""
+        # Path to the Nuxt.js generated HTML file relative to the project root
+        frontend_html_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "frontend",
+            ".output",
+            "public",
             "index.html",
-            {
-                "request": request,
-                "app_dashboard_http_port": APP_DASHBOARD_PORT,
-                "app_dashboard_http_host": APP_DASHBOARD_HOST,
-                "app_http_port": APP_PORT,
-                "app_http_host": APP_HOST,
-                "tenant_id": APP_TENANT_ID,
-                "app_name": APPLICATION_NAME,
-                "workflow_ui_host": WORKFLOW_UI_HOST,
-                "workflow_ui_port": WORKFLOW_UI_PORT,
-            },
         )
+
+        try:
+            with open(frontend_html_path, "r", encoding="utf-8") as file:
+                contents = file.read()
+            return HTMLResponse(content=contents)
+        except FileNotFoundError:
+            logger.error(f"Frontend HTML file not found at: {frontend_html_path}")
+            return HTMLResponse(
+                content="<html><body><h1>Frontend not built</h1><p>Please run 'nuxt build' in the frontend directory.</p></body></html>",
+                status_code=404,
+            )
 
     def register_workflow(
         self, workflow_class: Type[WorkflowInterface], triggers: List[WorkflowTrigger]
@@ -291,6 +327,34 @@ class APIServer(ServerInterface):
                     status=EventWorkflowResponse.Status.DROP,
                 )
 
+        # Create a closure for the get_configmap function that captures workflow_class
+        async def get_configmap_handler(config_map_id: str) -> ConfigMapResponse:
+            try:
+                # Create an instance of the workflow class
+                workflow_instance = workflow_class()
+
+                # Call the getConfigmap method on the workflow instance
+                config_map_data = await workflow_instance.get_configmap(config_map_id)
+
+                return ConfigMapResponse(
+                    success=True,
+                    message="Configuration map fetched successfully",
+                    data=config_map_data,
+                )
+            except NotImplementedError:
+                return ConfigMapResponse(
+                    success=False,
+                    message="getConfigmap method not implemented in workflow",
+                    data={},
+                )
+            except Exception as e:
+                logger.error(f"Error fetching configuration map: {e}")
+                return ConfigMapResponse(
+                    success=False,
+                    message=f"Failed to fetch configuration map: {str(e)}",
+                    data={},
+                )
+
         for trigger in triggers:
             # Set the workflow class on the trigger
             trigger.workflow_class = workflow_class
@@ -318,6 +382,16 @@ class APIServer(ServerInterface):
 
                 self.app.include_router(self.events_router, prefix="/events/v1")
 
+        # Register the configmap route for this workflow
+        self.workflow_router.add_api_route(
+            "/configmap/{config_map_id}",
+            get_configmap_handler,
+            methods=["GET"],
+            response_model=ConfigMapResponse,
+        )
+
+        self.app.include_router(self.workflow_router, prefix="/workflows/v1")
+
     def register_routes(self):
         """
         Method to register the routes for the FastAPI application
@@ -330,6 +404,12 @@ class APIServer(ServerInterface):
             response_class=RedirectResponse,
         )
 
+        self.workflow_router.add_api_route(
+            "/setup",
+            self.home,
+            methods=["GET"],
+            response_class=HTMLResponse,
+        )
         self.workflow_router.add_api_route(
             "/auth",
             self.test_auth,
@@ -392,8 +472,6 @@ class APIServer(ServerInterface):
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.home)
-        # Mount static files
-        self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
 
     async def get_dapr_subscriptions(
         self,
