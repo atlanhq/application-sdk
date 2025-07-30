@@ -290,33 +290,6 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         return self.namespace
 
-    def _calculate_refresh_interval(self) -> int:
-        """Calculate the optimal token refresh interval based on token expiry.
-
-        Returns:
-            int: Refresh interval in seconds
-        """
-        # Try to get token expiry time
-        expiry_time = self.auth_manager.get_token_expiry_time()
-        if expiry_time:
-            # Calculate time until expiry
-            time_until_expiry = self.auth_manager.get_time_until_expiry()
-            if time_until_expiry and time_until_expiry > 0:
-                # Refresh at 80% of the token lifetime, but at least every 5 minutes
-                # and at most every 30 minutes
-                refresh_interval = max(
-                    5 * 60,  # Minimum 5 minutes
-                    min(
-                        30 * 60,  # Maximum 30 minutes
-                        int(time_until_expiry * 0.8),  # 80% of token lifetime
-                    ),
-                )
-                return refresh_interval
-
-        # Default fallback: refresh every 14 minutes
-        logger.info("Using default token refresh interval: 14 minutes")
-        return 14 * 60
-
     async def _token_refresh_loop(self) -> None:
         """Background loop that refreshes the authentication token dynamically."""
         if not self.auth_enabled or not self.client:
@@ -325,7 +298,7 @@ class TemporalWorkflowClient(WorkflowClient):
         while True:
             try:
                 # Recalculate refresh interval each time in case token expiry changes
-                refresh_interval = self._calculate_refresh_interval()
+                refresh_interval = self.auth_manager.calculate_refresh_interval()
 
                 await asyncio.sleep(refresh_interval)
 
@@ -337,7 +310,9 @@ class TemporalWorkflowClient(WorkflowClient):
                     logger.info("Updated client RPC metadata with fresh token")
 
                     # Update our stored refresh interval for next iteration
-                    self._token_refresh_interval = self._calculate_refresh_interval()
+                    self._token_refresh_interval = (
+                        self.auth_manager.calculate_refresh_interval()
+                    )
                 else:
                     logger.warning(
                         "Failed to get fresh token - keeping existing metadata"
@@ -392,7 +367,9 @@ class TemporalWorkflowClient(WorkflowClient):
         # Start token refresh loop if auth is enabled
         if self.auth_enabled and self.client:
             # Calculate initial refresh interval based on token expiry
-            self._token_refresh_interval = self._calculate_refresh_interval()
+            self._token_refresh_interval = (
+                self.auth_manager.calculate_refresh_interval()
+            )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
@@ -554,7 +531,9 @@ class TemporalWorkflowClient(WorkflowClient):
             and self.auth_enabled
             and not self._token_refresh_task
         ):
-            self._token_refresh_interval = self._calculate_refresh_interval()
+            self._token_refresh_interval = (
+                self.auth_manager.calculate_refresh_interval()
+            )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"

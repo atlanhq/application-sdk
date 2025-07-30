@@ -90,6 +90,12 @@ async def test_credential_discovery_from_secret_store(
             "test_app_client_id": "discovered-client",
             "test_app_client_secret": "discovered-secret",
         },
+    ), patch(
+        "application_sdk.clients.atlanauth.WORKFLOW_AUTH_CLIENT_ID_KEY",
+        "test_app_client_id",
+    ), patch(
+        "application_sdk.clients.atlanauth.WORKFLOW_AUTH_CLIENT_SECRET_KEY",
+        "test_app_client_secret",
     ), patch("aiohttp.ClientSession.post") as mock_post:
         mock_response = AsyncMock()
         mock_response.status = 200

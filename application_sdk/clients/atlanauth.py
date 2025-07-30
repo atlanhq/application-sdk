@@ -11,7 +11,9 @@ from application_sdk.constants import (
     DEPLOYMENT_SECRET_COMPONENT,
     DEPLOYMENT_SECRET_NAME,
     WORKFLOW_AUTH_CLIENT_ID,
+    WORKFLOW_AUTH_CLIENT_ID_KEY,
     WORKFLOW_AUTH_CLIENT_SECRET,
+    WORKFLOW_AUTH_CLIENT_SECRET_KEY,
     WORKFLOW_AUTH_ENABLED,
     WORKFLOW_AUTH_URL,
 )
@@ -84,9 +86,8 @@ class AtlanAuthClient:
         # Fall back to secret store
         credentials = await self._fetch_app_credentials_from_store()
         if not credentials:
-            app_name = self.application_name.lower().replace("-", "_")
             raise ClientError(
-                f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. Expected either: 1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET 2. Secret store with key 'atlan-deployment-secrets' containing: {app_name}_client_id, {app_name}_client_secret"
+                f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. Expected either: 1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET 2. Secret store with key '{DEPLOYMENT_SECRET_NAME}' containing: {WORKFLOW_AUTH_CLIENT_ID_KEY}, {WORKFLOW_AUTH_CLIENT_SECRET_KEY} (or configure ATLAN_WORKFLOW_AUTH_CLIENT_ID_KEY, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET_KEY)"
             )
 
         # Store the credentials from secret store
@@ -150,6 +151,13 @@ class AtlanAuthClient:
                     )
 
                 token_data = await response.json()
+
+                # Validate required fields exist
+                if "access_token" not in token_data or "expires_in" not in token_data:
+                    raise ClientError(
+                        f"{ClientError.AUTH_TOKEN_REFRESH_ERROR}: Missing required fields in OAuth2 response"
+                    )
+
                 self._access_token = token_data["access_token"]
                 self._token_expiry = current_time + token_data["expires_in"]
 
@@ -235,10 +243,9 @@ class AtlanAuthClient:
                 DEPLOYMENT_SECRET_NAME, DEPLOYMENT_SECRET_COMPONENT
             )
 
-            # Auth-specific key generation
-            app_name = self.application_name.lower().replace("-", "_")
-            client_id_key = f"{app_name}_client_id"
-            client_secret_key = f"{app_name}_client_secret"
+            # Use configured key names from constants
+            client_id_key = WORKFLOW_AUTH_CLIENT_ID_KEY
+            client_secret_key = WORKFLOW_AUTH_CLIENT_SECRET_KEY
 
             if client_id_key in secret_data and client_secret_key in secret_data:
                 return {
@@ -259,3 +266,30 @@ class AtlanAuthClient:
         self.credentials = None
         self._access_token = None
         self._token_expiry = 0
+
+    def calculate_refresh_interval(self) -> int:
+        """Calculate the optimal token refresh interval based on token expiry.
+
+        Returns:
+            int: Refresh interval in seconds
+        """
+        # Try to get token expiry time
+        expiry_time = self.get_token_expiry_time()
+        if expiry_time:
+            # Calculate time until expiry
+            time_until_expiry = self.get_time_until_expiry()
+            if time_until_expiry and time_until_expiry > 0:
+                # Refresh at 80% of the token lifetime, but at least every 5 minutes
+                # and at most every 30 minutes
+                refresh_interval = max(
+                    5 * 60,  # Minimum 5 minutes
+                    min(
+                        30 * 60,  # Maximum 30 minutes
+                        int(time_until_expiry * 0.8),  # 80% of token lifetime
+                    ),
+                )
+                return refresh_interval
+
+        # Default fallback: refresh every 14 minutes
+        logger.info("Using default token refresh interval: 14 minutes")
+        return 14 * 60

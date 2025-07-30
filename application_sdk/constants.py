@@ -111,6 +111,17 @@ WORKFLOW_AUTH_CLIENT_ID = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_ID", "")
 #: OAuth2 client secret for Temporal authentication (primary source, falls back to fetching from secret store)
 WORKFLOW_AUTH_CLIENT_SECRET = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_SECRET", "")
 
+# OAuth2 Secret Store Key Names
+#: Key name for client ID in secret store (defaults to {app_name}_client_id)
+app_name = APPLICATION_NAME.lower().replace("-", "_")
+WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(
+    "ATLAN_WORKFLOW_AUTH_CLIENT_ID_KEY", f"{app_name}_client_id"
+)
+#: Key name for client secret in secret store (defaults to {app_name}_client_secret)
+WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
+    "ATLAN_WORKFLOW_AUTH_CLIENT_SECRET_KEY", f"{app_name}_client_secret"
+)
+
 # Workflow Constants
 #: Timeout duration for activity heartbeats
 HEARTBEAT_TIMEOUT = timedelta(
