@@ -21,7 +21,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     EVENT_STORE_NAME,
     HTTP_BINDING_NAME,
-    IS_EXTERNAL_DEPLOYMENT,
+    SEND_EVENTS_VIA_HTTP,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -113,8 +113,8 @@ class EventStore:
     """
 
     @classmethod
-    def _publish_to_external(cls, event: Event):
-        """Publish event to external deployment via HTTP binding."""
+    def _publish_via_http_binding(cls, event: Event):
+        """Publish event via HTTP binding."""
         payload = json.dumps(event.model_dump(mode="json"))
 
         # Get authentication token
@@ -153,13 +153,11 @@ class EventStore:
                 data=payload,
                 binding_metadata=binding_metadata,
             )
-            logger.info(
-                f"Published event to external deployment: {event.get_topic_name()}"
-            )
+            logger.info(f"Published event via HTTP binding: {event.get_topic_name()}")
 
     @classmethod
-    def _publish_to_internal(cls, event: Event):
-        """Publish event to internal pub/sub system."""
+    def _publish_via_pubsub(cls, event: Event):
+        """Publish event via pub/sub system."""
         with clients.DaprClient() as client:
             client.publish_event(
                 pubsub_name=EVENT_STORE_NAME,
@@ -167,7 +165,7 @@ class EventStore:
                 data=json.dumps(event.model_dump(mode="json")),
                 data_content_type="application/json",
             )
-            logger.info(f"Published event to internal pubsub: {event.get_topic_name()}")
+            logger.info(f"Published event via pub/sub: {event.get_topic_name()}")
 
     @classmethod
     def enrich_event_metadata(cls, event: Event):
@@ -221,11 +219,11 @@ class EventStore:
             if enrich_metadata:
                 event = cls.enrich_event_metadata(event)
 
-            # Choose publishing method based on deployment type
-            if IS_EXTERNAL_DEPLOYMENT:
-                cls._publish_to_external(event)
+            # Choose publishing method based on configuration
+            if SEND_EVENTS_VIA_HTTP:
+                cls._publish_via_http_binding(event)
             else:
-                cls._publish_to_internal(event)
+                cls._publish_via_pubsub(event)
 
         except Exception as e:
             logger.error(f"Error publishing event to {event.get_topic_name()}: {e}")

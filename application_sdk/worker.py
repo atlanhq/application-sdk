@@ -10,6 +10,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, List, Optional, Sequence
 
+from pydantic import BaseModel
 from temporalio.types import CallableType, ClassType
 from temporalio.worker import Worker as TemporalWorker
 
@@ -24,6 +25,38 @@ from application_sdk.outputs.eventstore import (
 )
 
 logger = get_logger(__name__)
+
+
+class WorkerCreationData(BaseModel):
+    """Model for worker creation event data.
+
+    This model represents the data structure used when publishing worker creation events.
+    It contains information about the worker configuration and environment.
+
+    Attributes:
+        application_name: Name of the application the worker belongs to.
+        task_queue: Task queue name for the worker.
+        namespace: Temporal namespace for the worker.
+        host: Host address of the Temporal server.
+        port: Port number of the Temporal server.
+        connection_string: Connection string for the Temporal server.
+        max_concurrent_activities: Maximum number of concurrent activities.
+        workflow_count: Number of workflow classes registered.
+        activity_count: Number of activity functions registered.
+        passthrough_modules: List of module names to pass through.
+    """
+
+    application_name: str
+    task_queue: str
+    namespace: str
+    host: str
+    port: int
+    connection_string: str
+    max_concurrent_activities: Optional[int]
+    workflow_count: int
+    activity_count: int
+    passthrough_modules: List[str]
+
 
 if sys.platform not in ("win32", "cygwin"):
     try:
@@ -120,18 +153,18 @@ class Worker:
             worker_creation_event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
                 event_name=ApplicationEventNames.WORKER_CREATED.value,
-                data={
-                    "application_name": self.workflow_client.application_name,
-                    "task_queue": self.workflow_client.worker_task_queue,
-                    "namespace": self.workflow_client.namespace,
-                    "host": self.workflow_client.host,
-                    "port": self.workflow_client.port,
-                    "connection_string": self.workflow_client.get_connection_string(),
-                    "max_concurrent_activities": max_concurrent_activities,
-                    "workflow_count": len(workflow_classes),
-                    "activity_count": len(workflow_activities),
-                    "passthrough_modules": list(passthrough_modules),
-                },
+                data=WorkerCreationData(
+                    application_name=self.workflow_client.application_name,
+                    task_queue=self.workflow_client.worker_task_queue,
+                    namespace=self.workflow_client.namespace,
+                    host=self.workflow_client.host,
+                    port=self.workflow_client.port,
+                    connection_string=self.workflow_client.get_connection_string(),
+                    max_concurrent_activities=max_concurrent_activities,
+                    workflow_count=len(workflow_classes),
+                    activity_count=len(workflow_activities),
+                    passthrough_modules=list(passthrough_modules),
+                ).model_dump(),
             )
 
             EventStore.publish_event(worker_creation_event)

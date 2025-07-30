@@ -62,11 +62,6 @@ DEPLOYMENT_SECRET_COMPONENT = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_COMPONENT", "atlan-deployment-secret-component"
 )
 
-#: Whether the application is deployed externally (true for external, false for internal)
-IS_EXTERNAL_DEPLOYMENT = (
-    os.getenv("ATLAN_APP_DEPLOYMENT_LOCATION", "internal").lower() == "external"
-)
-
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
@@ -154,7 +149,10 @@ OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: Name of the HTTP binding component in DAPR
 HTTP_BINDING_NAME = os.getenv("HTTP_BINDING_NAME", "http-binding")
-
+#: Whether to send events via HTTP (defaults to False)
+SEND_EVENTS_VIA_HTTP = (
+    os.getenv("ATLAN_SEND_EVENTS_VIA_HTTP", "false").lower() == "true"
+)
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
