@@ -4,7 +4,7 @@
 
     const { data: fetchedWorkflowTemplate } = await useAsyncData(
         'workflow',
-        () => $fetch('http://localhost:8000/workflows/v1/configmap/workflow')
+        () => $fetch('/workflows/v1/configmap/workflow')
     )
 
     const workflowTemplate = computed(() => fetchedWorkflowTemplate.value.data)
@@ -50,7 +50,7 @@
             if (currentStep.value === steps.value.length) {
                 // Submit workflow with collected form data
                 try {
-                    await $fetch('http://localhost:8000/workflows/v1/start', {
+                    await $fetch('/workflows/v1/start', {
                         method: 'POST',
                         body: {
                             ...formState.value,

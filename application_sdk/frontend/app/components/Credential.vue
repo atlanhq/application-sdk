@@ -19,10 +19,7 @@
 
     const { data } = await useAsyncData(
         () => `credential_${property.ui.credentialType}`,
-        () =>
-            $fetch(
-                `http://localhost:8000/workflows/v1/configmap/${property.ui.credentialType}`
-            )
+        () => $fetch(`/workflows/v1/configmap/${property.ui.credentialType}`)
     )
 
     const formState = form.useStore((state) =>
@@ -72,7 +69,7 @@
         isTesting.value = true
 
         try {
-            await $fetch('http://localhost:8000/workflows/v1/auth', {
+            await $fetch('/workflows/v1/auth', {
                 method: 'POST',
                 body: JSON.stringify(
                     buildCredentialBody(
