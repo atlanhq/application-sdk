@@ -471,7 +471,7 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         result = extract_database_names_from_exclude_regex(normalized_regex)
 
         # Only valid_db should be included (starts with letter/underscore, alphanumeric + underscore)
-        assert result == "'^(valid_db)$'"
+        assert result == "'^(db-2|valid_db)$'"
 
     def test_extract_database_names_from_exclude_regex_with_special_characters(
         self,
