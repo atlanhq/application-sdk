@@ -88,11 +88,10 @@ def _extract_database_names_from_regex_common(
                         continue
 
                 # Validate database name format
-                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
+                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_$-]*$", db_name):
                     database_names.add(db_name)
                 else:
                     logger.warning(f"Invalid database name format: {db_name}")
-
             except Exception as e:
                 logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
                 continue
