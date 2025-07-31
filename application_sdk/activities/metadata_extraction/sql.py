@@ -13,7 +13,6 @@ from application_sdk.common.utils import prepare_query, read_sql_files
 from application_sdk.constants import (
     APP_TENANT_ID,
     APPLICATION_NAME,
-    ENABLE_ATLAN_UPLOAD,
     SQL_QUERIES_PATH,
     TEMPORARY_PATH,
 )
@@ -536,12 +535,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             ValueError: If workflow_id or workflow_run_id are missing.
             ActivityError: If the upload fails with any migration errors when ENABLE_ATLAN_UPLOAD is true.
         """
-        # Check if Atlan upload is enabled
-        if not ENABLE_ATLAN_UPLOAD:
-            logger.info("Atlan upload activity disabled via configuration")
-            return ActivityStatistics(
-                total_record_count=0, chunk_count=0, typename="atlan-upload-disabled"
-            )
 
         # Get workflow arguments with fallbacks
         workflow_id = workflow_args.get("workflow_id")

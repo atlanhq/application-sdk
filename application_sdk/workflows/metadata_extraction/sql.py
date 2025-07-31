@@ -69,15 +69,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_columns,
             activities.fetch_procedures,
             activities.transform_data,
+            activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
         ]
-
-        # Conditionally add Atlan upload activity
-        if ENABLE_ATLAN_UPLOAD:
-            base_activities.append(activities.upload_to_atlan)
-            logger.info("Atlan upload activity enabled")
-        else:
-            logger.info("Atlan upload activity disabled - running in internal mode")
-
         return base_activities
 
     async def fetch_and_transform(

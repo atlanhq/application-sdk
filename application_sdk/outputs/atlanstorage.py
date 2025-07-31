@@ -64,10 +64,6 @@ class AtlanStorageOutput:
             # Get file data from objectstore
             file_data = ObjectStoreInput.get_file_data(file_path)
 
-            # Upload to Atlan storage
-            file_size = len(file_data)
-            logger.debug(f"Uploading file {file_path} with size {file_size} bytes")
-
             with DaprClient() as client:
                 metadata = {"key": file_path}
 
@@ -121,16 +117,11 @@ class AtlanStorageOutput:
                     destination=UPSTREAM_OBJECT_STORE_NAME,
                 )
 
-            if total_files > 0:
-                logger.info(
-                    f"Files to migrate: {files_to_migrate[:5]}..."
-                )  # Log first 5 files
-
             # Create migration tasks for all files
-            migration_tasks = []
-            for file_path in files_to_migrate:
-                task = cls._migrate_single_file(file_path)
-                migration_tasks.append(task)
+            migration_tasks = [
+                asyncio.create_task(cls._migrate_single_file(file_path))
+                for file_path in files_to_migrate
+            ]
 
             # Execute all migrations in parallel
             logger.info(f"Starting parallel migration of {total_files} files")
