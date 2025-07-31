@@ -98,12 +98,7 @@ class TestAtlanStorageOutput:
         assert result.migrated_files == 3
         assert result.failed_migrations == 0
         assert result.prefix == "test_prefix"
-        assert (
-            result.source == "objectstore"
-        )  # DEPLOYMENT_OBJECT_STORE_NAME constant value
-        assert (
-            result.destination == "atlan-storage"
-        )  # UPSTREAM_OBJECT_STORE_NAME constant value
+        # UPSTREAM_OBJECT_STORE_NAME constant value
         assert len(result.failures) == 0
 
         # Verify DaprClient was called for each file

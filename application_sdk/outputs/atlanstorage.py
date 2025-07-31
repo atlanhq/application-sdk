@@ -62,7 +62,9 @@ class AtlanStorageOutput:
         """
         try:
             # Get file data from objectstore
-            file_data = ObjectStoreInput.get_file_data(file_path)
+            file_data = ObjectStoreInput.get_file_data(
+                file_path, object_store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            )
 
             with DaprClient() as client:
                 metadata = {"key": file_path}
@@ -105,7 +107,9 @@ class AtlanStorageOutput:
             )
 
             # Get list of all files to migrate from objectstore
-            files_to_migrate = ObjectStoreInput.list_all_files(prefix)
+            files_to_migrate = ObjectStoreInput.list_all_files(
+                prefix, object_store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            )
 
             total_files = len(files_to_migrate)
             logger.info(f"Found {total_files} files to migrate")

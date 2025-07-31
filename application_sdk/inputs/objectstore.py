@@ -24,7 +24,11 @@ class ObjectStoreInput:
 
     @classmethod
     def _invoke_dapr_binding(
-        cls, operation: str, metadata: Dict[str, str], data: Optional[bytes] = None
+        cls,
+        operation: str,
+        metadata: Dict[str, str],
+        data: Optional[bytes] = None,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> bytes:
         """
         Common method to invoke Dapr binding operations.
@@ -45,7 +49,7 @@ class ObjectStoreInput:
                 max_grpc_message_length=DAPR_MAX_GRPC_MESSAGE_LENGTH
             ) as client:
                 response = client.invoke_binding(
-                    binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
+                    binding_name=object_store_name,
                     operation=operation,
                     data=data,
                     binding_metadata=metadata,
@@ -53,13 +57,14 @@ class ObjectStoreInput:
                 return response.data
         except Exception as e:
             logger.error(f"Error in Dapr binding operation '{operation}': {str(e)}")
-            raise e
+            raise
 
     @classmethod
     def download_files_from_object_store(
         cls,
         download_file_prefix: str,
         file_path: str,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """
         Downloads all files from the object store for a given prefix.
@@ -107,14 +112,15 @@ class ObjectStoreInput:
                 f"Successfully downloaded all files from: {download_file_prefix}"
             )
         except Exception as e:
-            logger.error(f"Error downloading files from object store: {str(e)}")
-            raise e
+            logger.warning(f"Failed to download files from object store: {str(e)}")
+            raise
 
     @classmethod
     def download_file_from_object_store(
         cls,
         download_file_prefix: str,
         file_path: str,
+        object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Downloads a single file from the object store.
 
@@ -134,7 +140,7 @@ class ObjectStoreInput:
 
         try:
             # Use get_file_data to retrieve the file bytes
-            response_data = cls.get_file_data(relative_path)
+            response_data = cls.get_file_data(relative_path, object_store_name)
 
             # Write the bytes to the local file
             with open(file_path, "wb") as f:
@@ -142,13 +148,15 @@ class ObjectStoreInput:
 
             logger.info(f"Successfully downloaded file: {relative_path}")
         except Exception as e:
-            logger.error(
-                f"Error downloading file {relative_path} to object store: {str(e)}"
+            logger.warning(
+                f"Failed to download file {relative_path} from object store: {str(e)}"
             )
             raise e
 
     @classmethod
-    def list_all_files(cls, prefix: str = "") -> List[str]:
+    def list_all_files(
+        cls, prefix: str = "", object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
+    ) -> List[str]:
         """
         List all files in the object store under a given prefix.
 
@@ -167,7 +175,10 @@ class ObjectStoreInput:
             data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else None
 
             response_data = cls._invoke_dapr_binding(
-                operation=cls.OBJECT_LIST_OPERATION, metadata=metadata, data=data
+                operation=cls.OBJECT_LIST_OPERATION,
+                metadata=metadata,
+                data=data,
+                object_store_name=object_store_name,
             )
 
             if not response_data:
@@ -205,7 +216,9 @@ class ObjectStoreInput:
             raise e
 
     @classmethod
-    def get_file_data(cls, file_path: str) -> bytes:
+    def get_file_data(
+        cls, file_path: str, object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
+    ) -> bytes:
         """
         Get raw file data from the object store.
 
@@ -223,7 +236,10 @@ class ObjectStoreInput:
             data = json.dumps({"key": file_path}).encode("utf-8") if file_path else None
 
             response_data = cls._invoke_dapr_binding(
-                operation=cls.OBJECT_GET_OPERATION, metadata=metadata, data=data
+                operation=cls.OBJECT_GET_OPERATION,
+                metadata=metadata,
+                data=data,
+                object_store_name=object_store_name,
             )
             if not response_data:
                 raise Exception(f"No data received for file: {file_path}")

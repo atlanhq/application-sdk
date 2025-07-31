@@ -7,6 +7,7 @@ from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.credential_utils import get_credentials
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
@@ -18,7 +19,6 @@ from application_sdk.constants import (
 )
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
-from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.atlanstorage import AtlanStorageOutput
@@ -144,9 +144,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self._state[workflow_id].handler = handler
 
         if "credential_guid" in workflow_args:
-            credentials = await SecretStoreInput.fetch_secret(
-                secret_key=workflow_args["credential_guid"]
-            )
+            credentials = get_credentials(workflow_args["credential_guid"])
             await sql_client.load(credentials)
 
         self._state[workflow_id].sql_client = sql_client
@@ -535,23 +533,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             ValueError: If workflow_id or workflow_run_id are missing.
             ActivityError: If the upload fails with any migration errors when ENABLE_ATLAN_UPLOAD is true.
         """
-
-        # Get workflow arguments with fallbacks
-        workflow_id = workflow_args.get("workflow_id")
-        workflow_run_id = workflow_args.get("workflow_run_id")
-
-        logger.info(
-            f"Atlan upload activity called with workflow_id: {workflow_id}, workflow_run_id: {workflow_run_id}"
-        )
-
-        if not workflow_id or not workflow_run_id:
-            logger.error(
-                "Missing required workflow_id or workflow_run_id for Atlan upload"
-            )
-            logger.error(f"Available workflow_args keys: {list(workflow_args.keys())}")
-            raise ValueError(
-                "workflow_id and workflow_run_id are required for Atlan upload"
-            )
 
         # Upload data from object store to Atlan storage
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data

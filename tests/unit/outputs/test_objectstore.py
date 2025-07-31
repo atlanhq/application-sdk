@@ -112,7 +112,9 @@ class TestObjectStoreInput:
             )
 
         # Assertions
-        mock_get_file_data.assert_called_once_with("test.txt")
+        mock_get_file_data.assert_called_once_with(
+            "test.txt", DEPLOYMENT_OBJECT_STORE_NAME
+        )
         mock_file().write.assert_called_once_with(b"test content")
 
     @patch("application_sdk.inputs.objectstore.ObjectStoreInput.get_file_data")
