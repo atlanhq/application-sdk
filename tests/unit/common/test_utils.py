@@ -246,11 +246,13 @@ class TestExtractDatabaseNamesFromRegex:
 
     def test_extract_database_names_from_regex_with_special_characters(self) -> None:
         """Test extracting database names from regex with special characters"""
-        normalized_regex = "db@test\\.schema1|db#test\\.schema2|db_test\\.schema3"
+        normalized_regex = (
+            "db@test\\.schema1|db#test\\.schema2|db_test\\.schema3|db$test\\.schema4"
+        )
         result = extract_database_names_from_regex(normalized_regex)
 
         # Only db_test should be included (valid format)
-        assert result == "'^(db_test)$'"
+        assert result == "'^(db$test|db_test)$'"
 
     def test_extract_database_names_from_regex_with_dot_patterns(self) -> None:
         """Test extracting database names from regex with dot patterns"""
