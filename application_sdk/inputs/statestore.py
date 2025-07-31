@@ -11,6 +11,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     STATE_STORE_PATH_TEMPLATE,
     TEMPORARY_PATH,
+    UPSTREAM_OBJECT_STORE_NAME,
 )
 from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
@@ -79,6 +80,7 @@ class StateStoreInput:
             ObjectStoreInput.download_file_from_object_store(
                 download_file_prefix=TEMPORARY_PATH,
                 file_path=local_state_file_path,
+                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
             with open(local_state_file_path, "r") as file:
@@ -90,7 +92,6 @@ class StateStoreInput:
                 logger.debug(
                     f"No state found for {type.value} with id '{id}', returning empty dict"
                 )
-                pass
             else:
                 logger.error(f"Failed to extract state: {str(e)}")
                 raise

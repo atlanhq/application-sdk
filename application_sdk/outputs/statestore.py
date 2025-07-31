@@ -6,7 +6,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.constants import TEMPORARY_PATH, UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.inputs.statestore import (
     StateStoreInput,
     StateType,
@@ -53,7 +53,9 @@ class StateStoreOutput:
 
             # save the state to the object store
             await ObjectStoreOutput.push_file_to_object_store(
-                output_prefix=TEMPORARY_PATH, file_path=local_state_file_path
+                output_prefix=TEMPORARY_PATH,
+                file_path=local_state_file_path,
+                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
         except Exception as e:
@@ -100,7 +102,9 @@ class StateStoreOutput:
 
             # save the state to the object store
             await ObjectStoreOutput.push_file_to_object_store(
-                output_prefix=TEMPORARY_PATH, file_path=local_state_file_path
+                output_prefix=TEMPORARY_PATH,
+                file_path=local_state_file_path,
+                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
             return current_state
