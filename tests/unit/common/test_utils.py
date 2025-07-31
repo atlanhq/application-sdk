@@ -186,7 +186,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from regex with multiple databases with special characters in database names"""
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$|test-db\\.schema_name$"
-        result = extract_database_names_from_regex(normalized_regex)
+        result = extract_database_names_from_include_regex(normalized_regex)
 
         # Should return sorted database names in regex format
         assert result == "'^(dev|test-db|wide_world_importers)$'"
@@ -260,7 +260,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = (
             "db@test\\.schema1|db#test\\.schema2|db_test\\.schema3|db$test\\.schema4"
         )
-        result = extract_database_names_from_regex(normalized_regex)
+        result = extract_database_names_from_include_regex(normalized_regex)
 
         # Only db_test should be included (valid format)
         assert result == "'^(db$test|db_test)$'"
@@ -369,7 +369,7 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         # This test would require mocking the split operation to raise an exception
         # For now, we'll test with a pattern that should trigger a warning
         normalized_regex = "db1\\.schema1|invalid^pattern|db2\\.schema2"
-        result = extract_database_names_from_regex(normalized_regex)
+        result = extract_database_names_from_include_regex(normalized_regex)
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
