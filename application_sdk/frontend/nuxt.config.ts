@@ -8,7 +8,6 @@ export default defineNuxtConfig({
     devtools: { enabled: true },
 
     modules: [
-        '@nuxt/content',
         '@nuxt/eslint',
         '@nuxt/fonts',
         '@nuxt/scripts',
@@ -16,24 +15,16 @@ export default defineNuxtConfig({
         '@vueuse/nuxt',
     ],
 
-
-
-  app: {
-    pageTransition: {
-      name: 'page',
-      mode: 'out-in'
-    }
-  },
+    app: {
+        pageTransition: {
+            name: 'page',
+            mode: 'out-in',
+        },
+    },
 
     alias: {
         'styled-system': resolve('./styled-system'),
     },
-
-  components: {
-    global: true,
-    dirs: ['~/components'],
-  },
-
 
     css: ['~/assets/css/global.css', '@atlanhq/atlantis/dist/styles.css'],
 

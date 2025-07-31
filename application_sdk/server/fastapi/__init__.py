@@ -5,7 +5,6 @@ from typing import Any, Callable, List, Optional, Type
 # Import with full paths to avoid naming conflicts
 from fastapi import status
 from fastapi.applications import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.routing import APIRouter
@@ -132,13 +131,6 @@ class APIServer(ServerInterface):
         # Add middleware
         self.app.add_middleware(LogMiddleware)
         self.app.add_middleware(MetricsMiddleware)
-        self.app.add_middleware(
-            CORSMiddleware,
-            allow_credentials=True,
-            allow_origins=["*"],
-            allow_methods=["*"],
-            allow_headers=["*"],
-        )
 
         # Register routers and setup docs
         self.register_routers()

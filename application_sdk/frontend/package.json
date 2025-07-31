@@ -1,52 +1,50 @@
 {
-  "name": "nuxt-app",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "prepare": "panda codegen",
-    "build": "nuxt build",
-    "dev": "nuxt dev",
-    "generate": "nuxt generate",
-    "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
-  },
-  "dependencies": {
-    "@atlanhq/atlantis": "^1.13.0",
-    "@atlanhq/atlantis-preset": "^1.13.0",
-    "@nuxt/content": "3.6.3",
-    "@nuxt/eslint": "1.7.0",
-    "@nuxt/fonts": "0.11.4",
-    "@nuxt/kit": "npm:@nuxt/kit-nightly@latest",
-    "@nuxt/scripts": "0.11.10",
-    "@nuxt/test-utils": "3.19.2",
-    "@tanstack/vue-form": "^1.15.0",
-    "@unhead/vue": "^2.0.3",
-    "@vueuse/nuxt": "13.5.0",
-    "async-validator": "^4.2.5",
-    "better-sqlite3": "^12.2.0",
-    "eslint": "^9.0.0",
-    "nuxt": "^4.0.1",
-    "radash": "^12.1.1",
-    "typescript": "^5.8.3",
-    "vue": "^3.5.17",
-    "vue-router": "^4.5.1"
-  },
-  "devDependencies": {
-    "@pandacss/dev": "^0.54.0",
-    "autoprefixer": "^10.4.21",
-    "eslint-config-prettier": "^10.1.8",
-    "postcss": "^8.5.6",
-    "prettier": "3.6.2",
-    "tailwindcss": "3"
-  },
-  "prettier": {
-    "semi": false,
-    "singleQuote": true,
-    "bracketSpacing": true,
-    "useTabs": false,
-    "printWidth": 80,
-    "tabWidth": 4,
-    "trailingComma": "es5",
-    "vueIndentScriptAndStyle": true
-  }
+    "name": "nuxt-app",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "prepare": "panda codegen",
+        "build": "nuxt build",
+        "dev": "nuxt dev",
+        "generate": "nuxt generate",
+        "preview": "nuxt preview",
+        "postinstall": "nuxt prepare"
+    },
+    "dependencies": {
+        "@atlanhq/atlantis": "^1.13.0",
+        "@atlanhq/atlantis-preset": "^1.13.0",
+        "@nuxt/eslint": "1.7.0",
+        "@nuxt/fonts": "0.11.4",
+        "@nuxt/kit": "npm:@nuxt/kit-nightly@latest",
+        "@nuxt/scripts": "0.11.10",
+        "@nuxt/test-utils": "3.19.2",
+        "@tanstack/vue-form": "^1.15.0",
+        "@unhead/vue": "^2.0.3",
+        "@vueuse/nuxt": "13.5.0",
+        "async-validator": "^4.2.5",
+        "eslint": "^9.0.0",
+        "nuxt": "^4.0.1",
+        "radash": "^12.1.1",
+        "typescript": "^5.8.3",
+        "vue": "^3.5.17",
+        "vue-router": "^4.5.1"
+    },
+    "devDependencies": {
+        "@pandacss/dev": "^0.54.0",
+        "autoprefixer": "^10.4.21",
+        "eslint-config-prettier": "^10.1.8",
+        "postcss": "^8.5.6",
+        "prettier": "3.6.2",
+        "tailwindcss": "3"
+    },
+    "prettier": {
+        "semi": false,
+        "singleQuote": true,
+        "bracketSpacing": true,
+        "useTabs": false,
+        "printWidth": 80,
+        "tabWidth": 4,
+        "trailingComma": "es5",
+        "vueIndentScriptAndStyle": true
+    }
 }
