@@ -25,11 +25,9 @@ logger = get_logger(__name__)
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
-def _extract_database_names_from_regex_common(
+def extract_database_names_from_regex_common(
     normalized_regex: str,
     regex_type: str,
-    empty_default: str,
-    require_wildcard_schema: bool = False,
 ) -> str:
     """
     Common implementation for extracting database names from regex patterns.
@@ -43,6 +41,15 @@ def _extract_database_names_from_regex_common(
     Returns:
         str: A regex string in the format ^(name1|name2|...)$ or default values
     """
+    if regex_type == "include":
+        empty_default = "'.*'"
+        require_wildcard_schema = False
+    elif regex_type == "exclude":
+        empty_default = "'^$'"
+        require_wildcard_schema = True
+    else:
+        raise CommonError(f"Invalid regex type: {regex_type}")
+
     try:
         # Handle special cases based on regex type
         if not normalized_regex or normalized_regex == "^$":
@@ -108,71 +115,6 @@ def _extract_database_names_from_regex_common(
         return empty_default
 
 
-def extract_database_names_from_include_regex(normalized_regex: str) -> str:
-    """
-    Extract database names from normalized regex patterns and return a regex string suitable for SQL queries.
-
-    This function parses regex patterns like 'dev\\.external_schema$|wide_world_importers\\.bronze_sales$'
-    or 'dev\\.*|wide_world_importers\\.*' to extract the database names, and returns a regex string
-    like '^(dev|wide_world_importers)$' for use in SQL queries.
-
-    Args:
-        normalized_regex (str): The normalized regex pattern containing database.schema patterns
-
-    Returns:
-        str: A regex string in the format ^(name1|name2|...)$ or '.*' if no names are found.
-
-    Examples:
-        >>> extract_database_names_from_include_regex('dev\\.external_schema$|wide_world_importers\\.bronze_sales$')
-        '^(dev|wide_world_importers)$'
-        >>> extract_database_names_from_include_regex('dev\\.*|wide_world_importers\\.*')
-        '^(dev|wide_world_importers)$'
-        >>> extract_database_names_from_include_regex('^$')
-        '.*'
-
-    Raises:
-        CommonError: If the input is invalid or processing fails
-    """
-    return _extract_database_names_from_regex_common(
-        normalized_regex=normalized_regex,
-        regex_type="include",
-        empty_default="'.*'",
-        require_wildcard_schema=False,
-    )
-
-
-def extract_database_names_from_exclude_regex(normalized_regex: str) -> str:
-    """
-    Extract database names from normalized regex patterns and return a regex string suitable for SQL queries.
-
-    This function parses regex patterns and only extracts database names when all schemas of a database
-    are selected (using wildcards like '.*'). For specific schema patterns, it does not extract database names.
-
-    Args:
-        normalized_regex (str): The normalized regex pattern containing database.schema patterns
-
-    Returns:
-        str: A regex string in the format ^(name1|name2|...)$ or '^$' if no names are found.
-
-    Examples:
-        >>> extract_database_names_from_exclude_regex('dev\\.external_schema$|wide_world_importers\\.bronze_sales$')
-        '^$'  # No database names extracted for specific schemas
-        >>> extract_database_names_from_exclude_regex('dev\\.*|wide_world_importers\\.*')
-        '^(dev|wide_world_importers)$'  # Database names extracted for wildcard schemas
-        >>> extract_database_names_from_exclude_regex('^$')
-        '^$'
-
-    Raises:
-        CommonError: If the input is invalid or processing fails
-    """
-    return _extract_database_names_from_regex_common(
-        normalized_regex=normalized_regex,
-        regex_type="exclude",
-        empty_default="'^$'",
-        require_wildcard_schema=True,
-    )
-
-
 def prepare_query(
     query: Optional[str],
     workflow_args: Dict[str, Any],
@@ -226,11 +168,13 @@ def prepare_query(
         )
 
         # Extract database names from the normalized regex patterns
-        include_databases = extract_database_names_from_include_regex(
-            normalized_include_regex
+        include_databases = extract_database_names_from_regex_common(
+            normalized_regex=normalized_include_regex,
+            regex_type="include",
         )
-        exclude_databases = extract_database_names_from_exclude_regex(
-            normalized_exclude_regex
+        exclude_databases = extract_database_names_from_regex_common(
+            normalized_regex=normalized_exclude_regex,
+            regex_type="exclude",
         )
 
         # Use sets directly for SQL query formatting

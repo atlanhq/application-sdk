@@ -5,8 +5,7 @@ from unittest.mock import mock_open, patch
 
 from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import (
-    extract_database_names_from_exclude_regex,
-    extract_database_names_from_include_regex,
+    extract_database_names_from_regex_common,
     normalize_filters,
     prepare_filters,
     prepare_query,
@@ -176,7 +175,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with multiple databases"""
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should return sorted database names in regex format
         assert result == "'^(dev|wide_world_importers)$'"
@@ -186,7 +188,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from regex with multiple databases with special characters in database names"""
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$|test-db\\.schema_name$"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should return sorted database names in regex format
         assert result == "'^(dev|test-db|wide_world_importers)$'"
@@ -194,7 +199,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     def test_extract_database_names_from_regex_with_wildcard_schemas(self) -> None:
         """Test extracting database names from regex with wildcard schemas"""
         normalized_regex = "dev\\.*|wide_world_importers\\.*"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         assert result == "'^(dev|wide_world_importers)$'"
 
@@ -203,19 +211,28 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with single database"""
         normalized_regex = "test_db\\.schema_name$"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         assert result == "'^(test_db)$'"
 
     def test_extract_database_names_from_include_regex_with_empty_input(self) -> None:
         """Test extracting database names from include regex with empty input"""
-        result = extract_database_names_from_include_regex("")
+        result = extract_database_names_from_regex_common(
+            normalized_regex="",
+            regex_type="include",
+        )
 
         assert result == "'.*'"
 
     def test_extract_database_names_from_include_regex_with_none_input(self) -> None:
         """Test extracting database names from include regex with None input"""
-        result = extract_database_names_from_include_regex(None)  # type: ignore
+        result = extract_database_names_from_regex_common(
+            normalized_regex=None,  # type: ignore
+            regex_type="include",
+        )
 
         assert result == "'.*'"
 
@@ -223,7 +240,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         self,
     ) -> None:
         """Test extracting database names from include regex with non-string input"""
-        result = extract_database_names_from_include_regex(123)  # type: ignore
+        result = extract_database_names_from_regex_common(
+            normalized_regex=123,  # type: ignore
+            regex_type="include",
+        )
 
         assert result == "'.*'"
 
@@ -232,7 +252,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with empty patterns"""
         normalized_regex = "|||"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         assert result == "'.*'"
 
@@ -241,7 +264,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with whitespace patterns"""
         normalized_regex = "   |  db1\\.schema1  |  "
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         assert result == "'^(db1)$'"
 
@@ -250,7 +276,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with invalid database names"""
         normalized_regex = "123db\\.schema1|db-2\\.schema2|valid_db\\.schema3"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Only valid_db should be included (starts with letter/underscore, alphanumeric + underscore)
         assert result == "'^(db-2|valid_db)$'"
@@ -260,7 +289,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = (
             "db@test\\.schema1|db#test\\.schema2|db_test\\.schema3|db$test\\.schema4"
         )
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Only db_test should be included (valid format)
         assert result == "'^(db$test|db_test)$'"
@@ -268,7 +300,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     def test_extract_database_names_from_include_regex_with_dot_patterns(self) -> None:
         """Test extracting database names from include regex with dot patterns"""
         normalized_regex = ".*\\.schema1|^$\\.schema2|db1\\.schema3"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Only db1 should be included (.* and ^$ are excluded)
         assert result == "'^(db1)$'"
@@ -278,7 +313,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with underscore names"""
         normalized_regex = "_test_db\\.schema1|test_db_\\.schema2|_test_db_\\.schema3"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # All should be included as they start with underscore or letter
         assert result == "'^(_test_db|_test_db_|test_db_)$'"
@@ -286,7 +324,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     def test_extract_database_names_from_include_regex_with_mixed_case(self) -> None:
         """Test extracting database names from include regex with mixed case"""
         normalized_regex = "TestDB\\.schema1|test_db\\.schema2|TEST_DB\\.schema3"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # All should be included as they follow valid naming convention
         assert result == "'^(TEST_DB|TestDB|test_db)$'"
@@ -296,7 +337,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with numbers in names"""
         normalized_regex = "db1\\.schema1|db_2\\.schema2|db3_test\\.schema3"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # All should be included as they follow valid naming convention
         assert result == "'^(db1|db3_test|db_2)$'"
@@ -306,7 +350,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with complex patterns"""
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$|test_db\\.*|prod\\.schema1$"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should return all valid database names sorted
         assert result == "'^(dev|prod|test_db|wide_world_importers)$'"
@@ -316,7 +363,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with duplicate names"""
         normalized_regex = "db1\\.schema1|db1\\.schema2|db2\\.schema3|db1\\.schema4"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should deduplicate and return sorted names
         assert result == "'^(db1|db2)$'"
@@ -326,7 +376,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with malformed patterns"""
         normalized_regex = "db1\\.|db2\\.schema2|\\..*|db3"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should handle malformed patterns gracefully
         assert result == "'^(db1|db2|db3)$'"
@@ -336,7 +389,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with ^$ patterns"""
         normalized_regex = "^$"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         assert result == "'.*'"
 
@@ -345,7 +401,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test extracting database names from include regex with .* pattern"""
         normalized_regex = ".*"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         assert result == "'.*'"
 
@@ -355,7 +414,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
     ) -> None:
         """Test that extract_database_names_from_include_regex logs warnings for invalid database names"""
         normalized_regex = "123db\\.schema1|valid_db\\.schema2"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should log warning for invalid database name
         mock_logger.warning.assert_called_with("Invalid database name format: 123db")
@@ -369,7 +431,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         # This test would require mocking the split operation to raise an exception
         # For now, we'll test with a pattern that should trigger a warning
         normalized_regex = "db1\\.schema1|invalid^pattern|db2\\.schema2"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
@@ -385,7 +450,10 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         # This test would require more complex mocking to trigger the general exception handler
         # For now, we'll test the error logging path with a valid input
         normalized_regex = "db1\\.schema1"
-        result = extract_database_names_from_include_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="include",
+        )
 
         # Should not log any errors for valid input
         mock_logger.error.assert_not_called()
@@ -398,7 +466,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with specific schemas"""
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should return empty regex for specific schemas (no database names extracted)
         assert result == "'^$'"
@@ -408,7 +479,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with wildcard schemas"""
         normalized_regex = "dev\\.*|wide_world_importers\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should extract database names for wildcard schemas
         assert result == "'^(dev|wide_world_importers)$'"
@@ -420,20 +494,29 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = (
             "dev\\.external_schema$|wide_world_importers\\.*|test_db\\.schema1$"
         )
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should only extract database names for wildcard schemas
         assert result == "'^(wide_world_importers)$'"
 
     def test_extract_database_names_from_exclude_regex_with_empty_input(self) -> None:
         """Test extracting database names from exclude regex with empty input"""
-        result = extract_database_names_from_exclude_regex("")
+        result = extract_database_names_from_regex_common(
+            normalized_regex="",
+            regex_type="exclude",
+        )
 
         assert result == "'^$'"
 
     def test_extract_database_names_from_exclude_regex_with_none_input(self) -> None:
         """Test extracting database names from exclude regex with None input"""
-        result = extract_database_names_from_exclude_regex(None)  # type: ignore
+        result = extract_database_names_from_regex_common(
+            normalized_regex=None,  # type: ignore
+            regex_type="exclude",
+        )
 
         assert result == "'^$'"
 
@@ -441,7 +524,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         self,
     ) -> None:
         """Test extracting database names from exclude regex with non-string input"""
-        result = extract_database_names_from_exclude_regex(123)  # type: ignore
+        result = extract_database_names_from_regex_common(
+            normalized_regex=123,  # type: ignore
+            regex_type="exclude",
+        )
 
         assert result == "'^$'"
 
@@ -450,7 +536,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with empty patterns"""
         normalized_regex = "|||"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         assert result == "'^$'"
 
@@ -459,7 +548,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with whitespace patterns"""
         normalized_regex = "   |  db1\\.*  |  "
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         assert result == "'^(db1)$'"
 
@@ -468,7 +560,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with invalid database names"""
         normalized_regex = "123db\\.*|db-2\\.*|valid_db\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Only valid_db should be included (starts with letter/underscore, alphanumeric + underscore)
         assert result == "'^(db-2|valid_db)$'"
@@ -478,7 +573,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with special characters"""
         normalized_regex = "db@test\\.*|db#test\\.*|db_test\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Only db_test should be included (valid format)
         assert result == "'^(db_test)$'"
@@ -486,7 +584,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     def test_extract_database_names_from_exclude_regex_with_dot_patterns(self) -> None:
         """Test extracting database names from exclude regex with dot patterns"""
         normalized_regex = ".*\\.*|^$\\.*|db1\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Only db1 should be included (.* and ^$ are excluded)
         assert result == "'^(db1)$'"
@@ -496,7 +597,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with underscore names"""
         normalized_regex = "_test_db\\.*|test_db_\\.*|_test_db_\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # All should be included as they start with underscore or letter
         assert result == "'^(_test_db|_test_db_|test_db_)$'"
@@ -504,7 +608,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     def test_extract_database_names_from_exclude_regex_with_mixed_case(self) -> None:
         """Test extracting database names from exclude regex with mixed case"""
         normalized_regex = "TestDB\\.*|test_db\\.*|TEST_DB\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # All should be included as they follow valid naming convention
         assert result == "'^(TEST_DB|TestDB|test_db)$'"
@@ -514,7 +621,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with numbers in names"""
         normalized_regex = "db1\\.*|db_2\\.*|db3_test\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # All should be included as they follow valid naming convention
         assert result == "'^(db1|db3_test|db_2)$'"
@@ -524,7 +634,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with complex patterns"""
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.*|test_db\\.*|prod\\.schema1$"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should return only database names for wildcard schemas
         assert result == "'^(test_db|wide_world_importers)$'"
@@ -534,7 +647,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with duplicate names"""
         normalized_regex = "db1\\.*|db1\\.*|db2\\.*|db1\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should deduplicate and return sorted names
         assert result == "'^(db1|db2)$'"
@@ -544,7 +660,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with malformed patterns"""
         normalized_regex = "db1\\.|db2\\.*|\\..*|db3\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should handle malformed patterns gracefully
         assert result == "'^(db2|db3)$'"
@@ -554,7 +673,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with ^$ pattern"""
         normalized_regex = "^$"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         assert result == "'^$'"
 
@@ -563,7 +685,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with .* pattern"""
         normalized_regex = ".*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         assert result == "'.*'"
 
@@ -572,7 +697,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test extracting database names from exclude regex with incomplete patterns"""
         normalized_regex = "db1\\.schema1|db2\\.*|db3"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should handle incomplete patterns and only extract for wildcard schemas
         assert result == "'^(db2)$'"
@@ -583,7 +711,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test that extract_database_names_from_exclude_regex logs warnings for invalid database names"""
         normalized_regex = "123db\\.*|valid_db\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should log warning for invalid database name
         mock_logger.warning.assert_called_with("Invalid database name format: 123db")
@@ -595,7 +726,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
     ) -> None:
         """Test that extract_database_names_from_exclude_regex logs warnings for processing errors"""
         normalized_regex = "db1\\.*|invalid-pattern|db2\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should log warning for invalid database name format
         mock_logger.warning.assert_called_with(
@@ -611,7 +745,10 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         # This test would require more complex mocking to trigger the general exception handler
         # For now, we'll test the error logging path with a valid input
         normalized_regex = "db1\\.*"
-        result = extract_database_names_from_exclude_regex(normalized_regex)
+        result = extract_database_names_from_regex_common(
+            normalized_regex=normalized_regex,
+            regex_type="exclude",
+        )
 
         # Should not log any errors for valid input
         mock_logger.error.assert_not_called()
