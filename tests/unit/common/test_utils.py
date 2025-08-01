@@ -177,7 +177,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should return sorted database names in regex format
@@ -190,7 +191,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$|test-db\\.schema_name$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should return sorted database names in regex format
@@ -201,7 +203,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "dev\\.*|wide_world_importers\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'^(dev|wide_world_importers)$'"
@@ -213,7 +216,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "test_db\\.schema_name$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'^(test_db)$'"
@@ -222,7 +226,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         """Test extracting database names from include regex with empty input"""
         result = extract_database_names_from_regex_common(
             normalized_regex="",
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'.*'"
@@ -231,7 +236,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         """Test extracting database names from include regex with None input"""
         result = extract_database_names_from_regex_common(
             normalized_regex=None,  # type: ignore
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'.*'"
@@ -242,7 +248,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         """Test extracting database names from include regex with non-string input"""
         result = extract_database_names_from_regex_common(
             normalized_regex=123,  # type: ignore
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'.*'"
@@ -254,7 +261,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "|||"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'.*'"
@@ -266,7 +274,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "   |  db1\\.schema1  |  "
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'^(db1)$'"
@@ -278,7 +287,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "123db\\.schema1|db-2\\.schema2|valid_db\\.schema3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Only valid_db should be included (starts with letter/underscore, alphanumeric + underscore)
@@ -291,7 +301,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         )
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Only db_test should be included (valid format)
@@ -302,7 +313,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = ".*\\.schema1|^$\\.schema2|db1\\.schema3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Only db1 should be included (.* and ^$ are excluded)
@@ -315,7 +327,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "_test_db\\.schema1|test_db_\\.schema2|_test_db_\\.schema3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # All should be included as they start with underscore or letter
@@ -326,7 +339,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "TestDB\\.schema1|test_db\\.schema2|TEST_DB\\.schema3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # All should be included as they follow valid naming convention
@@ -339,7 +353,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "db1\\.schema1|db_2\\.schema2|db3_test\\.schema3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # All should be included as they follow valid naming convention
@@ -352,7 +367,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$|test_db\\.*|prod\\.schema1$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should return all valid database names sorted
@@ -365,7 +381,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "db1\\.schema1|db1\\.schema2|db2\\.schema3|db1\\.schema4"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should deduplicate and return sorted names
@@ -378,7 +395,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "db1\\.|db2\\.schema2|\\..*|db3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should handle malformed patterns gracefully
@@ -391,7 +409,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "^$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'.*'"
@@ -403,7 +422,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = ".*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         assert result == "'.*'"
@@ -416,7 +436,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "123db\\.schema1|valid_db\\.schema2"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should log warning for invalid database name
@@ -433,7 +454,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "db1\\.schema1|invalid^pattern|db2\\.schema2"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should log warning for invalid database name format
@@ -452,7 +474,8 @@ class TestExtractDatabaseNamesFromIncludeRegex:
         normalized_regex = "db1\\.schema1"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
 
         # Should not log any errors for valid input
@@ -468,7 +491,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.bronze_sales$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should return empty regex for specific schemas (no database names extracted)
@@ -481,7 +505,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "dev\\.*|wide_world_importers\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should extract database names for wildcard schemas
@@ -496,7 +521,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         )
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should only extract database names for wildcard schemas
@@ -506,7 +532,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         """Test extracting database names from exclude regex with empty input"""
         result = extract_database_names_from_regex_common(
             normalized_regex="",
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'^$'"
@@ -515,7 +542,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         """Test extracting database names from exclude regex with None input"""
         result = extract_database_names_from_regex_common(
             normalized_regex=None,  # type: ignore
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'^$'"
@@ -526,7 +554,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         """Test extracting database names from exclude regex with non-string input"""
         result = extract_database_names_from_regex_common(
             normalized_regex=123,  # type: ignore
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'^$'"
@@ -538,7 +567,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "|||"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'^$'"
@@ -550,7 +580,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "   |  db1\\.*  |  "
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'^(db1)$'"
@@ -562,7 +593,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "123db\\.*|db-2\\.*|valid_db\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Only valid_db should be included (starts with letter/underscore, alphanumeric + underscore)
@@ -575,7 +607,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db@test\\.*|db#test\\.*|db_test\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Only db_test should be included (valid format)
@@ -586,7 +619,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = ".*\\.*|^$\\.*|db1\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Only db1 should be included (.* and ^$ are excluded)
@@ -599,7 +633,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "_test_db\\.*|test_db_\\.*|_test_db_\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # All should be included as they start with underscore or letter
@@ -610,7 +645,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "TestDB\\.*|test_db\\.*|TEST_DB\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # All should be included as they follow valid naming convention
@@ -623,7 +659,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db1\\.*|db_2\\.*|db3_test\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # All should be included as they follow valid naming convention
@@ -636,7 +673,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "dev\\.external_schema$|wide_world_importers\\.*|test_db\\.*|prod\\.schema1$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should return only database names for wildcard schemas
@@ -649,7 +687,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db1\\.*|db1\\.*|db2\\.*|db1\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should deduplicate and return sorted names
@@ -662,7 +701,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db1\\.|db2\\.*|\\..*|db3\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should handle malformed patterns gracefully
@@ -675,7 +715,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "^$"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'^$'"
@@ -687,7 +728,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = ".*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         assert result == "'.*'"
@@ -699,7 +741,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db1\\.schema1|db2\\.*|db3"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should handle incomplete patterns and only extract for wildcard schemas
@@ -713,7 +756,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "123db\\.*|valid_db\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should log warning for invalid database name
@@ -728,7 +772,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db1\\.*|invalid-pattern|db2\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should log warning for invalid database name format
@@ -747,7 +792,8 @@ class TestExtractDatabaseNamesFromExcludeRegex:
         normalized_regex = "db1\\.*"
         result = extract_database_names_from_regex_common(
             normalized_regex=normalized_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Should not log any errors for valid input

@@ -27,29 +27,20 @@ F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 def extract_database_names_from_regex_common(
     normalized_regex: str,
-    regex_type: str,
+    empty_default: str,
+    require_wildcard_schema: bool,
 ) -> str:
     """
     Common implementation for extracting database names from regex patterns.
 
     Args:
         normalized_regex (str): The normalized regex pattern containing database.schema patterns
-        regex_type (str): Type of regex processing ("include" or "exclude")
         empty_default (str): Default value to return for empty/null inputs
         require_wildcard_schema (bool): Whether to only extract database names for wildcard schemas
 
     Returns:
         str: A regex string in the format ^(name1|name2|...)$ or default values
     """
-    if regex_type == "include":
-        empty_default = "'.*'"
-        require_wildcard_schema = False
-    elif regex_type == "exclude":
-        empty_default = "'^$'"
-        require_wildcard_schema = True
-    else:
-        raise CommonError(f"Invalid regex type: {regex_type}")
-
     try:
         # Handle special cases based on regex type
         if not normalized_regex or normalized_regex == "^$":
@@ -109,7 +100,7 @@ def extract_database_names_from_regex_common(
 
     except Exception as e:
         logger.error(
-            f"Error extracting database names from {regex_type} regex '{normalized_regex}': {str(e)}"
+            f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
         )
         # Return appropriate default based on regex type
         return empty_default
@@ -170,11 +161,13 @@ def prepare_query(
         # Extract database names from the normalized regex patterns
         include_databases = extract_database_names_from_regex_common(
             normalized_regex=normalized_include_regex,
-            regex_type="include",
+            empty_default="'.*'",
+            require_wildcard_schema=False,
         )
         exclude_databases = extract_database_names_from_regex_common(
             normalized_regex=normalized_exclude_regex,
-            regex_type="exclude",
+            empty_default="'^$'",
+            require_wildcard_schema=True,
         )
 
         # Use sets directly for SQL query formatting
