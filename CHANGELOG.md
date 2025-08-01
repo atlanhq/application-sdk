@@ -11,6 +11,7 @@ Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc23...
 
 ### Bug Fixes
 
+- miner output path (#626) (by @Onkar Ravgan in [cabe7eb](https://github.com/atlanhq/application-sdk/commit/cabe7eb))
 - db name regex pattern (#630) (by @Onkar Ravgan in [bb26992](https://github.com/atlanhq/application-sdk/commit/bb26992))
 
 ## v0.1.1rc23 (July 29, 2025)
