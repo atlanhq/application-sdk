@@ -20,6 +20,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
+    "aiohttp>=3.10.0",
     "opentelemetry-exporter-otlp>=1.27.0",
     "psutil>=7.0.0",
     "fastapi[standard]>=0.115.0",

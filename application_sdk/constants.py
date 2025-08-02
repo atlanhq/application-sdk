@@ -30,6 +30,8 @@ load_dotenv(dotenv_path=".env")
 # Application Constants
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+#: Name of the deployment, used to distinguish between different deployments of the same application
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", None)
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server
@@ -46,7 +48,18 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 #: Whether to use local development mode (used for instance to fetch secrets from the local state store)
 LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
-
+#: Whether to enable TLS for Temporal client connections
+WORKFLOW_TLS_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_TLS_ENABLED", "false").lower() == "true"
+)
+#: Name of the deployment secrets in the secret store
+DEPLOYMENT_SECRET_NAME = os.getenv(
+    "ATLAN_DEPLOYMENT_SECRET_NAME", "atlan-deployment-secrets"
+)
+#: Name of the secret store component for deployment secrets
+DEPLOYMENT_SECRET_COMPONENT = os.getenv(
+    "ATLAN_DEPLOYMENT_SECRET_COMPONENT", "atlan-deployment-secret-component"
+)
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
@@ -84,6 +97,30 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 )
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
+#: Whether Temporal authentication is enabled
+WORKFLOW_AUTH_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+)
+#: OAuth2 token endpoint URL for Temporal authentication
+WORKFLOW_AUTH_URL = (
+    os.getenv("ATLAN_WORKFLOW_AUTH_URL")
+    or f"https://{WORKFLOW_HOST.replace('-temporal', '').replace('..', '.').replace('--', '-').strip('.-')}/auth/realms/default/protocol/openid-connect/token"
+)
+#: OAuth2 client ID for Temporal authentication (primary source, falls back to fetching from secret store)
+WORKFLOW_AUTH_CLIENT_ID = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_ID", "")
+#: OAuth2 client secret for Temporal authentication (primary source, falls back to fetching from secret store)
+WORKFLOW_AUTH_CLIENT_SECRET = os.getenv("ATLAN_WORKFLOW_AUTH_CLIENT_SECRET", "")
+
+# OAuth2 Secret Store Key Names
+#: Key name for client ID in secret store (defaults to {app_name}_client_id)
+app_name = APPLICATION_NAME.lower().replace("-", "_")
+WORKFLOW_AUTH_CLIENT_ID_KEY = os.getenv(
+    "ATLAN_WORKFLOW_AUTH_CLIENT_ID_KEY", f"{app_name}_client_id"
+)
+#: Key name for client secret in secret store (defaults to {app_name}_client_secret)
+WORKFLOW_AUTH_CLIENT_SECRET_KEY = os.getenv(
+    "ATLAN_WORKFLOW_AUTH_CLIENT_SECRET_KEY", f"{app_name}_client_secret"
+)
 
 # Workflow Constants
 #: Timeout duration for activity heartbeats
