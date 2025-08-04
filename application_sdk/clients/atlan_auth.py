@@ -5,19 +5,15 @@ from typing import Dict, Optional
 
 import aiohttp
 
+from application_sdk.clients.deployment_config import DeploymentConfig
 from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
-    DEPLOYMENT_SECRET_COMPONENT,
-    DEPLOYMENT_SECRET_NAME,
-    WORKFLOW_AUTH_CLIENT_ID,
     WORKFLOW_AUTH_CLIENT_ID_KEY,
-    WORKFLOW_AUTH_CLIENT_SECRET,
     WORKFLOW_AUTH_CLIENT_SECRET_KEY,
-    WORKFLOW_AUTH_ENABLED,
-    WORKFLOW_AUTH_URL,
+    WORKFLOW_AUTH_ENABLED_KEY,
+    WORKFLOW_AUTH_URL_KEY,
 )
-from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -38,16 +34,13 @@ class AtlanAuthClient:
     def __init__(self):
         """Initialize the OAuth2 token manager.
 
-        Args:
-            application_name: Application name for secret key generation (optional)
+        Credentials are always fetched from the configured Dapr secret store component.
+        The secret store component can be configured to use various backends
+        (environment variables, AWS Secrets Manager, Azure Key Vault, etc.)
         """
         self.application_name = APPLICATION_NAME
-        self.auth_enabled = WORKFLOW_AUTH_ENABLED
-        self.auth_url = WORKFLOW_AUTH_URL
-
-        # Environment-based credentials (will fall back to secret store if empty)
-        self._env_client_id = WORKFLOW_AUTH_CLIENT_ID
-        self._env_client_secret = WORKFLOW_AUTH_CLIENT_SECRET
+        self.auth_enabled: Optional[bool] = None
+        self.auth_url: Optional[str] = None
 
         # Secret store credentials (cached after first fetch)
         self.credentials: Optional[Dict[str, str]] = None
@@ -56,44 +49,14 @@ class AtlanAuthClient:
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0
 
-    async def _get_credentials(self) -> Dict[str, str]:
-        """Get credentials using the standardized approach.
-
-        Tries environment variables first, falls back to secret store.
-
-        Returns:
-            Dict containing client_id and client_secret
-
-        Raises:
-            ValueError: If credentials cannot be obtained from any source
-        """
-
-        logger.debug("Fetching credentials for token refresh")
-
-        # Return credentials if available
-        if self.credentials:
-            return self.credentials
-
-        # Try environment variables first
-        if self._env_client_id and self._env_client_secret:
-            logger.info("Using credentials from environment variables")
-            self.credentials = {
-                "client_id": self._env_client_id,
-                "client_secret": self._env_client_secret,
-            }
-            return self.credentials
-
-        # Fall back to secret store
-        credentials = await self._fetch_app_credentials_from_store()
-        if not credentials:
-            raise ClientError(
-                f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. Expected either: 1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET 2. Secret store with key '{DEPLOYMENT_SECRET_NAME}' containing: {WORKFLOW_AUTH_CLIENT_ID_KEY}, {WORKFLOW_AUTH_CLIENT_SECRET_KEY} (or configure ATLAN_WORKFLOW_AUTH_CLIENT_ID_KEY, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET_KEY)"
-            )
-
-        # Store the credentials from secret store
-        self.credentials = credentials
-        logger.info("Using credentials from secret store")
-        return self.credentials
+    async def get_auth_enabled(self) -> Optional[bool]:
+        """Get auth enabled status from deployment config with fallback."""
+        config = await DeploymentConfig.get()
+        auth_enabled = config.get(WORKFLOW_AUTH_ENABLED_KEY, False)
+        if isinstance(auth_enabled, str):
+            auth_enabled = auth_enabled.lower() == "true"
+        self.auth_enabled = auth_enabled
+        return self.auth_enabled
 
     async def get_access_token(self, force_refresh: bool = False) -> Optional[str]:
         """Get a valid access token, refreshing if necessary.
@@ -111,8 +74,19 @@ class AtlanAuthClient:
             ValueError: If authentication is disabled or credentials are missing
             AtlanAuthError: If token refresh fails
         """
+        if self.auth_enabled is None:
+            await self.get_auth_enabled()
+
         if not self.auth_enabled:
             return None
+
+        # Get credentials and ensure auth_url is set
+        if not self.credentials:
+            self.credentials = await self._extract_auth_credentials()
+            if not self.credentials:
+                raise ClientError(
+                    f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. "
+                )
 
         if not self.auth_url:
             raise ClientError(
@@ -128,8 +102,7 @@ class AtlanAuthClient:
         ):
             return self._access_token
 
-        # Get credentials and refresh token
-        credentials = await self._get_credentials()
+        # Refresh token
         logger.info("Refreshing OAuth2 token")
 
         async with aiohttp.ClientSession() as session:
@@ -137,8 +110,8 @@ class AtlanAuthClient:
                 self.auth_url,
                 data={
                     "grant_type": "client_credentials",
-                    "client_id": credentials["client_id"],
-                    "client_secret": credentials["client_secret"],
+                    "client_id": self.credentials["client_id"],
+                    "client_secret": self.credentials["client_secret"],
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             ) as response:
@@ -191,21 +164,6 @@ class AtlanAuthClient:
             return {}
         return {"Authorization": f"Bearer {token}"}
 
-    async def is_token_valid(self) -> bool:
-        """Check if current token is valid (not expired).
-
-        Returns:
-            bool: True if token exists and is not expired
-        """
-        if not self.auth_enabled:
-            return True  # No auth required
-
-        if not self._access_token:
-            return False
-
-        current_time = time.time()
-        return current_time < self._token_expiry - 30  # 30s buffer
-
     def get_token_expiry_time(self) -> Optional[float]:
         """Get the expiry time of the current token.
 
@@ -225,36 +183,24 @@ class AtlanAuthClient:
 
         return max(0, self._token_expiry - time.time())
 
-    async def refresh_token(self) -> Optional[str]:
-        """Force refresh the access token.
-
-        This method forces a token refresh regardless of current token validity.
-        Useful for credential rotation scenarios.
-
-        Returns:
-            Optional[str]: New access token, or None if authentication is disabled
-        """
-        return await self.get_access_token(force_refresh=True)
-
-    async def _fetch_app_credentials_from_store(self) -> Optional[Dict[str, str]]:
+    async def _extract_auth_credentials(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
-        try:
-            secret_data = await SecretStoreInput.fetch_secret(
-                DEPLOYMENT_SECRET_NAME, DEPLOYMENT_SECRET_COMPONENT
-            )
+        config = await DeploymentConfig.get()
 
-            # Use configured key names from constants
-            client_id_key = WORKFLOW_AUTH_CLIENT_ID_KEY
-            client_secret_key = WORKFLOW_AUTH_CLIENT_SECRET_KEY
+        if (
+            WORKFLOW_AUTH_CLIENT_ID_KEY in config
+            and WORKFLOW_AUTH_CLIENT_SECRET_KEY in config
+        ):
+            credentials = {
+                "client_id": config[WORKFLOW_AUTH_CLIENT_ID_KEY],
+                "client_secret": config[WORKFLOW_AUTH_CLIENT_SECRET_KEY],
+            }
 
-            if client_id_key in secret_data and client_secret_key in secret_data:
-                return {
-                    "client_id": secret_data[client_id_key],
-                    "client_secret": secret_data[client_secret_key],
-                }
-            return None
-        except Exception:
-            return None
+            if WORKFLOW_AUTH_URL_KEY in config:
+                self.auth_url = config[WORKFLOW_AUTH_URL_KEY]
+
+            return credentials
+        return None
 
     def clear_cache(self) -> None:
         """Clear cached credentials and token.
@@ -264,6 +210,7 @@ class AtlanAuthClient:
         Useful for credential rotation scenarios.
         """
         self.credentials = None
+        self.auth_url = None
         self._access_token = None
         self._token_expiry = 0
 
