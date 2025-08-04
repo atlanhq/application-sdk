@@ -376,14 +376,6 @@ class TemporalWorkflowClient(WorkflowClient):
             self._token_refresh_task = None  # Enable garbage collection
             logger.info("Stopped token refresh loop")
 
-        # Close client connection
-        try:
-            await self.client.close()  # type: ignore
-        except Exception as e:
-            logger.warning(f"Error closing client connection: {e}")
-
-    # Remove the run_worker_with_token_refresh method since it's not needed anymore
-
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
     ) -> Dict[str, Any]:
