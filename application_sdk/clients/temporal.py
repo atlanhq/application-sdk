@@ -304,7 +304,8 @@ class TemporalWorkflowClient(WorkflowClient):
 
                 # Get fresh token
                 token = await self.auth_manager.get_access_token()
-                self.client.api_key = token  # type: ignore
+                if self.client:
+                    self.client.api_key = token
                 logger.info("Updated client RPC metadata with fresh token")
 
                 # Update our stored refresh interval for next iteration
@@ -371,7 +372,7 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         # Cancel token refresh task
         if self._token_refresh_task:
-            await self._token_refresh_task.cancel()
+            self._token_refresh_task.cancel()  # cancel() is synchronous, don't await
             self._token_refresh_task = None  # Enable garbage collection
             logger.info("Stopped token refresh loop")
 
