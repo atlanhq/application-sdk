@@ -21,7 +21,6 @@ from temporalio.worker.workflow_sandbox import (
 )
 
 from application_sdk.clients.atlan_auth import AtlanAuthClient
-from application_sdk.clients.deployment_config import DeploymentConfig
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -34,6 +33,7 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
+from application_sdk.inputs.deployment_config import DeploymentConfig
 from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (

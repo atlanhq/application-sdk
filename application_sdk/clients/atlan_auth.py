@@ -5,7 +5,6 @@ from typing import Dict, Optional
 
 import aiohttp
 
-from application_sdk.clients.deployment_config import DeploymentConfig
 from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -14,6 +13,7 @@ from application_sdk.constants import (
     WORKFLOW_AUTH_ENABLED_KEY,
     WORKFLOW_AUTH_URL_KEY,
 )
+from application_sdk.inputs.deployment_config import DeploymentConfig
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
