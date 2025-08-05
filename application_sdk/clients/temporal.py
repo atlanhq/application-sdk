@@ -20,19 +20,20 @@ from temporalio.worker.workflow_sandbox import (
     SandboxRestrictions,
 )
 
-from application_sdk.clients.atlanauth import AtlanAuthClient
+from application_sdk.clients.atlan_auth import AtlanAuthClient
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
+    DEPLOYMENT_NAME_KEY,
     MAX_CONCURRENT_ACTIVITIES,
-    WORKFLOW_AUTH_ENABLED,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
     WORKFLOW_NAMESPACE,
     WORKFLOW_PORT,
-    WORKFLOW_TLS_ENABLED,
+    WORKFLOW_TLS_ENABLED_KEY,
 )
+from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import (
@@ -236,14 +237,15 @@ class TemporalWorkflowClient(WorkflowClient):
         self.application_name = (
             application_name if application_name else APPLICATION_NAME
         )
-        self.worker_task_queue = self.get_worker_task_queue()
         self.host = host if host else WORKFLOW_HOST
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
+        self.deployment_config: Dict[str, Any] = (
+            SecretStoreInput.get_deployment_secret()
+        )
+        self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
-
-        self.auth_enabled = WORKFLOW_AUTH_ENABLED
 
         # Token refresh configuration - will be determined dynamically
         self._token_refresh_interval: Optional[int] = None
@@ -262,8 +264,12 @@ class TemporalWorkflowClient(WorkflowClient):
         Returns:
             str: The task queue name in format "app_name-deployment_name".
         """
-        if DEPLOYMENT_NAME:
-            return f"{self.application_name}-{DEPLOYMENT_NAME}"
+        deployment_name = self.deployment_config.get(
+            DEPLOYMENT_NAME_KEY, DEPLOYMENT_NAME
+        )
+
+        if deployment_name:
+            return f"atlan-{self.application_name}-{deployment_name}"
         else:
             return self.application_name
 
@@ -290,59 +296,25 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         return self.namespace
 
-    def _calculate_refresh_interval(self) -> int:
-        """Calculate the optimal token refresh interval based on token expiry.
-
-        Returns:
-            int: Refresh interval in seconds
-        """
-        # Try to get token expiry time
-        expiry_time = self.auth_manager.get_token_expiry_time()
-        if expiry_time:
-            # Calculate time until expiry
-            time_until_expiry = self.auth_manager.get_time_until_expiry()
-            if time_until_expiry and time_until_expiry > 0:
-                # Refresh at 80% of the token lifetime, but at least every 5 minutes
-                # and at most every 30 minutes
-                refresh_interval = max(
-                    5 * 60,  # Minimum 5 minutes
-                    min(
-                        30 * 60,  # Maximum 30 minutes
-                        int(time_until_expiry * 0.8),  # 80% of token lifetime
-                    ),
-                )
-                return refresh_interval
-
-        # Default fallback: refresh every 14 minutes
-        logger.info("Using default token refresh interval: 14 minutes")
-        return 14 * 60
-
     async def _token_refresh_loop(self) -> None:
         """Background loop that refreshes the authentication token dynamically."""
-        if not self.auth_enabled or not self.client:
-            return
-
         while True:
             try:
                 # Recalculate refresh interval each time in case token expiry changes
-                refresh_interval = self._calculate_refresh_interval()
+                refresh_interval = self.auth_manager.calculate_refresh_interval()
 
                 await asyncio.sleep(refresh_interval)
 
                 # Get fresh token
                 token = await self.auth_manager.get_access_token()
-                if token:
-                    # Update client metadata - this works even while worker is running
-                    self.client.rpc_metadata = {"authorization": f"Bearer {token}"}
-                    logger.info("Updated client RPC metadata with fresh token")
+                if self.client:
+                    self.client.api_key = token
+                logger.info("Updated client RPC metadata with fresh token")
 
-                    # Update our stored refresh interval for next iteration
-                    self._token_refresh_interval = self._calculate_refresh_interval()
-                else:
-                    logger.warning(
-                        "Failed to get fresh token - keeping existing metadata"
-                    )
-
+                # Update our stored refresh interval for next iteration
+                self._token_refresh_interval = (
+                    self.auth_manager.calculate_refresh_interval()
+                )
             except asyncio.CancelledError:
                 logger.info("Token refresh loop cancelled")
                 break
@@ -362,37 +334,33 @@ class TemporalWorkflowClient(WorkflowClient):
             ConnectionError: If connection to the Temporal server fails.
             ValueError: If authentication is enabled but credentials are missing.
         """
+
         connection_options: Dict[str, Any] = {
             "target_host": self.get_connection_string(),
             "namespace": self.namespace,
-            "tls": WORKFLOW_TLS_ENABLED,
+            "tls": False,
         }
 
-        if self.auth_enabled:
-            try:
-                # Get initial token
-                token = await self.auth_manager.get_access_token()
-                if token:
-                    connection_options["rpc_metadata"] = {
-                        "authorization": f"Bearer {token}"
-                    }
-                    logger.info("Added initial auth token to client connection")
-                else:
-                    logger.warning(
-                        "No initial token available - connecting without auth"
-                    )
+        connection_options["tls"] = self.deployment_config.get(
+            WORKFLOW_TLS_ENABLED_KEY, False
+        )
+        self.worker_task_queue = self.get_worker_task_queue()
 
-            except Exception as e:
-                logger.error(f"Failed to get authentication token: {e}")
-                raise
+        if self.auth_manager.auth_enabled:
+            # Get initial token
+            token = await self.auth_manager.get_access_token()
+            connection_options["api_key"] = token
+            logger.info("Added initial auth token to client connection")
 
         # Create the client
         self.client = await Client.connect(**connection_options)
 
         # Start token refresh loop if auth is enabled
-        if self.auth_enabled and self.client:
+        if self.auth_manager.auth_enabled:
             # Calculate initial refresh interval based on token expiry
-            self._token_refresh_interval = self._calculate_refresh_interval()
+            self._token_refresh_interval = (
+                self.auth_manager.calculate_refresh_interval()
+            )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
@@ -406,26 +374,9 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         # Cancel token refresh task
         if self._token_refresh_task:
-            self._token_refresh_task.cancel()
-            try:
-                await self._token_refresh_task
-            except asyncio.CancelledError:
-                pass
-            self._token_refresh_task = None
+            self._token_refresh_task.cancel()  # cancel() is synchronous, don't await
+            self._token_refresh_task = None  # Enable garbage collection
             logger.info("Stopped token refresh loop")
-
-        # Close client connection
-        if self.client:
-            try:
-                await self.client.close()
-            except Exception as e:
-                logger.warning(f"Error closing client connection: {e}")
-
-        # Clear auth cache
-        if hasattr(self, "auth_manager"):
-            self.auth_manager.clear_cache()
-
-    # Remove the run_worker_with_token_refresh method since it's not needed anymore
 
     async def start_workflow(
         self, workflow_args: Dict[str, Any], workflow_class: Type[WorkflowInterface]
@@ -551,10 +502,12 @@ class TemporalWorkflowClient(WorkflowClient):
         # Start token refresh if not already started and auth is enabled
         if (
             auto_start_token_refresh
-            and self.auth_enabled
+            and self.auth_manager.auth_enabled
             and not self._token_refresh_task
         ):
-            self._token_refresh_interval = self._calculate_refresh_interval()
+            self._token_refresh_interval = (
+                self.auth_manager.calculate_refresh_interval()
+            )
             self._token_refresh_task = asyncio.create_task(self._token_refresh_loop())
             logger.info(
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"

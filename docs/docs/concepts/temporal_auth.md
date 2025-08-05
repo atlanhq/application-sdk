@@ -33,8 +33,8 @@ Provides automatic Dapr component discovery and secret retrieval:
    - Graceful handling of token refresh failures
 
 2. **Smart Credential Discovery**
-   - **Primary**: Dapr secret store with automatic component discovery
-   - **Fallback**: Environment variables for development/testing
+   - **Primary**: Dapr secret store component (configurable backend)
+   - **Flexible Backend**: Support for environment variables, AWS Secrets Manager, Azure Key Vault, etc.
    - **Application-specific**: Uses application name for credential key generation
 
 3. **Production-Ready Security**
@@ -45,18 +45,25 @@ Provides automatic Dapr component discovery and secret retrieval:
 
 ## Configuration
 
-### Environment Variables
+### Dapr Secret Store Component Configuration
 
-Configure authentication using these environment variables:
+The authentication system uses a Dapr secret store component that can be configured to use various backends. The component name is `deployment-secret-store` and can be configured to use:
 
+- **Environment Variables**: `secretstores.local.env`
+- **AWS Secrets Manager**: `secretstores.aws.secretmanager`
+- **Azure Key Vault**: `secretstores.azure.keyvault`
+- **HashiCorp Vault**: `secretstores.hashicorp.vault`
+- **Local File**: `secretstores.local.file`
+
+**Environment Variables:**
 ```bash
 # Authentication settings
 ATLAN_WORKFLOW_AUTH_ENABLED=true
 ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-provider.com/oauth/token
 
-# Primary credentials (environment variables take precedence)
-ATLAN_WORKFLOW_AUTH_CLIENT_ID=your_client_id
-ATLAN_WORKFLOW_AUTH_CLIENT_SECRET=your_client_secret
+# Secret store component configuration
+ATLAN_DEPLOYMENT_SECRET_COMPONENT=deployment-secret-store
+ATLAN_DEPLOYMENT_SECRET_NAME=atlan-deployment-secrets
 
 # Temporal connection settings
 ATLAN_WORKFLOW_HOST=temporal.your-domain.com
@@ -66,11 +73,9 @@ ATLAN_WORKFLOW_NAMESPACE=default
 
 ### Secret Store Configuration
 
-For production environments, store credentials in your Dapr secret store:
-
-**Secret Store Setup:**
-- **Component**: Any Dapr secret store component (automatically discovered)
-- **Secret Key**: `atlan-deployment-secrets`
+**Component Setup:**
+- **Component Name**: `deployment-secret-store` (configurable via `ATLAN_DEPLOYMENT_SECRET_COMPONENT`)
+- **Secret Key**: `atlan-deployment-secrets` (configurable via `ATLAN_DEPLOYMENT_SECRET_NAME`)
 - **Credential Format**: Application-specific keys within the secret
 
 **Example Secret Structure:**
@@ -87,6 +92,57 @@ For production environments, store credentials in your Dapr secret store:
 - Format: `<app_name>_client_id` and `<app_name>_client_secret`
 - App name transformation: lowercase with hyphens converted to underscores
 - Example: "postgres-extraction" → "postgres_extraction_client_id"
+
+### Component Configuration Examples
+
+**Environment Variables Backend:**
+```yaml
+# components/deployment-secret-store.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: deployment-secret-store
+spec:
+  type: secretstores.local.env
+  version: v1
+  metadata:
+  - name: prefix
+    value: "ATLAN_"
+```
+
+**AWS Secrets Manager Backend:**
+```yaml
+# components/deployment-secret-store.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: deployment-secret-store
+spec:
+  type: secretstores.aws.secretmanager
+  version: v1
+  metadata:
+  - name: region
+    value: "us-east-1"
+  - name: accessKey
+    value: ""
+  - name: secretKey
+    value: ""
+```
+
+**Azure Key Vault Backend:**
+```yaml
+# components/deployment-secret-store.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: deployment-secret-store
+spec:
+  type: secretstores.azure.keyvault
+  version: v1
+  metadata:
+  - name: vaultName
+    value: "my-key-vault"
+```
 
 ## Usage Examples
 
@@ -106,16 +162,17 @@ client = TemporalWorkflowClient(
 await client.load()
 ```
 
-### Development Setup (Environment Variables)
+### Development Setup (Environment Variables Backend)
 
 ```python
-# For development/testing with environment variables
+# For development/testing with environment variables backend
+# Configure the deployment-secret-store component to use secretstores.local.env
+# and set environment variables with ATLAN_ prefix
+
 client = TemporalWorkflowClient(
     application_name="query-intelligence",
     auth_enabled=True,
-    auth_url="https://auth.company.com/oauth/token",
-    client_id="dev_client_id",      # Fallback
-    client_secret="dev_secret"      # Fallback
+    auth_url="https://auth.company.com/oauth/token"
 )
 
 await client.load()
@@ -138,14 +195,12 @@ await worker.run()
 ### Manual Token Management
 
 ```python
-from application_sdk.clients.atlanauth import AtlanAuthClient
+from application_sdk.clients.atlan_auth import AtlanAuthClient
 
 # Create auth client directly
-auth_client = AtlanAuthClient(
-    application_name="postgres-extraction",
-    auth_enabled=True,
-    auth_url="https://auth.company.com/oauth/token"
-)
+# Credentials are automatically fetched from the configured secret store component
+auth_client = AtlanAuthClient()
+```
 
 # Get token for external API calls
 token = await auth_manager.get_access_token()
@@ -264,9 +319,11 @@ async def connect_with_retry(client, max_retries=3):
 kubectl get components  # Verify Dapr secret store component
 kubectl logs <your-pod> | grep "secret store"
 
-# Check environment variables
-echo $ATLAN_WORKFLOW_AUTH_CLIENT_ID
-echo $ATLAN_WORKFLOW_AUTH_CLIENT_SECRET
+# Check secret store component configuration
+kubectl get components deployment-secret-store -o yaml
+
+# Check if credentials are accessible via Dapr
+dapr invoke --app-id your-app --method get-secret --data '{"key": "atlan-deployment-secrets"}'
 ```
 
 **Symptom**: Token refresh failures
@@ -442,15 +499,36 @@ client = TemporalWorkflowClient(
 await client.load()  # Authentication handled automatically
 ```
 
-### Environment Variable Updates
+### Secret Store Component Configuration
 
-Update your environment configuration:
+Configure your Dapr secret store component:
+
+**For Environment Variables Backend:**
+```yaml
+# components/deployment-secret-store.yaml
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: deployment-secret-store
+spec:
+  type: secretstores.local.env
+  version: v1
+  metadata:
+  - name: prefix
+    value: "ATLAN_"
+```
+
+**Environment Variables:**
 ```bash
-# Add these new variables
+# Authentication settings
 ATLAN_WORKFLOW_AUTH_ENABLED=true
 ATLAN_WORKFLOW_AUTH_URL=https://your-oauth-server.com/oauth/token
 
-# Keep existing (now fallback) variables
-ATLAN_WORKFLOW_AUTH_CLIENT_ID=your_client_id
-ATLAN_WORKFLOW_AUTH_CLIENT_SECRET=your_client_secret
+# Secret store configuration
+ATLAN_DEPLOYMENT_SECRET_COMPONENT=deployment-secret-store
+ATLAN_DEPLOYMENT_SECRET_NAME=atlan-deployment-secrets
+
+# Credentials (if using environment variables backend)
+ATLAN_<app_name>_client_id=your_client_id
+ATLAN_<app_name>_client_secret=your_client_secret
 ```

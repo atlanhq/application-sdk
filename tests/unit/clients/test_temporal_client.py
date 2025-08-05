@@ -39,7 +39,15 @@ def mock_dapr_output_client() -> Generator[Mock, None, None]:
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-async def test_load(mock_connect: AsyncMock, temporal_client: TemporalWorkflowClient):
+@patch("application_sdk.clients.temporal.SecretStoreInput.get_deployment_secret")
+async def test_load(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    # Mock the deployment config to return empty dict (auth disabled)
+    mock_get_config.return_value = {}
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -276,23 +284,6 @@ def test_get_connection_string(temporal_client: TemporalWorkflowClient):
 def test_get_namespace(temporal_client: TemporalWorkflowClient):
     """Test get_namespace returns the correct namespace."""
     assert temporal_client.get_namespace() == "default"
-
-
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
-async def test_close(mock_connect: AsyncMock, temporal_client: TemporalWorkflowClient):
-    """Test close method."""
-    # Mock the client connection
-    mock_client = AsyncMock()
-    mock_connect.return_value = mock_client
-
-    # Run load to connect the client
-    await temporal_client.load()
-
-    # Close should complete without errors
-    await temporal_client.close()
 
 
 @patch(

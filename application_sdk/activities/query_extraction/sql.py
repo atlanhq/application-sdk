@@ -200,8 +200,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
+                chunk_size=None,
             )
-            sql_input = await sql_input.get_daft_dataframe()
+            sql_input = await sql_input.get_dataframe()
 
             raw_output = ParquetOutput(
                 output_prefix=workflow_args["output_prefix"],
@@ -211,7 +212,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 start_marker=workflow_args["start_marker"],
                 end_marker=workflow_args["end_marker"],
             )
-            await raw_output.write_daft_dataframe(sql_input)
+            await raw_output.write_dataframe(sql_input)
 
             logger.info(
                 f"Query fetch completed, {raw_output.total_record_count} records processed",
@@ -397,7 +398,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If marker file writing or object store upload fails
         """
-        output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+        output_path = workflow_args["output_path"].rsplit("/", 1)[0]
         logger.info(f"Writing marker file to {output_path}")
         marker_file_path = os.path.join(output_path, "markerfile")
 
@@ -437,7 +438,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             Exception: If marker file reading fails (logged as warning, not re-raised)
         """
         try:
-            output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+            output_path = workflow_args["output_path"].rsplit("/", 1)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
             logger.info(f"Downloading marker file from {marker_file_path}")
 
@@ -488,7 +489,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         current_marker = self.read_marker(workflow_args)
         if current_marker:
-            miner_args.miner_start_time_epoch = current_marker
+            miner_args.current_marker = current_marker
 
         queries_sql_query = self.fetch_queries_sql.format(
             database_name_cleaned=miner_args.database_name_cleaned,

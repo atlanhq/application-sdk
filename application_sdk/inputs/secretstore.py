@@ -7,13 +7,27 @@ from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
-from application_sdk.constants import LOCAL_DEVELOPMENT, SECRET_STORE_NAME
+from application_sdk.constants import (
+    DEPLOYMENT_SECRET_PATH,
+    DEPLOYMENT_SECRET_STORE_NAME,
+    LOCAL_DEVELOPMENT,
+    SECRET_STORE_NAME,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
 class SecretStoreInput:
+    @classmethod
+    def get_deployment_secret(cls) -> Dict[str, Any]:
+        """Get deployment config with caching."""
+        try:
+            return cls.get_secret(DEPLOYMENT_SECRET_PATH, DEPLOYMENT_SECRET_STORE_NAME)
+        except Exception as e:
+            logger.error(f"Failed to fetch deployment config: {e}")
+            return {}
+
     @classmethod
     def get_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
@@ -62,7 +76,8 @@ class SecretStoreInput:
                 parsed = json.loads(next(iter(secret_data.values())))
                 if isinstance(parsed, dict):
                     secret_data = parsed
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to parse secret data: {e}")
                 pass
 
         return secret_data

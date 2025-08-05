@@ -1,19 +1,17 @@
 """OAuth2 token manager with automatic secret store discovery."""
 
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import aiohttp
 
 from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
     APPLICATION_NAME,
-    DEPLOYMENT_SECRET_COMPONENT,
-    DEPLOYMENT_SECRET_NAME,
-    WORKFLOW_AUTH_CLIENT_ID,
-    WORKFLOW_AUTH_CLIENT_SECRET,
-    WORKFLOW_AUTH_ENABLED,
-    WORKFLOW_AUTH_URL,
+    WORKFLOW_AUTH_CLIENT_ID_KEY,
+    WORKFLOW_AUTH_CLIENT_SECRET_KEY,
+    WORKFLOW_AUTH_ENABLED_KEY,
+    WORKFLOW_AUTH_URL_KEY,
 )
 from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
@@ -36,16 +34,14 @@ class AtlanAuthClient:
     def __init__(self):
         """Initialize the OAuth2 token manager.
 
-        Args:
-            application_name: Application name for secret key generation (optional)
+        Credentials are always fetched from the configured Dapr secret store component.
+        The secret store component can be configured to use various backends
+        (environment variables, AWS Secrets Manager, Azure Key Vault, etc.)
         """
         self.application_name = APPLICATION_NAME
-        self.auth_enabled = WORKFLOW_AUTH_ENABLED
-        self.auth_url = WORKFLOW_AUTH_URL
-
-        # Environment-based credentials (will fall back to secret store if empty)
-        self._env_client_id = WORKFLOW_AUTH_CLIENT_ID
-        self._env_client_secret = WORKFLOW_AUTH_CLIENT_SECRET
+        self.auth_config: Dict[str, Any] = SecretStoreInput.get_deployment_secret()
+        self.auth_enabled: bool = self.auth_config.get(WORKFLOW_AUTH_ENABLED_KEY, False)
+        self.auth_url: Optional[str] = None
 
         # Secret store credentials (cached after first fetch)
         self.credentials: Optional[Dict[str, str]] = None
@@ -53,46 +49,6 @@ class AtlanAuthClient:
         # Token data
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0
-
-    async def _get_credentials(self) -> Dict[str, str]:
-        """Get credentials using the standardized approach.
-
-        Tries environment variables first, falls back to secret store.
-
-        Returns:
-            Dict containing client_id and client_secret
-
-        Raises:
-            ValueError: If credentials cannot be obtained from any source
-        """
-
-        logger.debug("Fetching credentials for token refresh")
-
-        # Return credentials if available
-        if self.credentials:
-            return self.credentials
-
-        # Try environment variables first
-        if self._env_client_id and self._env_client_secret:
-            logger.info("Using credentials from environment variables")
-            self.credentials = {
-                "client_id": self._env_client_id,
-                "client_secret": self._env_client_secret,
-            }
-            return self.credentials
-
-        # Fall back to secret store
-        credentials = await self._fetch_app_credentials_from_store()
-        if not credentials:
-            app_name = self.application_name.lower().replace("-", "_")
-            raise ClientError(
-                f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. Expected either: 1. Environment variables: ATLAN_WORKFLOW_AUTH_CLIENT_ID, ATLAN_WORKFLOW_AUTH_CLIENT_SECRET 2. Secret store with key 'atlan-deployment-secrets' containing: {app_name}_client_id, {app_name}_client_secret"
-            )
-
-        # Store the credentials from secret store
-        self.credentials = credentials
-        logger.info("Using credentials from secret store")
-        return self.credentials
 
     async def get_access_token(self, force_refresh: bool = False) -> Optional[str]:
         """Get a valid access token, refreshing if necessary.
@@ -110,8 +66,17 @@ class AtlanAuthClient:
             ValueError: If authentication is disabled or credentials are missing
             AtlanAuthError: If token refresh fails
         """
+
         if not self.auth_enabled:
             return None
+
+        # Get credentials and ensure auth_url is set
+        if not self.credentials:
+            self.credentials = await self._extract_auth_credentials()
+            if not self.credentials:
+                raise ClientError(
+                    f"{ClientError.AUTH_CREDENTIALS_ERROR}: OAuth2 credentials not found for application '{self.application_name}'. "
+                )
 
         if not self.auth_url:
             raise ClientError(
@@ -127,8 +92,7 @@ class AtlanAuthClient:
         ):
             return self._access_token
 
-        # Get credentials and refresh token
-        credentials = await self._get_credentials()
+        # Refresh token
         logger.info("Refreshing OAuth2 token")
 
         async with aiohttp.ClientSession() as session:
@@ -136,8 +100,8 @@ class AtlanAuthClient:
                 self.auth_url,
                 data={
                     "grant_type": "client_credentials",
-                    "client_id": credentials["client_id"],
-                    "client_secret": credentials["client_secret"],
+                    "client_id": self.credentials["client_id"],
+                    "client_secret": self.credentials["client_secret"],
                 },
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
             ) as response:
@@ -150,6 +114,13 @@ class AtlanAuthClient:
                     )
 
                 token_data = await response.json()
+
+                # Validate required fields exist
+                if "access_token" not in token_data or "expires_in" not in token_data:
+                    raise ClientError(
+                        f"{ClientError.AUTH_TOKEN_REFRESH_ERROR}: Missing required fields in OAuth2 response"
+                    )
+
                 self._access_token = token_data["access_token"]
                 self._token_expiry = current_time + token_data["expires_in"]
 
@@ -183,21 +154,6 @@ class AtlanAuthClient:
             return {}
         return {"Authorization": f"Bearer {token}"}
 
-    async def is_token_valid(self) -> bool:
-        """Check if current token is valid (not expired).
-
-        Returns:
-            bool: True if token exists and is not expired
-        """
-        if not self.auth_enabled:
-            return True  # No auth required
-
-        if not self._access_token:
-            return False
-
-        current_time = time.time()
-        return current_time < self._token_expiry - 30  # 30s buffer
-
     def get_token_expiry_time(self) -> Optional[float]:
         """Get the expiry time of the current token.
 
@@ -217,37 +173,22 @@ class AtlanAuthClient:
 
         return max(0, self._token_expiry - time.time())
 
-    async def refresh_token(self) -> Optional[str]:
-        """Force refresh the access token.
-
-        This method forces a token refresh regardless of current token validity.
-        Useful for credential rotation scenarios.
-
-        Returns:
-            Optional[str]: New access token, or None if authentication is disabled
-        """
-        return await self.get_access_token(force_refresh=True)
-
-    async def _fetch_app_credentials_from_store(self) -> Optional[Dict[str, str]]:
+    async def _extract_auth_credentials(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
-        try:
-            secret_data = SecretStoreInput.get_secret(
-                DEPLOYMENT_SECRET_NAME, DEPLOYMENT_SECRET_COMPONENT
-            )
+        if (
+            WORKFLOW_AUTH_CLIENT_ID_KEY in self.auth_config
+            and WORKFLOW_AUTH_CLIENT_SECRET_KEY in self.auth_config
+        ):
+            credentials = {
+                "client_id": self.auth_config[WORKFLOW_AUTH_CLIENT_ID_KEY],
+                "client_secret": self.auth_config[WORKFLOW_AUTH_CLIENT_SECRET_KEY],
+            }
 
-            # Auth-specific key generation
-            app_name = self.application_name.lower().replace("-", "_")
-            client_id_key = f"{app_name}_client_id"
-            client_secret_key = f"{app_name}_client_secret"
+            if WORKFLOW_AUTH_URL_KEY in self.auth_config:
+                self.auth_url = self.auth_config[WORKFLOW_AUTH_URL_KEY]
 
-            if client_id_key in secret_data and client_secret_key in secret_data:
-                return {
-                    "client_id": secret_data[client_id_key],
-                    "client_secret": secret_data[client_secret_key],
-                }
-            return None
-        except Exception:
-            return None
+            return credentials
+        return None
 
     def clear_cache(self) -> None:
         """Clear cached credentials and token.
@@ -256,6 +197,36 @@ class AtlanAuthClient:
         credential discovery and token refresh on next access.
         Useful for credential rotation scenarios.
         """
+        # we are doing this to force a fetch of the credentials from secret store
         self.credentials = None
+        self.auth_url = None
         self._access_token = None
         self._token_expiry = 0
+        self.auth_config = {}
+
+    def calculate_refresh_interval(self) -> int:
+        """Calculate the optimal token refresh interval based on token expiry.
+
+        Returns:
+            int: Refresh interval in seconds
+        """
+        # Try to get token expiry time
+        expiry_time = self.get_token_expiry_time()
+        if expiry_time:
+            # Calculate time until expiry
+            time_until_expiry = self.get_time_until_expiry()
+            if time_until_expiry and time_until_expiry > 0:
+                # Refresh at 80% of the token lifetime, but at least every 5 minutes
+                # and at most every 30 minutes
+                refresh_interval = max(
+                    5 * 60,  # Minimum 5 minutes
+                    min(
+                        30 * 60,  # Maximum 30 minutes
+                        int(time_until_expiry * 0.8),  # 80% of token lifetime
+                    ),
+                )
+                return refresh_interval
+
+        # Default fallback: refresh every 14 minutes
+        logger.info("Using default token refresh interval: 14 minutes")
+        return 14 * 60

@@ -129,7 +129,6 @@ While most customization typically happens in `Activities`, `Handlers`, or `Clie
         @workflow.run
         async def run(self, workflow_config: Dict[str, Any]) -> str: # Return type example
             # 1. Load full arguments (Essential step)
-            workflow_id = workflow_config["workflow_id"]
             workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
                 self.activities_cls.get_workflow_args,
                 workflow_config,  # Pass the whole config containing workflow_id
@@ -137,8 +136,6 @@ While most customization typically happens in `Activities`, `Handlers`, or `Clie
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
-            workflow.logger.info(f"Starting custom run logic for {workflow_id}")
-            workflow_args["workflow_run_id"] = workflow.info().run_id # Add run ID
 
             # Define a standard retry policy for activities
             retry_policy = RetryPolicy(maximum_attempts=3)
