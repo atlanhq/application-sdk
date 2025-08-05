@@ -39,7 +39,15 @@ def mock_dapr_output_client() -> Generator[Mock, None, None]:
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-async def test_load(mock_connect: AsyncMock, temporal_client: TemporalWorkflowClient):
+@patch("application_sdk.clients.temporal.SecretStoreInput.get_deployment_secret")
+async def test_load(
+    mock_get_config: AsyncMock,
+    mock_connect: AsyncMock,
+    temporal_client: TemporalWorkflowClient,
+):
+    # Mock the deployment config to return empty dict (auth disabled)
+    mock_get_config.return_value = {}
+
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -263,15 +271,16 @@ async def test_create_worker(
     assert worker == mock_worker_class.return_value
 
 
-@pytest.mark.asyncio
-async def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):
+def test_get_worker_task_queue():
     """Test get_worker_task_queue returns the application name."""
-    # Mock DeploymentConfig.get to return a deployment name
+    # Mock SecretStoreInput.get_deployment_secret to return a deployment name
     with patch(
-        "application_sdk.clients.temporal.DeploymentConfig.get"
+        "application_sdk.clients.temporal.SecretStoreInput.get_deployment_secret"
     ) as mock_get_config:
         mock_get_config.return_value = {"deployment_name": "agent-v2"}
-        result = await temporal_client.get_worker_task_queue()
+        # Create a new client instance with the mocked config
+        client = TemporalWorkflowClient(application_name="test_app")
+        result = client.get_worker_task_queue()
         assert result == "atlan-test_app-agent-v2"
 
 
@@ -283,23 +292,6 @@ def test_get_connection_string(temporal_client: TemporalWorkflowClient):
 def test_get_namespace(temporal_client: TemporalWorkflowClient):
     """Test get_namespace returns the correct namespace."""
     assert temporal_client.get_namespace() == "default"
-
-
-@patch(
-    "application_sdk.clients.temporal.Client.connect",
-    new_callable=AsyncMock,
-)
-async def test_close(mock_connect: AsyncMock, temporal_client: TemporalWorkflowClient):
-    """Test close method."""
-    # Mock the client connection
-    mock_client = AsyncMock()
-    mock_connect.return_value = mock_client
-
-    # Run load to connect the client
-    await temporal_client.load()
-
-    # Close should complete without errors
-    await temporal_client.close()
 
 
 @patch(

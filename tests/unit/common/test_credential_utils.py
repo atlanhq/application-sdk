@@ -1,4 +1,3 @@
-import asyncio
 import json
 from typing import Any, Dict
 from unittest.mock import Mock, patch
@@ -110,7 +109,7 @@ class TestCredentialUtils:
             assert result["test_field"] == expected_value
             assert result["extra"]["extra_field"] == expected_value
 
-    def test_resolve_credentials_direct(self):
+    async def test_resolve_credentials_direct(self):
         """Test resolving credentials with direct source."""
         credentials = {
             "credentialSource": "direct",
@@ -118,18 +117,18 @@ class TestCredentialUtils:
             "password": "test_pass",
         }
 
-        result = asyncio.run(resolve_credentials(credentials))
+        result = await resolve_credentials(credentials)
         assert result == credentials
 
-    def test_resolve_credentials_default_direct(self):
+    async def test_resolve_credentials_default_direct(self):
         """Test resolving credentials with no credentialSource (defaults to direct)."""
         credentials = {"username": "test_user", "password": "test_pass"}
 
-        result = asyncio.run(resolve_credentials(credentials))
+        result = await resolve_credentials(credentials)
         assert result == credentials
 
     @patch("application_sdk.inputs.secretstore.SecretStoreInput.get_secret")
-    def test_resolve_credentials_with_secret_store(self, mock_get_secret: Mock):
+    async def test_resolve_credentials_with_secret_store(self, mock_get_secret: Mock):
         """Test resolving credentials using a secret store."""
         mock_get_secret.return_value = {
             "pg_username": "db_user",
@@ -143,7 +142,7 @@ class TestCredentialUtils:
             "extra": {"secret_key": "postgres/test"},
         }
 
-        result = asyncio.run(resolve_credentials(credentials))
+        result = await resolve_credentials(credentials)
 
         mock_get_secret.assert_called_once_with(
             secret_key="postgres/test", component_name="aws-secrets"
@@ -151,18 +150,18 @@ class TestCredentialUtils:
         assert result["username"] == "db_user"
         assert result["password"] == "db_pass"
 
-    def test_resolve_credentials_missing_secret_key(self):
+    async def test_resolve_credentials_missing_secret_key(self):
         """Test resolving credentials with missing secret_key."""
         credentials = {"credentialSource": "aws-secrets", "extra": {}}
 
         with pytest.raises(CommonError) as exc_info:
-            asyncio.run(resolve_credentials(credentials))
+            await resolve_credentials(credentials)
         assert "secret_key is required in extra" in str(exc_info.value)
 
-    def test_resolve_credentials_no_extra(self):
+    async def test_resolve_credentials_no_extra(self):
         """Test resolving credentials with no extra field."""
         credentials = {"credentialSource": "aws-secrets"}
 
         with pytest.raises(CommonError) as exc_info:
-            asyncio.run(resolve_credentials(credentials))
+            await resolve_credentials(credentials)
         assert "secret_key is required in extra" in str(exc_info.value)

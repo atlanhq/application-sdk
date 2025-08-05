@@ -18,9 +18,6 @@ async def auth_client() -> AtlanAuthClient:
         "workflow_auth_url": "http://auth.test/token",
     }
 
-    async def mock_get_config():
-        return mock_config
-
     with patch(
         "application_sdk.constants.WORKFLOW_AUTH_ENABLED_KEY", "workflow_auth_enabled"
     ), patch(
@@ -33,11 +30,10 @@ async def auth_client() -> AtlanAuthClient:
         "application_sdk.constants.WORKFLOW_AUTH_CLIENT_SECRET_KEY",
         "test_app_client_secret",
     ), patch(
-        "application_sdk.clients.atlan_auth.DeploymentConfig.get",
-        side_effect=mock_get_config,
+        "application_sdk.clients.atlan_auth.SecretStoreInput.get_deployment_secret",
+        return_value=mock_config,
     ):
         client = AtlanAuthClient()
-        await client.get_auth_enabled()  # Initialize auth_enabled
         return client
 
 
@@ -57,7 +53,7 @@ async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> Non
         auth_client_no_fallback = AtlanAuthClient()
 
     with patch(
-        "application_sdk.clients.atlan_auth.DeploymentConfig.get",
+        "application_sdk.clients.atlan_auth.SecretStoreInput.get_deployment_secret",
         return_value={},  # Empty config means no credentials
     ):
         credentials = await auth_client_no_fallback._extract_auth_credentials()
