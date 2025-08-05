@@ -5,13 +5,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
-from application_sdk.outputs.atlanstorage import AtlanStorageOutput
+from application_sdk.outputs.atlan_storage import AtlanStorageOutput
 
 
 class TestAtlanStorageOutput:
     """Test suite for AtlanStorageOutput."""
 
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
+    @patch("application_sdk.outputs.atlan_storage.DaprClient")
     async def test_migrate_single_file_success(
         self, mock_dapr_client: MagicMock
     ) -> None:
@@ -24,7 +24,7 @@ class TestAtlanStorageOutput:
         file_data = b"test file content"
 
         with patch(
-            "application_sdk.outputs.atlanstorage.ObjectStoreInput.get_file_data",
+            "application_sdk.outputs.atlan_storage.ObjectStoreInput.get_file_data",
             return_value=file_data,
         ):
             # Act
@@ -43,7 +43,7 @@ class TestAtlanStorageOutput:
                 binding_metadata={"key": file_path},
             )
 
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
+    @patch("application_sdk.outputs.atlan_storage.DaprClient")
     async def test_migrate_single_file_error(self, mock_dapr_client: MagicMock) -> None:
         """Test single file migration error handling."""
         # Setup
@@ -55,7 +55,7 @@ class TestAtlanStorageOutput:
         file_data = b"test file content"
 
         with patch(
-            "application_sdk.outputs.atlanstorage.ObjectStoreInput.get_file_data",
+            "application_sdk.outputs.atlan_storage.ObjectStoreInput.get_file_data",
             return_value=file_data,
         ):
             # Act
@@ -67,8 +67,8 @@ class TestAtlanStorageOutput:
             assert success is False
             assert "Upload failed" in error_msg
 
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
+    @patch("application_sdk.outputs.atlan_storage.ObjectStoreInput")
+    @patch("application_sdk.outputs.atlan_storage.DaprClient")
     async def test_migrate_from_objectstore_to_atlan_success(
         self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
     ) -> None:
@@ -122,8 +122,8 @@ class TestAtlanStorageOutput:
             binding_metadata={"key": "file3.json"},
         )
 
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
+    @patch("application_sdk.outputs.atlan_storage.ObjectStoreInput")
+    @patch("application_sdk.outputs.atlan_storage.DaprClient")
     async def test_migrate_from_objectstore_to_atlan_with_failures(
         self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
     ) -> None:
@@ -164,7 +164,7 @@ class TestAtlanStorageOutput:
         assert "file2.json" in failure_files
         assert "File 2 error" in result.failures[0]["error"]
 
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
+    @patch("application_sdk.outputs.atlan_storage.ObjectStoreInput")
     async def test_migrate_from_objectstore_to_atlan_empty_list(
         self, mock_objectstore_input: MagicMock
     ) -> None:
@@ -184,7 +184,7 @@ class TestAtlanStorageOutput:
         assert result.prefix == "test_prefix"
         assert len(result.failures) == 0
 
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
+    @patch("application_sdk.outputs.atlan_storage.ObjectStoreInput")
     async def test_migrate_from_objectstore_to_atlan_list_error(
         self, mock_objectstore_input: MagicMock
     ) -> None:
@@ -196,7 +196,7 @@ class TestAtlanStorageOutput:
         with pytest.raises(Exception, match="List error"):
             await AtlanStorageOutput.migrate_from_objectstore_to_atlan("test_prefix")
 
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
+    @patch("application_sdk.outputs.atlan_storage.ObjectStoreInput")
     async def test_migrate_from_objectstore_to_atlan_get_data_error(
         self, mock_objectstore_input: MagicMock
     ) -> None:
@@ -219,8 +219,8 @@ class TestAtlanStorageOutput:
         assert result.failures[0]["file"] == "file1.txt"
         assert "Get data failed" in result.failures[0]["error"]
 
-    @patch("application_sdk.outputs.atlanstorage.ObjectStoreInput")
-    @patch("application_sdk.outputs.atlanstorage.DaprClient")
+    @patch("application_sdk.outputs.atlan_storage.ObjectStoreInput")
+    @patch("application_sdk.outputs.atlan_storage.DaprClient")
     async def test_parallel_file_migration(
         self, mock_dapr_client: MagicMock, mock_objectstore_input: MagicMock
     ) -> None:

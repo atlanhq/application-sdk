@@ -21,7 +21,7 @@ from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.atlanstorage import AtlanStorageOutput
+from application_sdk.outputs.atlan_storage import AtlanStorageOutput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.transformers import TransformerInterface
