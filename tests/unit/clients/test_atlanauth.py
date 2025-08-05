@@ -19,17 +19,6 @@ async def auth_client() -> AtlanAuthClient:
     }
 
     with patch(
-        "application_sdk.constants.WORKFLOW_AUTH_ENABLED_KEY", "workflow_auth_enabled"
-    ), patch(
-        "application_sdk.constants.WORKFLOW_AUTH_URL_KEY", "workflow_auth_url"
-    ), patch("application_sdk.constants.APPLICATION_NAME", "test-app"), patch(
-        "application_sdk.clients.atlan_auth.APPLICATION_NAME", "test-app"
-    ), patch(
-        "application_sdk.constants.WORKFLOW_AUTH_CLIENT_ID_KEY", "test_app_client_id"
-    ), patch(
-        "application_sdk.constants.WORKFLOW_AUTH_CLIENT_SECRET_KEY",
-        "test_app_client_secret",
-    ), patch(
         "application_sdk.clients.atlan_auth.SecretStoreInput.get_deployment_secret",
         return_value=mock_config,
     ):
@@ -48,16 +37,15 @@ async def test_get_access_token_auth_disabled(auth_client: AtlanAuthClient) -> N
 @pytest.mark.asyncio
 async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> None:
     """Test credential discovery failure handling."""
-    # Create an auth client
-    with patch("application_sdk.clients.atlan_auth.APPLICATION_NAME", "test-app"):
-        auth_client_no_fallback = AtlanAuthClient()
-
+    # Create an auth client with empty config
     with patch(
         "application_sdk.clients.atlan_auth.SecretStoreInput.get_deployment_secret",
         return_value={},  # Empty config means no credentials
     ):
-        credentials = await auth_client_no_fallback._extract_auth_credentials()
-        assert credentials is None
+        auth_client_no_fallback = AtlanAuthClient()
+
+    credentials = await auth_client_no_fallback._extract_auth_credentials()
+    assert credentials is None
 
 
 @pytest.mark.asyncio

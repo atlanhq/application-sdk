@@ -14,13 +14,22 @@ class MockWorkflow(WorkflowInterface):
 
 @pytest.fixture
 def temporal_client() -> TemporalWorkflowClient:
-    return TemporalWorkflowClient(
-        host="localhost", port="7233", application_name="test_app", namespace="default"
-    )
+    """Create a TemporalWorkflowClient instance for testing."""
+    with patch(
+        "application_sdk.clients.temporal.SecretStoreInput.get_deployment_secret",
+        return_value={},
+    ):
+        return TemporalWorkflowClient(
+            host="localhost",
+            port="7233",
+            application_name="test_app",
+            namespace="default",
+        )
 
 
 @pytest.fixture
 def mock_dapr_output_client() -> Generator[Mock, None, None]:
+    """Mock Dapr output clients."""
     with patch(
         "application_sdk.clients.temporal.StateStoreOutput"
     ) as mock_state_output, patch(
@@ -45,6 +54,7 @@ async def test_load(
     mock_connect: AsyncMock,
     temporal_client: TemporalWorkflowClient,
 ):
+    """Test loading the temporal client."""
     # Mock the deployment config to return empty dict (auth disabled)
     mock_get_config.return_value = {}
 
@@ -78,6 +88,7 @@ async def test_start_workflow(
     temporal_client: TemporalWorkflowClient,
     mock_dapr_output_client: Mock,
 ):
+    """Test starting a workflow."""
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -123,6 +134,7 @@ async def test_start_workflow_with_workflow_id(
     temporal_client: TemporalWorkflowClient,
     mock_dapr_output_client: Mock,
 ):
+    """Test starting a workflow with a provided workflow ID."""
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -181,6 +193,7 @@ async def test_start_workflow_failure(
     temporal_client: TemporalWorkflowClient,
     mock_dapr_output_client: Mock,
 ):
+    """Test workflow start failure handling."""
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -215,6 +228,7 @@ async def test_create_worker_without_client(
     mock_worker_class: MagicMock,
     temporal_client: TemporalWorkflowClient,
 ):
+    """Test creating a worker without a loaded client."""
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
@@ -239,6 +253,7 @@ async def test_create_worker(
     mock_worker_class: MagicMock,
     temporal_client: TemporalWorkflowClient,
 ):
+    """Test creating a worker with a loaded client."""
     # Mock the client connection
     mock_client = AsyncMock()
     mock_connect.return_value = mock_client
