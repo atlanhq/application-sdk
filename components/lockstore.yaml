@@ -7,6 +7,6 @@ spec:
   type: lock.redis
   metadata:
     - name: redisHost
-      value: localhost:6379
+      value: $REDIS_HOST
     - name: redisPassword
-      value: ""
+      value: $REDIS_PASSWORD
