@@ -187,3 +187,6 @@ TRACES_FILE_NAME = "traces.parquet"
 ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
 )
+
+# Lock Configuration
+LOCK_METADATA_KEY = "__lock_metadata__"
