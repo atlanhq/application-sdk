@@ -76,39 +76,31 @@ class EventStore:
         if enrich_metadata:
             event = cls.enrich_event_metadata(event)
 
-        with clients.DaprClient() as client:
-            try:
-                # Try pub/sub first
+        payload = json.dumps(event.model_dump(mode="json"))
+
+        # Try pub/sub first
+        try:
+            with clients.DaprClient() as client:
                 client.publish_event(
                     pubsub_name=EVENT_STORE_NAME,
                     topic_name=event.get_topic_name(),
-                    data=json.dumps(event.model_dump(mode="json")),
+                    data=payload,
                     data_content_type="application/json",
                 )
                 logger.info(f"Published event via pub/sub: {event.get_topic_name()}")
-            except Exception:
-                logger.warning("Pub/sub failed, sending event via HTTP binding")
-                # Fallback to HTTP binding
-                payload = json.dumps(event.model_dump(mode="json"))
+                return
+        except Exception:
+            logger.warning("Pub/sub failed, sending event via HTTP binding")
 
-                # Get authentication token
-                auth_token = ""
-                try:
-                    auth_client = AtlanAuthClient()
-                    auth_token = await auth_client.get_access_token()
+        # Fallback to HTTP binding - get auth token outside of DaprClient context
+        try:
+            auth_client = AtlanAuthClient()
+            auth_token = await auth_client.get_access_token()
 
-                except Exception as auth_e:
-                    logger.warning(f"Failed to get auth token: {auth_e}")
-                    auth_token = ""
-
-                # Prepare binding metadata
-                binding_metadata = {"content-type": "application/json"}
-                if auth_token:
-                    binding_metadata["Authorization"] = f"Bearer {auth_token}"
-                    logger.debug(f"Using auth token: {auth_token[:10]}...")
-                else:
-                    logger.warning("No auth token available")
-
+            # Prepare binding metadata
+            binding_metadata = {"content-type": "application/json"}
+            binding_metadata["Authorization"] = f"Bearer {auth_token}"
+            with clients.DaprClient() as client:
                 client.invoke_binding(
                     binding_name=EVENT_STORE_NAME,
                     operation="post",
@@ -118,3 +110,6 @@ class EventStore:
                 logger.info(
                     f"Published event via HTTP binding: {event.get_topic_name()}"
                 )
+        except Exception as e:
+            logger.error(f"Failed to publish event : {e}")
+            raise
