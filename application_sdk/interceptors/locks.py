@@ -1,5 +1,5 @@
+import asyncio
 import random
-import time
 from typing import Any
 
 from dapr.clients import DaprClient
@@ -99,7 +99,7 @@ class LockActivityInboundInterceptor(ActivityInboundInterceptor):
                             logger.debug(
                                 f"Failed to acquire lock for slot {slot}, retrying..."
                             )
-                            time.sleep(random.uniform(10, 20))
+                            await asyncio.sleep(random.uniform(10, 20))
             except Exception as e:
                 logger.error(
                     f"Failed to acquire lock for activity {input.fn.__name__}: {e}"
