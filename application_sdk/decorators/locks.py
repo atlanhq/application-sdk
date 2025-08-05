@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 from application_sdk.observability.logger_adaptor import get_logger
 
