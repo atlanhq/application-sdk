@@ -1,6 +1,8 @@
 """Utilities for credential providers."""
 
+import asyncio
 import copy
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
 from application_sdk.common.error_codes import CommonError
@@ -11,14 +13,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def get_credentials(credential_guid: str) -> Dict[str, Any]:
+async def get_credentials(credential_guid: str) -> Dict[str, Any]:
     """
     Resolve credentials based on credential source.
 
     Args:
-        credentials: Source credentials containing:
-            - credentialSource: "direct" or component name
-            - extra.secret_key: Secret path/key to fetch
+        credential_guid: The GUID of the credential to resolve
 
     Returns:
         Dict with resolved credentials
@@ -27,7 +27,8 @@ def get_credentials(credential_guid: str) -> Dict[str, Any]:
         CommonError: If credential resolution fails
     """
 
-    try:
+    def _get_credentials_sync(credential_guid: str) -> Dict[str, Any]:
+        """Synchronous helper function to perform blocking I/O operations."""
         credential_config = StateStoreInput.get_state(
             credential_guid, StateType.CREDENTIALS
         )
@@ -43,6 +44,14 @@ def get_credentials(credential_guid: str) -> Dict[str, Any]:
             return credential_config
         else:
             return resolve_credentials(credential_config, secret_data)
+
+    try:
+        # Run blocking I/O operations in a thread pool to avoid blocking the event loop
+        loop = asyncio.get_running_loop()
+        with ThreadPoolExecutor() as pool:
+            return await loop.run_in_executor(
+                pool, _get_credentials_sync, credential_guid
+            )
     except Exception as e:
         logger.error(f"Error resolving credentials: {str(e)}")
         raise CommonError(

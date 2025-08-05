@@ -129,7 +129,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_id = get_workflow_id()
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
-            credentials = get_credentials(workflow_args["credential_guid"])
+            credentials = await get_credentials(workflow_args["credential_guid"])
             await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
