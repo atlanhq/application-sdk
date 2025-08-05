@@ -16,10 +16,10 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
     METRICS_FILE_NAME,
-    OBJECT_STORE_NAME,
     STATE_STORE_NAME,
     TEMPORARY_PATH,
     TRACES_FILE_NAME,
@@ -440,14 +440,15 @@ class AtlanObservability(Generic[T], ABC):
                 # Upload to object store
                 with open(parquet_path, "rb") as f:
                     file_content = f.read()
+                    relative_path = os.path.relpath(parquet_path, TEMPORARY_PATH)
                     metadata = {
-                        "key": os.path.relpath(parquet_path, TEMPORARY_PATH),
-                        "blobName": os.path.relpath(parquet_path, TEMPORARY_PATH),
-                        "fileName": os.path.basename(parquet_path),
+                        "key": relative_path,
+                        "blobName": relative_path,
+                        "fileName": relative_path,
                     }
                     with DaprClient() as client:
                         client.invoke_binding(
-                            binding_name=OBJECT_STORE_NAME,
+                            binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
                             operation="create",
                             data=file_content,
                             binding_metadata=metadata,
@@ -560,7 +561,7 @@ class AtlanObservability(Generic[T], ABC):
                             # Delete from object store
                             with DaprClient() as client:
                                 client.invoke_binding(
-                                    binding_name=OBJECT_STORE_NAME,
+                                    binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
                                     operation="delete",
                                     data=b"",
                                     binding_metadata={

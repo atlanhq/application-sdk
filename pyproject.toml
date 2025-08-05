@@ -20,6 +20,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
+    "aiohttp>=3.10.0",
     "opentelemetry-exporter-otlp>=1.27.0",
     "psutil>=7.0.0",
     "fastapi[standard]>=0.115.0",
@@ -100,6 +101,10 @@ examples = [
 download-components.shell = "ls -l components/*.yaml"
 # Dapr and Temporal service tasks
 start-dapr = "dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components"
+
+# if you need to test dapr with environment values for an app
+#start-dapr.shell = "set -a && source .env && set +a && dapr run --enable-api-logging --log-level debug --app-id app --app-port 8000 --dapr-http-port 3500 --dapr-grpc-port 50001 --dapr-http-max-request-size 1024 --resources-path components"
+
 start-temporal = "temporal server start-dev --db-filename ./temporal.db"
 start-deps.shell = "poe start-dapr & poe start-temporal &"
 stop-deps.shell = "lsof -ti:3000,3500,7233,50001 | xargs kill -9 2>/dev/null || true"

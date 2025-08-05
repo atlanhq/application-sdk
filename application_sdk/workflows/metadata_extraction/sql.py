@@ -15,7 +15,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
     BaseSQLMetadataExtractionActivities,
 )
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import APPLICATION_NAME, ENABLE_ATLAN_UPLOAD
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.workflows.metadata_extraction import MetadataExtractionWorkflow
@@ -59,7 +59,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 in order, including preflight check, fetching databases, schemas,
                 tables, columns, and transforming data.
         """
-        return [
+        # Base activities that always run
+        base_activities: List[Any] = [
             activities.preflight_check,
             activities.get_workflow_args,
             activities.fetch_databases,
@@ -68,7 +69,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_columns,
             activities.fetch_procedures,
             activities.transform_data,
+            activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
         ]
+        return base_activities
 
     async def fetch_and_transform(
         self,
@@ -190,12 +193,13 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         workflow_success = False
 
         try:
+            # Let the base workflow handle the hybrid approach and preflight check
             await super().run(workflow_config)
 
-            # Get the workflow configuration from the state store
+            # StateStore approach - retrieve workflow configuration from state store
             workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
                 self.activities_cls.get_workflow_args,
-                workflow_config,  # Pass the whole config containing workflow_id
+                workflow_config,
                 retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
@@ -215,7 +219,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             ]
 
             await asyncio.gather(*fetch_and_transforms)
-
             logger.info(f"Extraction workflow completed for {workflow_id}")
             workflow_success = True
         except Exception as e:
@@ -238,6 +241,24 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 description="Total execution time of SQL metadata extraction workflow in seconds",
                 unit="s",
             )
+
+    async def run_exit_activities(self, workflow_args: Dict[str, Any]) -> None:
+        """Run the exit activity for the workflow."""
+        retry_policy = RetryPolicy(
+            maximum_attempts=6,
+            backoff_coefficient=2,
+        )
+        if ENABLE_ATLAN_UPLOAD:
+            workflow_args["typename"] = "atlan-upload"
+            await workflow.execute_activity_method(
+                self.activities_cls.upload_to_atlan,
+                args=[workflow_args],
+                retry_policy=retry_policy,
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
+        else:
+            logger.info("Atlan upload skipped for workflow (disabled)")
 
     def get_fetch_functions(
         self,

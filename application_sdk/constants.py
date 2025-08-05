@@ -30,6 +30,8 @@ load_dotenv(dotenv_path=".env")
 # Application Constants
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
+#: Name of the deployment, used to distinguish between different deployments of the same application
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "local")
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server
@@ -46,7 +48,6 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 #: Whether to use local development mode (used for instance to fetch secrets from the local state store)
 LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
-
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
@@ -85,6 +86,22 @@ WORKFLOW_MAX_TIMEOUT_HOURS = timedelta(
 #: Maximum number of activities that can run concurrently
 MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"))
 
+
+#: Name of the deployment secrets in the secret store
+DEPLOYMENT_SECRET_PATH = os.getenv(
+    "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
+)
+WORKFLOW_AUTH_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+)
+
+# Deployment Secret Store Key Names
+WORKFLOW_AUTH_CLIENT_ID_KEY = f"{APPLICATION_NAME}_app_client_id"
+WORKFLOW_AUTH_CLIENT_SECRET_KEY = f"{APPLICATION_NAME}_app_client_secret"
+WORKFLOW_AUTH_URL_KEY = "atlan_auth_url"
+WORKFLOW_TLS_ENABLED_KEY = "workflow_tls_enabled"
+DEPLOYMENT_NAME_KEY = "deployment_name"
+
 # Workflow Constants
 #: Timeout duration for activity heartbeats
 HEARTBEAT_TIMEOUT = timedelta(
@@ -104,10 +121,23 @@ USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "tru
 STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
-#: Name of the object store component in DAPR
-OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
+#: Name of the deployment object store component in DAPR
+DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
+#: Name of the upstream object store component in DAPR
+UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+#: Whether to enable Atlan storage upload
+ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
+# Dapr Client Configuration
+#: Maximum gRPC message length in bytes for Dapr client (default: 16MB)
+DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
+    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "16777216")
+)
+#: Name of the deployment secret store component in DAPR
+DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
+    "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"
+)
 
 
 # Logger Constants
