@@ -14,7 +14,7 @@ def mock_workflow_client():
     workflow_client.application_name = "test_app"
     workflow_client.namespace = "test_namespace"
     workflow_client.host = "localhost"
-    workflow_client.port = 7233
+    workflow_client.port = "7233"
     workflow_client.get_connection_string = Mock(return_value="localhost:7233")
 
     worker = Mock()

@@ -6,3 +6,18 @@ spec:
   type: pubsub.in-memory
   version: v1
   metadata: []
+# below binding will be used for external deployments
+# spec:
+#   type: bindings.http
+#   version: v1
+#   metadata:
+#     - name: url
+#       value: "https://{{customer-tenant.atlan.com}}/api/events"
+#     - name: method
+#       value: "POST"
+#     - name: timeout
+#       value: "30s"
+#     - name: retry
+#       value: "3"
+#     - name: retryInterval
+#       value: "10s"

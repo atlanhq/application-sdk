@@ -122,12 +122,6 @@ SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
-#: Name of the HTTP binding component in DAPR
-HTTP_BINDING_NAME = os.getenv("HTTP_BINDING_NAME", "http-binding")
-#: Whether to send events via HTTP (defaults to False)
-SEND_EVENTS_VIA_HTTP = (
-    os.getenv("ATLAN_SEND_EVENTS_VIA_HTTP", "false").lower() == "true"
-)
 #: Name of the deployment secret store component in DAPR
 DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
     "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"

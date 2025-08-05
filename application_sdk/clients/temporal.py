@@ -33,17 +33,17 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
-from application_sdk.inputs.deployment_config import DeploymentConfig
-from application_sdk.inputs.statestore import StateType
-from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.eventstore import (
+from application_sdk.events.base import (
     ApplicationEventNames,
     Event,
     EventMetadata,
-    EventStore,
     EventTypes,
     WorkflowStates,
 )
+from application_sdk.inputs.deployment_config import DeploymentConfig
+from application_sdk.inputs.statestore import StateType
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.eventstore import EventStore
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
 from application_sdk.workflows import WorkflowInterface
@@ -76,7 +76,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
             event_name=ApplicationEventNames.ACTIVITY_START.value,
             data={},
         )
-        EventStore.publish_event(event)
+        await EventStore.publish_event(event)
 
         output = None
         try:
@@ -87,7 +87,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
                 event_name=ApplicationEventNames.ACTIVITY_END.value,
                 data={},
             )
-            EventStore.publish_event(end_event)
+            await EventStore.publish_event(end_event)
             raise e
 
         end_event = Event(
@@ -95,7 +95,7 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
             event_name=ApplicationEventNames.ACTIVITY_END.value,
             data={},
         )
-        EventStore.publish_event(end_event)
+        await EventStore.publish_event(end_event)
         return output
 
 
@@ -116,7 +116,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             Any: The result of the workflow execution.
         """
         with workflow.unsafe.sandbox_unrestricted():
-            EventStore.publish_event(
+            await EventStore.publish_event(
                 Event(
                     metadata=EventMetadata(workflow_state=WorkflowStates.RUNNING.value),
                     event_type=EventTypes.APPLICATION_EVENT.value,
@@ -130,7 +130,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             output = await super().execute_workflow(input)
         except Exception as e:
             with workflow.unsafe.sandbox_unrestricted():
-                EventStore.publish_event(
+                await EventStore.publish_event(
                     Event(
                         metadata=EventMetadata(
                             workflow_state=WorkflowStates.FAILED.value
@@ -143,7 +143,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             raise e
 
         with workflow.unsafe.sandbox_unrestricted():
-            EventStore.publish_event(
+            await EventStore.publish_event(
                 Event(
                     metadata=EventMetadata(
                         workflow_state=WorkflowStates.COMPLETED.value

@@ -3,8 +3,8 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.utils import get_workflow_client
+from application_sdk.events.base import EventRegistration
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.eventstore import EventRegistration
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger

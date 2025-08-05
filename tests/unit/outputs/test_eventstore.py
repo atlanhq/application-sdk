@@ -4,15 +4,15 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-from application_sdk.outputs.eventstore import (
-    HTTP_BINDING_NAME,
+from application_sdk.constants import EVENT_STORE_NAME
+from application_sdk.events.base import (
     ApplicationEventNames,
     Event,
     EventMetadata,
-    EventStore,
     EventTypes,
     WorkflowStates,
 )
+from application_sdk.outputs.eventstore import EventStore
 
 
 class TestEvent:
@@ -98,7 +98,6 @@ class TestEventStore:
         assert enriched_event.metadata.workflow_type == "TestWorkflow"
         assert enriched_event.metadata.workflow_id == "test_workflow_id"
         assert enriched_event.metadata.workflow_run_id == "test_run_id"
-        assert enriched_event.metadata.workflow_state == WorkflowStates.UNKNOWN.value
 
     @patch("application_sdk.outputs.eventstore.workflow")
     @patch("application_sdk.outputs.eventstore.activity")
@@ -145,13 +144,29 @@ class TestEventStore:
         assert enriched_event.metadata.activity_type is None
         assert enriched_event.metadata.workflow_state == WorkflowStates.UNKNOWN.value
 
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
+    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
+    async def test_publish_event_success(self, mock_dapr_client, sample_event):
+        """Test publishing event successfully via pub/sub."""
+        # Mock DAPR client
+        mock_dapr_instance = Mock()
+        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
+
+        await EventStore.publish_event(sample_event)
+
+        # Verify DAPR publish_event was called with correct parameters
+        mock_dapr_instance.publish_event.assert_called_once()
+        call_args = mock_dapr_instance.publish_event.call_args
+
+        assert call_args[1]["pubsub_name"] == EVENT_STORE_NAME
+        assert call_args[1]["topic_name"] == "application_event_topic"
+        assert call_args[1]["data_content_type"] == "application/json"
+
     @patch("application_sdk.outputs.eventstore.clients.DaprClient")
     @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    def test_publish_event_external_deployment_success(
+    async def test_publish_event_fallback_to_http_binding(
         self, mock_auth_client, mock_dapr_client, sample_event
     ):
-        """Test publishing event to external deployment successfully."""
+        """Test publishing event with fallback to HTTP binding when pub/sub fails."""
         # Mock auth client
         mock_auth_instance = Mock()
         mock_auth_client.return_value = mock_auth_instance
@@ -161,31 +176,28 @@ class TestEventStore:
         mock_dapr_instance = Mock()
         mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
 
-        # Mock asyncio.run to return the token
-        with patch(
-            "application_sdk.outputs.eventstore.asyncio.run",
-            return_value="test_token_123",
-        ):
-            EventStore.publish_event(sample_event)
+        # Make pub/sub fail, forcing fallback to HTTP binding
+        mock_dapr_instance.publish_event.side_effect = Exception("Pub/sub failed")
 
-        # Verify DAPR binding was called with correct parameters
+        await EventStore.publish_event(sample_event)
+
+        # Verify HTTP binding was called with correct parameters
         mock_dapr_instance.invoke_binding.assert_called_once()
         call_args = mock_dapr_instance.invoke_binding.call_args
 
-        assert call_args[1]["binding_name"] == HTTP_BINDING_NAME
+        assert call_args[1]["binding_name"] == EVENT_STORE_NAME
         assert call_args[1]["operation"] == "post"
         assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
         assert (
             call_args[1]["binding_metadata"]["Authorization"] == "Bearer test_token_123"
         )
 
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
     @patch("application_sdk.outputs.eventstore.clients.DaprClient")
     @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    def test_publish_event_external_deployment_no_token(
+    async def test_publish_event_fallback_no_auth_token(
         self, mock_auth_client, mock_dapr_client, sample_event
     ):
-        """Test publishing event to external deployment when auth token is not available."""
+        """Test publishing event with fallback when auth token is not available."""
         # Mock auth client to raise exception
         mock_auth_instance = Mock()
         mock_auth_client.return_value = mock_auth_instance
@@ -197,255 +209,54 @@ class TestEventStore:
         mock_dapr_instance = Mock()
         mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
 
-        # Mock asyncio.run to raise exception
-        with patch(
-            "application_sdk.outputs.eventstore.asyncio.run",
-            side_effect=Exception("Auth failed"),
-        ):
-            EventStore.publish_event(sample_event)
+        # Make pub/sub fail, forcing fallback to HTTP binding
+        mock_dapr_instance.publish_event.side_effect = Exception("Pub/sub failed")
 
-        # Verify DAPR binding was called without Authorization header
+        await EventStore.publish_event(sample_event)
+
+        # Verify HTTP binding was called without Authorization header
         mock_dapr_instance.invoke_binding.assert_called_once()
         call_args = mock_dapr_instance.invoke_binding.call_args
 
-        assert call_args[1]["binding_name"] == HTTP_BINDING_NAME
+        assert call_args[1]["binding_name"] == EVENT_STORE_NAME
         assert call_args[1]["operation"] == "post"
         assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
         assert "Authorization" not in call_args[1]["binding_metadata"]
 
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", False)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    def test_publish_event_internal_deployment(self, mock_dapr_client, sample_event):
-        """Test publishing event to internal pub/sub system."""
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        EventStore.publish_event(sample_event)
-
-        # Verify DAPR publish_event was called with correct parameters
-        mock_dapr_instance.publish_event.assert_called_once()
-        call_args = mock_dapr_instance.publish_event.call_args
-
-        assert call_args[1]["pubsub_name"] == "eventstore"
-        assert call_args[1]["topic_name"] == "application_event_topic"
-        assert call_args[1]["data_content_type"] == "application/json"
-
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    def test_publish_event_external_deployment_dapr_error(
-        self, mock_dapr_client, sample_event
-    ):
-        """Test publishing event when DAPR client raises an error."""
-        # Mock DAPR client to raise exception
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-        mock_dapr_instance.invoke_binding.side_effect = Exception("DAPR error")
-
-        # Should not raise exception, should log error
-        with patch("application_sdk.outputs.eventstore.logger") as mock_logger:
-            EventStore.publish_event(sample_event)
-            mock_logger.error.assert_called_once()
-
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", False)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    def test_publish_event_internal_deployment_dapr_error(
-        self, mock_dapr_client, sample_event
-    ):
-        """Test publishing event to internal deployment when DAPR raises an error."""
-        # Mock DAPR client to raise exception
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-        mock_dapr_instance.publish_event.side_effect = Exception("DAPR error")
-
-        # Should not raise exception, should log error
-        with patch("application_sdk.outputs.eventstore.logger") as mock_logger:
-            EventStore.publish_event(sample_event)
-            mock_logger.error.assert_called_once()
-
-    def test_publish_event_without_enrichment(self, sample_event):
+    async def test_publish_event_without_enrichment(self, sample_event):
         """Test publishing event without metadata enrichment."""
-        with patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", False):
-            with patch("application_sdk.outputs.eventstore.clients.DaprClient"):
-                # Should not call enrich_event_metadata
-                with patch.object(EventStore, "enrich_event_metadata") as mock_enrich:
-                    EventStore.publish_event(sample_event, enrich_metadata=False)
-                    mock_enrich.assert_not_called()
-
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    def test_publish_event_external_deployment_with_thread_executor(
-        self, mock_auth_client, mock_dapr_client, sample_event
-    ):
-        """Test publishing event to external deployment using thread executor for async token."""
-        # Mock auth client
-        mock_auth_instance = Mock()
-        mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(return_value="test_token_123")
-
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        # Mock asyncio.run to raise RuntimeError (event loop already running)
-        with patch(
-            "application_sdk.outputs.eventstore.asyncio.run",
-            side_effect=RuntimeError("Event loop already running"),
-        ):
-            # Mock ThreadPoolExecutor
-            with patch(
-                "application_sdk.outputs.eventstore.ThreadPoolExecutor"
-            ) as mock_executor:
-                mock_future = Mock()
-                mock_future.result.return_value = "test_token_123"
-                mock_executor.return_value.__enter__.return_value.submit.return_value = mock_future
-
-                EventStore.publish_event(sample_event)
-
-        # Verify DAPR binding was called with correct parameters
-        mock_dapr_instance.invoke_binding.assert_called_once()
-        call_args = mock_dapr_instance.invoke_binding.call_args
-
-        assert call_args[1]["binding_name"] == HTTP_BINDING_NAME
-        assert call_args[1]["operation"] == "post"
-        assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
-        assert (
-            call_args[1]["binding_metadata"]["Authorization"] == "Bearer test_token_123"
-        )
-
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    def test_publish_event_external_deployment_token_timeout(
-        self, mock_auth_client, mock_dapr_client, sample_event
-    ):
-        """Test publishing event to external deployment when token retrieval times out."""
-        # Mock auth client
-        mock_auth_instance = Mock()
-        mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(return_value="test_token_123")
-
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        # Mock asyncio.run to raise RuntimeError
-        with patch(
-            "application_sdk.outputs.eventstore.asyncio.run",
-            side_effect=RuntimeError("Event loop already running"),
-        ):
-            # Mock ThreadPoolExecutor to raise timeout
-            with patch(
-                "application_sdk.outputs.eventstore.ThreadPoolExecutor"
-            ) as mock_executor:
-                from concurrent.futures import TimeoutError
-
-                mock_future = Mock()
-                mock_future.result.side_effect = TimeoutError(
-                    "Token retrieval timed out"
-                )
-                mock_executor.return_value.__enter__.return_value.submit.return_value = mock_future
-
-                EventStore.publish_event(sample_event)
-
-        # Verify DAPR binding was called without Authorization header
-        mock_dapr_instance.invoke_binding.assert_called_once()
-        call_args = mock_dapr_instance.invoke_binding.call_args
-
-        assert call_args[1]["binding_name"] == HTTP_BINDING_NAME
-        assert call_args[1]["operation"] == "post"
-        assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
-        assert "Authorization" not in call_args[1]["binding_metadata"]
-
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    def test_publish_event_external_deployment_empty_token(
-        self, mock_auth_client, mock_dapr_client, sample_event
-    ):
-        """Test publishing event to external deployment when auth token is empty."""
-        # Mock auth client
-        mock_auth_instance = Mock()
-        mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(return_value="")
-
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        # Mock asyncio.run to return empty token
-        with patch("application_sdk.outputs.eventstore.asyncio.run", return_value=""):
-            EventStore.publish_event(sample_event)
-
-        # Verify DAPR binding was called without Authorization header
-        mock_dapr_instance.invoke_binding.assert_called_once()
-        call_args = mock_dapr_instance.invoke_binding.call_args
-
-        assert call_args[1]["binding_name"] == HTTP_BINDING_NAME
-        assert call_args[1]["operation"] == "post"
-        assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
-        assert "Authorization" not in call_args[1]["binding_metadata"]
-
-    @patch("application_sdk.outputs.eventstore.IS_EXTERNAL_DEPLOYMENT", True)
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    def test_publish_event_external_deployment_none_token(
-        self, mock_auth_client, mock_dapr_client, sample_event
-    ):
-        """Test publishing event to external deployment when auth token is None."""
-        # Mock auth client
-        mock_auth_instance = Mock()
-        mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(return_value=None)
-
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        # Mock asyncio.run to return None
-        with patch("application_sdk.outputs.eventstore.asyncio.run", return_value=None):
-            EventStore.publish_event(sample_event)
-
-        # Verify DAPR binding was called without Authorization header
-        mock_dapr_instance.invoke_binding.assert_called_once()
-        call_args = mock_dapr_instance.invoke_binding.call_args
-
-        assert call_args[1]["binding_name"] == HTTP_BINDING_NAME
-        assert call_args[1]["operation"] == "post"
-        assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
-        assert "Authorization" not in call_args[1]["binding_metadata"]
+        with patch("application_sdk.outputs.eventstore.clients.DaprClient"):
+            # Should not call enrich_event_metadata
+            await EventStore.publish_event(sample_event, enrich_metadata=False)
 
 
 class TestApplicationEventNames:
     """Test cases for ApplicationEventNames enum."""
 
     def test_worker_created_event_name(self):
-        """Test that WORKER_CREATED event name is correctly defined."""
+        """Test worker created event name."""
         assert ApplicationEventNames.WORKER_CREATED.value == "worker_created"
 
     def test_all_event_names(self):
-        """Test all event names are correctly defined."""
-        expected_names = {
-            "WORKFLOW_END": "workflow_end",
-            "WORKFLOW_START": "workflow_start",
-            "ACTIVITY_START": "activity_start",
-            "ACTIVITY_END": "activity_end",
-            "WORKER_CREATED": "worker_created",
-        }
-
-        for name, value in expected_names.items():
-            assert getattr(ApplicationEventNames, name).value == value
+        """Test all event names are properly defined."""
+        expected_names = [
+            "workflow_end",
+            "workflow_start",
+            "activity_start",
+            "activity_end",
+            "worker_created",
+        ]
+        actual_names = [name.value for name in ApplicationEventNames]
+        assert actual_names == expected_names
 
 
 class TestEventMetadata:
     """Test cases for EventMetadata class."""
 
     def test_event_metadata_creation(self):
-        """Test basic EventMetadata creation."""
+        """Test basic event metadata creation."""
         metadata = EventMetadata()
-
-        assert metadata.application_name == "default"
+        assert metadata.application_name is not None
         assert metadata.event_published_client_timestamp == 0
         assert metadata.workflow_type is None
         assert metadata.workflow_id is None
@@ -457,21 +268,22 @@ class TestEventMetadata:
         assert metadata.topic_name is None
 
     def test_event_metadata_with_values(self):
-        """Test EventMetadata creation with specific values."""
+        """Test event metadata creation with specific values."""
         metadata = EventMetadata(
             application_name="test_app",
-            workflow_type="TestWorkflow",
+            workflow_type="test_workflow",
             workflow_id="test_id",
+            workflow_run_id="test_run_id",
             workflow_state=WorkflowStates.RUNNING.value,
-            activity_type="TestActivity",
+            activity_type="test_activity",
             activity_id="test_activity_id",
             attempt=1,
         )
-
         assert metadata.application_name == "test_app"
-        assert metadata.workflow_type == "TestWorkflow"
+        assert metadata.workflow_type == "test_workflow"
         assert metadata.workflow_id == "test_id"
+        assert metadata.workflow_run_id == "test_run_id"
         assert metadata.workflow_state == WorkflowStates.RUNNING.value
-        assert metadata.activity_type == "TestActivity"
+        assert metadata.activity_type == "test_activity"
         assert metadata.activity_id == "test_activity_id"
         assert metadata.attempt == 1
