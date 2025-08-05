@@ -1,15 +1,13 @@
 import random
 import time
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict
 
 from dapr.clients import DaprClient
-from temporalio import workflow
+from temporalio import activity
 from temporalio.worker import (
+    ActivityInboundInterceptor,
+    ExecuteActivityInput,
     Interceptor,
-    StartActivityInput,
-    WorkflowInboundInterceptor,
-    WorkflowInterceptorClassInput,
-    WorkflowOutboundInterceptor,
 )
 
 from application_sdk.constants import APPLICATION_NAME, LOCK_STORE_NAME
@@ -21,23 +19,23 @@ logger = get_logger(__name__)
 LOCK_METADATA_KEY = "__lock_metadata__"
 
 
-class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
-    """Interceptor that manages distributed locks for activities."""
+class LockActivityInboundInterceptor(ActivityInboundInterceptor):
+    """Interceptor that manages distributed locks for activities when they are picked up by workers."""
 
-    def __init__(self, next: WorkflowOutboundInterceptor):
+    def __init__(self, next: ActivityInboundInterceptor):
         super().__init__(next)
         self.activities = {}
-        self.next = next
 
     def set_activities(self, activities: Dict[str, Any]) -> None:
         """Set the activities dictionary for metadata lookup."""
         self.activities = activities
 
-    def start_activity(self, input: StartActivityInput) -> workflow.ActivityHandle[Any]:
+    async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         # Check if activity needs locking using metadata
-        activity_fn = self.activities.get(input.activity)
-        if not activity_fn or not hasattr(activity_fn, LOCK_METADATA_KEY):
-            return self.next.start_activity(input)
+        if not hasattr(input.fn, LOCK_METADATA_KEY):
+            return await super().execute_activity(input)
+
+        logger.debug(f"Attempting to acquire lock for activity: {input.fn.__name__}")
 
         # Quick check for lockstore component
         try:
@@ -48,68 +46,62 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
                     logger.warning(
                         f"Dapr component {LOCK_STORE_NAME} is not available, skipping lock acquisition, please use dapr lock component for testing locks locally"
                     )
-                    return self.next.start_activity(input)
+                    return await super().execute_activity(input)
         except Exception as e:
             logger.warning(f"Failed to check Dapr components: {e}")
-            return self.next.start_activity(input)
+            return await super().execute_activity(input)
 
-        lock_config = getattr(activity_fn, LOCK_METADATA_KEY)
+        lock_config = getattr(input.fn, LOCK_METADATA_KEY)
         # Get lock configuration
-        lock_name = lock_config.get("lock_name", input.activity)
+        lock_name = lock_config.get("lock_name", input.fn.__name__)
         max_locks = lock_config.get("max_locks", 5)
-        start_to_close_timeout = (
-            int(input.start_to_close_timeout.total_seconds())
-            if input.start_to_close_timeout
-            else 300
-        )
 
-        # Try to acquire a lock before starting the activity
+        # Use activity timeout or default to 300 seconds
+        activity_timeout = 300
+        activity_info = activity.info()
+        if activity_info.start_to_close_timeout is not None:
+            activity_timeout = int(activity_info.start_to_close_timeout.total_seconds())
+
         while True:
             slot = random.randint(0, max_locks - 1)
             lock_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
-            owner_id = f"{APPLICATION_NAME}:{workflow.info().workflow_id}"
+            owner_id = f"{APPLICATION_NAME}:{input.fn.__name__}:{activity_info.workflow_run_id}:{activity_info.activity_id}"
 
-            try:
-                with DaprClient() as client:
-                    with client.try_lock(
-                        store_name=LOCK_STORE_NAME,
-                        resource_id=lock_id,
-                        lock_owner=owner_id,
-                        expiry_in_seconds=start_to_close_timeout,
-                    ) as lock:
-                        if lock.success:
-                            logger.debug(
-                                f"Lock acquired {slot}, starting activity {input.activity}"
-                            )
-                            return self.next.start_activity(input)
-            except Exception as e:
-                logger.error(
-                    f"Failed to acquire lock for activity '{input.activity}'. Possible Dapr connectivity issue. Error: {e}"
-                )
-                raise e
-
-            # TODO: Check if this is correct
-            time.sleep(random.uniform(0, 0.5))
             logger.debug(
-                f"No lock for slot {slot}, retrying for activity {input.activity}"
+                f"Attempting to acquire lock {lock_id} for activity {input.fn.__name__}"
             )
 
-
-class LockWorkflowInboundInterceptor(WorkflowInboundInterceptor):
-    """Inbound interceptor that sets up the lock outbound interceptor."""
-
-    def __init__(self, next: WorkflowInboundInterceptor):
-        self.activities = {}
-        super().__init__(next)
-
-    def set_activities(self, activities: Dict[str, Any]) -> None:
-        """Set the activities dictionary for metadata lookup."""
-        self.activities = activities
-
-    def init(self, outbound: WorkflowOutboundInterceptor) -> None:
-        lock_interceptor = LockWorkflowOutboundInterceptor(outbound)
-        lock_interceptor.set_activities(self.activities)
-        self.next.init(lock_interceptor)
+            with DaprClient() as client:
+                with client.try_lock(
+                    store_name=LOCK_STORE_NAME,
+                    resource_id=lock_id,
+                    lock_owner=owner_id,
+                    expiry_in_seconds=activity_timeout,
+                ) as lock:
+                    if lock.success:
+                        logger.debug(
+                            f"Lock acquired {slot} for activity {input.fn.__name__}, executing activity"
+                        )
+                        try:
+                            # Execute activity with lock held
+                            result = await super().execute_activity(input)
+                            logger.debug(
+                                f"Activity {input.fn.__name__} completed successfully"
+                            )
+                            return result
+                        except Exception as e:
+                            logger.error(f"Activity {input.fn.__name__} failed: {e}")
+                            raise
+                        finally:
+                            # Lock is automatically released when with block ends
+                            logger.debug(
+                                f"Lock released for activity {input.fn.__name__}"
+                            )
+                    else:
+                        logger.debug(
+                            f"Failed to acquire lock for slot {slot}, retrying..."
+                        )
+                        time.sleep(random.uniform(10, 20))
 
 
 class LockInterceptor(Interceptor):
@@ -119,15 +111,17 @@ class LockInterceptor(Interceptor):
         self.activities = activities
         super().__init__()
 
-    def workflow_interceptor_class(
-        self, input: WorkflowInterceptorClassInput
-    ) -> Optional[Type[WorkflowInboundInterceptor]]:
-        # Create a new class that inherits from LockWorkflowInboundInterceptor
-        activities = self.activities
+    def intercept_activity(
+        self, next: ActivityInboundInterceptor
+    ) -> ActivityInboundInterceptor:
+        """Intercept activity executions.
 
-        class ConfiguredLockWorkflowInboundInterceptor(LockWorkflowInboundInterceptor):
-            def __init__(self, next: Optional[WorkflowInboundInterceptor] = None):
-                super().__init__(next)
-                self.set_activities(activities)
+        Args:
+            next (ActivityInboundInterceptor): The next interceptor in the chain.
 
-        return ConfiguredLockWorkflowInboundInterceptor
+        Returns:
+            ActivityInboundInterceptor: The activity interceptor.
+        """
+        interceptor = LockActivityInboundInterceptor(super().intercept_activity(next))
+        interceptor.set_activities(self.activities)
+        return interceptor
