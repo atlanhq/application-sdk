@@ -263,9 +263,16 @@ async def test_create_worker(
     assert worker == mock_worker_class.return_value
 
 
-def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):
+@pytest.mark.asyncio
+async def test_get_worker_task_queue(temporal_client: TemporalWorkflowClient):
     """Test get_worker_task_queue returns the application name."""
-    assert temporal_client.get_worker_task_queue() == "test_app"
+    # Mock DeploymentConfig.get to return a deployment name
+    with patch(
+        "application_sdk.clients.temporal.DeploymentConfig.get"
+    ) as mock_get_config:
+        mock_get_config.return_value = {"deployment_name": "agent-v2"}
+        result = await temporal_client.get_worker_task_queue()
+        assert result == "atlan-test_app-agent-v2"
 
 
 def test_get_connection_string(temporal_client: TemporalWorkflowClient):

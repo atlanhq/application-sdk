@@ -8,7 +8,6 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 
 from application_sdk.constants import LOCAL_DEVELOPMENT, SECRET_STORE_NAME
-from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -16,7 +15,7 @@ logger = get_logger(__name__)
 
 class SecretStoreInput:
     @classmethod
-    def get_secret(
+    async def get_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
     ) -> Dict[str, Any]:
         """Get secret from the Dapr component.
@@ -28,44 +27,15 @@ class SecretStoreInput:
         Returns:
             Dict with processed secret data
         """
+        if LOCAL_DEVELOPMENT:
+            return {}
+
         try:
             with DaprClient() as client:
                 dapr_secret_object = client.get_secret(
                     store_name=component_name, key=secret_key
                 )
-                return cls._process_secret_data(dapr_secret_object.secret)
-        except Exception as e:
-            logger.error(
-                f"Failed to fetch secret using component {component_name}: {str(e)}"
-            )
-            raise
-
-    @classmethod
-    async def fetch_secret(
-        cls, secret_key: str, component_name: str = SECRET_STORE_NAME
-    ) -> Dict[str, Any]:
-        """Fetch secret using the Dapr component.
-
-        Args:
-            component_name: Name of the Dapr component to fetch from
-            secret_key: Key of the secret to fetch
-
-        Returns:
-            Dict with processed secret data
-
-        Raises:
-            Exception: If secret fetching fails
-        """
-        try:
-            secret = {}
-            if not LOCAL_DEVELOPMENT:
-                secret = cls.get_secret(secret_key, component_name)
-
-            credential_config = StateStoreInput.get_state(
-                secret_key, StateType.CREDENTIALS
-            )
-            secret.update(credential_config)
-            return secret
+            return cls._process_secret_data(dapr_secret_object.secret)
         except Exception as e:
             logger.error(
                 f"Failed to fetch secret using component {component_name}: {str(e)}"
@@ -92,7 +62,8 @@ class SecretStoreInput:
                 parsed = json.loads(next(iter(secret_data.values())))
                 if isinstance(parsed, dict):
                     secret_data = parsed
-            except Exception:
+            except Exception as e:
+                logger.error(f"Failed to parse secret data: {e}")
                 pass
 
         return secret_data
