@@ -27,7 +27,6 @@ TEMPORAL_NOT_FOUND_FAILURE = (
 )
 
 
-LOCK_METADATA_KEY = "__lock_metadata__"
 
 
 class EventActivityInboundInterceptor(ActivityInboundInterceptor):

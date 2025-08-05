@@ -1,4 +1,4 @@
-from typing import Callable, Optional
+from typing import Callable, Optional, Any
 
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -27,7 +27,7 @@ def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
         ```
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         # Store lock metadata directly on the function object
         # TODO: This needs to be provided by a simple context manager
         metadata = {
