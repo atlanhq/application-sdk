@@ -237,7 +237,6 @@ class TemporalWorkflowClient(WorkflowClient):
         self.application_name = (
             application_name if application_name else APPLICATION_NAME
         )
-        self.worker_task_queue = self.application_name
         self.host = host if host else WORKFLOW_HOST
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
@@ -245,6 +244,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.deployment_config: Dict[str, Any] = (
             SecretStoreInput.get_deployment_secret()
         )
+        self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
 
         # Token refresh configuration - will be determined dynamically
