@@ -260,9 +260,6 @@ class TemporalWorkflowClient(WorkflowClient):
                 thread_name_prefix="activity-pool-",
             )
 
-        # Convert activities sequence to dict for metadata lookup
-        activities_dict = {getattr(a, "__name__", str(a)): a for a in activities}
-
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -277,7 +274,7 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor=activity_executor,
             interceptors=[
                 EventInterceptor(),
-                LockInterceptor(activities_dict),
+                LockInterceptor(),
             ],
         )
 
