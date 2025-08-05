@@ -461,7 +461,7 @@ class SecretStoreInput:
     """Secret store integration with automatic component discovery."""
 
     @classmethod
-    async def fetch_secret(
+    async def get_secret(
         cls,
         component_name: str,
         secret_key: str

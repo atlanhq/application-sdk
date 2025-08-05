@@ -137,7 +137,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self._state[workflow_id].handler = handler
 
         if "credential_guid" in workflow_args:
-            credentials = await SecretStoreInput.fetch_secret(
+            credentials = SecretStoreInput.get_secret(
                 secret_key=workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
