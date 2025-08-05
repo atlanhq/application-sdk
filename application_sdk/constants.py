@@ -91,13 +91,16 @@ MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
+WORKFLOW_AUTH_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+)
+
 # Deployment Secret Store Key Names
 WORKFLOW_AUTH_CLIENT_ID_KEY = f"{APPLICATION_NAME}_app_client_id"
 WORKFLOW_AUTH_CLIENT_SECRET_KEY = f"{APPLICATION_NAME}_app_client_secret"
 WORKFLOW_AUTH_URL_KEY = "atlan_auth_url"
 WORKFLOW_TLS_ENABLED_KEY = "workflow_tls_enabled"
 DEPLOYMENT_NAME_KEY = "deployment_name"
-WORKFLOW_AUTH_ENABLED_KEY = "workflow_auth_enabled"
 
 # Workflow Constants
 #: Timeout duration for activity heartbeats

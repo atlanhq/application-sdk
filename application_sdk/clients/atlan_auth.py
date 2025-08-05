@@ -10,7 +10,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     WORKFLOW_AUTH_CLIENT_ID_KEY,
     WORKFLOW_AUTH_CLIENT_SECRET_KEY,
-    WORKFLOW_AUTH_ENABLED_KEY,
+    WORKFLOW_AUTH_ENABLED,
     WORKFLOW_AUTH_URL_KEY,
 )
 from application_sdk.inputs.secretstore import SecretStoreInput
@@ -40,7 +40,7 @@ class AtlanAuthClient:
         """
         self.application_name = APPLICATION_NAME
         self.auth_config: Dict[str, Any] = SecretStoreInput.get_deployment_secret()
-        self.auth_enabled: bool = self.auth_config.get(WORKFLOW_AUTH_ENABLED_KEY, False)
+        self.auth_enabled: bool = WORKFLOW_AUTH_ENABLED
         self.auth_url: Optional[str] = None
 
         # Secret store credentials (cached after first fetch)

@@ -18,9 +18,7 @@ async def auth_client() -> AtlanAuthClient:
         "workflow_auth_url": "http://auth.test/token",
     }
 
-    with patch(
-        "application_sdk.constants.WORKFLOW_AUTH_ENABLED_KEY", "workflow_auth_enabled"
-    ), patch(
+    with patch("application_sdk.constants.WORKFLOW_AUTH_ENABLED", True), patch(
         "application_sdk.constants.WORKFLOW_AUTH_URL_KEY", "workflow_auth_url"
     ), patch("application_sdk.constants.APPLICATION_NAME", "test-app"), patch(
         "application_sdk.clients.atlan_auth.APPLICATION_NAME", "test-app"
