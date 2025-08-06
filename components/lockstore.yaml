@@ -6,9 +6,7 @@ metadata:
 spec:
   type: lock.redis
   metadata:
-    - name: sentinelMasterName
-      value: $REDIS_MASTER_SET_NAME
     - name: redisHost
-      value: $SENTINEL_URLS
+      value: $REDIS_HOST
     - name: redisPassword
       value: $REDIS_PASSWORD
