@@ -259,9 +259,12 @@ import aiofiles
 
 # Async for I/O operations
 async def read_files_async(filenames):
-    tasks = [aiofiles.open(filename, 'r') for filename in filenames]
-    results = await asyncio.gather(*tasks)
-    return [await f.read() for f in results]
+    async def read_single_file(filename):
+        async with aiofiles.open(filename, 'r') as f:
+            return await f.read()
+
+    tasks = [read_single_file(filename) for filename in filenames]
+    return await asyncio.gather(*tasks)
 
 # Sync for CPU-bound operations
 def process_data_cpu_intensive(data):
