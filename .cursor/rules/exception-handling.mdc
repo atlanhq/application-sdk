@@ -1,5 +1,6 @@
 ---
 alwaysApply: false
+globs: application_sdk/**/*.py
 ---
 # Exception Handling Standards
 
@@ -195,7 +196,3 @@ When reviewing code, check for:
 - **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
 - **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
 - **Documentation**: Document all exceptions that functions can raise in docstrings
-description:
-globs:
-alwaysApply: false
----
