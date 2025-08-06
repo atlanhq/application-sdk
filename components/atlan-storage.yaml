@@ -1,0 +1,20 @@
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: atlan-storage
+spec:
+  type: bindings.aws.s3
+  version: v1
+  metadata:
+    - name: accessKey
+      value: "{{clientId}}"
+    - name: secretKey
+      value: "{{clientSecret}}"
+    - name: endpoint
+      value: "https://{{tenant}}.atlan.com/api/blobstorage"
+    - name: bucket
+      value: "atlan-default-bucket"
+    - name: forcePathStyle
+      value: "true"
+    - name: region
+      value: "us-east-1"

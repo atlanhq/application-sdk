@@ -1,14 +1,11 @@
-import asyncio
 import json
 from typing import Any, Dict
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.common.credential_utils import resolve_credentials
-from application_sdk.common.error_codes import CommonError
 from application_sdk.inputs.secretstore import SecretStoreInput
 
 # Helper strategy for credentials dictionaries
@@ -110,59 +107,55 @@ class TestCredentialUtils:
             assert result["test_field"] == expected_value
             assert result["extra"]["extra_field"] == expected_value
 
-    def test_resolve_credentials_direct(self):
-        """Test resolving credentials with direct source."""
-        credentials = {
-            "credentialSource": "direct",
-            "username": "test_user",
-            "password": "test_pass",
-        }
+    @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
+    @patch("application_sdk.inputs.secretstore.DaprClient")
+    def test_fetch_secret_success(
+        self, mock_secret_dapr_client, mock_get_state, mock_object_dapr_client
+    ):
+        """Test successful secret fetching."""
+        # Setup mock for secret store
+        mock_client = MagicMock()
+        mock_secret_dapr_client.return_value.__enter__.return_value = mock_client
 
-        result = asyncio.run(resolve_credentials(credentials))
-        assert result == credentials
+        # Mock the secret response
+        mock_response = MagicMock()
+        mock_response.secret = {"username": "test", "password": "secret"}
+        mock_client.get_secret.return_value = mock_response
 
-    def test_resolve_credentials_default_direct(self):
-        """Test resolving credentials with no credentialSource (defaults to direct)."""
-        credentials = {"username": "test_user", "password": "test_pass"}
+        # Mock the state store response
+        mock_get_state.return_value = {"additional_key": "additional_value"}
 
-        result = asyncio.run(resolve_credentials(credentials))
-        assert result == credentials
-
-    @patch("application_sdk.inputs.secretstore.SecretStoreInput.get_secret")
-    def test_resolve_credentials_with_secret_store(self, mock_get_secret: Mock):
-        """Test resolving credentials using a secret store."""
-        mock_get_secret.return_value = {
-            "pg_username": "db_user",
-            "pg_password": "db_pass",
-        }
-
-        credentials = {
-            "credentialSource": "aws-secrets",
-            "username": "pg_username",
-            "password": "pg_password",
-            "extra": {"secret_key": "postgres/test"},
-        }
-
-        result = asyncio.run(resolve_credentials(credentials))
-
-        mock_get_secret.assert_called_once_with(
-            secret_key="postgres/test", component_name="aws-secrets"
+        result = SecretStoreInput.get_secret(
+            "test-key", component_name="test-component"
         )
-        assert result["username"] == "db_user"
-        assert result["password"] == "db_pass"
 
-    def test_resolve_credentials_missing_secret_key(self):
-        """Test resolving credentials with missing secret_key."""
-        credentials = {"credentialSource": "aws-secrets", "extra": {}}
+        # Verify the result includes both secret and state data
+        expected_result = {
+            "username": "test",
+            "password": "secret",
+        }
+        assert result == expected_result
+        mock_client.get_secret.assert_called_once_with(
+            store_name="test-component", key="test-key"
+        )
 
-        with pytest.raises(CommonError) as exc_info:
-            asyncio.run(resolve_credentials(credentials))
-        assert "secret_key is required in extra" in str(exc_info.value)
+    @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
+    @patch("application_sdk.inputs.secretstore.DaprClient")
+    def test_fetch_secret_failure(
+        self,
+        mock_secret_dapr_client: Mock,
+        mock_get_state: Mock,
+        mock_object_dapr_client: Mock,
+    ):
+        """Test failed secret fetching."""
+        mock_client = MagicMock()
+        mock_secret_dapr_client.return_value.__enter__.return_value = mock_client
+        mock_client.get_secret.side_effect = Exception("Connection failed")
 
-    def test_resolve_credentials_no_extra(self):
-        """Test resolving credentials with no extra field."""
-        credentials = {"credentialSource": "aws-secrets"}
+        # Mock the state store (though it won't be reached due to the exception)
+        mock_get_state.return_value = {}
 
-        with pytest.raises(CommonError) as exc_info:
-            asyncio.run(resolve_credentials(credentials))
-        assert "secret_key is required in extra" in str(exc_info.value)
+        with pytest.raises(Exception, match="Connection failed"):
+            SecretStoreInput.get_secret("test-key", component_name="test-component")

@@ -91,13 +91,16 @@ MAX_CONCURRENT_ACTIVITIES = int(os.getenv("ATLAN_MAX_CONCURRENT_ACTIVITIES", "5"
 DEPLOYMENT_SECRET_PATH = os.getenv(
     "ATLAN_DEPLOYMENT_SECRET_PATH", "ATLAN_DEPLOYMENT_SECRETS"
 )
+WORKFLOW_AUTH_ENABLED = (
+    os.getenv("ATLAN_WORKFLOW_AUTH_ENABLED", "false").lower() == "true"
+)
+
 # Deployment Secret Store Key Names
 WORKFLOW_AUTH_CLIENT_ID_KEY = f"{APPLICATION_NAME}_app_client_id"
 WORKFLOW_AUTH_CLIENT_SECRET_KEY = f"{APPLICATION_NAME}_app_client_secret"
 WORKFLOW_AUTH_URL_KEY = "atlan_auth_url"
 WORKFLOW_TLS_ENABLED_KEY = "workflow_tls_enabled"
 DEPLOYMENT_NAME_KEY = "deployment_name"
-WORKFLOW_AUTH_ENABLED_KEY = "workflow_auth_enabled"
 
 # Workflow Constants
 #: Timeout duration for activity heartbeats
@@ -118,8 +121,10 @@ USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "tru
 STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
 SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
-#: Name of the object store component in DAPR
-OBJECT_STORE_NAME = os.getenv("OBJECT_STORE_NAME", "objectstore")
+#: Name of the deployment object store component in DAPR
+DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
+#: Name of the upstream object store component in DAPR
+UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: Name of the deployment secret store component in DAPR

@@ -1,7 +1,7 @@
 """OAuth2 token manager with automatic secret store discovery."""
 
 import time
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 import aiohttp
 
@@ -10,10 +10,10 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     WORKFLOW_AUTH_CLIENT_ID_KEY,
     WORKFLOW_AUTH_CLIENT_SECRET_KEY,
-    WORKFLOW_AUTH_ENABLED_KEY,
+    WORKFLOW_AUTH_ENABLED,
     WORKFLOW_AUTH_URL_KEY,
 )
-from application_sdk.inputs.deployment_config import DeploymentConfig
+from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +39,8 @@ class AtlanAuthClient:
         (environment variables, AWS Secrets Manager, Azure Key Vault, etc.)
         """
         self.application_name = APPLICATION_NAME
-        self.auth_enabled: Optional[bool] = None
+        self.auth_config: Dict[str, Any] = SecretStoreInput.get_deployment_secret()
+        self.auth_enabled: bool = WORKFLOW_AUTH_ENABLED
         self.auth_url: Optional[str] = None
 
         # Secret store credentials (cached after first fetch)
@@ -48,15 +49,6 @@ class AtlanAuthClient:
         # Token data
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0
-
-    async def get_auth_enabled(self) -> Optional[bool]:
-        """Get auth enabled status from deployment config with fallback."""
-        config = await DeploymentConfig.get()
-        auth_enabled = config.get(WORKFLOW_AUTH_ENABLED_KEY, False)
-        if isinstance(auth_enabled, str):
-            auth_enabled = auth_enabled.lower() == "true"
-        self.auth_enabled = auth_enabled
-        return self.auth_enabled
 
     async def get_access_token(self, force_refresh: bool = False) -> Optional[str]:
         """Get a valid access token, refreshing if necessary.
@@ -74,8 +66,6 @@ class AtlanAuthClient:
             ValueError: If authentication is disabled or credentials are missing
             AtlanAuthError: If token refresh fails
         """
-        if self.auth_enabled is None:
-            await self.get_auth_enabled()
 
         if not self.auth_enabled:
             return None
@@ -185,19 +175,17 @@ class AtlanAuthClient:
 
     async def _extract_auth_credentials(self) -> Optional[Dict[str, str]]:
         """Fetch app credentials from secret store - auth-specific logic"""
-        config = await DeploymentConfig.get()
-
         if (
-            WORKFLOW_AUTH_CLIENT_ID_KEY in config
-            and WORKFLOW_AUTH_CLIENT_SECRET_KEY in config
+            WORKFLOW_AUTH_CLIENT_ID_KEY in self.auth_config
+            and WORKFLOW_AUTH_CLIENT_SECRET_KEY in self.auth_config
         ):
             credentials = {
-                "client_id": config[WORKFLOW_AUTH_CLIENT_ID_KEY],
-                "client_secret": config[WORKFLOW_AUTH_CLIENT_SECRET_KEY],
+                "client_id": self.auth_config[WORKFLOW_AUTH_CLIENT_ID_KEY],
+                "client_secret": self.auth_config[WORKFLOW_AUTH_CLIENT_SECRET_KEY],
             }
 
-            if WORKFLOW_AUTH_URL_KEY in config:
-                self.auth_url = config[WORKFLOW_AUTH_URL_KEY]
+            if WORKFLOW_AUTH_URL_KEY in self.auth_config:
+                self.auth_url = self.auth_config[WORKFLOW_AUTH_URL_KEY]
 
             return credentials
         return None
@@ -209,10 +197,12 @@ class AtlanAuthClient:
         credential discovery and token refresh on next access.
         Useful for credential rotation scenarios.
         """
+        # we are doing this to force a fetch of the credentials from secret store
         self.credentials = None
         self.auth_url = None
         self._access_token = None
         self._token_expiry = 0
+        self.auth_config = {}
 
     def calculate_refresh_interval(self) -> int:
         """Calculate the optimal token refresh interval based on token expiry.

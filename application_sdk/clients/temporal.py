@@ -40,7 +40,7 @@ from application_sdk.events.base import (
     EventTypes,
     WorkflowStates,
 )
-from application_sdk.inputs.deployment_config import DeploymentConfig
+from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import EventStore
@@ -237,13 +237,16 @@ class TemporalWorkflowClient(WorkflowClient):
         self.application_name = (
             application_name if application_name else APPLICATION_NAME
         )
-        self.worker_task_queue = self.application_name
         self.host = host if host else WORKFLOW_HOST
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
-        self.auth_enabled: Optional[bool] = None
+        self.deployment_config: Dict[str, Any] = (
+            SecretStoreInput.get_deployment_secret()
+        )
+        self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
+
         # Token refresh configuration - will be determined dynamically
         self._token_refresh_interval: Optional[int] = None
         self._token_refresh_task: Optional[asyncio.Task] = None
@@ -261,9 +264,9 @@ class TemporalWorkflowClient(WorkflowClient):
         Returns:
             str: The task queue name in format "app_name-deployment_name".
         """
-
-        config = await DeploymentConfig.get()
-        deployment_name = config.get(DEPLOYMENT_NAME_KEY, DEPLOYMENT_NAME)
+        deployment_name = self.deployment_config.get(
+            DEPLOYMENT_NAME_KEY, DEPLOYMENT_NAME
+        )
 
         if deployment_name:
             return f"atlan-{self.application_name}-{deployment_name}"
@@ -338,13 +341,12 @@ class TemporalWorkflowClient(WorkflowClient):
             "tls": False,
         }
 
-        config = await DeploymentConfig.get()
-        connection_options["tls"] = config.get(WORKFLOW_TLS_ENABLED_KEY, False)
+        connection_options["tls"] = self.deployment_config.get(
+            WORKFLOW_TLS_ENABLED_KEY, False
+        )
+        self.worker_task_queue = self.get_worker_task_queue()
 
-        self.auth_enabled = await self.auth_manager.get_auth_enabled()
-        self.worker_task_queue = await self.get_worker_task_queue()
-
-        if self.auth_enabled:
+        if self.auth_manager.auth_enabled:
             # Get initial token
             token = await self.auth_manager.get_access_token()
             connection_options["api_key"] = token
@@ -354,7 +356,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.client = await Client.connect(**connection_options)
 
         # Start token refresh loop if auth is enabled
-        if self.auth_enabled:
+        if self.auth_manager.auth_enabled:
             # Calculate initial refresh interval based on token expiry
             self._token_refresh_interval = (
                 self.auth_manager.calculate_refresh_interval()
@@ -500,7 +502,7 @@ class TemporalWorkflowClient(WorkflowClient):
         # Start token refresh if not already started and auth is enabled
         if (
             auto_start_token_refresh
-            and self.auth_enabled
+            and self.auth_manager.auth_enabled
             and not self._token_refresh_task
         ):
             self._token_refresh_interval = (

@@ -364,3 +364,6 @@ class ActivityError(AtlanError):
     METADATA_EXTRACTION_VALIDATION_ERROR = ErrorCode(
         ErrorComponent.ACTIVITY, "422", "01", "Metadata extraction validation error"
     )
+    ATLAN_UPLOAD_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "500", "08", "Atlan upload error"
+    )
