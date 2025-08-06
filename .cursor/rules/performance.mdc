@@ -211,31 +211,6 @@ data = json.dumps(large_dict)  # Slower than orjson
 data = str(orjson.dumps(large_dict))  # Unnecessary conversion
 ```
 
-#### **Data Compression and Storage**
-- **Rule**: Use appropriate compression for data storage and transfer
-- **Anti-pattern**: Storing uncompressed data
-- **Correct pattern**: Use compression for large datasets
-
-**✅ DO: Compressed data handling**
-```python
-import gzip
-import json
-
-# Compress large JSON data
-def save_compressed_data(data, filename):
-    with gzip.open(filename, 'wt', encoding='utf-8') as f:
-        json.dump(data, f)
-
-# Use parquet for structured data (better compression than CSV)
-df.to_parquet('data.parquet', compression='snappy')
-```
-
-**❌ DON'T: Uncompressed large data**
-```python
-# REJECT: Storing large uncompressed data
-with open('large_data.json', 'w') as f:
-    json.dump(large_data, f)  # No compression
-```
 
 ### **CPU Performance**
 
@@ -302,44 +277,6 @@ async def process_data_cpu_intensive(data):
     return [x * 2 for x in data]
 ```
 
-### **Caching and Memoization**
-
-#### **Result Caching**
-- **Rule**: Cache expensive operations and database queries
-- **Anti-pattern**: Recomputing or re-querying the same data
-- **Correct pattern**: Use caching for expensive operations
-
-**✅ DO: Proper caching**
-```python
-from functools import lru_cache
-import redis
-
-# Use LRU cache for function results
-@lru_cache(maxsize=128)
-def expensive_calculation(x, y):
-    return x * y + x**2 + y**2
-
-# Use Redis for distributed caching
-def get_user_data(user_id):
-    cache_key = f"user:{user_id}"
-    cached_data = redis_client.get(cache_key)
-    if cached_data:
-        return json.loads(cached_data)
-
-    # Fetch from database
-    user_data = fetch_from_database(user_id)
-    redis_client.setex(cache_key, 3600, json.dumps(user_data))
-    return user_data
-```
-
-**❌ DON'T: No caching**
-```python
-# REJECT: Recomputing expensive operations
-def get_user_data(user_id):
-    # Always fetches from database
-    return fetch_from_database(user_id)
-```
-
 ## Performance Review Checklist
 
 When reviewing code for performance, check for:
@@ -350,7 +287,5 @@ When reviewing code for performance, check for:
 4. **Serialization**: Are efficient libraries (orjson) used for large datasets?
 5. **Algorithm Efficiency**: Are appropriate data structures and algorithms used?
 6. **Async Usage**: Is async used for I/O operations, not CPU-bound tasks?
-7. **Caching**: Are expensive operations cached appropriately?
-8. **Compression**: Is data compressed for storage and transfer?
-9. **Connection Pooling**: Are database connections reused?
-10. **Batch Processing**: Are operations batched when possible?
+7. **Connection Pooling**: Are database connections reused?
+8. **Batch Processing**: Are operations batched when possible?
