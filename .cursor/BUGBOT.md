@@ -14,6 +14,7 @@
 - **Cognitive Load**: Can a new developer understand this change with less cognitive load?
 - **Magic Numbers/Strings**: All constants properly defined and named in @application_sdk/constants.py
 - **Spell Check**: No typos in code, comments, docstrings, or documentation
+- **Exception Handling Standards**: All exception handling must follow these principles. See detailed guidelines in [exception-handling.mdc](mdc:.cursor/rules/exception-handling.mdc).
 
 ### 🏗️ Architecture & Design
 
