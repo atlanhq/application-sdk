@@ -93,6 +93,13 @@ class TestBaseSQLMetadataExtractionApplication:
     async def test_setup_workflow_success(self, mock_get_workflow_client):
         """Test successful SQL metadata extraction workflow setup."""
         mock_workflow_client = AsyncMock()
+        # Configure mock to return proper string values for WorkerCreationEventData
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
         mock_get_workflow_client.return_value = mock_workflow_client
 
         app = BaseSQLMetadataExtractionApplication("test-app")
@@ -109,6 +116,13 @@ class TestBaseSQLMetadataExtractionApplication:
     async def test_setup_workflow_with_custom_classes(self, mock_get_workflow_client):
         """Test SQL metadata extraction workflow setup with custom classes."""
         mock_workflow_client = AsyncMock()
+        # Configure mock to return proper string values for WorkerCreationEventData
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
         mock_get_workflow_client.return_value = mock_workflow_client
 
         app = BaseSQLMetadataExtractionApplication(
@@ -132,6 +146,13 @@ class TestBaseSQLMetadataExtractionApplication:
     ):
         """Test SQL metadata extraction workflow setup with passthrough modules."""
         mock_workflow_client = AsyncMock()
+        # Configure mock to return proper string values for WorkerCreationEventData
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
         mock_get_workflow_client.return_value = mock_workflow_client
 
         app = BaseSQLMetadataExtractionApplication("test-app")
@@ -152,6 +173,13 @@ class TestBaseSQLMetadataExtractionApplication:
     ):
         """Test SQL metadata extraction workflow setup with activity executor."""
         mock_workflow_client = AsyncMock()
+        # Configure mock to return proper string values for WorkerCreationEventData
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
         mock_get_workflow_client.return_value = mock_workflow_client
 
         app = BaseSQLMetadataExtractionApplication("test-app")
@@ -172,6 +200,13 @@ class TestBaseSQLMetadataExtractionApplication:
     ):
         """Test SQL metadata extraction workflow setup with max concurrent activities."""
         mock_workflow_client = AsyncMock()
+        # Configure mock to return proper string values for WorkerCreationEventData
+        mock_workflow_client.application_name = "test-app"
+        mock_workflow_client.worker_task_queue = "test-app"
+        mock_workflow_client.namespace = "default"
+        mock_workflow_client.host = "localhost"
+        mock_workflow_client.port = "7233"
+        mock_workflow_client.get_connection_string = Mock(return_value="localhost:7233")
         mock_get_workflow_client.return_value = mock_workflow_client
 
         app = BaseSQLMetadataExtractionApplication("test-app")

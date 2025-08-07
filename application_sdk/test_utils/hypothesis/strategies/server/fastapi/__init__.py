@@ -2,7 +2,7 @@ import json
 
 from hypothesis import strategies as st
 
-from application_sdk.outputs.eventstore import Event
+from application_sdk.events.base import Event
 
 # Strategy for generating auth credentials
 auth_credentials_strategy = st.fixed_dictionaries(

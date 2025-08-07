@@ -15,9 +15,13 @@ from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
+from application_sdk.events.base import ApplicationEventNames, Event, EventTypes
+from application_sdk.events.worker_events import WorkerStartEventData
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.eventstore import EventStore
 
 logger = get_logger(__name__)
+
 
 if sys.platform not in ("win32", "cygwin"):
     try:
@@ -109,6 +113,21 @@ class Worker:
             thread_name_prefix="activity-pool-",
         )
 
+        # Store event data for later publishing
+        self._worker_creation_event_data = None
+        if self.workflow_client:
+            self._worker_creation_event_data = WorkerStartEventData(
+                application_name=self.workflow_client.application_name,
+                task_queue=self.workflow_client.worker_task_queue,
+                namespace=self.workflow_client.namespace,
+                host=self.workflow_client.host,
+                port=self.workflow_client.port,
+                connection_string=self.workflow_client.get_connection_string(),
+                max_concurrent_activities=max_concurrent_activities,
+                workflow_count=len(workflow_classes),
+                activity_count=len(workflow_activities),
+            )
+
     async def start(self, daemon: bool = True, *args: Any, **kwargs: Any) -> None:
         """Start the Temporal worker.
 
@@ -133,6 +152,16 @@ class Worker:
             When running as a daemon, the worker runs in a separate thread and
             does not block the main thread.
         """
+        # Publish worker creation event when starting
+        if self._worker_creation_event_data:
+            worker_creation_event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.WORKER_START.value,
+                data=self._worker_creation_event_data.model_dump(),
+            )
+
+            await EventStore.publish_event(worker_creation_event)
+
         if daemon:
             worker_thread = threading.Thread(
                 target=lambda: asyncio.run(self.start(daemon=False)), daemon=True

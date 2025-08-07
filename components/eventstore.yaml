@@ -3,6 +3,8 @@ kind: Component
 metadata:
   name: eventstore
 spec:
-  type: pubsub.in-memory
+  type: bindings.localstorage
   version: v1
-  metadata: []
+  metadata:
+  - name: rootPath
+    value: "./local/dapr/eventstore"
