@@ -1,4 +1,6 @@
 import asyncio
+import json
+import os
 from typing import Any, Dict, List, Optional
 
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -45,6 +47,30 @@ class SampleWorkflow(WorkflowInterface):
     async def run(self, workflow_config: Dict[str, Any]) -> None:
         pass
 
+    async def get_configmap(self, config_map_id: str) -> Dict[str, Any]:
+        workflow_json_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "application_sdk",
+            "frontend",
+            "content",
+            "workflow.json",
+        )
+
+        credential_json_path = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)),
+            "application_sdk",
+            "frontend",
+            "content",
+            "credential.json",
+        )
+
+        if config_map_id == "atlan-connectors-redshift":
+            with open(credential_json_path) as f:
+                return json.load(f)
+
+        with open(workflow_json_path) as f:
+            return json.load(f)
+
 
 async def application_fastapi():
     fast_api_app = APIServer(
@@ -54,10 +80,13 @@ async def application_fastapi():
         SampleWorkflow,
         [
             HttpWorkflowTrigger(
+                workflow_class=SampleWorkflow,
+            ),
+            HttpWorkflowTrigger(
                 endpoint="/sample",
                 methods=["POST"],
                 workflow_class=SampleWorkflow,
-            )
+            ),
         ],
     )
 
