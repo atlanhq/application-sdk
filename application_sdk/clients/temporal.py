@@ -255,7 +255,7 @@ class TemporalWorkflowClient(WorkflowClient):
         workflow.logger = logger
         activity.logger = logger
 
-    async def get_worker_task_queue(self) -> str:
+    def get_worker_task_queue(self) -> str:
         """Get the worker task queue name.
 
         The task queue name is derived from the application name and deployment name
