@@ -1,5 +1,4 @@
 import asyncio
-import json
 import re
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -7,7 +6,11 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.common.utils import (
+    parse_filter_input,
+    prepare_query,
+    read_sql_files,
+)
 from application_sdk.constants import SQL_QUERIES_PATH, SQL_SERVER_MIN_VERSION
 from application_sdk.handlers import HandlerInterface
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -220,10 +223,10 @@ class BaseSQLHandler(HandlerInterface):
         """
         try:
             schemas_results: List[Dict[str, str]] = await self.prepare_metadata()
-
-            include_filter = json.loads(
-                payload.get("metadata", {}).get("include-filter", "{}")
+            include_filter = parse_filter_input(
+                payload.get("metadata", {}).get("include-filter", {})
             )
+
             allowed_databases, allowed_schemas = self.extract_allowed_schemas(
                 schemas_results
             )

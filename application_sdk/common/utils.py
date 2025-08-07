@@ -195,6 +195,38 @@ def prepare_query(
         return None
 
 
+def parse_filter_input(
+    filter_input: Union[str, Dict[str, Any], None],
+) -> Dict[str, Any]:
+    """
+    Robustly parse filter input from various formats.
+
+    Args:
+        filter_input: Can be None, empty string, JSON string, or dict
+
+    Returns:
+        Dict[str, Any]: Parsed filter dictionary (empty dict if input is invalid/empty)
+    """
+    # Handle None or empty cases
+    if not filter_input:
+        return {}
+
+    # If already a dict, return as-is
+    if isinstance(filter_input, dict):
+        return filter_input
+
+    # If it's a string, try to parse as JSON
+    if isinstance(filter_input, str):
+        # Handle empty string
+        if not filter_input.strip():
+            return {}
+        try:
+            return json.loads(filter_input)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid filter JSON: '{filter_input}', error: {str(e)}")
+            raise CommonError(f"Invalid filter JSON: {str(e)}")
+
+
 def prepare_filters(
     include_filter_str: str, exclude_filter_str: str
 ) -> Tuple[str, str]:
@@ -212,15 +244,8 @@ def prepare_filters(
     Raises:
         CommonError: If JSON parsing fails for either filter.
     """
-    try:
-        include_filter = json.loads(include_filter_str)
-    except json.JSONDecodeError as e:
-        raise CommonError(f"Invalid include filter JSON: {str(e)}")
-
-    try:
-        exclude_filter = json.loads(exclude_filter_str)
-    except json.JSONDecodeError as e:
-        raise CommonError(f"Invalid exclude filter JSON: {str(e)}")
+    include_filter = parse_filter_input(include_filter_str)
+    exclude_filter = parse_filter_input(exclude_filter_str)
 
     normalized_include_filter_list = normalize_filters(include_filter, True)
     normalized_exclude_filter_list = normalize_filters(exclude_filter, False)

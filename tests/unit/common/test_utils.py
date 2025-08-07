@@ -7,6 +7,7 @@ from application_sdk.common.error_codes import CommonError
 from application_sdk.common.utils import (
     extract_database_names_from_regex_common,
     normalize_filters,
+    parse_filter_input,
     prepare_filters,
     prepare_query,
     read_sql_files,
@@ -895,3 +896,38 @@ def test_read_sql_files_case_sensitivity():
 
         result = read_sql_files("/mock/path")
         assert result == expected_result
+
+
+class TestParseFilterInput:
+    """Test the parse_filter_input function with various inputs."""
+
+    def test_empty_inputs(self) -> None:
+        """Test empty and None inputs return empty dict."""
+        assert parse_filter_input(None) == {}
+        assert parse_filter_input("") == {}
+        assert parse_filter_input("   ") == {}
+        assert parse_filter_input("{}") == {}
+
+    def test_dict_inputs(self) -> None:
+        """Test dict inputs are returned as-is."""
+        test_dict = {"^db$": ["^schema$"]}
+        assert parse_filter_input(test_dict) == test_dict
+        assert parse_filter_input({}) == {}
+
+    def test_valid_json_strings(self) -> None:
+        """Test valid JSON strings are parsed correctly."""
+        assert parse_filter_input('{"^db$": ["^schema$"]}') == {"^db$": ["^schema$"]}
+        assert parse_filter_input('{"db1": ["s1", "s2"]}') == {"db1": ["s1", "s2"]}
+
+    def test_invalid_json_strings(self) -> None:
+        """Test invalid JSON strings raise CommonError."""
+        import pytest
+
+        with pytest.raises(CommonError, match="Invalid filter JSON"):
+            parse_filter_input("invalid json")
+
+        with pytest.raises(CommonError, match="Invalid filter JSON"):
+            parse_filter_input('{"invalid": }')
+
+        with pytest.raises(CommonError, match="Invalid filter JSON"):
+            parse_filter_input("not json at all")
