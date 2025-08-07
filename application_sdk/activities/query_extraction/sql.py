@@ -9,10 +9,11 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.credential_utils import get_credentials
+from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.objectstore import ObjectStoreInput
-from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.objectstore import ObjectStoreOutput
@@ -128,9 +129,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_id = get_workflow_id()
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
-            credentials = SecretStoreInput.extract_credentials(
-                workflow_args["credential_guid"]
-            )
+            credentials = await get_credentials(workflow_args["credential_guid"])
             await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
@@ -201,8 +200,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
+                chunk_size=None,
             )
-            sql_input = await sql_input.get_daft_dataframe()
+            sql_input = await sql_input.get_dataframe()
 
             raw_output = ParquetOutput(
                 output_prefix=workflow_args["output_prefix"],
@@ -212,7 +212,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 start_marker=workflow_args["start_marker"],
                 end_marker=workflow_args["end_marker"],
             )
-            await raw_output.write_daft_dataframe(sql_input)
+            await raw_output.write_dataframe(sql_input)
 
             logger.info(
                 f"Query fetch completed, {raw_output.total_record_count} records processed",
@@ -398,7 +398,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Raises:
             Exception: If marker file writing or object store upload fails
         """
-        output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+        output_path = workflow_args["output_path"].rsplit("/", 1)[0]
         logger.info(f"Writing marker file to {output_path}")
         marker_file_path = os.path.join(output_path, "markerfile")
 
@@ -413,7 +413,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         logger.info(f"Last marker: {last_marker}")
         await ObjectStoreOutput.push_file_to_object_store(
-            workflow_args["output_prefix"], marker_file_path
+            workflow_args["output_prefix"],
+            marker_file_path,
+            object_store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
         logger.info(f"Marker file written to {marker_file_path}")
 
@@ -436,14 +438,16 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             Exception: If marker file reading fails (logged as warning, not re-raised)
         """
         try:
-            output_path = workflow_args["output_path"].rsplit("/", 2)[0]
+            output_path = workflow_args["output_path"].rsplit("/", 1)[0]
             marker_file_path = os.path.join(output_path, "markerfile")
             logger.info(f"Downloading marker file from {marker_file_path}")
 
             os.makedirs(workflow_args["output_prefix"], exist_ok=True)
 
             ObjectStoreInput.download_file_from_object_store(
-                workflow_args["output_prefix"], marker_file_path
+                workflow_args["output_prefix"],
+                marker_file_path,
+                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
             logger.info(f"Output prefix: {workflow_args['output_prefix']}")
@@ -485,7 +489,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         current_marker = self.read_marker(workflow_args)
         if current_marker:
-            miner_args.miner_start_time_epoch = current_marker
+            miner_args.current_marker = current_marker
 
         queries_sql_query = self.fetch_queries_sql.format(
             database_name_cleaned=miner_args.database_name_cleaned,

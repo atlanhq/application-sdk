@@ -1,6 +1,65 @@
 # Changelog
 
 
+## v0.1.1rc26 (August 07, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc25...v0.1.1rc26
+
+### Features
+
+- add cursor and bugbot rules (#636) (by @Amit Prabhu in [cbbecd9](https://github.com/atlanhq/application-sdk/commit/cbbecd9))
+
+### Bug Fixes
+
+- handle str and dict types in preflight checks (#638) (by @Nishchith Shetty in [57ee9a0](https://github.com/atlanhq/application-sdk/commit/57ee9a0))
+
+## v0.1.1rc25 (August 05, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc24...v0.1.1rc25
+
+### Features
+
+- implement OAuth2 authentication and data transfer for applications (#634) (by @nishantmunjal7 in [e5e70a2](https://github.com/atlanhq/application-sdk/commit/e5e70a2))
+
+
+
+## v0.1.1rc24 (August 01, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc23...v0.1.1rc24
+
+### Features
+
+- Add utility function to fetch include/exclude databases from include-exclude regex (#623) (by @Abhishek Agrawal in [0c6cc62](https://github.com/atlanhq/application-sdk/commit/0c6cc62))
+
+### Bug Fixes
+
+- miner output path (#626) (by @Onkar Ravgan in [cabe7eb](https://github.com/atlanhq/application-sdk/commit/cabe7eb))
+- db name regex pattern (#630) (by @Onkar Ravgan in [bb26992](https://github.com/atlanhq/application-sdk/commit/bb26992))
+
+## v0.1.1rc23 (July 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc22...v0.1.1rc23
+
+### Bug Fixes
+
+- marker file being saved at incorrect location (#620) (by @Abhishek Agrawal in [d3de56f](https://github.com/atlanhq/application-sdk/commit/d3de56f))
+- issues with inferring workflow_run_id (#624) (by @Nishchith Shetty in [61e7a4d](https://github.com/atlanhq/application-sdk/commit/61e7a4d))
+
+
+
+## v0.1.1rc22 (July 21, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc21...v0.1.1rc22
+
+### Features
+
+- use object store as state store, path update and fixes (#618) (by @Nishchith Shetty in [d439cb4](https://github.com/atlanhq/application-sdk/commit/d439cb4))
+
+### Bug Fixes
+
+- suppress daft dependency loggers (#611) (by @Nishchith Shetty in [3e379d4](https://github.com/atlanhq/application-sdk/commit/3e379d4))
+
+
 ## v0.1.1rc21 (July 10, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc20...v0.1.1rc21

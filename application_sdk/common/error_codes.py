@@ -72,6 +72,15 @@ class ClientError(AtlanError):
     SQL_CLIENT_AUTH_ERROR = ErrorCode(
         ErrorComponent.CLIENT, "401", "02", "SQL client authentication failed"
     )
+    AUTH_TOKEN_REFRESH_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "401", "03", "Authentication token refresh failed"
+    )
+    AUTH_CREDENTIALS_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "401", "04", "Authentication credentials not found"
+    )
+    AUTH_CONFIG_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "400", "00", "Authentication configuration error"
+    )
 
 
 class ApiError(AtlanError):
@@ -354,4 +363,7 @@ class ActivityError(AtlanError):
     )
     METADATA_EXTRACTION_VALIDATION_ERROR = ErrorCode(
         ErrorComponent.ACTIVITY, "422", "01", "Metadata extraction validation error"
+    )
+    ATLAN_UPLOAD_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "500", "08", "Atlan upload error"
     )

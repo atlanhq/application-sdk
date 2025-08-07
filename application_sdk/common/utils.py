@@ -18,44 +18,36 @@ from typing import (
 )
 
 from application_sdk.common.error_codes import CommonError
-from application_sdk.inputs.statestore import StateStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.statestore import StateStoreOutput
 
 logger = get_logger(__name__)
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
 
 
-def extract_database_names_from_regex(normalized_regex: str) -> str:
+def extract_database_names_from_regex_common(
+    normalized_regex: str,
+    empty_default: str,
+    require_wildcard_schema: bool,
+) -> str:
     """
-    Extract database names from normalized regex patterns and return a regex string suitable for SQL queries.
-
-    This function parses regex patterns like 'dev\\.external_schema$|wide_world_importers\\.bronze_sales$'
-    or 'dev\\.*|wide_world_importers\\.*' to extract the database names, and returns a regex string
-    like '^(dev|wide_world_importers)$' for use in SQL queries.
+    Common implementation for extracting database names from regex patterns.
 
     Args:
         normalized_regex (str): The normalized regex pattern containing database.schema patterns
+        empty_default (str): Default value to return for empty/null inputs
+        require_wildcard_schema (bool): Whether to only extract database names for wildcard schemas
 
     Returns:
-        str: A regex string in the format ^(name1|name2|...)$ or '^$' if no names are found.
-
-    Examples:
-        >>> extract_database_names_from_regex('dev\\.external_schema$|wide_world_importers\\.bronze_sales$')
-        '^(dev|wide_world_importers)$'
-        >>> extract_database_names_from_regex('dev\\.*|wide_world_importers\\.*')
-        '^(dev|wide_world_importers)$'
-        >>> extract_database_names_from_regex('^$')
-        '^$'
-
-    Raises:
-        CommonError: If the input is invalid or processing fails
+        str: A regex string in the format ^(name1|name2|...)$ or default values
     """
     try:
-        if not normalized_regex or not isinstance(normalized_regex, str):
-            logger.warning("Invalid normalized_regex input: empty or non-string value")
-            return "'^$'"
+        # Handle special cases based on regex type
+        if not normalized_regex or normalized_regex == "^$":
+            return empty_default
+
+        if normalized_regex == ".*":
+            return "'.*'"
 
         database_names: Set[str] = set()
 
@@ -68,32 +60,50 @@ def extract_database_names_from_regex(normalized_regex: str) -> str:
                 if not pattern or not pattern.strip():
                     continue
 
-                # Split by \\. to get database name (first part)
+                # Split by \\. to get database name and schema part
                 # The \\. represents an escaped dot in the regex
                 parts = pattern.split("\\.")
-                if parts:
-                    db_name = parts[0].strip()
-                    if db_name and db_name not in (".*", "^$"):
-                        # Validate database name format
-                        if re.match(r"^[a-zA-Z_][a-zA-Z0-9_]*$", db_name):
-                            database_names.add(db_name)
-                        else:
-                            logger.warning(f"Invalid database name format: {db_name}")
 
+                # Handle different validation requirements
+                if require_wildcard_schema:
+                    # For exclude regex, we need at least 2 parts and schema must be wildcard
+                    if len(parts) < 2:
+                        logger.warning(f"Invalid database name format: {pattern}")
+                        continue
+                    db_name = parts[0].strip()
+                    schema_part = parts[1].strip()
+                    # Only extract database name if the schema part is a wildcard (*)
+                    if not (
+                        db_name and db_name not in (".*", "^$") and schema_part == "*"
+                    ):
+                        continue
+                else:
+                    # For include regex, we just need the database name
+                    if not parts:
+                        continue
+                    db_name = parts[0].strip()
+                    if not (db_name and db_name not in (".*", "^$")):
+                        continue
+
+                # Validate database name format
+                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_$-]*$", db_name):
+                    database_names.add(db_name)
+                else:
+                    logger.warning(f"Invalid database name format: {db_name}")
             except Exception as e:
                 logger.warning(f"Error processing pattern '{pattern}': {str(e)}")
                 continue
 
         if not database_names:
-            return "'^$'"
+            return empty_default
         return f"'^({'|'.join(sorted(database_names))})$'"
 
     except Exception as e:
         logger.error(
             f"Error extracting database names from regex '{normalized_regex}': {str(e)}"
         )
-        # Return a safe default that excludes everything
-        return "'^$'"
+        # Return appropriate default based on regex type
+        return empty_default
 
 
 def prepare_query(
@@ -149,12 +159,16 @@ def prepare_query(
         )
 
         # Extract database names from the normalized regex patterns
-        include_databases = extract_database_names_from_regex(normalized_include_regex)
-        exclude_databases = extract_database_names_from_regex(normalized_exclude_regex)
-
-        if include_databases == "'^$'" and exclude_databases == "'^$'":
-            include_databases = "'.*'"
-            exclude_databases = "'^$'"
+        include_databases = extract_database_names_from_regex_common(
+            normalized_regex=normalized_include_regex,
+            empty_default="'.*'",
+            require_wildcard_schema=False,
+        )
+        exclude_databases = extract_database_names_from_regex_common(
+            normalized_regex=normalized_exclude_regex,
+            empty_default="'^$'",
+            require_wildcard_schema=True,
+        )
 
         # Use sets directly for SQL query formatting
         exclude_empty_tables = workflow_args.get("metadata", {}).get(
@@ -181,6 +195,38 @@ def prepare_query(
         return None
 
 
+def parse_filter_input(
+    filter_input: Union[str, Dict[str, Any], None],
+) -> Dict[str, Any]:
+    """
+    Robustly parse filter input from various formats.
+
+    Args:
+        filter_input: Can be None, empty string, JSON string, or dict
+
+    Returns:
+        Dict[str, Any]: Parsed filter dictionary (empty dict if input is invalid/empty)
+    """
+    # Handle None or empty cases
+    if not filter_input:
+        return {}
+
+    # If already a dict, return as-is
+    if isinstance(filter_input, dict):
+        return filter_input
+
+    # If it's a string, try to parse as JSON
+    if isinstance(filter_input, str):
+        # Handle empty string
+        if not filter_input.strip():
+            return {}
+        try:
+            return json.loads(filter_input)
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid filter JSON: '{filter_input}', error: {str(e)}")
+            raise CommonError(f"Invalid filter JSON: {str(e)}")
+
+
 def prepare_filters(
     include_filter_str: str, exclude_filter_str: str
 ) -> Tuple[str, str]:
@@ -198,15 +244,8 @@ def prepare_filters(
     Raises:
         CommonError: If JSON parsing fails for either filter.
     """
-    try:
-        include_filter = json.loads(include_filter_str)
-    except json.JSONDecodeError as e:
-        raise CommonError(f"Invalid include filter JSON: {str(e)}")
-
-    try:
-        exclude_filter = json.loads(exclude_filter_str)
-    except json.JSONDecodeError as e:
-        raise CommonError(f"Invalid exclude filter JSON: {str(e)}")
+    include_filter = parse_filter_input(include_filter_str)
+    exclude_filter = parse_filter_input(exclude_filter_str)
 
     normalized_include_filter_list = normalize_filters(include_filter, True)
     normalized_exclude_filter_list = normalize_filters(exclude_filter, False)
@@ -266,38 +305,6 @@ def normalize_filters(
                 normalized_filter_list.append(f"{db}\\.{sch}")
 
     return normalized_filter_list
-
-
-def get_workflow_config(config_id: str) -> Dict[str, Any]:
-    """Gets the workflow configuration from the state store using config id.
-
-    Args:
-        config_id: The configuration ID to retrieve.
-
-    Returns:
-        dict: The workflow configuration.
-    """
-    return StateStoreInput.extract_configuration(config_id)
-
-
-def update_workflow_config(config_id: str, config: Dict[str, Any]) -> Dict[str, Any]:
-    """Updates the workflow configuration.
-
-    Args:
-        config_id: The configuration ID to update.
-        config: The new configuration dictionary.
-
-    Returns:
-        dict: The updated workflow configuration.
-    """
-    extracted_config = get_workflow_config(config_id)
-
-    for key in extracted_config.keys():
-        if key in config and config[key] is not None:
-            extracted_config[key] = config[key]
-
-    StateStoreOutput.store_configuration(config_id, extracted_config)
-    return extracted_config
 
 
 def read_sql_files(

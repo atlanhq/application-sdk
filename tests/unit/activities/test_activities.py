@@ -178,34 +178,73 @@ class TestActivitiesInterface:
 class TestActivitiesInterfaceActivities:
     """Test cases for ActivitiesInterface activity methods."""
 
-    @patch("application_sdk.inputs.statestore.StateStoreInput.extract_configuration")
+    @patch("application_sdk.activities.build_output_path")
+    @patch("application_sdk.activities.get_workflow_run_id")
+    @patch("application_sdk.activities.get_workflow_id")
+    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
     async def test_get_workflow_args_success(
-        self, mock_extract_config, mock_activities
+        self,
+        mock_get_state,
+        mock_get_workflow_id,
+        mock_get_workflow_run_id,
+        mock_build_output_path,
+        mock_activities,
     ):
         """Test successful get_workflow_args activity."""
         workflow_config = {"workflow_id": "test-123"}
         expected_config = {"workflow_id": "test-123", "config": "data"}
-        mock_extract_config.return_value = expected_config
+        mock_get_state.return_value = expected_config
+        mock_get_workflow_id.return_value = "test-123"
+        mock_get_workflow_run_id.return_value = "run-456"
+        mock_build_output_path.return_value = "test/output/path"
 
         result = await mock_activities.get_workflow_args(workflow_config)
 
-        assert result == expected_config
-        mock_extract_config.assert_called_once_with("test-123")
+        # The result should include the output_prefix and output_path added by get_workflow_args
+        assert result["workflow_id"] == expected_config["workflow_id"]
+        assert result["config"] == expected_config["config"]
+        assert "output_prefix" in result
+        assert "output_path" in result
 
-    async def test_get_workflow_args_missing_workflow_id(self, mock_activities):
+        from application_sdk.inputs.statestore import StateType
+
+        mock_get_state.assert_called_once_with("test-123", StateType.WORKFLOWS)
+
+    @patch("application_sdk.activities.build_output_path")
+    @patch("application_sdk.activities.get_workflow_run_id")
+    @patch("application_sdk.activities.get_workflow_id")
+    async def test_get_workflow_args_missing_workflow_id(
+        self,
+        mock_get_workflow_id,
+        mock_get_workflow_run_id,
+        mock_build_output_path,
+        mock_activities,
+    ):
         """Test get_workflow_args with missing workflow_id."""
         workflow_config = {"other_param": "value"}
+        mock_get_workflow_id.side_effect = Exception("Failed to get workflow id")
 
-        with pytest.raises(ValueError, match="workflow_id is required"):
+        with pytest.raises(Exception, match="Failed to get workflow id"):
             await mock_activities.get_workflow_args(workflow_config)
 
-    @patch("application_sdk.inputs.statestore.StateStoreInput.extract_configuration")
+    @patch("application_sdk.activities.build_output_path")
+    @patch("application_sdk.activities.get_workflow_run_id")
+    @patch("application_sdk.activities.get_workflow_id")
+    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
     async def test_get_workflow_args_extraction_error(
-        self, mock_extract_config, mock_activities
+        self,
+        mock_get_state,
+        mock_get_workflow_id,
+        mock_get_workflow_run_id,
+        mock_build_output_path,
+        mock_activities,
     ):
         """Test get_workflow_args when extraction fails."""
         workflow_config = {"workflow_id": "test-123"}
-        mock_extract_config.side_effect = Exception("Extraction failed")
+        mock_get_state.side_effect = Exception("Extraction failed")
+        mock_get_workflow_id.return_value = "test-123"
+        mock_get_workflow_run_id.return_value = "run-456"
+        mock_build_output_path.return_value = "test/output/path"
 
         with pytest.raises(Exception, match="Extraction failed"):
             await mock_activities.get_workflow_args(workflow_config)

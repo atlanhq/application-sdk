@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
-from application_sdk.constants import OBJECT_STORE_NAME
+from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME
 from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.outputs.objectstore import ObjectStoreOutput
 
@@ -29,7 +29,7 @@ class TestObjectStoreOutput:
 
         # Assertions
         mock_client.invoke_binding.assert_called_once_with(
-            binding_name=OBJECT_STORE_NAME,
+            binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
             operation=ObjectStoreOutput.OBJECT_CREATE_OPERATION,
             data=test_file_content,
             binding_metadata={
@@ -96,17 +96,13 @@ class TestObjectStoreOutput:
 
 
 class TestObjectStoreInput:
-    @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("application_sdk.inputs.objectstore.ObjectStoreInput.get_file_data")
+    @patch("os.makedirs")
     def test_download_file_from_object_store_success(
-        self, mock_dapr_client: MagicMock
+        self, mock_makedirs: MagicMock, mock_get_file_data: MagicMock
     ) -> None:
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_response.data = b"test content"
-        mock_client.invoke_binding.return_value = mock_response
+        mock_get_file_data.return_value = b"test content"
 
         mock_file = mock_open()
 
@@ -116,23 +112,18 @@ class TestObjectStoreInput:
             )
 
         # Assertions
-        mock_client.invoke_binding.assert_called_once_with(
-            binding_name=OBJECT_STORE_NAME,
-            operation=ObjectStoreInput.OBJECT_GET_OPERATION,
-            binding_metadata={"key": "test.txt", "fileName": "test.txt"},
+        mock_get_file_data.assert_called_once_with(
+            "test.txt", DEPLOYMENT_OBJECT_STORE_NAME
         )
-
         mock_file().write.assert_called_once_with(b"test content")
 
-    @patch("application_sdk.inputs.objectstore.DaprClient")
+    @patch("application_sdk.inputs.objectstore.ObjectStoreInput.get_file_data")
+    @patch("os.makedirs")
     def test_download_file_from_object_store_error(
-        self, mock_dapr_client: MagicMock
+        self, mock_makedirs: MagicMock, mock_get_file_data: MagicMock
     ) -> None:
         # Setup
-        mock_client = MagicMock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_client
-
-        mock_client.invoke_binding.side_effect = Exception("Test download error")
+        mock_get_file_data.side_effect = Exception("Test download error")
 
         with pytest.raises(Exception, match="Test download error"):
             ObjectStoreInput.download_file_from_object_store(

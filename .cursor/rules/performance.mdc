@@ -1,0 +1,294 @@
+---
+alwaysApply: false
+globs: application_sdk/**/*.py
+---
+# Performance Standards
+
+## Core Principles
+
+**Performance is a Feature** - Performance issues are bugs that affect user experience and system reliability. All code must be written with performance considerations in mind.
+
+## Critical Performance Areas
+
+### **Memory Management**
+
+#### **Memory Leaks Prevention**
+- **Rule**: Always close resources (files, connections, iterators) in finally blocks
+- **Anti-pattern**: Opening resources without proper cleanup
+- **Correct pattern**: Use context managers or try/finally
+
+**✅ DO: Proper resource management**
+```python
+# Using context manager
+with open(filename, 'r') as f:
+    data = f.read()
+
+# Using try/finally
+file_handle = None
+try:
+    file_handle = open(filename, 'r')
+    data = file_handle.read()
+finally:
+    if file_handle:
+        file_handle.close()
+```
+
+**❌ DON'T: Resource leaks**
+```python
+# REJECT: No cleanup
+file_handle = open(filename, 'r')
+data = file_handle.read()
+# Missing file_handle.close()
+```
+
+#### **Large Object Management**
+- **Rule**: Process large datasets in chunks, not all at once
+- **Anti-pattern**: Loading entire dataset into memory
+- **Correct pattern**: Use generators, iterators, or chunked processing
+
+**✅ DO: Chunked processing**
+```python
+def process_large_file(filename: str, chunk_size: int = 1000):
+    """Process large file in chunks to avoid memory issues."""
+    with open(filename, 'r') as f:
+        chunk = []
+        for line in f:
+            chunk.append(line.strip())
+            if len(chunk) >= chunk_size:
+                yield process_chunk(chunk)
+                chunk = []
+        if chunk:  # Process remaining items
+            yield process_chunk(chunk)
+```
+
+**❌ DON'T: Load everything into memory**
+```python
+# REJECT: Memory intensive
+def process_large_file(filename: str):
+    with open(filename, 'r') as f:
+        all_lines = f.readlines()  # Loads entire file into memory
+        return process_all_lines(all_lines)
+```
+
+### **DataFrame Performance**
+
+#### **Memory-Efficient DataFrame Operations**
+- **Rule**: Use appropriate data types and avoid unnecessary copies
+- **Anti-pattern**: Creating multiple copies of large DataFrames
+- **Correct pattern**: Use inplace operations and proper dtypes
+
+**✅ DO: Memory-efficient DataFrame operations**
+```python
+# Use appropriate dtypes
+df = pd.read_csv('large_file.csv', dtype={
+    'id': 'int32',
+    'category': 'category',  # More memory efficient than object
+    'value': 'float32'
+})
+
+# Use inplace operations when possible
+df.dropna(inplace=True)  # Instead of df = df.dropna()
+df.reset_index(drop=True, inplace=True)
+
+# Use query() for filtering (more memory efficient)
+filtered_df = df.query('value > 100 and category == "A"')
+```
+
+**❌ DON'T: Inefficient DataFrame operations**
+```python
+# REJECT: Creates unnecessary copies
+df = df.dropna()  # Creates copy
+df = df.reset_index()  # Creates another copy
+df = df[df['value'] > 100]  # Creates another copy
+df = df[df['category'] == 'A']  # Creates another copy
+```
+
+#### **DataFrame Chunking**
+- **Rule**: Process large DataFrames in chunks
+- **Anti-pattern**: Processing entire DataFrame at once
+- **Correct pattern**: Use chunked reading and processing
+
+**✅ DO: Chunked DataFrame processing**
+```python
+def process_large_dataframe(filename: str, chunk_size: int = 10000):
+    """Process large CSV file in chunks."""
+    for chunk in pd.read_csv(filename, chunksize=chunk_size):
+        # Process each chunk
+        processed_chunk = process_chunk(chunk)
+        yield processed_chunk
+```
+
+**❌ DON'T: Load entire DataFrame**
+```python
+# REJECT: Memory intensive for large files
+df = pd.read_csv('very_large_file.csv')  # Loads entire file
+process_dataframe(df)
+```
+
+### **SQL Query Performance**
+
+#### **Query Optimization**
+- **Rule**: Write efficient SQL queries with proper indexing and limiting
+- **Anti-pattern**: SELECT * without LIMIT on large tables
+- **Correct pattern**: Use specific columns, LIMIT, and proper WHERE clauses
+
+**✅ DO: Optimized SQL queries**
+```python
+# Use specific columns instead of SELECT *
+query = "SELECT id, name, created_at FROM users WHERE status = 'active' LIMIT 1000"
+
+# Use parameterized queries for security and performance
+query = "SELECT * FROM users WHERE age > %s AND city = %s LIMIT %s"
+params = (18, 'New York', 100)
+
+# Use appropriate indexes in WHERE clauses
+query = "SELECT * FROM orders WHERE user_id = %s AND created_at > %s"
+```
+
+**❌ DON'T: Inefficient SQL queries**
+```python
+# REJECT: No LIMIT on large table
+query = "SELECT * FROM users"  # Could return millions of rows
+
+# REJECT: No WHERE clause on indexed columns
+query = "SELECT * FROM orders WHERE amount > 0"  # Should use user_id or date
+
+# REJECT: String concatenation (SQL injection risk)
+query = f"SELECT * FROM users WHERE name = '{user_input}'"
+```
+
+#### **Connection and Transaction Management**
+- **Rule**: Use connection pooling and proper transaction management
+- **Anti-pattern**: Creating new connections for each query
+- **Correct pattern**: Reuse connections and use transactions
+
+**✅ DO: Proper connection management**
+```python
+# Use connection pooling
+async def execute_queries():
+    async with get_db_connection() as conn:
+        async with conn.transaction():
+            await conn.execute("INSERT INTO logs (message) VALUES ($1)", "info")
+            await conn.execute("UPDATE counters SET value = value + 1")
+```
+
+**❌ DON'T: Poor connection management**
+```python
+# REJECT: Creating new connection for each query
+for query in queries:
+    conn = create_new_connection()  # Expensive
+    conn.execute(query)
+    conn.close()
+```
+
+### **Serialization/Deserialization Performance**
+
+#### **JSON Serialization Optimization**
+- **Rule**: Use efficient serialization libraries and avoid unnecessary conversions
+- **Anti-pattern**: Using default json module for large datasets
+- **Correct pattern**: Use orjson, ujson, or custom serializers
+
+**✅ DO: Efficient JSON serialization**
+```python
+import orjson  # Much faster than json
+
+# Use orjson for better performance
+data = orjson.dumps(large_dict, option=orjson.OPT_APPEND_NEWLINE)
+
+# Use streaming for large datasets
+def serialize_large_dataset(data_iterator):
+    for item in data_iterator:
+        yield orjson.dumps(item) + b'\n'
+```
+
+**❌ DON'T: Inefficient serialization**
+```python
+# REJECT: Using default json for large datasets
+import json
+data = json.dumps(large_dict)  # Slower than orjson
+
+# REJECT: Converting to string unnecessarily
+data = str(orjson.dumps(large_dict))  # Unnecessary conversion
+```
+
+
+### **CPU Performance**
+
+#### **Algorithm Efficiency**
+- **Rule**: Use appropriate algorithms and data structures
+- **Anti-pattern**: O(n²) algorithms when O(n) or O(log n) alternatives exist
+- **Correct pattern**: Choose efficient algorithms and data structures
+
+**✅ DO: Efficient algorithms**
+```python
+# Use set for O(1) lookups
+def find_duplicates(items):
+    seen = set()
+    duplicates = set()
+    for item in items:
+        if item in seen:
+            duplicates.add(item)
+        else:
+            seen.add(item)
+    return list(duplicates)
+
+# Use list comprehension instead of loops when appropriate
+squares = [x**2 for x in range(1000)]  # More efficient than loop
+```
+
+**❌ DON'T: Inefficient algorithms**
+```python
+# REJECT: O(n²) algorithm
+def find_duplicates(items):
+    duplicates = []
+    for i, item in enumerate(items):
+        if item in items[i+1:]:  # O(n) lookup
+            duplicates.append(item)
+    return duplicates
+```
+
+#### **Async/Await Performance**
+- **Rule**: Use async/await for I/O operations, not CPU-bound tasks
+- **Anti-pattern**: Using async for CPU-intensive operations
+- **Correct pattern**: Use async for I/O, sync for CPU-bound tasks
+
+**✅ DO: Proper async usage**
+```python
+import asyncio
+import aiofiles
+
+# Async for I/O operations
+async def read_files_async(filenames):
+    async def read_single_file(filename):
+        async with aiofiles.open(filename, 'r') as f:
+            return await f.read()
+
+    tasks = [read_single_file(filename) for filename in filenames]
+    return await asyncio.gather(*tasks)
+
+# Sync for CPU-bound operations
+def process_data_cpu_intensive(data):
+    # CPU-intensive processing
+    return [x * 2 for x in data]
+```
+
+**❌ DON'T: Misusing async**
+```python
+# REJECT: Using async for CPU-bound operations
+async def process_data_cpu_intensive(data):
+    # This should be sync
+    return [x * 2 for x in data]
+```
+
+## Performance Review Checklist
+
+When reviewing code for performance, check for:
+
+1. **Memory Management**: Are resources properly closed? Are large datasets processed in chunks?
+2. **DataFrame Operations**: Are appropriate dtypes used? Are unnecessary copies avoided?
+3. **SQL Queries**: Are queries optimized with LIMIT and proper WHERE clauses?
+4. **Serialization**: Are efficient libraries (orjson) used for large datasets?
+5. **Algorithm Efficiency**: Are appropriate data structures and algorithms used?
+6. **Async Usage**: Is async used for I/O operations, not CPU-bound tasks?
+7. **Connection Pooling**: Are database connections reused?
+8. **Batch Processing**: Are operations batched when possible?

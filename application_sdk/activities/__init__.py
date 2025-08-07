@@ -13,16 +13,23 @@ Example:
     ...         await state.handler.do_something()
 """
 
+import os
 from abc import ABC
 from typing import Any, Dict, Generic, Optional, TypeVar
 
 from pydantic import BaseModel
 from temporalio import activity
 
-from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.common.utils import (
+    auto_heartbeater,
+    build_output_path,
+    get_workflow_id,
+    get_workflow_run_id,
+)
 from application_sdk.common.error_codes import OrchestratorError
+from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
-from application_sdk.inputs.statestore import StateStoreInput
+from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -177,13 +184,23 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         Raises:
             IOError: If configuration cannot be retrieved from state store
         """
-        workflow_id = workflow_config.get("workflow_id")
+        workflow_id = workflow_config.get("workflow_id", get_workflow_id())
         if not workflow_id:
             raise ValueError("workflow_id is required in workflow_config")
 
         try:
             # This already handles the Dapr call internally
-            return StateStoreInput.extract_configuration(workflow_id)
+            workflow_args = StateStoreInput.get_state(workflow_id, StateType.WORKFLOWS)
+            workflow_args["output_prefix"] = workflow_args.get(
+                "output_prefix", TEMPORARY_PATH
+            )
+            workflow_args["output_path"] = os.path.join(
+                workflow_args["output_prefix"], build_output_path()
+            )
+            workflow_args["workflow_id"] = workflow_id
+            workflow_args["workflow_run_id"] = get_workflow_run_id()
+            return workflow_args
+
         except Exception as e:
             logger.error(
                 f"Failed to retrieve workflow configuration for {workflow_id}: {str(e)}",

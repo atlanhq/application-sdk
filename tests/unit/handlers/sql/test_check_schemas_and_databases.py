@@ -235,3 +235,50 @@ class TestCheckSchemasAndDatabases:
             assert result["successMessage"] == "Schemas and Databases check successful"
             assert result["failureMessage"] == ""
             mock_get_dataframe.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_include_filter_string_and_dict_formats(
+        self, handler: BaseSQLHandler
+    ) -> None:
+        """Test check with include-filter as both string (JSON) and dict formats"""
+        # Test data
+        test_data = pd.DataFrame(
+            {"TABLE_CATALOG": ["db1", "db1"], "TABLE_SCHEMA": ["schema1", "schema2"]}
+        )
+
+        # Mock the SQLQueryInput.get_dataframe to return our test data
+        with patch(
+            "application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe",
+            new_callable=AsyncMock,
+        ) as mock_get_dataframe:
+            mock_get_dataframe.return_value = test_data
+
+            # Test case 1: include-filter as JSON string
+            payload_string = {
+                "metadata": {"include-filter": '{"^db1$": ["^schema1$"]}'}
+            }
+            result_string = await handler.check_schemas_and_databases(payload_string)
+
+            assert result_string["success"] is True
+            assert (
+                result_string["successMessage"]
+                == "Schemas and Databases check successful"
+            )
+            assert result_string["failureMessage"] == ""
+
+            # Test case 2: include-filter as dict (already parsed)
+            payload_dict = {"metadata": {"include-filter": {"^db1$": ["^schema1$"]}}}
+            result_dict = await handler.check_schemas_and_databases(payload_dict)
+
+            assert result_dict["success"] is True
+            assert (
+                result_dict["successMessage"]
+                == "Schemas and Databases check successful"
+            )
+            assert result_dict["failureMessage"] == ""
+
+            # Both cases should produce the same result
+            assert result_string == result_dict
+
+            # Verify that get_dataframe was called twice (once for each test case)
+            assert mock_get_dataframe.call_count == 2
