@@ -16,7 +16,7 @@ from temporalio.worker import Worker as TemporalWorker
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
 from application_sdk.events.base import ApplicationEventNames, Event, EventTypes
-from application_sdk.events.worker_events import WorkerCreationEventData
+from application_sdk.events.worker_events import WorkerStartEventData
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import EventStore
 
@@ -116,7 +116,7 @@ class Worker:
         # Store event data for later publishing
         self._worker_creation_event_data = None
         if self.workflow_client:
-            self._worker_creation_event_data = WorkerCreationEventData(
+            self._worker_creation_event_data = WorkerStartEventData(
                 application_name=self.workflow_client.application_name,
                 task_queue=self.workflow_client.worker_task_queue,
                 namespace=self.workflow_client.namespace,
@@ -156,7 +156,7 @@ class Worker:
         if self._worker_creation_event_data:
             worker_creation_event = Event(
                 event_type=EventTypes.APPLICATION_EVENT.value,
-                event_name=ApplicationEventNames.WORKER_CREATED.value,
+                event_name=ApplicationEventNames.WORKER_START.value,
                 data=self._worker_creation_event_data.model_dump(),
             )
 

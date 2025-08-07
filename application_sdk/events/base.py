@@ -140,7 +140,7 @@ class Event(BaseModel, ABC):
         Returns:
             str: The topic name.
         """
-        return self.event_type + "_topic"
+        return self.event_type
 
     class Config:
         extra = "allow"

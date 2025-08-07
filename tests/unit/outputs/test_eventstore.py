@@ -27,7 +27,7 @@ class TestEvent:
         assert event.event_type == "test_event"
         assert event.event_name == "test_name"
         assert event.data == {"key": "value"}
-        assert event.get_topic_name() == "test_event_topic"
+        assert event.get_topic_name() == "test_event"
 
     def test_event_with_metadata(self):
         """Test event creation with metadata."""
@@ -68,7 +68,7 @@ class TestEventStore:
         """Create a sample event for testing."""
         return Event(
             event_type=EventTypes.APPLICATION_EVENT.value,
-            event_name=ApplicationEventNames.WORKER_CREATED.value,
+            event_name=ApplicationEventNames.WORKER_START.value,
             data={
                 "application_name": "test_app",
                 "task_queue": "test_queue",
@@ -145,59 +145,37 @@ class TestEventStore:
         assert enriched_event.metadata.workflow_state == WorkflowStates.UNKNOWN.value
 
     @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    async def test_publish_event_success(self, mock_dapr_client, sample_event):
-        """Test publishing event successfully via pub/sub."""
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        await EventStore.publish_event(sample_event)
-
-        # Verify DAPR publish_event was called with correct parameters
-        mock_dapr_instance.publish_event.assert_called_once()
-        call_args = mock_dapr_instance.publish_event.call_args
-
-        assert call_args[1]["pubsub_name"] == EVENT_STORE_NAME
-        assert call_args[1]["topic_name"] == "application_event_topic"
-        assert call_args[1]["data_content_type"] == "application/json"
-
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
     @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    async def test_publish_event_fallback_to_http_binding(
+    async def test_publish_event_success(
         self, mock_auth_client, mock_dapr_client, sample_event
     ):
-        """Test publishing event with fallback to HTTP binding when pub/sub fails."""
+        """Test publishing event successfully via binding."""
         # Mock auth client
         mock_auth_instance = Mock()
         mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(return_value="test_token_123")
+        mock_auth_instance.get_access_token = AsyncMock(return_value="test_token")
 
         # Mock DAPR client
         mock_dapr_instance = Mock()
         mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
 
-        # Make pub/sub fail, forcing fallback to HTTP binding
-        mock_dapr_instance.publish_event.side_effect = Exception("Pub/sub failed")
-
         await EventStore.publish_event(sample_event)
 
-        # Verify HTTP binding was called with correct parameters
+        # Verify DAPR invoke_binding was called with correct parameters
         mock_dapr_instance.invoke_binding.assert_called_once()
         call_args = mock_dapr_instance.invoke_binding.call_args
 
         assert call_args[1]["binding_name"] == EVENT_STORE_NAME
-        assert call_args[1]["operation"] == "post"
+        assert call_args[1]["operation"] == "create"
         assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
-        assert (
-            call_args[1]["binding_metadata"]["Authorization"] == "Bearer test_token_123"
-        )
+        assert call_args[1]["binding_metadata"]["Authorization"] == "Bearer test_token"
 
     @patch("application_sdk.outputs.eventstore.clients.DaprClient")
     @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
     async def test_publish_event_fallback_no_auth_token(
         self, mock_auth_client, mock_dapr_client, sample_event
     ):
-        """Test publishing event with fallback when auth token is not available."""
+        """Test publishing event when auth token is not available."""
         # Mock auth client to raise exception
         mock_auth_instance = Mock()
         mock_auth_client.return_value = mock_auth_instance
@@ -209,19 +187,12 @@ class TestEventStore:
         mock_dapr_instance = Mock()
         mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
 
-        # Make pub/sub fail, forcing fallback to HTTP binding
-        mock_dapr_instance.publish_event.side_effect = Exception("Pub/sub failed")
+        # Expect the auth failure to raise an exception
+        with pytest.raises(Exception, match="Auth failed"):
+            await EventStore.publish_event(sample_event)
 
-        await EventStore.publish_event(sample_event)
-
-        # Verify HTTP binding was called without Authorization header
-        mock_dapr_instance.invoke_binding.assert_called_once()
-        call_args = mock_dapr_instance.invoke_binding.call_args
-
-        assert call_args[1]["binding_name"] == EVENT_STORE_NAME
-        assert call_args[1]["operation"] == "post"
-        assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
-        assert "Authorization" not in call_args[1]["binding_metadata"]
+        # Verify DAPR client was not called since auth failed
+        mock_dapr_instance.invoke_binding.assert_not_called()
 
     async def test_publish_event_without_enrichment(self, sample_event):
         """Test publishing event without metadata enrichment."""
@@ -235,7 +206,7 @@ class TestApplicationEventNames:
 
     def test_worker_created_event_name(self):
         """Test worker created event name."""
-        assert ApplicationEventNames.WORKER_CREATED.value == "worker_created"
+        assert ApplicationEventNames.WORKER_START.value == "worker_start"
 
     def test_all_event_names(self):
         """Test all event names are properly defined."""
@@ -244,7 +215,10 @@ class TestApplicationEventNames:
             "workflow_start",
             "activity_start",
             "activity_end",
-            "worker_created",
+            "worker_start",
+            "worker_end",
+            "application_start",
+            "application_end",
         ]
         actual_names = [name.value for name in ApplicationEventNames]
         assert actual_names == expected_names

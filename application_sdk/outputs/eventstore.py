@@ -74,40 +74,24 @@ class EventStore:
         if enrich_metadata:
             event = cls.enrich_event_metadata(event)
 
+        # if event.event_type != EventTypes.APPLICATION_EVENT:
+        #     raise ValueError("Event type must be APPLICATION_EVENT")
+
         payload = json.dumps(event.model_dump(mode="json"))
 
-        # Try pub/sub first
-        try:
-            with clients.DaprClient() as client:
-                client.publish_event(
-                    pubsub_name=EVENT_STORE_NAME,
-                    topic_name=event.get_topic_name(),
-                    data=payload,
-                    data_content_type="application/json",
-                )
-                logger.info(f"Published event via pub/sub: {event.get_topic_name()}")
-                return
-        except Exception:
-            logger.warning("Pub/sub failed, sending event via HTTP binding")
+        # Prepare binding metadata with auth token for HTTP bindings
+        binding_metadata = {"content-type": "application/json"}
 
-        # Fallback to HTTP binding - get auth token outside of DaprClient context
-        try:
-            auth_client = AtlanAuthClient()
-            auth_token = await auth_client.get_access_token()
+        # Add auth token - HTTP bindings will use it, others will ignore it
+        auth_client = AtlanAuthClient()
+        auth_token = await auth_client.get_access_token()
+        binding_metadata["Authorization"] = f"Bearer {auth_token}"
 
-            # Prepare binding metadata
-            binding_metadata = {"content-type": "application/json"}
-            binding_metadata["Authorization"] = f"Bearer {auth_token}"
-            with clients.DaprClient() as client:
-                client.invoke_binding(
-                    binding_name=EVENT_STORE_NAME,
-                    operation="post",
-                    data=payload,
-                    binding_metadata=binding_metadata,
-                )
-                logger.info(
-                    f"Published event via HTTP binding: {event.get_topic_name()}"
-                )
-        except Exception as e:
-            logger.error(f"Failed to publish event : {e}")
-            raise
+        with clients.DaprClient() as client:
+            client.invoke_binding(
+                binding_name=EVENT_STORE_NAME,
+                operation="create",
+                data=payload,
+                binding_metadata=binding_metadata,
+            )
+            logger.info(f"Published event via binding: {event.get_topic_name()}")
