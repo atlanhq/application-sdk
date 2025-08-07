@@ -212,6 +212,9 @@ test = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0" },
+    { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
+    { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
+    { name = "azure-storage-file-datalake", marker = "extra == 'azure'", specifier = ">=12.19.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
     { name = "duckdb", specifier = ">=1.1.3" },

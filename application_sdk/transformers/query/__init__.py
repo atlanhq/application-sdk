@@ -208,17 +208,17 @@ class QueryBasedTransformer(TransformerInterface):
         logger.info(f"=== DEBUG: _build_struct called ===")
         logger.info(f"level: {level} (type: {type(level)})")
         logger.info(f"prefix: {prefix} (type: {type(prefix)})")
-        
+
         # Check if level is None
         if level is None:
             logger.error("ERROR: level is None in _build_struct!")
             raise ValueError("level cannot be None in _build_struct")
-        
+
         # Check if prefix is None
         if prefix is None:
             logger.error("ERROR: prefix is None in _build_struct!")
             raise ValueError("prefix cannot be None in _build_struct")
-        
+
         struct_fields = []
         non_null_fields = []
 
@@ -312,7 +312,7 @@ class QueryBasedTransformer(TransformerInterface):
                 if col is None:
                     logger.error(f"Found None column in DataFrame columns: {columns}")
                     continue
-                
+
                 if "." in col:
                     # Split the full path into components
                     path_components = col.split(".")

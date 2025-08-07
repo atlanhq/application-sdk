@@ -59,6 +59,7 @@ async def get_credentials(credential_guid: str) -> Dict[str, Any]:
             f"Failed to resolve credentials: {str(e)}",
         )
 
+
 def resolve_credentials(
     credential_config: Dict[str, Any], secret_data: Dict[str, Any]
 ) -> Dict[str, Any]:

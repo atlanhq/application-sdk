@@ -139,7 +139,6 @@ def flatten_yaml_columns(
     flat_columns: List[Dict[str, Any]] = []
     for key, value in nested.items():
         new_key = f"{parent_key}{sep}{key}" if parent_key else key
-        
         if isinstance(value, dict) and any(isinstance(v, dict) for v in value.values()):
             # If value is a dict and has nested dicts, recurse
             flat_columns.extend(flatten_yaml_columns(value, new_key, sep=sep))
@@ -150,5 +149,4 @@ def flatten_yaml_columns(
             )
             col_def["name"] = new_key
             flat_columns.append(col_def)
-    
     return flat_columns
