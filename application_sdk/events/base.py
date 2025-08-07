@@ -15,7 +15,7 @@ from application_sdk.constants import APPLICATION_NAME
 class EventTypes(Enum):
     """Enumeration of event types."""
 
-    APPLICATION_EVENT = "application_event"
+    APPLICATION_EVENT = "application_events"
 
 
 class ApplicationEventNames(Enum):
@@ -25,7 +25,10 @@ class ApplicationEventNames(Enum):
     WORKFLOW_START = "workflow_start"
     ACTIVITY_START = "activity_start"
     ACTIVITY_END = "activity_end"
-    WORKER_CREATED = "worker_created"
+    WORKER_START = "worker_start"
+    WORKER_END = "worker_end"
+    APPLICATION_START = "application_start"
+    APPLICATION_END = "application_end"
 
 
 class WorkflowStates(Enum):
@@ -42,7 +45,7 @@ class EventMetadata(BaseModel):
 
     Attributes:
         application_name: Name of the application the event belongs to.
-        event_published_client_timestamp: Timestamp when the event was published.
+        created_timestamp: Timestamp when the event was created.
         workflow_type: Type of the workflow.
         workflow_id: ID of the workflow.
         workflow_run_id: Run ID of the workflow.
@@ -54,7 +57,7 @@ class EventMetadata(BaseModel):
     """
 
     application_name: str = Field(init=True, default=APPLICATION_NAME)
-    event_published_client_timestamp: int = Field(init=True, default=0)
+    created_timestamp: int = Field(init=True, default=0)
 
     # Workflow information
     workflow_type: str | None = Field(init=True, default=None)

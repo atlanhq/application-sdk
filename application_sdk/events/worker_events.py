@@ -7,8 +7,10 @@ from typing import Optional
 
 from pydantic import BaseModel
 
+from application_sdk.constants import WORKER_START_EVENT_VERSION
 
-class WorkerCreationEventData(BaseModel):
+
+class WorkerStartEventData(BaseModel):
     """Model for worker creation event data.
 
     This model represents the data structure used when publishing worker creation events.
@@ -26,7 +28,7 @@ class WorkerCreationEventData(BaseModel):
         activity_count: Number of activity functions registered.
     """
 
-    version: str = "v1"
+    version: str = WORKER_START_EVENT_VERSION
     application_name: str
     task_queue: str
     namespace: str

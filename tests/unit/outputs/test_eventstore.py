@@ -257,7 +257,7 @@ class TestEventMetadata:
         """Test basic event metadata creation."""
         metadata = EventMetadata()
         assert metadata.application_name is not None
-        assert metadata.event_published_client_timestamp == 0
+        assert metadata.created_timestamp == 0
         assert metadata.workflow_type is None
         assert metadata.workflow_id is None
         assert metadata.workflow_run_id is None

@@ -127,6 +127,8 @@ DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "object
 UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+#: Version of worker start events used in the application
+WORKER_START_EVENT_VERSION = "v1"
 
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"

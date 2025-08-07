@@ -36,9 +36,7 @@ class EventStore:
             event.metadata = EventMetadata()
 
         event.metadata.application_name = APPLICATION_NAME
-        event.metadata.event_published_client_timestamp = int(
-            datetime.now().timestamp()
-        )
+        event.metadata.created_timestamp = int(datetime.now().timestamp())
         event.metadata.topic_name = event.get_topic_name()
 
         try:
