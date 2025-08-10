@@ -51,8 +51,8 @@ class IcebergInput(Input):
         # and using that can cause out of memory issues.
         # ref: https://www.getdaft.io/projects/docs/en/stable/user_guide/poweruser/partitioning.html
         raise NotImplementedError
- 
-     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
+
+    async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
         Method to read the data from the iceberg table
         and return as a single combined daft dataframe
