@@ -1,5 +1,6 @@
 """Unit tests for object store input and output operations."""
 
+import os
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -92,10 +93,15 @@ class TestObjectStoreOutput:
         assert mock_client.invoke_binding.call_count == len(test_files)
         # Expect cleanup for each file + once for the directory at the end
         assert mock_cleanup.call_count == len(test_files) + 1
-        called_paths = {args[0][0] for args in mock_cleanup.call_args_list}
-        assert "/test/input" in called_paths
-        assert "/test/input/file1.txt" in called_paths
-        assert "/test/input/file2.txt" in called_paths
+        called_paths = {
+            os.path.normpath(args[0][0]) for args in mock_cleanup.call_args_list
+        }
+        expected_paths = {
+            os.path.normpath("/test/input"),
+            os.path.normpath(os.path.join("/test/input", "file1.txt")),
+            os.path.normpath(os.path.join("/test/input", "file2.txt")),
+        }
+        assert expected_paths.issubset(called_paths)
 
     @patch("application_sdk.outputs.objectstore.DaprClient")
     async def test_push_files_to_object_store_invalid_directory(
