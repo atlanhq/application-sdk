@@ -1,6 +1,7 @@
 """Object store interface for the application."""
 
 import os
+import shutil
 
 from dapr.clients import DaprClient
 from temporalio import activity
@@ -14,6 +15,22 @@ activity.logger = logger
 
 class ObjectStoreOutput:
     OBJECT_CREATE_OPERATION = "create"
+
+    @staticmethod
+    def _cleanup_local_path(path: str) -> None:
+        """Remove a file or directory (recursively). Ignores if doesn't exist.
+        Args:
+            path (str): The path to the file or directory to remove.
+        """
+        try:
+            if os.path.isfile(path) or os.path.islink(path):
+                os.remove(path)
+            elif os.path.isdir(path):
+                shutil.rmtree(path)
+        except FileNotFoundError:
+            pass  # ignore if the file or directory doesn't exist
+        except Exception as e:
+            logger.warning(f"Error cleaning up {path}: {str(e)}")
 
     @classmethod
     async def push_file_to_object_store(
@@ -62,6 +79,8 @@ class ObjectStoreOutput:
                     f"Error pushing file {relative_path} to object store: {str(e)}"
                 )
                 raise e
+            finally:
+                ObjectStoreOutput._cleanup_local_path(file_path)
 
     @classmethod
     async def push_files_to_object_store(
@@ -105,3 +124,5 @@ class ObjectStoreOutput:
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e
+        finally:
+            ObjectStoreOutput._cleanup_local_path(input_files_path)
