@@ -11,14 +11,16 @@ def get_client(
     api_key: Optional[str] = None,
     api_token_guid: Optional[str] = None,
 ) -> AtlanClient:
-    """Returns an authenticated AtlanClient instance using provided parameters or environment variables.
+    """
+    Returns an authenticated AtlanClient instance using provided parameters or environment variables.
 
-    Selects authentication method based on the presence of parameters or environment variables and validates required configuration.
+    Selects authentication method based on the presence of parameters or environment variables and validates the required configuration.
+    In general, the use of environment variables is recommended. Any parameters specified will override the environment variables.
 
     Args:
-        base_url (Optional[str]): The Atlan base URL. If not provided, will use the ATLAN_BASE_URL environment variable.
-        api_key (Optional[str]): The Atlan API key. If not provided, will use the ATLAN_API_KEY environment variable.
-        api_token_guid (Optional[str]): The Atlan API token GUID. If not provided, will use the API_TOKEN_GUID environment variable.
+        base_url (Optional[str]): The Atlan base URL. If not provided, we will use the ATLAN_BASE_URL environment variable.
+        api_key (Optional[str]): The Atlan API key. If not provided, we will use the ATLAN_API_KEY environment variable.
+        api_token_guid (Optional[str]): The Atlan API token GUID. If not provided, we will use the API_TOKEN_GUID environment variable.
 
     Returns:
         AtlanClient: An authenticated AtlanClient instance.
@@ -27,6 +29,10 @@ def get_client(
         ClientError: If required parameters or environment variables are missing for the selected authentication method.
     """
     if api_token_guid:
+        if base_url or api_key:
+            raise ClientError(
+                f"{ClientError.AUTH_CONFIG_ERROR}: neither base_url nor api_key should be provided when api_token_guid is provided."
+            )
         return _get_client_from_token(api_token_guid)
     if base_url:
         if not api_key and not (os.environ.get("ATLAN_API_KEY")):
@@ -35,7 +41,7 @@ def get_client(
             )
         return AtlanClient(
             base_url=base_url,
-            api_key=api_key if api_key else os.environ.get("ATLAN_API_KEY"),
+            api_key=api_key or os.environ.get("ATLAN_API_KEY"),
         )
     if api_key:
         if not (os.environ.get("ATLAN_BASE_URL")):

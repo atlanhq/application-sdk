@@ -15,6 +15,16 @@ from application_sdk.common.error_codes import ClientError
             {},
             "base_url or environment variable ATLAN_BASE_URL is required when api_key is provided",
         ),
+        #       Error: all paramters provided
+        (
+            {
+                "base_url": "https://atlan.com",
+                "api_key": "api_key_789",
+                "api_token_guid": "123",
+            },
+            {},
+            "neither base_url nor api_key should be provided when api_token_guid is provided",
+        ),
         # Error: missing api_key (param and env)
         (
             {"base_url": "https://atlan.com", "api_key": None, "api_token_guid": None},
@@ -42,6 +52,7 @@ from application_sdk.common.error_codes import ClientError
     ],
     ids=[
         "missing_base_url",
+        "all_parameters",
         "missing_api_key",
         "missing_both_base_url_and_api_key",
         "missing_client_id",
