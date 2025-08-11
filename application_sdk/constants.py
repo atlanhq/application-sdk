@@ -46,8 +46,6 @@ APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 #: Path to the SQL queries directory
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
-#: Whether to use local development mode (used for instance to fetch secrets from the local state store)
-LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
@@ -120,7 +118,7 @@ USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "tru
 #: Name of the state store component in DAPR
 STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
-SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
+SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "local")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
 #: Name of the upstream object store component in DAPR

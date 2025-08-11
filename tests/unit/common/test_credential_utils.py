@@ -107,6 +107,7 @@ class TestCredentialUtils:
             assert result["test_field"] == expected_value
             assert result["extra"]["extra_field"] == expected_value
 
+    @patch("application_sdk.constants.SECRET_STORE_NAME", "test-component")
     @patch("application_sdk.inputs.objectstore.DaprClient")
     @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
     @patch("application_sdk.inputs.secretstore.DaprClient")
@@ -143,6 +144,7 @@ class TestCredentialUtils:
     @patch("application_sdk.inputs.objectstore.DaprClient")
     @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
     @patch("application_sdk.inputs.secretstore.DaprClient")
+    @patch("application_sdk.constants.SECRET_STORE_NAME", "test-component")
     def test_fetch_secret_failure(
         self,
         mock_secret_dapr_client: Mock,

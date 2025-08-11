@@ -10,7 +10,6 @@ from dapr.clients import DaprClient
 from application_sdk.constants import (
     DEPLOYMENT_SECRET_PATH,
     DEPLOYMENT_SECRET_STORE_NAME,
-    LOCAL_DEVELOPMENT,
     SECRET_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -41,7 +40,7 @@ class SecretStoreInput:
         Returns:
             Dict with processed secret data
         """
-        if LOCAL_DEVELOPMENT:
+        if component_name == "local":
             return {}
 
         try:
