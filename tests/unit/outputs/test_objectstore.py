@@ -91,13 +91,11 @@ class TestObjectStoreOutput:
 
         # Assert invoke_binding was called for each file
         assert mock_client.invoke_binding.call_count == len(test_files)
-        # Expect cleanup for each file + once for the directory at the end
-        assert mock_cleanup.call_count == len(test_files) + 1
+        assert mock_cleanup.call_count == len(test_files)
         called_paths = {
             os.path.normpath(args[0][0]) for args in mock_cleanup.call_args_list
         }
         expected_paths = {
-            os.path.normpath("/test/input"),
             os.path.normpath(os.path.join("/test/input", "file1.txt")),
             os.path.normpath(os.path.join("/test/input", "file2.txt")),
         }

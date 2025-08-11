@@ -79,8 +79,7 @@ class ObjectStoreOutput:
                     f"Error pushing file {relative_path} to object store: {str(e)}"
                 )
                 raise e
-            finally:
-                ObjectStoreOutput._cleanup_local_path(file_path)
+            cls._cleanup_local_path(file_path)
 
     @classmethod
     async def push_files_to_object_store(
@@ -124,5 +123,3 @@ class ObjectStoreOutput:
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
             raise e
-        finally:
-            ObjectStoreOutput._cleanup_local_path(input_files_path)
