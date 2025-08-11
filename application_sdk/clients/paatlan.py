@@ -40,7 +40,7 @@ def get_client(
     if api_key:
         if not (os.environ.get("ATLAN_BASE_URL")):
             raise ClientError(
-                f"{ClientError.AUTH_CONFIG_ERROR}: base_url or environment variable ATLAN_BASE is required when api_key is provided."
+                f"{ClientError.AUTH_CONFIG_ERROR}: base_url or environment variable ATLAN_BASE_URL is required when api_key is provided."
             )
         return AtlanClient(base_url=os.environ.get("ATLAN_BASE_URL"), api_key=api_key)
     if api_token_guid := os.environ.get("API_TOKEN_GUID"):
