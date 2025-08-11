@@ -28,23 +28,31 @@ def get_client(
     """
     if api_token_guid:
         return _get_client_from_token(api_token_guid)
-    elif api_token_guid := os.environ.get("API_TOKEN_GUID"):
+    if base_url:
+        if not api_key and not (os.environ.get("ATLAN_API_KEY")):
+            raise ClientError(
+                f"{ClientError.AUTH_CONFIG_ERROR}: api_key or environment variable ATLAN_API_KEY is required when base_url is provided."
+            )
+        return AtlanClient(
+            base_url=base_url,
+            api_key=api_key if api_key else os.environ.get("ATLAN_API_KEY"),
+        )
+    if api_key:
+        if not (os.environ.get("ATLAN_BASE_URL")):
+            raise ClientError(
+                f"{ClientError.AUTH_CONFIG_ERROR}: base_url or environment variable ATLAN_BASE is required when api_key is provided."
+            )
+        return AtlanClient(base_url=os.environ.get("ATLAN_BASE_URL"), api_key=api_key)
+    if api_token_guid := os.environ.get("API_TOKEN_GUID"):
         return _get_client_from_token(api_token_guid)
-    if not base_url and not (os.environ.get("ATLAN_BASE_URL")):
+    if not (os.environ.get("ATLAN_BASE_URL")):
         raise ClientError(
             f"{ClientError.AUTH_CONFIG_ERROR}: base_url parameter or environment variable ATLAN_BASE_URL is required when API_TOKEN_GUID is not set."
         )
-    if not api_key and not (os.environ.get("ATLAN_API_KEY")):
+    if not (os.environ.get("ATLAN_API_KEY")):
         raise ClientError(
             f"{ClientError.AUTH_CONFIG_ERROR}: api_key or environment variable ATLAN_API_KEY is required when API_TOKEN_GUID is not set."
         )
-    if base_url:
-        if api_key:
-            return AtlanClient(base_url=base_url, api_key=api_key)
-        else:
-            return AtlanClient(base_url=base_url)
-    elif api_key:
-        return AtlanClient(api_key=api_key)
     return AtlanClient()
 
 

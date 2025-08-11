@@ -13,7 +13,7 @@ from application_sdk.common.error_codes import ClientError
         (
             {"base_url": None, "api_key": "api_key_789", "api_token_guid": None},
             {},
-            "base_url parameter or environment variable ATLAN_BASE_URL is required",
+            "base_url or environment variable ATLAN_BASE is required when api_key is provided",
         ),
         # Error: missing api_key (param and env)
         (
