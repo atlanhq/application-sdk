@@ -56,7 +56,7 @@ def test_get_client_parameter_problems(params, env_vars, raises):
         with pytest.raises(ClientError) as excinfo:
             get_client(**params)
             # Assert
-            assert raises in str(excinfo.value)
+        assert raises in str(excinfo.value)
 
 
 @pytest.mark.parametrize(
