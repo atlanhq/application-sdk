@@ -19,7 +19,7 @@ Apache License 2.0 Dependencies:
   - Apache Atlas (https://github.com/apache/atlas) under Apache-2.0 license
   - Elasticsearch DSL (https://github.com/elastic/elasticsearch-dsl-py) under Apache-2.0 license
 - orjson (https://github.com/ijl/orjson)
-- getdaft (https://github.com/Eventual-Inc/Daft)
+- daft (https://github.com/Eventual-Inc/Daft)
 - pyiceberg (https://github.com/apache/iceberg-python)
 - pyarrow (https://github.com/apache/arrow/tree/main/python)
 - dapr (https://github.com/dapr/python-sdk/)
