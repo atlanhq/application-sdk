@@ -34,7 +34,7 @@ def get_client(
     if final_token_guid:
         if final_base_url or final_api_key:  # Check original params, not env vars
             logger.warning(
-                "Token auth takes precedence - ignoring base_url/api_key parameters"
+                "Token auth takes precedence - ignoring base_url/api_key parameters as well as ATLAN_BASE_URL and ATLAN_API_KEY environment variables."
             )
         return _get_client_from_token(final_token_guid)
 
