@@ -82,7 +82,6 @@ class AtlanStorageOutput:
 
             logger.debug(f"Successfully migrated: {file_path}")
             return file_path, True, ""
-
         except Exception as e:
             error_msg = str(e)
             logger.error(f"Failed to migrate file {file_path}: {error_msg}")

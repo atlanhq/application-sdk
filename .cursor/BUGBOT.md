@@ -14,6 +14,7 @@
 - **Cognitive Load**: Can a new developer understand this change with less cognitive load?
 - **Magic Numbers/Strings**: All constants properly defined and named in @application_sdk/constants.py
 - **Spell Check**: No typos in code, comments, docstrings, or documentation
+- **Exception Handling Standards**: All exception handling must follow these principles. See detailed guidelines in [exception-handling.mdc](mdc:.cursor/rules/exception-handling.mdc).
 
 ### 🏗️ Architecture & Design
 
@@ -42,8 +43,14 @@
 - **Input Validation**: All external inputs validated and sanitized
 - **Secrets Management**: No secrets in code; proper credential handling
 - **SQL Injection**: Parameterized queries used for all SQL operations
-- **Performance Impact**: Resource-intensive operations benchmarked
-- **Memory Leaks**: Long-running processes properly manage memory
+- **Performance Standards**: All performance considerations must follow these principles. See detailed guidelines in [performance.mdc](mdc:.cursor/rules/performance.mdc).
+- **Memory Management**: Resources properly closed, large datasets processed in chunks
+- **DataFrame Optimization**: Appropriate dtypes, avoid unnecessary copies, use chunked processing
+- **SQL Query Efficiency**: Use LIMIT, specific columns, proper WHERE clauses, connection pooling
+- **Serialization Performance**: Use orjson for large datasets, implement compression
+- **Algorithm Efficiency**: Use appropriate data structures, avoid O(n²) when O(n) alternatives exist
+- **Caching Strategy**: Cache expensive operations and database queries
+- **Async Usage**: Use async for I/O operations, sync for CPU-bound tasks
 
 ### 📊 Observability & Logging
 

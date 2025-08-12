@@ -8,9 +8,10 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 
 from application_sdk.constants import (
+    DEPLOYMENT_NAME,
     DEPLOYMENT_SECRET_PATH,
     DEPLOYMENT_SECRET_STORE_NAME,
-    LOCAL_DEVELOPMENT,
+    LOCAL_ENVIRONMENT,
     SECRET_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -41,7 +42,7 @@ class SecretStoreInput:
         Returns:
             Dict with processed secret data
         """
-        if LOCAL_DEVELOPMENT:
+        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             return {}
 
         try:

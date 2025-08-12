@@ -79,7 +79,6 @@ async def test_load(
     assert temporal_client.client == mock_client
 
 
-@patch("application_sdk.outputs.secretstore.LOCAL_DEVELOPMENT", True)
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -125,7 +124,6 @@ async def test_start_workflow(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.outputs.secretstore.LOCAL_DEVELOPMENT", True)
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
@@ -184,7 +182,6 @@ async def test_start_workflow_with_workflow_id(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.outputs.secretstore.LOCAL_DEVELOPMENT", True)
 @patch("application_sdk.outputs.secretstore.SecretStoreOutput")
 @patch(
     "application_sdk.clients.temporal.Client.connect",

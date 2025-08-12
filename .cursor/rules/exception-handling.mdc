@@ -1,0 +1,198 @@
+---
+alwaysApply: false
+globs: application_sdk/**/*.py
+---
+# Exception Handling Standards
+
+## Core Principles
+
+**Default Behavior: Re-raise Exceptions** - Exceptions should be re-raised by default unless explicitly handled for a specific reason. Silent exception swallowing is not allowed.
+
+## Critical Rules
+
+### **Exception Propagation**
+- **Rule**: Always re-raise exceptions after logging unless in non-critical operations
+- **Anti-pattern**: `except Exception as e: logger.error(f"Error: {e}")` - This swallows exceptions
+- **Correct pattern**: `except Exception as e: logger.error(f"Error: {e}"); raise`
+
+### **Specific Exception Types**
+- **Use specific exception types** instead of generic `Exception`
+- **Examples**: `ValueError`, `ConnectionError`, `TimeoutError`, `FileNotFoundError`
+- **Create custom exceptions** in `application_sdk/common/error_codes.py` for domain-specific errors
+- **Anti-pattern**: `except Exception:` - Too broad, masks real issues
+
+## Exception Handling Patterns
+
+### **✅ DO: Proper exception handling with re-raising**
+```python
+try:
+    result = some_operation()
+    return result
+except ValueError as e:
+    logger.error(f"Invalid input: {e}")
+    raise  # Re-raise to propagate the error
+except ConnectionError as e:
+    logger.error(f"Connection failed: {e}")
+    raise  # Re-raise to propagate the error
+except Exception as e:
+    logger.error(f"Unexpected error: {e}")
+    raise  # Re-raise to propagate the error
+```
+
+### **❌ DON'T: Swallowing exceptions**
+```python
+try:
+    result = some_operation()
+    return result
+except Exception as e:
+    logger.error(f"Error: {e}")
+    # Missing raise - this swallows the exception!
+```
+
+## Context-Specific Guidelines
+
+### **1. Critical Operations (Database, Network, File I/O)**
+- **Always re-raise** exceptions after logging
+- **Include context** in error messages
+- **Use specific exception types**
+
+### **2. Non-Critical Operations (Logging, Metrics, Observability)**
+- **May swallow exceptions** to prevent cascading failures
+- **Log the failure** for debugging
+- **Continue operation** if possible
+
+### **3. Resource Cleanup**
+- **Use try/finally** for guaranteed cleanup
+- **Log cleanup failures** but don't re-raise (to avoid masking original error)
+
+## Common Anti-patterns to Reject
+
+### **❌ Silent Exception Swallowing**
+```python
+try:
+    operation()
+except Exception:
+    pass  # REJECT: Silent failure
+```
+
+### **❌ Generic Exception Catching Without Re-raising**
+```python
+try:
+    operation()
+except Exception as e:
+    logger.error(f"Error: {e}")  # REJECT: Swallows exception
+```
+
+### **❌ Overly Broad Exception Handling**
+```python
+try:
+    operation()
+except Exception as e:  # REJECT: Too broad
+    logger.error(f"Error: {e}")
+    raise
+```
+
+### **❌ Exception Handling Without Context**
+```python
+try:
+    operation()
+except Exception as e:
+    logger.error(f"Error: {e}")  # REJECT: No context about what failed
+    raise
+```
+
+## Best Practices
+
+### **✅ DO: Proper exception handling with context**
+```python
+try:
+    result = database_connection.execute_query(query)
+    return result
+except ConnectionError as e:
+    logger.error(f"Database connection failed for query {query[:50]}...: {e}")
+    raise
+except ValueError as e:
+    logger.error(f"Invalid query parameters: {e}")
+    raise
+except Exception as e:
+    logger.error(f"Unexpected error during database operation: {e}")
+    raise
+```
+
+### **✅ DO: Resource cleanup with exception handling**
+```python
+file_handle = None
+try:
+    file_handle = open(filename, 'r')
+    return file_handle.read()
+except FileNotFoundError as e:
+    logger.error(f"File not found: {filename}")
+    raise
+finally:
+    if file_handle:
+        try:
+            file_handle.close()
+        except Exception as e:
+            logger.warning(f"Failed to close file {filename}: {e}")
+            # Don't re-raise cleanup errors
+```
+
+### **✅ DO: Non-critical operation exception handling**
+```python
+try:
+    metrics.record_metric("operation_success", 1)
+except Exception as e:
+    logger.warning(f"Failed to record metric: {e}")
+    # Don't re-raise for non-critical operations
+```
+
+## Module-Specific Guidelines
+
+### **Handlers (`application_sdk/handlers/`)**
+- **Critical**: Always re-raise exceptions after logging
+- **Include operation context** in error messages
+- **Use specific exception types** for different error scenarios
+
+### **Outputs (`application_sdk/outputs/`)**
+- **Critical**: Re-raise exceptions for data writing operations
+- **Non-critical**: May swallow exceptions for metrics/logging operations
+- **Resource cleanup**: Ensure files/connections are properly closed
+
+### **Inputs (`application_sdk/inputs/`)**
+- **Critical**: Re-raise exceptions for data reading operations
+- **Include file/connection context** in error messages
+- **Handle specific I/O exceptions** appropriately
+
+### **Observability (`application_sdk/observability/`)**
+- **Non-critical**: May swallow exceptions to prevent cascading failures
+- **Log all failures** for debugging
+- **Continue operation** when possible
+
+### **Workflows (`application_sdk/workflows/`)**
+- **Critical**: Re-raise exceptions to trigger workflow retry logic
+- **Include workflow context** in error messages
+- **Handle Temporal-specific exceptions** appropriately
+
+### **Server (`application_sdk/server/`)**
+- **Critical**: Re-raise exceptions to return proper HTTP error responses
+- **Include request context** in error messages
+- **Handle HTTP-specific exceptions** appropriately
+
+## Review Checklist
+
+When reviewing code, check for:
+
+1. **Exception Propagation**: Are exceptions properly re-raised when they should be?
+2. **Specific Exception Types**: Are specific exception types used instead of generic `Exception`?
+3. **Error Context**: Do error messages include sufficient context for debugging?
+4. **Resource Cleanup**: Are resources properly cleaned up in finally blocks?
+5. **Non-Critical Operations**: Are non-critical operations (logging, metrics) handled appropriately?
+6. **Custom Exceptions**: Are domain-specific exceptions defined in `error_codes.py`?
+7. **Exception Documentation**: Are exceptions documented in function docstrings?
+
+## Implementation Notes
+
+- **Custom Exceptions**: Define domain-specific exceptions in `application_sdk/common/error_codes.py`
+- **Logging**: Use `AtlanLoggerAdapter` for all logging with proper context
+- **Context**: Always include relevant context in error messages (query, filename, operation, etc.)
+- **Documentation**: Document all exceptions that functions can raise in docstrings

@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.13'",
@@ -131,7 +131,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "0.1.1rc25"
+version = "0.1.1rc27"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -149,7 +149,7 @@ dependencies = [
 
 [package.optional-dependencies]
 daft = [
-    { name = "getdaft", extra = ["sql"] },
+    { name = "daft", extra = ["sql"] },
 ]
 iam-auth = [
     { name = "boto3" },
@@ -208,12 +208,12 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
+    { name = "daft", extras = ["sql"], marker = "extra == 'daft'", specifier = ">=0.4.12" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
     { name = "duckdb", specifier = ">=1.1.3" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.0" },
-    { name = "getdaft", extras = ["sql"], marker = "extra == 'daft'", specifier = ">=0.4.12" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "numpy", marker = "extra == 'scale-data-generator'", specifier = ">=1.23.5,<3.0.0" },
     { name = "opentelemetry-exporter-otlp", specifier = ">=1.27.0" },
@@ -686,6 +686,31 @@ wheels = [
 ]
 
 [[package]]
+name = "daft"
+version = "0.5.18"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "fsspec" },
+    { name = "pyarrow" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/e3/0d/09560f06a7f9169ee3a2c8a45622200b1438fa86b742db0576428adf77ad/daft-0.5.18.tar.gz", hash = "sha256:c903847583700dd98f37a914029f88ed7915e3aa65f2b97fea832293e5814306", size = 6080230, upload-time = "2025-08-08T10:17:34.484Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/de/b9/c3b8e681ec479b63a1da24d4b26db3777e7c2f222f7d3a75a4e051016e78/daft-0.5.18-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:13d52a0416b178ef860e66a0bc437b9ca386e9918846e94d759fc785c9a32d8f", size = 44509691, upload-time = "2025-08-08T10:17:06.671Z" },
+    { url = "https://files.pythonhosted.org/packages/d2/4d/a0d16eada7f8efee7b8ff15538599116579dfdee546ae7aa3ac543997041/daft-0.5.18-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:f4e27c1b3c4b85bcf4e9bbae1de3165680ca7b8d47dd3ed78fc93d116d53be21", size = 40681823, upload-time = "2025-08-08T10:17:10.465Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/93/9ee16e46fc04eefa632e58b7333fb432649c340ffcda450fe0fe4f590b68/daft-0.5.18-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:f948990300f3d88ea505af49a2dc70d60720d510c5f28a05f88469ed6969efcd", size = 41796429, upload-time = "2025-08-08T10:17:13.755Z" },
+    { url = "https://files.pythonhosted.org/packages/02/4a/5dbda507c93b09e26edb235a95db56afe68edaa1e240286e9c5a94445c7b/daft-0.5.18-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:7b6d78fc45af586dcbcbe2734b4fb628d47604b56f1a0e9be606fa63166a0ce4", size = 44752470, upload-time = "2025-08-08T10:17:16.916Z" },
+    { url = "https://files.pythonhosted.org/packages/e0/21/0b8dadc76079b9d2dee25d73d8678b5b9ea727ac2c88cb29964d6a30af89/daft-0.5.18-cp39-abi3-win_amd64.whl", hash = "sha256:46657067776be7058b59b870faed3468e842f07a1dfb1901485edbcf7ac68cf3", size = 43232060, upload-time = "2025-08-08T10:17:20.1Z" },
+]
+
+[package.optional-dependencies]
+sql = [
+    { name = "connectorx" },
+    { name = "sqlalchemy" },
+    { name = "sqlglot" },
+]
+
+[[package]]
 name = "dapr"
 version = "1.15.0"
 source = { registry = "https://pypi.org/simple" }
@@ -979,31 +1004,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/8b/02/0835e6ab9cfc03916fe3f78c0956cfcdb6ff2669ffa6651065d5ebf7fc98/fsspec-2025.7.0.tar.gz", hash = "sha256:786120687ffa54b8283d942929540d8bc5ccfa820deb555a2b5d0ed2b737bf58", size = 304432, upload-time = "2025-07-15T16:05:21.19Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2f/e0/014d5d9d7a4564cf1c40b5039bc882db69fd881111e03ab3657ac0b218e2/fsspec-2025.7.0-py3-none-any.whl", hash = "sha256:8b012e39f63c7d5f10474de957f3ab793b47b45ae7d39f2fb735f8bbe25c0e21", size = 199597, upload-time = "2025-07-15T16:05:19.529Z" },
-]
-
-[[package]]
-name = "getdaft"
-version = "0.4.18"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "fsspec" },
-    { name = "pyarrow" },
-    { name = "tqdm" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/81/58/b9f821d25a174431622b1450f40ddeb1c79303f5d4377cbc04a578d39ae7/getdaft-0.4.18.tar.gz", hash = "sha256:ff10119147a28cfaad949f1599d9e8317069d07f83098c8d40744c4f10b51398", size = 4914409, upload-time = "2025-05-29T02:33:49.486Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ce/36/b6f1f52e03045a4145cfb45c06a055601608d57d18a377c24a456e176830/getdaft-0.4.18-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:ef7fd708e230ef7a80afe0b91d2ecc03d5ff3ec78826c5f39ff5a8fb15517ed2", size = 40710895, upload-time = "2025-05-29T02:33:28.481Z" },
-    { url = "https://files.pythonhosted.org/packages/03/2b/42192ff380fc72aa6afcdd33f057c5b7817e1ae7972b2e453759437cb1f7/getdaft-0.4.18-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:d2ae3a7271eaa6f93e830bea80ea7ded0d2c3814b97b4b615af41e6aac91268b", size = 37537008, upload-time = "2025-05-29T02:33:32.055Z" },
-    { url = "https://files.pythonhosted.org/packages/51/b4/0ba53025cc239db32d895eae8b81a69f44d6ee729b2fb2e71aa37bf616d5/getdaft-0.4.18-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:626f644af9f16ea77accf80177151fa6817313d596633e46d893ca2b232b1856", size = 40885891, upload-time = "2025-05-29T02:33:35.584Z" },
-    { url = "https://files.pythonhosted.org/packages/f5/14/22573e87ad2fca6489b69315a7a9e66085783ab483256dafc6b652f43c48/getdaft-0.4.18-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:4e5ad35750731499a39c6056620e09ef7f310e1364a7c9d6310341e5f7478ba2", size = 42991552, upload-time = "2025-05-29T02:33:38.896Z" },
-    { url = "https://files.pythonhosted.org/packages/a4/1e/8226f8455697dda1bf6d062f8899aa057f0161dad2ed155d3480ff7e6d67/getdaft-0.4.18-cp39-abi3-win_amd64.whl", hash = "sha256:def486c781c414b241a7843eb8c54c1ba105795cb14283d5986e395bd0510abc", size = 39924199, upload-time = "2025-05-29T02:33:42.331Z" },
-]
-
-[package.optional-dependencies]
-sql = [
-    { name = "connectorx" },
-    { name = "sqlalchemy" },
-    { name = "sqlglot" },
 ]
 
 [[package]]
