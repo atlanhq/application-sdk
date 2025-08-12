@@ -5,12 +5,11 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-def is_component_available(component_name: str) -> bool:
-    """Check if a pubsub component with the given name is loaded in the Dapr sidecar.
+def is_component_registered(component_name: str) -> bool:
+    """Check if a DAPR component with the given name is registered.
 
     Args:
-        client: Dapr client instance.
-        component_name: Name of the pubsub component to check.
+        component_name: Name of the component to check.
 
     Returns:
         True if the component is present, False otherwise or on metadata errors.
@@ -18,7 +17,7 @@ def is_component_available(component_name: str) -> bool:
     try:
         with clients.DaprClient() as client:
             metadata = client.get_metadata()
-            # Each registered component has fields: name, type (e.g., "pubsub.kafka")
+            # Each registered component has fields: name, type (e.g., "eventstore")
             for component in getattr(metadata, "registered_components", []):
                 if component.name == component_name:
                     return True

@@ -14,7 +14,7 @@ from dapr import clients
 from pydantic import BaseModel, Field
 from temporalio import activity, workflow
 
-from application_sdk.common.dapr_utils import is_component_available
+from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.constants import APPLICATION_NAME, EVENT_STORE_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -156,7 +156,7 @@ class EventStore:
         Example:
             >>> EventStore.create_generic_event(Event(event_type="test", data={"test": "test"}))
         """
-        if not is_component_available(EVENT_STORE_NAME):
+        if not is_component_registered(EVENT_STORE_NAME):
             logger.warning(
                 "Skipping event publish because event store component is not registered",
             )
