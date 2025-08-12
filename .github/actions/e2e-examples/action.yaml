@@ -125,7 +125,6 @@ runs:
         SNOWFLAKE_ACCOUNT_ID: ${{ inputs.snowflake-account-id }}
         SNOWFLAKE_USER: ${{ inputs.snowflake-user }}
         SNOWFLAKE_PASSWORD: ${{ inputs.snowflake-password }}
-        ATLAN_LOCAL_DEVELOPMENT: true
       run: |
         cd examples
         uv run run_examples.py

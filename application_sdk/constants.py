@@ -27,11 +27,14 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env")
 
+# Static Constants
+LOCAL_ENVIRONMENT = "local"
+
 # Application Constants
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
-DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "local")
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server
@@ -46,8 +49,6 @@ APP_DASHBOARD_PORT = int(os.getenv("ATLAN_APP_DASHBOARD_PORT", "8000"))
 SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 #: Path to the SQL queries directory
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
-#: Whether to use local development mode (used for instance to fetch secrets from the local state store)
-LOCAL_DEVELOPMENT = os.getenv("ATLAN_LOCAL_DEVELOPMENT", "false").lower() == "true"
 
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
