@@ -217,3 +217,10 @@ TRACES_FILE_NAME = "traces.parquet"
 ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
 )
+
+# atlan_client configuration
+ATLAN_API_TOKEN_GUID = os.environ.get("API_TOKEN_GUID")
+ATLAN_BASE_URL = os.environ.get("ATLAN_BASE_URL")
+ATLAN_API_KEY = os.environ.get("ATLAN_API_KEY")
+ATLAN_CLIENT_ID = os.getenv("CLIENT_ID")
+ATLAN_CLIENT_SECRET = os.getenv("CLIENT_SECRET")

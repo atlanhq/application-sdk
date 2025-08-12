@@ -1,9 +1,15 @@
-import os
 from typing import Optional
 
 from pyatlan.client.atlan import AtlanClient
 
 from application_sdk.common.error_codes import ClientError
+from application_sdk.constants import (
+    ATLAN_API_KEY,
+    ATLAN_API_TOKEN_GUID,
+    ATLAN_BASE_URL,
+    ATLAN_CLIENT_ID,
+    ATLAN_CLIENT_SECRET,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -26,9 +32,9 @@ def get_client(
     api_token_guid: API token GUID (overrides API_TOKEN_GUID)
     """
     # Resolve final values (parameters override env vars)
-    final_token_guid = api_token_guid or os.environ.get("API_TOKEN_GUID")
-    final_base_url = base_url or os.environ.get("ATLAN_BASE_URL")
-    final_api_key = api_key or os.environ.get("ATLAN_API_KEY")
+    final_token_guid = api_token_guid or ATLAN_API_TOKEN_GUID
+    final_base_url = base_url or ATLAN_BASE_URL
+    final_api_key = api_key or ATLAN_API_KEY
 
     # Priority 1: Token-based auth (recommended for production)
     if final_token_guid:
@@ -53,11 +59,11 @@ def get_client(
 
 
 def _get_client_from_token(api_token_guid: str):
-    if not (os.getenv("CLIENT_ID")):
+    if not ATLAN_CLIENT_ID:
         raise ClientError(
             f"{ClientError.AUTH_CONFIG_ERROR}: Environment variable CLIENT_ID is required when API_TOKEN_GUID is set."
         )
-    if not (os.getenv("CLIENT_SECRET")):
+    if not ATLAN_CLIENT_SECRET:
         raise ClientError(
             f"{ClientError.AUTH_CONFIG_ERROR}: Environment variable CLIENT_SECRET is required when API_TOKEN_GUID is set."
         )
