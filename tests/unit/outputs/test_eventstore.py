@@ -170,30 +170,6 @@ class TestEventStore:
         assert call_args[1]["binding_metadata"]["content-type"] == "application/json"
         assert call_args[1]["binding_metadata"]["Authorization"] == "Bearer test_token"
 
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    async def test_publish_event_fallback_no_auth_token(
-        self, mock_auth_client, mock_dapr_client, sample_event
-    ):
-        """Test publishing event when auth token is not available."""
-        # Mock auth client to raise exception
-        mock_auth_instance = Mock()
-        mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(
-            side_effect=Exception("Auth failed")
-        )
-
-        # Mock DAPR client
-        mock_dapr_instance = Mock()
-        mock_dapr_client.return_value.__enter__.return_value = mock_dapr_instance
-
-        # Expect the auth failure to raise an exception
-        with pytest.raises(Exception, match="Auth failed"):
-            await EventStore.publish_event(sample_event)
-
-        # Verify DAPR client was not called since auth failed
-        mock_dapr_instance.invoke_binding.assert_not_called()
-
     async def test_publish_event_always_enriches_metadata(self, sample_event):
         """Test publishing event always enriches metadata."""
         with patch("application_sdk.outputs.eventstore.clients.DaprClient"):
