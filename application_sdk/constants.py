@@ -121,7 +121,7 @@ USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "tru
 #: Name of the state store component in DAPR
 STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
-SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", LOCAL_ENVIRONMENT)
+SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "secretstore")
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
 #: Name of the upstream object store component in DAPR

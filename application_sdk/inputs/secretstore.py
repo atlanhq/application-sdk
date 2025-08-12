@@ -8,6 +8,7 @@ from typing import Any, Dict
 from dapr.clients import DaprClient
 
 from application_sdk.constants import (
+    DEPLOYMENT_NAME,
     DEPLOYMENT_SECRET_PATH,
     DEPLOYMENT_SECRET_STORE_NAME,
     LOCAL_ENVIRONMENT,
@@ -41,7 +42,7 @@ class SecretStoreInput:
         Returns:
             Dict with processed secret data
         """
-        if component_name == LOCAL_ENVIRONMENT:
+        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             return {}
 
         try:
