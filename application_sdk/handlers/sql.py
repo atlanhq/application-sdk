@@ -116,7 +116,7 @@ class BaseSQLHandler(HandlerInterface):
     async def fetch_metadata(
         self,
         metadata_type: Optional[str] = None,
-        database: Optional[str] = None,
+        database: str = "",
     ) -> List[Dict[str, str]]:
         """
         Fetch metadata based on the requested type.
