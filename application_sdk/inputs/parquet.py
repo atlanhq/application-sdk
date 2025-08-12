@@ -1,4 +1,5 @@
 import glob
+import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
 from application_sdk.inputs import Input
@@ -41,27 +42,32 @@ class ParquetInput(Input):
         self.input_prefix = input_prefix
         self.file_names = file_names
 
-    async def download_files(self, remote_file_path: str) -> Optional[str]:
+    async def download_files(self, local_file_path: str) -> Optional[str]:
         """Read a file from the object store.
 
         Args:
-            remote_file_path (str): Path to the remote file in object store.
+            local_file_path (str): Path to the local file in the temp directory.
 
         Returns:
             Optional[str]: Path to the downloaded local file.
         """
-        parquet_files = glob.glob(remote_file_path)
+        parquet_files = glob.glob(local_file_path)
         if not parquet_files:
             if self.input_prefix:
                 logger.info(
-                    f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
+                    f"Reading file from object store: {local_file_path} from {self.input_prefix}"
                 )
-                ObjectStoreInput.download_files_from_object_store(
-                    self.input_prefix, remote_file_path
-                )
+                if os.path.isdir(local_file_path):
+                    ObjectStoreInput.download_files_from_object_store(
+                        self.input_prefix, local_file_path
+                    )
+                else:
+                    ObjectStoreInput.download_file_from_object_store(
+                        self.input_prefix, local_file_path
+                    )
             else:
                 raise ValueError(
-                    f"No parquet files found in {remote_file_path} and no input prefix provided"
+                    f"No parquet files found in {local_file_path} and no input prefix provided"
                 )
 
     async def get_dataframe(self) -> "pd.DataFrame":
