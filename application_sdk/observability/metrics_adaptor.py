@@ -63,7 +63,7 @@ class MetricRecord(BaseModel):
     name: str
     value: float
     type: MetricType  # counter, gauge, histogram
-    labels: Dict[str, str]
+    labels: Dict[str, Optional[str]]
     description: Optional[str] = None
     unit: Optional[str] = None
 
