@@ -2,7 +2,7 @@
 
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Dict, List, Union
 
 import orjson
 from dapr.clients import DaprClient
@@ -27,7 +27,7 @@ class ObjectStoreInput:
         cls,
         operation: str,
         metadata: Dict[str, str],
-        data: Optional[bytes] = None,
+        data: Union[bytes, str] = "",
         object_store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> bytes:
         """
@@ -172,7 +172,7 @@ class ObjectStoreInput:
         try:
             # this takes care of listing from all type of storage - local as well as object stores
             metadata = {"prefix": prefix, "fileName": prefix} if prefix else {}
-            data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else None
+            data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
 
             response_data = cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
@@ -233,7 +233,7 @@ class ObjectStoreInput:
         """
         try:
             metadata = {"key": file_path, "fileName": file_path}
-            data = json.dumps({"key": file_path}).encode("utf-8") if file_path else None
+            data = json.dumps({"key": file_path}).encode("utf-8") if file_path else ""
 
             response_data = cls._invoke_dapr_binding(
                 operation=cls.OBJECT_GET_OPERATION,
