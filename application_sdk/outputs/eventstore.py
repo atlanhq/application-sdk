@@ -11,8 +11,12 @@ from dapr import clients
 from temporalio import activity, workflow
 
 from application_sdk.clients.atlan_auth import AtlanAuthClient
-from application_sdk.constants import APPLICATION_NAME, EVENT_STORE_NAME
-from application_sdk.events.base import Event, EventMetadata, WorkflowStates
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    DAPR_BINDING_OPERATION_CREATE,
+    EVENT_STORE_NAME,
+)
+from application_sdk.events.models import Event, EventMetadata, WorkflowStates
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -64,34 +68,34 @@ class EventStore:
         return event
 
     @classmethod
-    async def publish_event(cls, event: Event, enrich_metadata: bool = True):
+    async def publish_event(cls, event: Event):
         """Publish event with automatic fallback between pub/sub and HTTP binding.
 
         Args:
             event (Event): Event data to publish.
-            enrich_metadata (bool): Whether to enrich event with context metadata.
         """
-        if enrich_metadata:
+        try:
             event = cls.enrich_event_metadata(event)
 
-        # if event.event_type != EventTypes.APPLICATION_EVENT:
-        #     raise ValueError("Event type must be APPLICATION_EVENT")
+            payload = json.dumps(event.model_dump(mode="json"))
 
-        payload = json.dumps(event.model_dump(mode="json"))
+            # Prepare binding metadata with auth token for HTTP bindings
+            binding_metadata = {"content-type": "application/json"}
 
-        # Prepare binding metadata with auth token for HTTP bindings
-        binding_metadata = {"content-type": "application/json"}
+            # Add auth token - HTTP bindings will use it, others will ignore it
+            auth_client = AtlanAuthClient()
+            auth_token = await auth_client.get_access_token()
+            binding_metadata["Authorization"] = f"Bearer {auth_token}"
 
-        # Add auth token - HTTP bindings will use it, others will ignore it
-        auth_client = AtlanAuthClient()
-        auth_token = await auth_client.get_access_token()
-        binding_metadata["Authorization"] = f"Bearer {auth_token}"
-
-        with clients.DaprClient() as client:
-            client.invoke_binding(
-                binding_name=EVENT_STORE_NAME,
-                operation="create",
-                data=payload,
-                binding_metadata=binding_metadata,
+            with clients.DaprClient() as client:
+                client.invoke_binding(
+                    binding_name=EVENT_STORE_NAME,
+                    operation=DAPR_BINDING_OPERATION_CREATE,
+                    data=payload,
+                    binding_metadata=binding_metadata,
+                )
+                logger.info(f"Published event via binding: {event.get_topic_name()}")
+        except Exception as e:
+            logger.error(
+                f"Failed to publish event {event.get_topic_name()}: {e}", exc_info=True
             )
-            logger.info(f"Published event via binding: {event.get_topic_name()}")

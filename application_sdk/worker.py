@@ -15,7 +15,7 @@ from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
-from application_sdk.events.base import ApplicationEventNames, Event, EventTypes
+from application_sdk.events.models import ApplicationEventNames, Event, EventTypes
 from application_sdk.events.worker_events import WorkerStartEventData
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import EventStore
@@ -152,16 +152,6 @@ class Worker:
             When running as a daemon, the worker runs in a separate thread and
             does not block the main thread.
         """
-        # Publish worker creation event when starting
-        if self._worker_creation_event_data:
-            worker_creation_event = Event(
-                event_type=EventTypes.APPLICATION_EVENT.value,
-                event_name=ApplicationEventNames.WORKER_START.value,
-                data=self._worker_creation_event_data.model_dump(),
-            )
-
-            await EventStore.publish_event(worker_creation_event)
-
         if daemon:
             worker_thread = threading.Thread(
                 target=lambda: asyncio.run(self.start(daemon=False)), daemon=True
@@ -171,6 +161,15 @@ class Worker:
 
         if not self.workflow_client:
             raise ValueError("Workflow client is not set")
+
+        if self._worker_creation_event_data:
+            worker_creation_event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.WORKER_START.value,
+                data=self._worker_creation_event_data.model_dump(),
+            )
+
+            await EventStore.publish_event(worker_creation_event)
 
         try:
             worker = self.workflow_client.create_worker(

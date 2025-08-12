@@ -127,6 +127,8 @@ DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "object
 UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+#: DAPR binding operation for creating resources
+DAPR_BINDING_OPERATION_CREATE = "create"
 #: Version of worker start events used in the application
 WORKER_START_EVENT_VERSION = "v1"
 

@@ -33,7 +33,7 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
-from application_sdk.events.base import (
+from application_sdk.events.models import (
     ApplicationEventNames,
     Event,
     EventMetadata,

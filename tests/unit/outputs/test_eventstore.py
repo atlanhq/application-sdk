@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, Mock, patch
 import pytest
 
 from application_sdk.constants import EVENT_STORE_NAME
-from application_sdk.events.base import (
+from application_sdk.events.models import (
     ApplicationEventNames,
     Event,
     EventMetadata,
@@ -194,11 +194,11 @@ class TestEventStore:
         # Verify DAPR client was not called since auth failed
         mock_dapr_instance.invoke_binding.assert_not_called()
 
-    async def test_publish_event_without_enrichment(self, sample_event):
-        """Test publishing event without metadata enrichment."""
+    async def test_publish_event_always_enriches_metadata(self, sample_event):
+        """Test publishing event always enriches metadata."""
         with patch("application_sdk.outputs.eventstore.clients.DaprClient"):
-            # Should not call enrich_event_metadata
-            await EventStore.publish_event(sample_event, enrich_metadata=False)
+            # Should always call enrich_event_metadata
+            await EventStore.publish_event(sample_event)
 
 
 class TestApplicationEventNames:
