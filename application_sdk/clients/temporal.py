@@ -38,6 +38,7 @@ from application_sdk.constants import (
 from application_sdk.events.models import (
     ApplicationEventNames,
     Event,
+    EventMetadata,
     EventTypes,
     WorkflowStates,
 )
@@ -139,7 +140,9 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             await workflow.execute_activity(
                 publish_event_activity,
                 {
-                    "metadata": {"workflow_state": WorkflowStates.RUNNING.value},
+                    "metadata": EventMetadata(
+                        workflow_state=WorkflowStates.RUNNING.value
+                    ),
                     "event_type": EventTypes.APPLICATION_EVENT.value,
                     "event_name": ApplicationEventNames.WORKFLOW_START.value,
                     "data": {},
@@ -168,7 +171,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 await workflow.execute_activity(
                     publish_event_activity,
                     {
-                        "metadata": {"workflow_state": workflow_state},
+                        "metadata": EventMetadata(workflow_state=workflow_state),
                         "event_type": EventTypes.APPLICATION_EVENT.value,
                         "event_name": ApplicationEventNames.WORKFLOW_END.value,
                         "data": {},
