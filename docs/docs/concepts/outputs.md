@@ -21,7 +21,7 @@ This module provides a standardized way to write data to various destinations wi
     *   **`SecretStoreOutput` (`secretstore.py`)**: Saves sensitive data (like credentials) securely, typically via the StateStore using a Dapr binding.
     *   **`StateStoreOutput` (`statestore.py`)**: Saves configuration or state data to the configured Dapr state store binding.
     *   **`IcebergOutput` (`iceberg.py`)**: Writes DataFrames to Apache Iceberg tables.
-    *   **`EventStore` (`eventstore.py`)**: Publishes events (like workflow/activity start/end) to a configured Dapr pub/sub binding.
+    *   **`EventStore` (`eventstore.py`)**: Publishes events (like workflow/activity start/end) to a configured Dapr eventstore binding. Before publishing, it performs a preflight check via the Dapr Metadata API to verify that the configured eventstore component exists; if not, it skips publishing and logs a warning with context.
 
 ## `JsonOutput` (`json.py`)
 
