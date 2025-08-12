@@ -27,11 +27,14 @@ from dotenv import load_dotenv
 
 load_dotenv(dotenv_path=".env")
 
+# Static Constants
+LOCAL_ENVIRONMENT = "local"
+
 # Application Constants
 #: Name of the application, used for identification
 APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
-DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", "local")
+DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
 APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
 #: Port number for the application's HTTP server
@@ -118,7 +121,7 @@ USE_SERVER_SIDE_CURSOR = bool(os.getenv("ATLAN_SQL_USE_SERVER_SIDE_CURSOR", "tru
 #: Name of the state store component in DAPR
 STATE_STORE_NAME = os.getenv("STATE_STORE_NAME", "statestore")
 #: Name of the secret store component in DAPR
-SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", "local")
+SECRET_STORE_NAME = os.getenv("SECRET_STORE_NAME", LOCAL_ENVIRONMENT)
 #: Name of the deployment object store component in DAPR
 DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "objectstore")
 #: Name of the upstream object store component in DAPR
