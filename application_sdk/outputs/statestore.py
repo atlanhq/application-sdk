@@ -84,8 +84,8 @@ class StateStoreOutput:
             >>> from application_sdk.outputs.statestore import StateStoreOutput
             >>> await StateStoreOutput.save_state_object("wf-123", {"test": "test"}, "workflow")
         """
-
         try:
+            logger.info(f"Saving state object for {id} with type {type}")
             # get the current state from object store
             current_state = StateStoreInput.get_state(id, type)
             state_file_path = build_state_store_path(id, type)
@@ -106,7 +106,7 @@ class StateStoreOutput:
                 file_path=local_state_file_path,
                 object_store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
-
+            logger.info(f"State object saved for {id} with type {type}")
             return current_state
         except Exception as e:
             logger.error(f"Failed to store state: {str(e)}")

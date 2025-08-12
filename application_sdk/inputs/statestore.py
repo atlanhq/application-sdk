@@ -76,6 +76,7 @@ class StateStoreInput:
         state = {}
 
         try:
+            logger.info(f"Trying to download state object for {id} with type {type}")
             local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
             ObjectStoreInput.download_file_from_object_store(
                 download_file_prefix=TEMPORARY_PATH,
@@ -86,10 +87,11 @@ class StateStoreInput:
             with open(local_state_file_path, "r") as file:
                 state = json.load(file)
 
+            logger.info(f"State object downloaded for {id} with type {type}")
         except Exception as e:
             # local error message is "file not found", while in object store it is "object not found"
             if "not found" in str(e).lower():
-                logger.debug(
+                logger.info(
                     f"No state found for {type.value} with id '{id}', returning empty dict"
                 )
             else:
