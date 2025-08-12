@@ -68,7 +68,7 @@ async def publish_event_activity(event_data: dict) -> None:
     try:
         event = Event(**event_data)
         await EventStore.publish_event(event)
-        activity.logger.info(f"Published event: {event_data.get('event_name')}")
+        activity.logger.info(f"Published event: {event_data.get('event_name','')}")
     except Exception as e:
         activity.logger.error(f"Failed to publish event: {e}")
         raise
@@ -92,39 +92,26 @@ class EventActivityInboundInterceptor(ActivityInboundInterceptor):
             Any: The result of the activity execution.
         """
         # Extract activity information for tracking
-        activity_info = {
-            "activity_type": input.activity_type,
-            "activity_id": getattr(input.info, "activity_id", "unknown"),
-        }
 
         start_event = Event(
             event_type=EventTypes.APPLICATION_EVENT.value,
             event_name=ApplicationEventNames.ACTIVITY_START.value,
-            data=activity_info,
+            data={},
         )
         await EventStore.publish_event(start_event)
 
         output = None
         try:
             output = await super().execute_activity(input)
-
-            # Success event
-            end_event = Event(
-                event_type=EventTypes.APPLICATION_EVENT.value,
-                event_name=ApplicationEventNames.ACTIVITY_END.value,
-                data={**activity_info, "status": "success"},
-            )
-            await EventStore.publish_event(end_event)
-
-        except Exception as e:
-            # Failure event
-            end_event = Event(
-                event_type=EventTypes.APPLICATION_EVENT.value,
-                event_name=ApplicationEventNames.ACTIVITY_END.value,
-                data={**activity_info, "status": "failed", "error": str(e)},
-            )
-            await EventStore.publish_event(end_event)
+        except Exception:
             raise
+        finally:
+            end_event = Event(
+                event_type=EventTypes.APPLICATION_EVENT.value,
+                event_name=ApplicationEventNames.ACTIVITY_END.value,
+                data={},
+            )
+            await EventStore.publish_event(end_event)
 
         return output
 
@@ -146,13 +133,6 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         Returns:
             Any: The result of the workflow execution.
         """
-        # Get workflow information
-        workflow_info_data = workflow.info()
-        base_data = {
-            "workflow_id": workflow_info_data.workflow_id,
-            "workflow_run_id": workflow_info_data.run_id,
-            "workflow_type": workflow_info_data.workflow_type,
-        }
 
         # Publish workflow start event via activity
         try:
@@ -162,7 +142,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     "metadata": {"workflow_state": WorkflowStates.RUNNING.value},
                     "event_type": EventTypes.APPLICATION_EVENT.value,
                     "event_name": ApplicationEventNames.WORKFLOW_START.value,
-                    "data": base_data,
+                    "data": {},
                 },
                 schedule_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(maximum_attempts=3),
@@ -172,46 +152,34 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             # Don't fail the workflow if event publishing fails
 
         output = None
+        workflow_state = WorkflowStates.FAILED.value  # Default to failed
+
         try:
             output = await super().execute_workflow(input)
-
-            # Publish workflow success event
+            workflow_state = (
+                WorkflowStates.COMPLETED.value
+            )  # Update to completed on success
+        except Exception:
+            workflow_state = WorkflowStates.FAILED.value  # Keep as failed
+            raise
+        finally:
+            # Always publish workflow end event
             try:
                 await workflow.execute_activity(
                     publish_event_activity,
                     {
-                        "metadata": {"workflow_state": WorkflowStates.COMPLETED.value},
+                        "metadata": {"workflow_state": workflow_state},
                         "event_type": EventTypes.APPLICATION_EVENT.value,
                         "event_name": ApplicationEventNames.WORKFLOW_END.value,
-                        "data": base_data,
-                    },
-                    schedule_to_close_timeout=timedelta(seconds=30),
-                    retry_policy=RetryPolicy(maximum_attempts=3),
-                )
-            except Exception as e:
-                workflow.logger.warning(
-                    f"Failed to publish workflow success event: {e}"
-                )
-
-        except Exception as e:
-            # Publish workflow failure event
-            try:
-                await workflow.execute_activity(
-                    publish_event_activity,
-                    {
-                        "metadata": {"workflow_state": WorkflowStates.FAILED.value},
-                        "event_type": EventTypes.APPLICATION_EVENT.value,
-                        "event_name": ApplicationEventNames.WORKFLOW_END.value,
-                        "data": {**base_data, "error": str(e)},
+                        "data": {},
                     },
                     schedule_to_close_timeout=timedelta(seconds=30),
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
             except Exception as publish_error:
                 workflow.logger.warning(
-                    f"Failed to publish workflow failure event: {publish_error}"
+                    f"Failed to publish workflow end event: {publish_error}"
                 )
-            raise
 
         return output
 

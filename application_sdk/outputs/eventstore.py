@@ -94,8 +94,11 @@ class EventStore:
                     data=payload,
                     binding_metadata=binding_metadata,
                 )
-                logger.info(f"Published event via binding: {event.get_topic_name()}")
+                logger.info(
+                    f"Published event via binding on topic: {event.get_topic_name()}"
+                )
         except Exception as e:
             logger.error(
-                f"Failed to publish event {event.get_topic_name()}: {e}", exc_info=True
+                f"Failed to publish event on topic {event.get_topic_name()}: {e}",
+                exc_info=True,
             )
