@@ -8,42 +8,37 @@ from application_sdk.common.error_codes import ClientError
 
 
 @pytest.mark.parametrize(
-    "params,env_vars,msg,case_id",
+    "params,env_vars,msg",
     [
         # Error: missing base_url
         (
             {"base_url": None, "api_key": "api_key_789", "api_token_guid": None},
             {},
             "ATLAN_BASE_URL is required",
-            "missing_base_url",
         ),
         # Error: missing api_key
         (
             {"base_url": "https://atlan.com", "api_key": None, "api_token_guid": None},
             {},
             "ATLAN_API_KEY is required",
-            "missing_api_key",
         ),
         # Error: missing both base_url and api_key
         (
             {"base_url": None, "api_key": None, "api_token_guid": None},
             {},
             "ATLAN_BASE_URL is required",
-            "missing_both_base_url_and_api_key",
         ),
         # Error: missing client_id
         (
             {"base_url": None, "api_key": None, "api_token_guid": "guid_param"},
             {},
             "Environment variable CLIENT_ID is required when API_TOKEN_GUID is set",
-            "missing_client_id",
         ),
         # Error: missing client_secret
         (
             {"base_url": None, "api_key": None, "api_token_guid": "guid_param"},
             {"CLIENT_ID": "CLIENT_ID_789"},
             "Environment variable CLIENT_SECRET is required when API_TOKEN_GUID is set",
-            "missing_client_id",
         ),
     ],
     ids=[
@@ -54,7 +49,7 @@ from application_sdk.common.error_codes import ClientError
         "missing_client_secret",
     ],
 )
-def test_get_client_bad_params(params, env_vars, msg, case_id):
+def test_get_client_bad_params(params, env_vars, msg):
     # Arrange
     patch_env = {**env_vars}
 
@@ -67,7 +62,7 @@ def test_get_client_bad_params(params, env_vars, msg, case_id):
 
 
 @pytest.mark.parametrize(
-    "params,env_vars,expected_call,expected_args,expected_log,raises,case_id",
+    "params,env_vars,expected_call,expected_args,expected_log,raises",
     [
         # Happy path: token auth via param
         (
@@ -77,7 +72,6 @@ def test_get_client_bad_params(params, env_vars, msg, case_id):
             ("guid_param",),
             None,
             None,
-            "param_token_guid",
         ),
         # Happy path: token auth via env
         (
@@ -87,7 +81,6 @@ def test_get_client_bad_params(params, env_vars, msg, case_id):
             ("guid_env",),
             None,
             None,
-            "env_token_guid",
         ),
         # Happy path: token auth, base_url/api_key params present (should log warning)
         (
@@ -101,7 +94,6 @@ def test_get_client_bad_params(params, env_vars, msg, case_id):
             ("guid_param",),
             "warning",
             None,
-            "token_guid_with_base_url_api_key",
         ),
     ],
     ids=[
@@ -111,7 +103,7 @@ def test_get_client_bad_params(params, env_vars, msg, case_id):
     ],
 )
 def test_get_client_with_token_guid(
-    params, env_vars, expected_call, expected_args, expected_log, raises, case_id
+    params, env_vars, expected_call, expected_args, expected_log, raises
 ):
     # Arrange
     patch_env = {**env_vars}
@@ -139,7 +131,7 @@ def test_get_client_with_token_guid(
 
 
 @pytest.mark.parametrize(
-    "params,env_vars,expected_call,expected_args,expected_log,raises,case_id",
+    "params,env_vars,expected_call,expected_args,expected_log,raises",
     [
         # Happy path: API key auth via params
         (
@@ -153,7 +145,6 @@ def test_get_client_with_token_guid(
             {"base_url": "https://atlan.com", "api_key": "api_key_123"},
             "info",
             None,
-            "param_base_url_and_api_key",
         ),
         # Happy path: API key auth via env
         (
@@ -163,7 +154,6 @@ def test_get_client_with_token_guid(
             {"base_url": "https://env.atlan.com", "api_key": "env_api_key"},
             "info",
             None,
-            "env_base_url_and_api_key",
         ),
         # Edge case: param overrides env
         (
@@ -177,7 +167,6 @@ def test_get_client_with_token_guid(
             {"base_url": "https://param.atlan.com", "api_key": "param_api_key"},
             "info",
             None,
-            "param_precedence_over_env",
         ),
     ],
     ids=[
@@ -187,7 +176,7 @@ def test_get_client_with_token_guid(
     ],
 )
 def test_get_client_with_api_key(
-    params, env_vars, expected_call, expected_args, expected_log, raises, case_id
+    params, env_vars, expected_call, expected_args, expected_log, raises
 ):
     # Arrange
     patch_env = {**env_vars}
