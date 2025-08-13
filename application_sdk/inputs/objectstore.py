@@ -79,7 +79,11 @@ class ObjectStoreInput:
         try:
             # List all files in the object store path
             relative_path = os.path.relpath(file_path, download_file_prefix)
-            metadata = {"fileName": relative_path}
+            metadata = {
+                "fileName": relative_path,
+                "prefix": relative_path,
+                "key": relative_path,
+            }
 
             try:
                 # Assuming the object store binding supports a "list" operation
