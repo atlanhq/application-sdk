@@ -36,7 +36,6 @@ class BaseSQLClient(ClientInterface):
     Attributes:
         connection: Database connection instance.
         engine: SQLAlchemy engine instance.
-        sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
         credentials (Dict[str, Any]): Database credentials.
         resolved_credentials (Dict[str, Any]): Resolved credentials after reading from secret manager.
         use_server_side_cursor (bool): Whether to use server-side cursors.
@@ -44,7 +43,6 @@ class BaseSQLClient(ClientInterface):
 
     connection = None
     engine = None
-    sql_alchemy_connect_args: Dict[str, Any] = {}
     credentials: Dict[str, Any] = {}
     resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
@@ -54,7 +52,6 @@ class BaseSQLClient(ClientInterface):
         self,
         use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR,
         credentials: Dict[str, Any] = {},
-        sql_alchemy_connect_args: Dict[str, Any] = {},
     ):
         """
         Initialize the SQL client.
@@ -63,12 +60,10 @@ class BaseSQLClient(ClientInterface):
             use_server_side_cursor (bool, optional): Whether to use server-side cursors.
                 Defaults to USE_SERVER_SIDE_CURSOR.
             credentials (Dict[str, Any], optional): Database credentials. Defaults to {}.
-            sql_alchemy_connect_args (Dict[str, Any], optional): Additional SQLAlchemy
                 connection arguments. Defaults to {}.
         """
         self.use_server_side_cursor = use_server_side_cursor
         self.credentials = credentials
-        self.sql_alchemy_connect_args = sql_alchemy_connect_args
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """Load and establish the database connection.
@@ -85,7 +80,6 @@ class BaseSQLClient(ClientInterface):
 
             self.engine = create_engine(
                 self.get_sqlalchemy_connection_string(),
-                connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
             self.connection = self.engine.connect()
@@ -377,7 +371,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
     Attributes:
         connection (AsyncConnection): Async database connection instance.
         engine (AsyncEngine): Async SQLAlchemy engine instance.
-        sql_alchemy_connect_args (Dict[str, Any]): Additional connection arguments.
         credentials (Dict[str, Any]): Database credentials.
         use_server_side_cursor (bool): Whether to use server-side cursors.
     """
@@ -404,7 +397,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
 
             self.engine = create_async_engine(
                 self.get_sqlalchemy_connection_string(),
-                connect_args=self.sql_alchemy_connect_args,
                 pool_pre_ping=True,
             )
             if not self.engine:

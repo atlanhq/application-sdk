@@ -1,3 +1,7 @@
+from typing import Any, Dict
+
+import boto3
+
 from application_sdk.constants import AWS_SESSION_NAME
 
 
@@ -107,3 +111,39 @@ def generate_aws_rds_token_with_iam_user(
         return token
     except Exception as e:
         raise Exception(f"Failed to get user credentials: {str(e)}")
+
+
+def create_aws_session(self, credentials: Dict[str, Any]) -> boto3.Session:
+    """
+    Create a boto3 session with AWS credentials.
+
+    Args:
+        credentials: Dictionary containing AWS credentials
+
+    Returns:
+        boto3.Session: Configured boto3 session
+    """
+    aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
+        "username"
+    )
+    aws_secret_access_key = credentials.get("aws_secret_access_key") or credentials.get(
+        "password"
+    )
+
+    return boto3.Session(
+        aws_access_key_id=aws_access_key_id,
+        aws_secret_access_key=aws_secret_access_key,
+    )
+
+def create_aws_client(self, session: boto3.Session, region: str, service_name: str):
+        """
+        Create an AWS client for the provided service using session and region.
+
+        Args:
+            session: Boto3 session instance
+            region: AWS region name
+            service_name: AWS service name
+        Returns:
+            AWS client instance
+        """
+        return session.client(service_name, region_name=region)

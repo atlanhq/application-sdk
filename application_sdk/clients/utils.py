@@ -1,5 +1,5 @@
 import re
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from application_sdk.clients.temporal import TemporalWorkflowClient
 from application_sdk.clients.workflow import WorkflowEngineType
@@ -69,3 +69,27 @@ def extract_region_from_host(self, host: str) -> Optional[str]:
     if match:
         return match.group(1)
     return None
+
+
+def get_cluster_credentials(
+    self, aws_client, credentials: Dict[str, Any], extra: Dict[str, Any]
+) -> Dict[str, str]:
+    """
+    Retrieve cluster credentials using IAM authentication.
+
+    Args:
+        aws_client: Boto3 Redshift client instance
+        credentials: Dictionary containing connection credentials
+
+    Returns:
+        Dict[str, str]: Dictionary containing DbUser and DbPassword
+    """
+    database = extra["database"]
+    cluster_identifier = credentials.get("cluster_id") or self.get_cluster_identifier(
+        aws_client
+    )
+    return aws_client.get_cluster_credentials_with_iam(
+        DbName=database,
+        ClusterIdentifier=cluster_identifier,
+        DurationSeconds=3600,
+    )
