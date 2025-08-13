@@ -146,10 +146,18 @@ class TestEventStore:
 
     @patch("application_sdk.outputs.eventstore.clients.DaprClient")
     @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
+    @patch("application_sdk.outputs.eventstore.is_component_registered")
     async def test_publish_event_success(
-        self, mock_auth_client, mock_dapr_client, sample_event
+        self,
+        mock_is_component_registered,
+        mock_auth_client,
+        mock_dapr_client,
+        sample_event,
     ):
         """Test publishing event successfully via binding."""
+        # Mock component registration check
+        mock_is_component_registered.return_value = True
+
         # Mock auth client
         mock_auth_instance = Mock()
         mock_auth_client.return_value = mock_auth_instance
@@ -173,8 +181,12 @@ class TestEventStore:
     async def test_publish_event_always_enriches_metadata(self, sample_event):
         """Test publishing event always enriches metadata."""
         with patch("application_sdk.outputs.eventstore.clients.DaprClient"):
-            # Should always call enrich_event_metadata
-            await EventStore.publish_event(sample_event)
+            with patch(
+                "application_sdk.outputs.eventstore.is_component_registered",
+                return_value=True,
+            ):
+                # Should always call enrich_event_metadata
+                await EventStore.publish_event(sample_event)
 
 
 class TestApplicationEventNames:
