@@ -493,7 +493,7 @@ class APIServer(ServerInterface):
         metrics = get_metrics()
 
         metadata_type = body.root.get("type", "all")
-        database = body.root.get("database", None)
+        database = body.root.get("database", "")
 
         try:
             if not self.handler:

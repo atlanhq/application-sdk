@@ -11,6 +11,7 @@ from dapr import clients
 from temporalio import activity, workflow
 
 from application_sdk.clients.atlan_auth import AtlanAuthClient
+from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.constants import (
     APPLICATION_NAME,
     DAPR_BINDING_OPERATION_CREATE,
@@ -74,6 +75,11 @@ class EventStore:
         Args:
             event (Event): Event data to publish.
         """
+        if not is_component_registered(EVENT_STORE_NAME):
+            logger.warning(
+                "Skipping event publish because event store component is not registered",
+            )
+            return
         try:
             event = cls.enrich_event_metadata(event)
 
