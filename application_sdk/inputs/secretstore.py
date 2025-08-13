@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from dapr.clients import DaprClient
 
+from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.constants import (
     DEPLOYMENT_NAME,
     DEPLOYMENT_SECRET_PATH,
@@ -23,6 +24,12 @@ class SecretStoreInput:
     @classmethod
     def get_deployment_secret(cls) -> Dict[str, Any]:
         """Get deployment config with caching."""
+        if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
+            logger.warning(
+                f"Deployment secret store component '{DEPLOYMENT_SECRET_STORE_NAME}' is not registered"
+            )
+            return {}
+
         try:
             return cls.get_secret(DEPLOYMENT_SECRET_PATH, DEPLOYMENT_SECRET_STORE_NAME)
         except Exception as e:
