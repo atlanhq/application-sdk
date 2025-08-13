@@ -131,9 +131,9 @@ EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 # Dapr Client Configuration
-#: Maximum gRPC message length in bytes for Dapr client (default: 16MB)
+#: Maximum gRPC message length in bytes for Dapr client (default: 100MB)
 DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
-    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "16777216")
+    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "104857600")
 )
 #: Name of the deployment secret store component in DAPR
 DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
