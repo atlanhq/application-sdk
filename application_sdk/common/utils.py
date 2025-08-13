@@ -18,6 +18,7 @@ from typing import (
 )
 
 from application_sdk.common.error_codes import CommonError
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -432,3 +433,43 @@ def run_sync(func):
             return await loop.run_in_executor(pool, func, *args, **kwargs)
 
     return wrapper
+
+
+async def get_database_names(
+    sql_client, workflow_args, fetch_database_sql
+) -> Optional[List[str]]:
+    """
+    Get the database names from the workflow args if include-filter is present
+    Args:
+        workflow_args: The workflow args
+    Returns:
+        List[str]: The database names
+    """
+    database_names = parse_filter_input(
+        workflow_args.get("metadata", {}).get("include-filter", {})
+    )
+
+    database_names = [
+        re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
+        for database_name in database_names
+    ]
+    if not database_names:
+        # if database_names are not provided in the include-filter, we'll run the query to get all the database names
+        # because by default for an empty include-filter, we fetch details corresponding to all the databases.
+        temp_table_regex_sql = workflow_args.get("metadata", {}).get(
+            "temp-table-regex", ""
+        )
+        prepared_query = prepare_query(
+            query=fetch_database_sql,
+            workflow_args=workflow_args,
+            temp_table_regex_sql=temp_table_regex_sql,
+        )
+        # We'll run the query to get all the database names
+        database_sql_input = SQLQueryInput(
+            engine=sql_client.engine,
+            query=prepared_query,  # type: ignore
+            chunk_size=None,
+        )
+        database_dataframe = await database_sql_input.get_dataframe()
+        database_names = list(database_dataframe["database_name"])
+    return database_names

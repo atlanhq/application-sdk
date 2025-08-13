@@ -1,6 +1,8 @@
+import json
 import os
 from typing import Any, Dict, Optional, Tuple, Type, cast
 
+from sqlalchemy.exc import OperationalError
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -10,7 +12,11 @@ from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.credential_utils import get_credentials
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.common.utils import (
+    get_database_names,
+    prepare_query,
+    read_sql_files,
+)
 from application_sdk.constants import (
     APP_TENANT_ID,
     APPLICATION_NAME,
@@ -204,6 +210,116 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             logger.warning("Missing required workflow arguments")
             raise ValueError("Missing required workflow arguments")
         return output_prefix, output_path, typename, workflow_id, workflow_run_id
+
+    async def multidb_query_executor(
+        sql_client,
+        fetch_database_sql,
+        extract_temp_table_regex_column_sql,
+        extract_temp_table_regex_table_sql,
+        sql_query: Optional[str],
+        workflow_args: Dict[str, Any],
+        output_suffix: str,
+        typename: str,
+        write_to_file: bool = True,
+    ):
+        """
+        Create new connection for each database and
+        execute the query and write the dataframe
+        """
+        database_names = await get_database_names(
+            sql_client, workflow_args, fetch_database_sql
+        )
+        if not sql_client or not sql_client.engine:
+            logger.error("SQL client or engine not initialized")
+            raise ValueError("SQL client or engine not initialized")
+        parquet_output = None
+        if write_to_file:
+            output_prefix = workflow_args.get("output_prefix")
+            output_path = workflow_args.get("output_path")
+            if not output_prefix or not output_path:
+                logger.error("Output prefix or path not provided in workflow_args.")
+                raise ValueError(
+                    "Output prefix and path must be specified in workflow_args."
+                )
+            parquet_output = ParquetOutput(
+                output_prefix=output_prefix,
+                output_path=output_path,
+                output_suffix=output_suffix,
+            )
+        successful_databases = []
+        failed_databases = []
+        dataframe_list = []
+        for database_name in database_names or []:
+            try:
+                # create the engine with the new database name
+                # Parse extra field if it's a JSON string
+                if isinstance(sql_client.credentials.get("extra"), str):
+                    try:
+                        extra_dict = json.loads(sql_client.credentials["extra"])
+                        extra_dict["database"] = database_name
+                        sql_client.credentials["extra"] = extra_dict
+                    except json.JSONDecodeError:
+                        logger.error(
+                            f"Failed to parse extra field as JSON: {sql_client.credentials.get('extra')}"
+                        )
+                        raise ValueError("Invalid JSON in extra field")
+                else:
+                    sql_client.credentials["extra"]["database"] = database_name
+                await sql_client.load(sql_client.credentials)
+                fetch_sql = sql_query.replace("{database_name}", database_name)  # type: ignore
+                if typename == "column":
+                    temp_table_regex_sql = extract_temp_table_regex_column_sql
+                elif typename == "table":
+                    temp_table_regex_sql = extract_temp_table_regex_table_sql
+                else:
+                    temp_table_regex_sql = ""
+                prepared_query = prepare_query(
+                    query=fetch_sql,
+                    workflow_args=workflow_args,
+                    temp_table_regex_sql=temp_table_regex_sql,
+                )
+                sql_input = SQLQueryInput(
+                    engine=sql_client.engine,  # type: ignore
+                    query=prepared_query,  # type: ignore
+                )
+                dataframe = await sql_input.get_batched_dataframe()
+                if write_to_file:
+                    await parquet_output.write_batched_dataframe(dataframe)  # type: ignore
+                else:
+                    dataframe_list.append(dataframe)
+                successful_databases.append(database_name)
+                logger.info(f"Successfully processed database: {database_name}")
+            except OperationalError as e:
+                # Log the error but continue with the next database
+                error_msg = str(e)
+                logger.warning(
+                    f"Failed to connect to database '{database_name}': {error_msg}. Skipping to next database."
+                )
+                failed_databases.append(database_name)
+                continue
+            except Exception as e:
+                # Log other errors but continue with the next database
+                logger.warning(
+                    f"Unexpected error processing database '{database_name}': {str(e)}. Skipping to next database."
+                )
+                failed_databases.append(database_name)
+                continue
+        # Log summary of results
+        if successful_databases:
+            logger.info(
+                f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
+            )
+        if failed_databases:
+            logger.warning(
+                f"Failed to process {len(failed_databases)} databases: {failed_databases}"
+            )
+        if not successful_databases:
+            logger.warning("No databases were processed")
+        if write_to_file and parquet_output:
+            statistics = await parquet_output.get_statistics(typename=typename)
+            return statistics
+        else:
+            return dataframe_list
 
     async def query_executor(
         self,
