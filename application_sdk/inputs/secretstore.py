@@ -23,7 +23,15 @@ logger = get_logger(__name__)
 class SecretStoreInput:
     @classmethod
     def get_deployment_secret(cls) -> Dict[str, Any]:
-        """Get deployment config with caching."""
+        """Get deployment config from the deployment secret store.
+
+        Validates that the deployment secret store component is registered
+        before attempting to fetch secrets to prevent errors.
+
+        Returns:
+            Dict[str, Any]: Deployment configuration data, or empty dict if
+                          component is unavailable or fetch fails.
+        """
         if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
             logger.warning(
                 f"Deployment secret store component '{DEPLOYMENT_SECRET_STORE_NAME}' is not registered"
