@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc27"
+version = "0.1.1rc30"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -24,7 +24,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27.0",
     "psutil>=7.0.0",
     "fastapi[standard]>=0.115.0",
-    "pyatlan>=7.1.1",
+    "pyatlan>=7.1.6",
     "pydantic>=2.10.6",
     "loguru>=0.7.3",
     "uvloop>=0.21.0; sys_platform != 'win32'",

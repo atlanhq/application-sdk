@@ -131,9 +131,9 @@ EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 # Dapr Client Configuration
-#: Maximum gRPC message length in bytes for Dapr client (default: 16MB)
+#: Maximum gRPC message length in bytes for Dapr client (default: 100MB)
 DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
-    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "16777216")
+    os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "104857600")
 )
 #: Name of the deployment secret store component in DAPR
 DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
@@ -217,3 +217,10 @@ TRACES_FILE_NAME = "traces.parquet"
 ENABLE_OBSERVABILITY_DAPR_SINK = (
     os.getenv("ATLAN_ENABLE_OBSERVABILITY_DAPR_SINK", "false").lower() == "true"
 )
+
+# atlan_client configuration (non ATLAN_ prefix are rooted in pyatlan SDK, to be revisited)
+ATLAN_API_TOKEN_GUID = os.getenv("API_TOKEN_GUID")
+ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
+ATLAN_API_KEY = os.getenv("ATLAN_API_KEY")
+ATLAN_CLIENT_ID = os.getenv("CLIENT_ID")
+ATLAN_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
