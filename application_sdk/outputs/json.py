@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 import orjson
 from temporalio import activity
 
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -50,6 +51,22 @@ def convert_datetime_to_epoch(data: Any) -> Any:
     elif isinstance(data, list):
         return [convert_datetime_to_epoch(item) for item in data]
     return data
+
+
+def estimate_dataframe_json_size(dataframe: "pd.DataFrame") -> int:
+    """Estimate JSON size of a DataFrame by sampling a few records."""
+    if len(dataframe) == 0:
+        return 0
+
+    # Sample up to 10 records to estimate average size
+    sample_size = min(10, len(dataframe))
+    sample = dataframe.head(sample_size)
+    sample_json = sample.to_json(orient="records", lines=True)
+    if sample_json is not None:
+        avg_record_size = len(sample_json.encode("utf-8")) / sample_size
+        return int(avg_record_size * len(dataframe))
+
+    return 0
 
 
 class JsonOutput(Output):
@@ -123,6 +140,10 @@ class JsonOutput(Output):
         self.chunk_size = chunk_size or 100000
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
+        self.max_file_size_bytes = int(
+            DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.9
+        )  # 90% of DAPR limit as safety buffer
         self.path_gen = path_gen
         self.start_marker = start_marker
         self.end_marker = end_marker
@@ -171,8 +192,21 @@ class JsonOutput(Output):
             ]
 
             for chunk in chunks:
+                # Estimate size of this chunk
+                chunk_size_bytes = estimate_dataframe_json_size(chunk)
+
+                # Check if adding this chunk would exceed size limit
+                if (
+                    self.current_buffer_size_bytes + chunk_size_bytes
+                    > self.max_file_size_bytes
+                    and self.current_buffer_size > 0
+                ):
+                    # Flush current buffer before adding this chunk
+                    await self._flush_buffer()
+
                 self.buffer.append(chunk)
                 self.current_buffer_size += len(chunk)
+                self.current_buffer_size_bytes += chunk_size_bytes
 
                 if self.current_buffer_size >= partition:
                     await self._flush_buffer()
@@ -350,6 +384,7 @@ class JsonOutput(Output):
 
             self.buffer.clear()
             self.current_buffer_size = 0
+            self.current_buffer_size_bytes = 0
 
         except Exception as e:
             # Record metrics for failed write
