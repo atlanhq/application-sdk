@@ -7,6 +7,7 @@ from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.utils import (
+    multidb_query_executor,
     parse_filter_input,
     prepare_query,
     read_sql_files,
@@ -57,8 +58,13 @@ class BaseSQLHandler(HandlerInterface):
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
 
-    def __init__(self, sql_client: BaseSQLClient | None = None):
+    def __init__(
+        self,
+        sql_client: BaseSQLClient | None = None,
+        multidb_tables_check_enabled: Optional[bool] = False,
+    ):
         self.sql_client = sql_client
+        self.multidb_tables_check_enabled = multidb_tables_check_enabled
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
@@ -294,6 +300,46 @@ class BaseSQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
+    async def multidb_tables_check(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Method to check the count of tables
+        """
+        logger.info("Starting tables check")
+
+        dataframe_list = await multidb_query_executor(
+            sql_client=self.sql_client,
+            fetch_database_sql=self.fetch_databases_sql,
+            extract_temp_table_regex_column_sql=self.extract_temp_table_regex_table_sql,
+            extract_temp_table_regex_table_sql=self.extract_temp_table_regex_table_sql,
+            sql_query=self.tables_check_sql,
+            workflow_args=payload,
+            output_suffix="raw/table",
+            typename="table",
+            write_to_file=False,
+        )
+        try:
+            result = 0
+            for df_generator in dataframe_list:
+                for dataframe in df_generator:
+                    for row in dataframe.to_dict(orient="records"):  # type: ignore
+                        result += row["count"]
+            return {
+                "success": True,
+                "successMessage": f"Tables check successful. Table count: {result}",
+                "failureMessage": "",
+            }
+        except Exception as exc:
+            logger.error("Error during tables check", exc_info=True)
+            return {
+                "success": False,
+                "successMessage": "",
+                "failureMessage": "Tables check failed",
+                "error": str(exc),
+            }
+
     async def tables_check(
         self,
         payload: Dict[str, Any],
@@ -301,6 +347,9 @@ class BaseSQLHandler(HandlerInterface):
         """
         Method to check the count of tables
         """
+        if self.multidb_tables_check_enabled:
+            return await self.multidb_tables_check(payload)
+
         logger.info("Starting tables check")
         query = prepare_query(
             query=self.tables_check_sql,
