@@ -5,11 +5,11 @@ This module contains the base classes and models for all events in the applicati
 
 from abc import ABC
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
-from application_sdk.constants import APPLICATION_NAME
+from application_sdk.constants import APPLICATION_NAME, WORKER_START_EVENT_VERSION
 
 
 class EventTypes(Enum):
@@ -144,3 +144,33 @@ class Event(BaseModel, ABC):
 
     class Config:
         extra = "allow"
+
+
+class WorkerStartEventData(BaseModel):
+    """Model for worker creation event data.
+
+    This model represents the data structure used when publishing worker creation events.
+    It contains information about the worker configuration and environment.
+
+    Attributes:
+        application_name: Name of the application the worker belongs to.
+        task_queue: Task queue name for the worker.
+        namespace: Temporal namespace for the worker.
+        host: Host address of the Temporal server.
+        port: Port number of the Temporal server.
+        connection_string: Connection string for the Temporal server.
+        max_concurrent_activities: Maximum number of concurrent activities.
+        workflow_count: Number of workflow classes registered.
+        activity_count: Number of activity functions registered.
+    """
+
+    version: str = WORKER_START_EVENT_VERSION
+    application_name: str
+    task_queue: str
+    namespace: str
+    host: str
+    port: str
+    connection_string: str
+    max_concurrent_activities: Optional[int]
+    workflow_count: int
+    activity_count: int

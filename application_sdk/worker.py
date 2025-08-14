@@ -15,8 +15,12 @@ from temporalio.worker import Worker as TemporalWorker
 
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
-from application_sdk.events.models import ApplicationEventNames, Event, EventTypes
-from application_sdk.events.worker_events import WorkerStartEventData
+from application_sdk.events.models import (
+    ApplicationEventNames,
+    Event,
+    EventTypes,
+    WorkerStartEventData,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.eventstore import EventStore
 

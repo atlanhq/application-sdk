@@ -59,7 +59,7 @@ TEMPORAL_NOT_FOUND_FAILURE = (
 
 # Activity for publishing events (runs outside sandbox)
 @activity.defn
-async def publish_event_activity(event_data: dict) -> None:
+async def publish_event(event_data: dict) -> None:
     """Activity to publish events outside the workflow sandbox.
 
     Args:
@@ -138,7 +138,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
         # Publish workflow start event via activity
         try:
             await workflow.execute_activity(
-                publish_event_activity,
+                publish_event,
                 {
                     "metadata": EventMetadata(
                         workflow_state=WorkflowStates.RUNNING.value
@@ -169,7 +169,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             # Always publish workflow end event
             try:
                 await workflow.execute_activity(
-                    publish_event_activity,
+                    publish_event,
                     {
                         "metadata": EventMetadata(workflow_state=workflow_state),
                         "event_type": EventTypes.APPLICATION_EVENT.value,
@@ -541,8 +541,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
             )
 
-        # Add the publish_event_activity to the activities list
-        extended_activities = list(activities) + [publish_event_activity]
+        # Add the publish_event to the activities list
+        extended_activities = list(activities) + [publish_event]
 
         return Worker(
             self.client,

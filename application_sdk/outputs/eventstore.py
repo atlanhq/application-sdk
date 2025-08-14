@@ -90,8 +90,7 @@ class EventStore:
 
             # Add auth token - HTTP bindings will use it, others will ignore it
             auth_client = AtlanAuthClient()
-            auth_token = await auth_client.get_access_token()
-            binding_metadata["Authorization"] = f"Bearer {auth_token}"
+            binding_metadata.update(await auth_client.get_authenticated_headers())
 
             with clients.DaprClient() as client:
                 client.invoke_binding(
