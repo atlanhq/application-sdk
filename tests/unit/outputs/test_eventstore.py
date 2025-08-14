@@ -161,7 +161,9 @@ class TestEventStore:
         # Mock auth client
         mock_auth_instance = Mock()
         mock_auth_client.return_value = mock_auth_instance
-        mock_auth_instance.get_access_token = AsyncMock(return_value="test_token")
+        mock_auth_instance.get_authenticated_headers = AsyncMock(
+            return_value={"Authorization": "Bearer test_token"}
+        )
 
         # Mock DAPR client
         mock_dapr_instance = Mock()
