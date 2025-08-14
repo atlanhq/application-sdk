@@ -80,6 +80,7 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
             retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            summary="Load workflow args",
         )
 
         logger.info("Starting workflow execution")
@@ -93,6 +94,7 @@ class WorkflowInterface(ABC, Generic[ActivitiesInterfaceType]):
                 retry_policy=retry_policy,
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
+                summary="Preflight check",
             )
 
         except Exception as e:

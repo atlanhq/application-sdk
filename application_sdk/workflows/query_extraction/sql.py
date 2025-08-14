@@ -89,6 +89,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            summary=f"Load workflow args for {workflow_id}",
         )
 
         logger.info(f"Starting miner workflow for {workflow_id}")
@@ -103,6 +104,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            summary="Prepare query batches",
         )
 
         miner_activities: List[Coroutine[Any, Any, None]] = []
@@ -121,6 +123,7 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
                     retry_policy=retry_policy,
                     start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,
+                    summary=f"Fetch queries {result['start']}–{result['end']}",
                 )
             )
 
