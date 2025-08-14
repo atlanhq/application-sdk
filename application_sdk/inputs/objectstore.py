@@ -79,25 +79,11 @@ class ObjectStoreInput:
         try:
             # List all files in the object store path
             relative_path = os.path.relpath(file_path, download_file_prefix)
-            metadata = {"fileName": relative_path}
+            file_list = cls.list_all_files(relative_path, object_store_name)
 
-            try:
-                # Assuming the object store binding supports a "list" operation
-                response_data = cls._invoke_dapr_binding(
-                    operation=cls.OBJECT_LIST_OPERATION, metadata=metadata
-                )
-                file_list = orjson.loads(response_data.decode("utf-8"))
-            except Exception as e:
-                logger.error(
-                    f"Error listing files in object store path {download_file_prefix}: {str(e)}"
-                )
-                raise e
-
-            if not file_list:
-                logger.info(
-                    f"No files found in object store path: {download_file_prefix}"
-                )
-                return
+            logger.info(
+                f"Found list of files: {file_list} from: {download_file_prefix}"
+            )
 
             # Download each file
             for relative_path in file_list:
