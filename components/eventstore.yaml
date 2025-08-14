@@ -8,3 +8,16 @@ spec:
   metadata:
   - name: rootPath
     value: "./local/dapr/eventstore"
+
+# to test this with http binding - use this
+# apiVersion: dapr.io/v1alpha1
+# kind: Component
+# metadata:
+#   name: eventstore
+# spec:
+#   type: bindings.http
+#   version: v1
+#   metadata:
+#   - name: url
+#     value: https://atlan.url/eventurl
+#     value: "https://webhook.site/testhash"
