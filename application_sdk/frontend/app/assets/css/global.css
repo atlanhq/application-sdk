@@ -1,0 +1,9 @@
+@layer tailwind.base {
+    @tailwind base;
+}
+
+@tailwind components;
+
+@tailwind utilities;
+
+@layer pw-reset, pw-base, pw-tokens, pw-recipes, pw-utilities;

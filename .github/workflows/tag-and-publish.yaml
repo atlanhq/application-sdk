@@ -27,14 +27,38 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'pnpm'
+
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
           version: "0.7.3"
 
-      - name: Install dependencies
+      - name: Install Python dependencies
         shell: bash
         run: uv sync --all-extras --all-groups
+
+      - name: Install frontend dependencies
+        shell: bash
+        working-directory: application_sdk/frontend
+        run: pnpm install
+        env:
+          GITHUB_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+
+      - name: Build frontend
+        shell: bash
+        working-directory: application_sdk/frontend
+        run: |
+          pnpm run generate
 
       - name: Get version
         id: get_version
