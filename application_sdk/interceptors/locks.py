@@ -51,7 +51,7 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
             await self._lock_provider.initialize()
         return self._lock_provider
 
-    async def start_activity(
+    async def start_activity(  # type: ignore
         self, input: StartActivityInput
     ) -> workflow.ActivityHandle[Any]:
         # Check if activity needs locking using metadata
