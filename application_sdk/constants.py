@@ -190,3 +190,13 @@ ENABLE_OBSERVABILITY_DAPR_SINK = (
 
 # Lock Configuration
 LOCK_METADATA_KEY = "__lock_metadata__"
+
+# Redis Lock Configuration
+REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "localhost:26379").split(",")
+REDIS_SERVICE_NAME = os.getenv("REDIS_SERVICE_NAME", "mymaster")
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", "0.2"))
+LOCK_RETRY_COUNT = int(os.getenv("LOCK_RETRY_COUNT", "3"))
+LOCK_RETRY_DELAY_MIN = float(os.getenv("LOCK_RETRY_DELAY_MIN", "0.1"))
+LOCK_RETRY_DELAY_MAX = float(os.getenv("LOCK_RETRY_DELAY_MAX", "0.3"))

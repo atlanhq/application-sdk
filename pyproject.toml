@@ -43,6 +43,8 @@ workflows = [
     "dapr>=1.14.0",
     "temporalio>=1.7.1",
     "orjson>=3.10.18",
+    "aioredis>=2.0.1",
+    "aioredlock>=0.7.0",
 ]
 pandas = [
     "pandas>=2.2.3"

@@ -1,12 +1,8 @@
-import asyncio
 import random
 from typing import Any, Dict, Optional, Type
 
-from dapr.clients import DaprClient
-from temporalio import activity, workflow
+from temporalio import workflow
 from temporalio.worker import (
-    ActivityInboundInterceptor,
-    ExecuteActivityInput,
     Interceptor,
     StartActivityInput,
     WorkflowInboundInterceptor,
@@ -17,8 +13,11 @@ from temporalio.worker import (
 from application_sdk.constants import (
     APPLICATION_NAME,
     LOCK_METADATA_KEY,
-    LOCK_STORE_NAME,
+    REDIS_PASSWORD,
+    REDIS_SENTINEL_HOSTS,
+    REDIS_SERVICE_NAME,
 )
+from application_sdk.locks.redis_lock import RedisLockProvider
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -30,10 +29,27 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
     def __init__(self, next: WorkflowOutboundInterceptor):
         super().__init__(next)
         self.activities = {}
+        self._lock_provider: Optional[RedisLockProvider] = None
 
     def set_activities(self, activities: Dict[str, Any]) -> None:
         """Set the activities dictionary for metadata lookup."""
         self.activities = activities
+
+    async def _get_lock_provider(self) -> RedisLockProvider:
+        """Get or create the lock provider instance."""
+        if not self._lock_provider:
+            # Parse sentinel hosts
+            hosts = [
+                (h.split(":")[0], int(h.split(":")[1]) if ":" in h else 26379)
+                for h in REDIS_SENTINEL_HOSTS
+            ]
+            self._lock_provider = RedisLockProvider(
+                sentinel_hosts=hosts,
+                service_name=REDIS_SERVICE_NAME,
+                password=REDIS_PASSWORD,
+            )
+            await self._lock_provider.initialize()
+        return self._lock_provider
 
     async def start_activity(
         self, input: StartActivityInput
@@ -43,18 +59,16 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         if not activity_fn or not hasattr(activity_fn, LOCK_METADATA_KEY):
             return await self.next.start_activity(input)
 
-        # Quick check for lockstore component
+        # Quick check for lock provider availability
         try:
-            with DaprClient() as client:
-                metadata = client.get_metadata()
-                components = metadata.registered_components
-                if not any(comp.name == LOCK_STORE_NAME for comp in components):
-                    logger.warning(
-                        f"Dapr component {LOCK_STORE_NAME} is not available, skipping lock acquisition, please use dapr lock component for testing locks locally"
-                    )
-                    return await self.next.start_activity(input)
+            lock_provider = await self._get_lock_provider()
+            if not await lock_provider.is_available():
+                logger.warning(
+                    "Lock provider is not available, skipping lock acquisition"
+                )
+                return await self.next.start_activity(input)
         except Exception as e:
-            logger.warning(f"Failed to check Dapr components: {e}")
+            logger.warning(f"Failed to check lock provider availability: {e}")
             return await self.next.start_activity(input)
 
         lock_config = getattr(activity_fn, LOCK_METADATA_KEY)
@@ -68,27 +82,27 @@ class LockWorkflowOutboundInterceptor(WorkflowOutboundInterceptor):
         )
 
         # Try to acquire a lock before starting the activity
+        lock_provider = await self._get_lock_provider()
+
         while True:
             slot = random.randint(0, max_locks - 1)
             lock_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
             owner_id = f"{APPLICATION_NAME}:{workflow.info().workflow_id}"
 
             try:
-                with DaprClient() as client:
-                    with client.try_lock(
-                        store_name=LOCK_STORE_NAME,
-                        resource_id=lock_id,
-                        lock_owner=owner_id,
-                        expiry_in_seconds=start_to_close_timeout,
-                    ) as lock:
-                        if lock.success:
-                            logger.debug(
-                                f"Lock acquired {slot}, starting activity {input.activity}"
-                            )
-                            return await self.next.start_activity(input)
+                async with lock_provider.try_lock(
+                    resource_id=lock_id,
+                    lock_owner=owner_id,
+                    expiry_in_seconds=start_to_close_timeout,
+                ) as lock:
+                    if lock.success:
+                        logger.debug(
+                            f"Lock acquired {slot}, starting activity {input.activity}"
+                        )
+                        return await self.next.start_activity(input)
             except Exception as e:
                 logger.error(
-                    f"Failed to acquire lock for activity '{input.activity}'. Possible Dapr connectivity issue. Error: {e}"
+                    f"Failed to acquire lock for activity '{input.activity}'. Error: {e}"
                 )
                 raise e
 
