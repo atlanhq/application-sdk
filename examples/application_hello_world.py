@@ -26,6 +26,7 @@ class HelloWorldWorkflow(WorkflowInterface):
             args=[workflow_config],
             start_to_close_timeout=timedelta(seconds=10),
             heartbeat_timeout=timedelta(seconds=10),
+            summary="Run demo activity",
         )
 
     @staticmethod
