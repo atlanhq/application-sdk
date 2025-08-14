@@ -302,6 +302,13 @@ class BaseSQLHandler(HandlerInterface):
         Method to check the count of tables
         """
         logger.info("Starting tables check")
+        
+        # Check if multidb_table_check is enabled
+        if hasattr(self, 'multidb_table_check') and self.multidb_table_check:
+            logger.info("Using multidb table check")
+            return await self._multidb_tables_check(payload)
+        
+        # Original single database table check logic
         query = prepare_query(
             query=self.tables_check_sql,
             workflow_args=payload,
@@ -328,6 +335,49 @@ class BaseSQLHandler(HandlerInterface):
                 "success": False,
                 "successMessage": "",
                 "failureMessage": "Tables check failed",
+                "error": str(exc),
+            }
+
+    async def _multidb_tables_check(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Method to check the count of tables using multidb query executor
+        """
+        logger.info("Starting multidb tables check")
+        try:
+            from application_sdk.activities.metadata_extraction.sql import multidb_query_executor
+            
+            dataframe_list = await multidb_query_executor(
+                sql_client=self.sql_client,
+                fetch_database_sql=self.fetch_databases_sql,
+                extract_temp_table_regex_column_sql=self.extract_temp_table_regex_table_sql,
+                extract_temp_table_regex_table_sql=self.extract_temp_table_regex_table_sql,
+                sql_query=self.tables_check_sql,
+                workflow_args=payload,
+                output_suffix="raw/table",
+                typename="table",
+                write_to_file=False,
+            )
+            
+            result = 0
+            for df_generator in dataframe_list:
+                for dataframe in df_generator:
+                    for row in dataframe.to_dict(orient="records"):  # type: ignore
+                        result += row["count"]
+            
+            return {
+                "success": True,
+                "successMessage": f"Multidb tables check successful. Table count: {result}",
+                "failureMessage": "",
+            }
+        except Exception as exc:
+            logger.error("Error during multidb tables check", exc_info=True)
+            return {
+                "success": False,
+                "successMessage": "",
+                "failureMessage": "Multidb tables check failed",
                 "error": str(exc),
             }
 

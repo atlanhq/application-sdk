@@ -135,15 +135,16 @@ def create_aws_session(self, credentials: Dict[str, Any]) -> boto3.Session:
         aws_secret_access_key=aws_secret_access_key,
     )
 
-def create_aws_client(self, session: boto3.Session, region: str, service_name: str):
-        """
-        Create an AWS client for the provided service using session and region.
 
-        Args:
-            session: Boto3 session instance
-            region: AWS region name
-            service_name: AWS service name
-        Returns:
-            AWS client instance
-        """
-        return session.client(service_name, region_name=region)
+def create_aws_client(self, session: boto3.Session, region: str, service_name: str):
+    """
+    Create an AWS client for the provided service using session and region.
+
+    Args:
+        session: Boto3 session instance
+        region: AWS region name
+        service_name: AWS service name
+    Returns:
+        AWS client instance
+    """
+    return session.client(service_name, region_name=region)

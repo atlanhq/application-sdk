@@ -473,3 +473,54 @@ async def get_database_names(
         database_dataframe = await database_sql_input.get_dataframe()
         database_names = list(database_dataframe["database_name"])
     return database_names
+
+
+def parse_control_config(workflow_args: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Parse the control configuration from workflow arguments.
+
+    Args:
+        workflow_args: The workflow arguments containing control configuration
+
+    Returns:
+        Dict[str, Any]: Parsed control configuration dictionary
+    """
+    control_config = workflow_args.get("control-config")
+    if control_config is None:
+        return {}
+    elif isinstance(control_config, str):
+        try:
+            return json.loads(control_config)
+        except Exception:
+            return {}
+    return control_config
+
+
+def get_database_name_from_credentials(workflow_args: Dict[str, Any]) -> Optional[str]:
+    """
+    Extract database name from credentials in workflow arguments.
+
+    Args:
+        workflow_args: The workflow arguments containing credentials
+
+    Returns:
+        Optional[str]: Database name if found, None otherwise
+    """
+    credentials = workflow_args.get("credentials", {})
+    return credentials.get("database") or credentials.get("extra", {}).get("database")
+
+
+def has_custom_control_config(workflow_args: Dict[str, Any]) -> bool:
+    """
+    Check if custom control configuration is present in workflow arguments.
+
+    Args:
+        workflow_args: The workflow arguments
+
+    Returns:
+        bool: True if custom control configuration is present, False otherwise
+    """
+    return (
+        workflow_args.get("control-config-strategy") == "custom"
+        and workflow_args.get("control-config") is not None
+    )
