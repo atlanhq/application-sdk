@@ -3,7 +3,7 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from application_sdk.clients.temporal import TemporalWorkflowClient
+from application_sdk.clients.temporal import TemporalWorkflowClient, publish_event
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -269,11 +269,13 @@ async def test_create_worker(
     )
 
     # Verify Worker was instantiated with the expected parameters
+    # Note: activities now includes publish_event
+    expected_activities = list(activities) + [publish_event]
     mock_worker_class.assert_called_once_with(
         temporal_client.client,
         task_queue=temporal_client.worker_task_queue,
         workflows=workflow_classes,
-        activities=activities,
+        activities=expected_activities,
         workflow_runner=ANY,
         interceptors=ANY,
         activity_executor=ANY,

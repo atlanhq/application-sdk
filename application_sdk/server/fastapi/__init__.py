@@ -417,7 +417,7 @@ class APIServer(ServerInterface):
             subscriptions.append(
                 {
                     "pubsubname": EVENT_STORE_NAME,
-                    "topic": event_trigger.event_type + "_topic",
+                    "topic": event_trigger.event_type,
                     "routes": {
                         "rules": [
                             {
