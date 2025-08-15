@@ -432,3 +432,22 @@ def run_sync(func):
             return await loop.run_in_executor(pool, func, *args, **kwargs)
 
     return wrapper
+
+
+def send_heartbeat() -> None:
+    """
+    Send a heartbeat to Temporal activity if in activity context.
+
+    This function safely sends a heartbeat to Temporal without raising exceptions
+    if not in an activity context, if Temporal is not available, or if the
+    heartbeat queue is full.
+
+    Returns:
+        None
+    """
+    try:
+        from temporalio import activity
+
+        activity.heartbeat()
+    except (ImportError, RuntimeError, asyncio.QueueFull):
+        pass  # Not in activity context, activity not available, or queue full
