@@ -44,7 +44,7 @@ class MigrationSummary(BaseModel):
 
 
 # keeping any logic related to operations on atlan storage within this file.
-class AtlanStorageOutput:
+class AtlanStorage:
     """Handles upload operations to Atlan storage and migration from objectstore."""
 
     OBJECT_CREATE_OPERATION = "create"

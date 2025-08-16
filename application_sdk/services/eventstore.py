@@ -1,4 +1,4 @@
-"""Event store module for handling application events.
+"""Unified event store service for handling application events.
 
 This module provides the EventStore class for publishing application events
 to a pub/sub system with automatic fallback to HTTP binding.
@@ -25,7 +25,7 @@ activity.logger = logger
 
 
 class EventStore:
-    """Event store for publishing application events.
+    """Unified event store service for publishing application events.
 
     This class provides functionality to publish events to a pub/sub system.
     """

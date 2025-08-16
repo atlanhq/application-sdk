@@ -113,7 +113,7 @@ class TestOutput:
             "orjson.dumps",
             return_value=b'{"total_record_count": 100, "chunk_count": 5}',
         ) as mock_orjson, patch(
-            "application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store",
+            "application_sdk.services.objectstore.ObjectStore.upload",
             new_callable=AsyncMock,
         ) as mock_push:
             # Call the method
@@ -126,7 +126,8 @@ class TestOutput:
                 {"total_record_count": 100, "chunk_count": 5}
             )
             mock_push.assert_awaited_once_with(
-                "/test/prefix", "/test/path/statistics.json.ignore"
+                source="/test/path/statistics.json.ignore",
+                destination="/test/prefix/statistics.json.ignore",
             )
 
     @pytest.mark.asyncio

@@ -1,8 +1,9 @@
-"""Secret store for the application."""
+"""Unified secret store service for the application."""
 
 import collections.abc
 import copy
 import json
+import uuid
 from typing import Any, Dict
 
 from dapr.clients import DaprClient
@@ -16,11 +17,14 @@ from application_sdk.constants import (
     SECRET_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.statestore import StateStore, StateType
 
 logger = get_logger(__name__)
 
 
-class SecretStoreInput:
+class SecretStore:
+    """Unified secret store service for handling secret management."""
+
     @classmethod
     def get_deployment_secret(cls) -> Dict[str, Any]:
         """Get deployment config from the deployment secret store.
@@ -128,3 +132,31 @@ class SecretStoreInput:
                     result_data["extra"][key] = secret_data[value]
 
         return result_data
+
+    @classmethod
+    async def save_secret(cls, config: Dict[str, Any]) -> str:
+        """Store credentials in the state store.
+
+        Args:
+            config: The credentials to store.
+
+        Returns:
+            str: The generated credential GUID.
+
+        Raises:
+            Exception: If there's an error with the Dapr client operations.
+
+        Examples:
+            >>> SecretStore.save_secret({"username": "admin", "password": "password"})
+            "1234567890"
+        """
+        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+            # NOTE: (development) temporary solution to store the credentials in the state store.
+            # In production, dapr doesn't support creating secrets.
+            credential_guid = str(uuid.uuid4())
+            await StateStore.save_state_object(
+                id=credential_guid, value=config, type=StateType.CREDENTIALS
+            )
+            return credential_guid
+        else:
+            raise ValueError("Storing credentials is not supported in production.")

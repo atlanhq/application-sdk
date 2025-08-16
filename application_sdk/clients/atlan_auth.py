@@ -13,8 +13,8 @@ from application_sdk.constants import (
     WORKFLOW_AUTH_ENABLED,
     WORKFLOW_AUTH_URL_KEY,
 )
-from application_sdk.inputs.secretstore import SecretStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.secretstore import SecretStore
 
 logger = get_logger(__name__)
 
@@ -39,7 +39,7 @@ class AtlanAuthClient:
         (environment variables, AWS Secrets Manager, Azure Key Vault, etc.)
         """
         self.application_name = APPLICATION_NAME
-        self.auth_config: Dict[str, Any] = SecretStoreInput.get_deployment_secret()
+        self.auth_config: Dict[str, Any] = SecretStore.get_deployment_secret()
         self.auth_enabled: bool = WORKFLOW_AUTH_ENABLED
         self.auth_url: Optional[str] = None
 

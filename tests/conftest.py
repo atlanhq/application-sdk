@@ -7,9 +7,9 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def mock_secret_store():
-    """Automatically mock SecretStoreInput.get_deployment_secret for all tests."""
+    """Automatically mock SecretStore.get_deployment_secret for all tests."""
     with patch(
-        "application_sdk.inputs.secretstore.SecretStoreInput.get_deployment_secret",
+        "application_sdk.services.secretstore.SecretStore.get_deployment_secret",
         return_value={},
     ):
         yield
@@ -19,7 +19,7 @@ def mock_secret_store():
 def mock_dapr_client():
     """Automatically mock DaprClient for all tests to prevent Dapr health check timeouts."""
     with patch(
-        "application_sdk.outputs.eventstore.clients.DaprClient",
+        "application_sdk.services.eventstore.clients.DaprClient",
         autospec=True,
     ) as mock_dapr:
         # Create a mock instance that can be used as a context manager

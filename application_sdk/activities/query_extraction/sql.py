@@ -13,11 +13,10 @@ from application_sdk.common.credential_utils import get_credentials
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.objectstore import ObjectStoreOutput
 from application_sdk.outputs.parquet import ParquetOutput
+from application_sdk.services.objectstore import ObjectStore
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
@@ -412,14 +411,14 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             f.write(last_marker)
 
         logger.info(f"Last marker: {last_marker}")
-        await ObjectStoreOutput.push_file_to_object_store(
-            workflow_args["output_prefix"],
-            marker_file_path,
-            object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await ObjectStore.upload(
+            source=marker_file_path,
+            destination=f"{workflow_args['output_prefix']}/markerfile",
+            store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
         logger.info(f"Marker file written to {marker_file_path}")
 
-    def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
+    async def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
         """Read the marker from the output path.
 
         This method reads the current marker value from a marker file to determine the
@@ -444,10 +443,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
             os.makedirs(workflow_args["output_prefix"], exist_ok=True)
 
-            ObjectStoreInput.download_file_from_object_store(
-                workflow_args["output_prefix"],
-                marker_file_path,
-                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+            await ObjectStore.download(
+                source=f"{workflow_args['output_prefix']}/markerfile",
+                destination=marker_file_path,
+                store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
             logger.info(f"Output prefix: {workflow_args['output_prefix']}")
@@ -487,7 +486,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
 
-        current_marker = self.read_marker(workflow_args)
+        current_marker = await self.read_marker(workflow_args)
         if current_marker:
             miner_args.current_marker = current_marker
 
@@ -522,8 +521,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
 
-        await ObjectStoreOutput.push_file_to_object_store(
-            workflow_args["output_prefix"], metadata_file_path
+        await ObjectStore.upload(
+            source=metadata_file_path,
+            destination=f"{workflow_args['output_prefix']}/raw/query/metadata.json.ignore",
         )
 
         try:
