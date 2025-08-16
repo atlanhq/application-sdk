@@ -6,7 +6,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from application_sdk.inputs.secretstore import SecretStoreInput
+from application_sdk.services.secretstore import SecretStore
 
 # Helper strategy for credentials dictionaries
 credential_dict_strategy = st.dictionaries(
@@ -26,7 +26,7 @@ class TestCredentialUtils:
     )
     def test_process_secret_data_dict(self, secret_data: Dict[str, str]):
         """Test processing secret data when it's already a dictionary."""
-        result = SecretStoreInput._process_secret_data(secret_data)
+        result = SecretStore._process_secret_data(secret_data)
         assert result == secret_data
 
     def test_process_secret_data_json(self):
@@ -34,13 +34,13 @@ class TestCredentialUtils:
         nested_data = {"username": "test_user", "password": "test_pass"}
         secret_data = {"data": json.dumps(nested_data)}
 
-        result = SecretStoreInput._process_secret_data(secret_data)
+        result = SecretStore._process_secret_data(secret_data)
         assert result == nested_data
 
     def test_process_secret_data_invalid_json(self):
         """Test processing secret data with invalid JSON."""
         secret_data = {"data": "invalid json string"}
-        result = SecretStoreInput._process_secret_data(secret_data)
+        result = SecretStore._process_secret_data(secret_data)
         assert result == secret_data  # Should return original if JSON parsing fails
 
     def test_apply_secret_values_simple(self):
@@ -57,7 +57,7 @@ class TestCredentialUtils:
             "db_name_key": "actual_database",
         }
 
-        result = SecretStoreInput.apply_secret_values(source_credentials, secret_data)
+        result = SecretStore.apply_secret_values(source_credentials, secret_data)
 
         assert result["username"] == "actual_username"
         assert result["password"] == "actual_password"
@@ -69,7 +69,7 @@ class TestCredentialUtils:
 
         secret_data = {"some_key": "some_value"}
 
-        result = SecretStoreInput.apply_secret_values(source_credentials, secret_data)
+        result = SecretStore.apply_secret_values(source_credentials, secret_data)
 
         # Should remain unchanged
         assert result == source_credentials
@@ -97,9 +97,7 @@ class TestCredentialUtils:
             # Add extra field
             test_credentials["extra"] = {"extra_field": key_to_substitute}
 
-        result = SecretStoreInput.apply_secret_values(
-            test_credentials, safe_secret_data
-        )
+        result = SecretStore.apply_secret_values(test_credentials, safe_secret_data)
 
         # Verify substitutions happened correctly
         if secret_keys and "test_field" in test_credentials:
@@ -107,10 +105,10 @@ class TestCredentialUtils:
             assert result["test_field"] == expected_value
             assert result["extra"]["extra_field"] == expected_value
 
-    @patch("application_sdk.inputs.objectstore.DaprClient")
-    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
-    @patch("application_sdk.inputs.secretstore.DaprClient")
-    @patch("application_sdk.inputs.secretstore.DEPLOYMENT_NAME", "production")
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.statestore.StateStore.get_state")
+    @patch("application_sdk.services.secretstore.DaprClient")
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "production")
     def test_fetch_secret_success(
         self, mock_secret_dapr_client, mock_get_state, mock_object_dapr_client
     ):
@@ -127,9 +125,7 @@ class TestCredentialUtils:
         # Mock the state store response
         mock_get_state.return_value = {"additional_key": "additional_value"}
 
-        result = SecretStoreInput.get_secret(
-            "test-key", component_name="test-component"
-        )
+        result = SecretStore.get_secret("test-key", component_name="test-component")
 
         # Verify the result includes both secret and state data
         expected_result = {
@@ -141,10 +137,10 @@ class TestCredentialUtils:
             store_name="test-component", key="test-key"
         )
 
-    @patch("application_sdk.inputs.objectstore.DaprClient")
-    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
-    @patch("application_sdk.inputs.secretstore.DaprClient")
-    @patch("application_sdk.inputs.secretstore.DEPLOYMENT_NAME", "production")
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.statestore.StateStore.get_state")
+    @patch("application_sdk.services.secretstore.DaprClient")
+    @patch("application_sdk.services.secretstore.DEPLOYMENT_NAME", "production")
     def test_fetch_secret_failure(
         self,
         mock_secret_dapr_client: Mock,
@@ -160,4 +156,4 @@ class TestCredentialUtils:
         mock_get_state.return_value = {}
 
         with pytest.raises(Exception, match="Connection failed"):
-            SecretStoreInput.get_secret("test-key", component_name="test-component")
+            SecretStore.get_secret("test-key", component_name="test-component")

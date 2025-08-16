@@ -19,7 +19,7 @@ async def auth_client() -> AtlanAuthClient:
     }
 
     with patch(
-        "application_sdk.clients.atlan_auth.SecretStoreInput.get_deployment_secret",
+        "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
         return_value=mock_config,
     ):
         client = AtlanAuthClient()
@@ -39,7 +39,7 @@ async def test_credential_discovery_failure(auth_client: AtlanAuthClient) -> Non
     """Test credential discovery failure handling."""
     # Create an auth client with empty config
     with patch(
-        "application_sdk.clients.atlan_auth.SecretStoreInput.get_deployment_secret",
+        "application_sdk.clients.atlan_auth.SecretStore.get_deployment_secret",
         return_value={},  # Empty config means no credentials
     ):
         auth_client_no_fallback = AtlanAuthClient()

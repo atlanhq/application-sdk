@@ -21,9 +21,9 @@ from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.atlan_storage import AtlanStorageOutput
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
+from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
 
@@ -540,7 +540,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
         )
-        upload_stats = await AtlanStorageOutput.migrate_from_objectstore_to_atlan(
+        upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(
             prefix=migration_prefix
         )
 

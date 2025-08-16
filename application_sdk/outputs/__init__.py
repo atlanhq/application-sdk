@@ -24,7 +24,7 @@ from temporalio import activity
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -224,8 +224,9 @@ class Output(ABC):
                 f.write(orjson.dumps(statistics).decode("utf-8"))
 
             # Push the file to the object store
-            await ObjectStoreOutput.push_file_to_object_store(
-                self.output_prefix, output_file_name
+            await ObjectStore.upload(
+                source=output_file_name,
+                destination=f"{self.output_prefix}/statistics.json.ignore",
             )
             return statistics
         except Exception as e:

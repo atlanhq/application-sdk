@@ -1,14 +1,12 @@
 """Utilities for credential providers."""
 
-import asyncio
 import copy
-from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
 
 from application_sdk.common.error_codes import CommonError
-from application_sdk.inputs.secretstore import SecretStoreInput
-from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.secretstore import SecretStore
+from application_sdk.services.statestore import StateStore, StateType
 
 logger = get_logger(__name__)
 
@@ -27,15 +25,15 @@ async def get_credentials(credential_guid: str) -> Dict[str, Any]:
         CommonError: If credential resolution fails
     """
 
-    def _get_credentials_sync(credential_guid: str) -> Dict[str, Any]:
-        """Synchronous helper function to perform blocking I/O operations."""
-        credential_config = StateStoreInput.get_state(
+    async def _get_credentials_async(credential_guid: str) -> Dict[str, Any]:
+        """Async helper function to perform async I/O operations."""
+        credential_config = await StateStore.get_state(
             credential_guid, StateType.CREDENTIALS
         )
 
         # Fetch secret data from secret store
         secret_key = credential_config.get("secret-path", credential_guid)
-        secret_data = SecretStoreInput.get_secret(secret_key=secret_key)
+        secret_data = SecretStore.get_secret(secret_key=secret_key)
 
         # Resolve credentials
         credential_source = credential_config.get("credentialSource", "direct")
@@ -46,12 +44,8 @@ async def get_credentials(credential_guid: str) -> Dict[str, Any]:
             return resolve_credentials(credential_config, secret_data)
 
     try:
-        # Run blocking I/O operations in a thread pool to avoid blocking the event loop
-        loop = asyncio.get_running_loop()
-        with ThreadPoolExecutor() as pool:
-            return await loop.run_in_executor(
-                pool, _get_credentials_sync, credential_guid
-            )
+        # Run async operations directly
+        return await _get_credentials_async(credential_guid)
     except Exception as e:
         logger.error(f"Error resolving credentials: {str(e)}")
         raise CommonError(

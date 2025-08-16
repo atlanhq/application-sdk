@@ -42,12 +42,10 @@ from application_sdk.events.models import (
     EventTypes,
     WorkflowStates,
 )
-from application_sdk.inputs.secretstore import SecretStoreInput
-from application_sdk.inputs.statestore import StateType
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.eventstore import EventStore
-from application_sdk.outputs.secretstore import SecretStoreOutput
-from application_sdk.outputs.statestore import StateStoreOutput
+from application_sdk.services.eventstore import EventStore
+from application_sdk.services.secretstore import SecretStore
+from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -269,9 +267,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
-        self.deployment_config: Dict[str, Any] = (
-            SecretStoreInput.get_deployment_secret()
-        )
+        self.deployment_config: Dict[str, Any] = SecretStore.get_deployment_secret()
         self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
 
@@ -426,7 +422,7 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = await SecretStoreOutput.save_secret(
+            workflow_args["credential_guid"] = await SecretStore.save_secret(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
@@ -442,7 +438,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             )
 
-            await StateStoreOutput.save_state_object(
+            await StateStore.save_state_object(
                 id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
             logger.info(f"Created workflow config with ID: {workflow_id}")

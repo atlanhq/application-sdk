@@ -8,7 +8,7 @@ from temporalio import activity
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -285,10 +285,8 @@ class JsonOutput(Output):
                 description="Number of records written to JSON files from daft DataFrame",
             )
 
-            # Push the file to the object store
-            await ObjectStoreOutput.push_files_to_object_store(
-                self.output_prefix, self.output_path
-            )
+            # Push files to the object store
+            await ObjectStore.upload(self.output_path, self.output_prefix)
 
         except Exception as e:
             # Record metrics for failed write
@@ -344,9 +342,7 @@ class JsonOutput(Output):
                 )
 
                 # Push the file to the object store
-                await ObjectStoreOutput.push_file_to_object_store(
-                    self.output_prefix, output_file_name
-                )
+                await ObjectStore.upload(output_file_name, self.output_prefix)
 
             self.buffer.clear()
             self.current_buffer_size = 0

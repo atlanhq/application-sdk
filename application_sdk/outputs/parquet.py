@@ -6,7 +6,7 @@ from temporalio import activity
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -242,16 +242,12 @@ class ParquetOutput(Output):
                 logger.info(
                     f"Uploading files: {local_file_path} to {self.output_prefix}"
                 )
-                await ObjectStoreOutput.push_files_to_object_store(
-                    self.output_prefix, local_file_path
-                )
+                await ObjectStore.upload(local_file_path, self.output_prefix)
             else:
                 logger.info(
                     f"Uploading file: {local_file_path} to {self.output_prefix}"
                 )
-                await ObjectStoreOutput.push_file_to_object_store(
-                    self.output_prefix, local_file_path
-                )
+                await ObjectStore.upload(local_file_path, self.output_prefix)
         except Exception as e:
             # Record metrics for failed upload
             self.metrics.record_metric(

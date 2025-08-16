@@ -7,6 +7,7 @@ import pytest
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.handlers import HandlerInterface
+from application_sdk.services.statestore import StateType
 
 
 class MockHandler(HandlerInterface):
@@ -181,7 +182,7 @@ class TestActivitiesInterfaceActivities:
     @patch("application_sdk.activities.build_output_path")
     @patch("application_sdk.activities.get_workflow_run_id")
     @patch("application_sdk.activities.get_workflow_id")
-    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
+    @patch("application_sdk.services.statestore.StateStore.get_state")
     async def test_get_workflow_args_success(
         self,
         mock_get_state,
@@ -206,8 +207,6 @@ class TestActivitiesInterfaceActivities:
         assert "output_prefix" in result
         assert "output_path" in result
 
-        from application_sdk.inputs.statestore import StateType
-
         mock_get_state.assert_called_once_with("test-123", StateType.WORKFLOWS)
 
     @patch("application_sdk.activities.build_output_path")
@@ -230,7 +229,7 @@ class TestActivitiesInterfaceActivities:
     @patch("application_sdk.activities.build_output_path")
     @patch("application_sdk.activities.get_workflow_run_id")
     @patch("application_sdk.activities.get_workflow_id")
-    @patch("application_sdk.inputs.statestore.StateStoreInput.get_state")
+    @patch("application_sdk.services.statestore.StateStore.get_state")
     async def test_get_workflow_args_extraction_error(
         self,
         mock_get_state,
