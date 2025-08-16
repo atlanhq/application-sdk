@@ -13,7 +13,7 @@ from application_sdk.inputs.statestore import (
     build_state_store_path,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -38,7 +38,7 @@ class StateStoreOutput:
         """
         try:
             # get the current state from object store
-            current_state = StateStoreInput.get_state(id, type)
+            current_state = await StateStoreInput.get_state(id, type)
             state_file_path = build_state_store_path(id, type)
 
             # update the state with the new value
@@ -52,10 +52,10 @@ class StateStoreOutput:
                 json.dump(current_state, file)
 
             # save the state to the object store
-            await ObjectStoreOutput.push_file_to_object_store(
-                output_prefix=TEMPORARY_PATH,
-                file_path=local_state_file_path,
-                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+            await ObjectStore.upload(
+                source=local_state_file_path,
+                destination=state_file_path,
+                store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
         except Exception as e:
@@ -87,7 +87,7 @@ class StateStoreOutput:
         try:
             logger.info(f"Saving state object for {id} with type {type}")
             # get the current state from object store
-            current_state = StateStoreInput.get_state(id, type)
+            current_state = await StateStoreInput.get_state(id, type)
             state_file_path = build_state_store_path(id, type)
 
             # update the state with the new value
@@ -101,10 +101,10 @@ class StateStoreOutput:
                 json.dump(current_state, file)
 
             # save the state to the object store
-            await ObjectStoreOutput.push_file_to_object_store(
-                output_prefix=TEMPORARY_PATH,
-                file_path=local_state_file_path,
-                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+            await ObjectStore.upload(
+                source=local_state_file_path,
+                destination=state_file_path,
+                store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
             logger.info(f"State object saved for {id} with type {type}")
             return current_state

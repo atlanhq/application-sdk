@@ -13,8 +13,8 @@ from application_sdk.constants import (
     TEMPORARY_PATH,
     UPSTREAM_OBJECT_STORE_NAME,
 )
-from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -50,7 +50,7 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
 
 class StateStoreInput:
     @classmethod
-    def get_state(cls, id: str, type: StateType) -> Dict[str, Any]:
+    async def get_state(cls, id: str, type: StateType) -> Dict[str, Any]:
         """Get state from the store.
 
         Args:
@@ -78,10 +78,10 @@ class StateStoreInput:
         try:
             logger.info(f"Trying to download state object for {id} with type {type}")
             local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
-            ObjectStoreInput.download_file_from_object_store(
-                download_file_prefix=TEMPORARY_PATH,
-                file_path=local_state_file_path,
-                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+            await ObjectStore.download(
+                source=state_file_path,
+                destination=local_state_file_path,
+                store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
             with open(local_state_file_path, "r") as file:

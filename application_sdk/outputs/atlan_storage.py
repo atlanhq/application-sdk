@@ -11,8 +11,8 @@ from application_sdk.constants import (
     DEPLOYMENT_OBJECT_STORE_NAME,
     UPSTREAM_OBJECT_STORE_NAME,
 )
-from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -62,8 +62,8 @@ class AtlanStorageOutput:
         """
         try:
             # Get file data from objectstore
-            file_data = ObjectStoreInput.get_file_data(
-                file_path, object_store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            file_data = await ObjectStore.get_content(
+                file_path, store_name=DEPLOYMENT_OBJECT_STORE_NAME
             )
 
             with DaprClient() as client:
@@ -106,8 +106,8 @@ class AtlanStorageOutput:
             )
 
             # Get list of all files to migrate from objectstore
-            files_to_migrate = ObjectStoreInput.list_all_files(
-                prefix, object_store_name=DEPLOYMENT_OBJECT_STORE_NAME
+            files_to_migrate = await ObjectStore.list_files(
+                prefix, store_name=DEPLOYMENT_OBJECT_STORE_NAME
             )
 
             total_files = len(files_to_migrate)
