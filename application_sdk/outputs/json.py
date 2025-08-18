@@ -32,7 +32,7 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
     if chunk_start is None:
         return f"{str(chunk_count)}.json"
     else:
-        return f"{str(chunk_start+chunk_count)}.json"
+        return f"{chunk_start}-{chunk_count}.json"
 
 
 def convert_datetime_to_epoch(data: Any) -> Any:
@@ -270,45 +270,19 @@ class JsonOutput(Output):
                     row, preserve_fields, null_to_empty_dict_fields
                 )
                 # Serialize the row and add it to the buffer
-                buffer.append(
-                    orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
-                        "utf-8"
-                    )
-                )
-
-            # If the buffer reaches the specified size, write it to the file
-            if self.chunk_size and len(buffer) >= self.chunk_size:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()  # Clear the buffer
-
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                serialized_row = orjson.dumps(
+                    cleaned_row, option=orjson.OPT_APPEND_NEWLINE
+                ).decode("utf-8")
+                buffer.append(serialized_row)
+                self.current_buffer_size_bytes += len(serialized_row)
+                if (self.chunk_size and len(buffer) >= self.chunk_size) or (
+                    self.current_buffer_size_bytes > self.max_file_size_bytes
+                ):
+                    await self.flush_daft_buffer(buffer)
 
             # Write any remaining rows in the buffer
             if buffer:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()
-
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                await self.flush_daft_buffer(buffer)
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -334,6 +308,32 @@ class JsonOutput(Output):
                 description="Number of errors while writing to JSON files",
             )
             logger.error(f"Error writing daft dataframe to json: {str(e)}")
+
+    async def flush_daft_buffer(self, buffer: List[str]):
+        """Flush the current buffer to a JSON file.
+
+        This method combines all DataFrames in the buffer, writes them to a JSON file,
+        and uploads the file to the object store.
+        """
+        self.chunk_count += 1
+        output_file_name = (
+            f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+        )
+        with open(output_file_name, "w") as f:
+            f.writelines(buffer)
+        buffer.clear()  # Clear the buffer
+
+        self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0
+
+        # Record chunk metrics
+        self.metrics.record_metric(
+            name="json_chunks_written",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels={"type": "daft"},
+            description="Number of chunks written to JSON files",
+        )
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
