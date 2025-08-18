@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 import orjson
 from temporalio import activity
 
+from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -286,7 +287,10 @@ class JsonOutput(Output):
             )
 
             # Push files to the object store
-            await ObjectStore.upload(self.output_path, self.output_prefix)
+            await ObjectStore.upload_prefix(
+                source=self.output_path,
+                destination=os.path.relpath(self.output_path, TEMPORARY_PATH),
+            )
 
         except Exception as e:
             # Record metrics for failed write
@@ -342,7 +346,10 @@ class JsonOutput(Output):
                 )
 
                 # Push the file to the object store
-                await ObjectStore.upload(output_file_name, self.output_prefix)
+                await ObjectStore.upload_file(
+                    source=output_file_name,
+                    destination=os.path.relpath(output_file_name, TEMPORARY_PATH),
+                )
 
             self.buffer.clear()
             self.current_buffer_size = 0

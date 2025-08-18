@@ -411,7 +411,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             f.write(last_marker)
 
         logger.info(f"Last marker: {last_marker}")
-        await ObjectStore.upload(
+        await ObjectStore.upload_file(
             source=marker_file_path,
             destination=f"{workflow_args['output_prefix']}/markerfile",
             store_name=UPSTREAM_OBJECT_STORE_NAME,
@@ -443,7 +443,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
             os.makedirs(workflow_args["output_prefix"], exist_ok=True)
 
-            await ObjectStore.download(
+            await ObjectStore.download_file(
                 source=f"{workflow_args['output_prefix']}/markerfile",
                 destination=marker_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
@@ -521,7 +521,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
 
-        await ObjectStore.upload(
+        await ObjectStore.upload_file(
             source=metadata_file_path,
             destination=f"{workflow_args['output_prefix']}/raw/query/metadata.json.ignore",
         )

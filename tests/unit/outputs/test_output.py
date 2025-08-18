@@ -1,5 +1,6 @@
 """Unit tests for output interface."""
 
+import os
 from typing import Any
 from unittest.mock import AsyncMock, mock_open, patch
 
@@ -108,12 +109,14 @@ class TestOutput:
         self.output.total_record_count = 100
         self.output.chunk_count = 5
 
-        # Mock the open function, orjson.dumps, and push_file_to_object_store
+        # Mock the open function, orjson.dumps, and object store upload
         with patch("builtins.open", mock_open()) as mock_file, patch(
             "orjson.dumps",
             return_value=b'{"total_record_count": 100, "chunk_count": 5}',
         ) as mock_orjson, patch(
-            "application_sdk.services.objectstore.ObjectStore.upload",
+            "application_sdk.outputs.TEMPORARY_PATH", "/test"
+        ), patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
             new_callable=AsyncMock,
         ) as mock_push:
             # Call the method
@@ -125,9 +128,13 @@ class TestOutput:
             mock_orjson.assert_called_once_with(
                 {"total_record_count": 100, "chunk_count": 5}
             )
-            mock_push.assert_awaited_once_with(
-                source="/test/path/statistics.json.ignore",
-                destination="/test/prefix/statistics.json.ignore",
+            # Verify the upload call with OS-agnostic path comparison
+            mock_push.assert_awaited()
+            upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
+            assert upload_kwargs["source"] == "/test/path/statistics.json.ignore"
+            expected_dest = os.path.join("path", "statistics.json.ignore")
+            assert os.path.normpath(upload_kwargs["destination"]) == os.path.normpath(
+                expected_dest
             )
 
     @pytest.mark.asyncio

@@ -35,7 +35,7 @@ def mock_dapr_output_client() -> Generator[Mock, None, None]:
     ) as mock_state_output, patch(
         "application_sdk.services.statestore.StateStore.get_state"
     ) as mock_get_state, patch(
-        "application_sdk.services.objectstore.ObjectStore.upload"
+        "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push_file:
         mock_state_output.save_state = AsyncMock()
         mock_state_output.save_state_object = AsyncMock()

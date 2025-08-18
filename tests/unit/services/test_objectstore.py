@@ -22,7 +22,7 @@ class TestObjectStore:
         ), patch("os.path.isfile", return_value=True), patch(
             "application_sdk.services.objectstore.ObjectStore._cleanup_local_path"
         ) as mock_cleanup:
-            await ObjectStore.upload(
+            await ObjectStore.upload_file(
                 source="/tmp/test.txt",
                 destination="/prefix/test.txt",
             )
@@ -43,7 +43,7 @@ class TestObjectStore:
             mock_isdir.return_value = True
             mock_walk.return_value = [("/input", [], ["file1.txt", "file2.txt"])]
 
-            await ObjectStore.upload(
+            await ObjectStore.upload_prefix(
                 source="/input",
                 destination="/prefix",
             )
@@ -60,7 +60,7 @@ class TestObjectStore:
         with patch("builtins.open", mock_open()) as m, patch(
             "os.path.exists", return_value=True
         ), patch("os.path.dirname", return_value="/tmp"):
-            await ObjectStore.download(
+            await ObjectStore.download_file(
                 source="/prefix/test.txt",
                 destination="/tmp/test.txt",
             )

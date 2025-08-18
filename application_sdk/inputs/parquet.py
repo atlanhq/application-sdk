@@ -2,6 +2,7 @@ import glob
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
+from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.inputs import Input
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
@@ -58,9 +59,15 @@ class ParquetInput(Input):
                     f"Reading file from object store: {local_file_path} from {self.input_prefix}"
                 )
                 if os.path.isdir(local_file_path):
-                    await ObjectStore.download(self.input_prefix, local_file_path)
+                    await ObjectStore.download_prefix(
+                        source=os.path.relpath(local_file_path, TEMPORARY_PATH),
+                        destination=local_file_path,
+                    )
                 else:
-                    await ObjectStore.download(self.input_prefix, local_file_path)
+                    await ObjectStore.download_file(
+                        source=os.path.relpath(local_file_path, TEMPORARY_PATH),
+                        destination=local_file_path,
+                    )
             else:
                 raise ValueError(
                     f"No parquet files found in {local_file_path} and no input prefix provided"

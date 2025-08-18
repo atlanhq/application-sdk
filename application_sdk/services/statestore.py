@@ -41,7 +41,7 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
 
     Example:
         >>> build_state_store_path("wf-123", "workflows")
-        'persistent-artifacts/apps/my-app/workflows/wf-123/config.json'
+        'persistent-artifacts/apps/appName/workflows/wf-123/config.json'
     """
     return STATE_STORE_PATH_TEMPLATE.format(
         application_name=APPLICATION_NAME, state_type=state_type.value, id=id
@@ -80,7 +80,7 @@ class StateStore:
         try:
             logger.info(f"Trying to download state object for {id} with type {type}")
             local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
-            await ObjectStore.download(
+            await ObjectStore.download_file(
                 source=state_file_path,
                 destination=local_state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
@@ -134,7 +134,7 @@ class StateStore:
                 json.dump(current_state, file)
 
             # save the state to the object store
-            await ObjectStore.upload(
+            await ObjectStore.upload_file(
                 source=local_state_file_path,
                 destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
@@ -183,7 +183,7 @@ class StateStore:
                 json.dump(current_state, file)
 
             # save the state to the object store
-            await ObjectStore.upload(
+            await ObjectStore.upload_file(
                 source=local_state_file_path,
                 destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
