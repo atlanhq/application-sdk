@@ -51,7 +51,12 @@ class ParquetInput(Input):
         Returns:
             Optional[str]: Path to the downloaded local file.
         """
-        parquet_files = glob.glob(local_file_path)
+        # if the path is a directory, then check if the directory has any parquet files
+        parquet_files = []
+        if os.path.isdir(local_file_path):
+            parquet_files = glob.glob(os.path.join(local_file_path, "*.parquet"))
+        else:
+            parquet_files = glob.glob(local_file_path)
         if not parquet_files:
             if self.input_prefix:
                 logger.info(
@@ -163,8 +168,8 @@ class ParquetInput(Input):
                         yield daft.read_parquet(path)
             else:
                 path = f"{self.path}/*.parquet"
-                if self.input_prefix and path:
-                    await self.download_files(path)
+                if self.path and self.input_prefix and path:
+                    await self.download_files(self.path)
                 yield daft.read_parquet(path)
 
         except Exception as error:
