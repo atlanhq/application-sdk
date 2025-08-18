@@ -18,11 +18,9 @@ activity.logger = logger
 class GenericMetadataExtractionActivitiesState(ActivitiesState):
     """State for generic metadata extraction activities."""
 
-    def __init__(self):
-        """Initialize the state."""
-        self.client: Optional[GenericClient] = None
-        self.handler: Optional[GenericHandler] = None
-        self.transformer: Optional[TransformerInterface] = None
+    client: Optional[Type[GenericClient]] = None
+    handler: Optional[Type[GenericHandler]] = None
+    transformer: Optional[Type[TransformerInterface]] = None
 
 
 class GenericMetadataExtractionActivities(ActivitiesInterface):
