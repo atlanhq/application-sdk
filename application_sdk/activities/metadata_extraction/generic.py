@@ -72,7 +72,6 @@ class GenericMetadataExtractionActivities(ActivitiesInterface):
 
         # Initialize client
         client = self.client_class()
-        credentials = {}
         # Extract credentials from state store if credential_guid is available
         if "credential_guid" in workflow_args:
             logger.info(
@@ -83,6 +82,8 @@ class GenericMetadataExtractionActivities(ActivitiesInterface):
                 logger.info(
                     f"Successfully retrieved credentials with keys: {list(credentials.keys())}"
                 )
+                # Load the client with credentials
+                await client.load(credentials=credentials)
             except Exception as e:
                 logger.error(f"Failed to retrieve credentials: {e}")
                 raise
