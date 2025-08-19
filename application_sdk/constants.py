@@ -190,3 +190,23 @@ ENABLE_OBSERVABILITY_DAPR_SINK = (
 
 # Lock Configuration
 LOCK_METADATA_KEY = "__lock_metadata__"
+
+# Redis Lock Configuration
+#: Redis host for direct connection (when not using Sentinel)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+#: Redis port for direct connection (when not using Sentinel)
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+#: Redis database number
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+#: Redis password
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+#: Redis Sentinel service name
+REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
+#: Redis Sentinel hosts (comma-separated host:port pairs)
+REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
+#: Redis connection pool size
+REDIS_CONNECTION_POOL_SIZE = int(os.getenv("REDIS_CONNECTION_POOL_SIZE", "10"))
+#: Redis socket timeout in seconds
+REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", "5.0"))
+#: Redis health check interval in seconds
+REDIS_HEALTH_CHECK_INTERVAL = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))

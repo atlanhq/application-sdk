@@ -22,7 +22,7 @@ from application_sdk.constants import (
 )
 from application_sdk.inputs.statestore import StateType
 from application_sdk.interceptors.events import EventInterceptor
-from application_sdk.interceptors.locks import LockInterceptor
+from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.secretstore import SecretStoreOutput
 from application_sdk.outputs.statestore import StateStoreOutput
@@ -260,6 +260,9 @@ class TemporalWorkflowClient(WorkflowClient):
                 thread_name_prefix="activity-pool-",
             )
 
+        # Convert activities sequence to dict for metadata lookup
+        activities_dict = {getattr(a, "__name__", str(a)): a for a in activities}
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
@@ -274,7 +277,7 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor=activity_executor,
             interceptors=[
                 EventInterceptor(),
-                LockInterceptor(),
+                RedisLockInterceptor(activities_dict),
             ],
         )
 
