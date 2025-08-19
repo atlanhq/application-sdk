@@ -931,3 +931,72 @@ class TestParseFilterInput:
 
         with pytest.raises(CommonError, match="Invalid filter JSON"):
             parse_filter_input("not json at all")
+
+
+class TestSendHeartbeat:
+    """Test cases for send_heartbeat function."""
+
+    @patch("temporalio.activity", autospec=True)
+    def test_send_heartbeat_success(self, mock_activity):
+        """Test successful heartbeat sending."""
+        from application_sdk.common.utils import send_heartbeat
+
+        send_heartbeat()
+
+        mock_activity.heartbeat.assert_called_once()
+
+    @patch("temporalio.activity", autospec=True)
+    def test_send_heartbeat_runtime_error(self, mock_activity):
+        """Test heartbeat sending when RuntimeError occurs."""
+        from application_sdk.common.utils import send_heartbeat
+
+        mock_activity.heartbeat.side_effect = RuntimeError("No activity context")
+
+        # Should not raise exception
+        send_heartbeat()
+
+    @patch("temporalio.activity", autospec=True)
+    def test_send_heartbeat_queue_full(self, mock_activity):
+        """Test heartbeat sending when queue is full."""
+        import asyncio
+
+        from application_sdk.common.utils import send_heartbeat
+
+        mock_activity.heartbeat.side_effect = asyncio.QueueFull()
+
+        # Should not raise exception
+        send_heartbeat()
+
+    @patch("temporalio.activity", autospec=True)
+    def test_send_heartbeat_import_error(self, mock_activity):
+        """Test heartbeat sending when temporalio import fails."""
+        from application_sdk.common.utils import send_heartbeat
+
+        # Mock import error by making activity raise ImportError
+        mock_activity.heartbeat.side_effect = ImportError("temporalio not available")
+
+        # Should not raise exception
+        send_heartbeat()
+
+    def test_send_heartbeat_no_temporalio(self):
+        """Test heartbeat sending when temporalio is not available."""
+        from application_sdk.common.utils import send_heartbeat
+
+        # Mock the import to fail
+        with patch(
+            "builtins.__import__",
+            side_effect=ImportError("No module named 'temporalio'"),
+        ):
+            # Should not raise exception
+            send_heartbeat()
+
+    @patch("temporalio.activity", autospec=True)
+    def test_send_heartbeat_multiple_calls(self, mock_activity):
+        """Test multiple heartbeat calls."""
+        from application_sdk.common.utils import send_heartbeat
+
+        send_heartbeat()
+        send_heartbeat()
+        send_heartbeat()
+
+        assert mock_activity.heartbeat.call_count == 3
