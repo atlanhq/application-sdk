@@ -122,4 +122,4 @@ class ObjectStoreOutput:
             logger.error(
                 f"An unexpected error occurred while pushing files to object store: {str(e)}"
             )
-            raise e
+            pass
