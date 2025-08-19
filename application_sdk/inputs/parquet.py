@@ -167,10 +167,9 @@ class ParquetInput(Input):
                         await self.download_files(path)
                         yield daft.read_parquet(path)
             else:
-                path = f"{self.path}/*.parquet"
-                if self.path and self.input_prefix and path:
+                if self.path and self.input_prefix:
                     await self.download_files(self.path)
-                yield daft.read_parquet(path)
+                    yield daft.read_parquet(f"{self.path}/*.parquet")
 
         except Exception as error:
             logger.error(

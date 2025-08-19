@@ -676,7 +676,9 @@ async def test_get_batched_daft_dataframe_no_input_prefix(monkeypatch) -> None:
 
     frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-    expected_frames = ["daft_df:/data/*.parquet"]
+    # When there's no input_prefix, the method doesn't yield anything
+    expected_frames = []
 
     assert frames == expected_frames
-    assert call_log == [{"path": "/data/*.parquet"}]
+    # No calls to daft.read_parquet should be made when there's no input_prefix
+    assert call_log == []
