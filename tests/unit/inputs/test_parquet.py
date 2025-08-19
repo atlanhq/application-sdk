@@ -1,4 +1,5 @@
 # Added os import for path manipulations used in new tests
+import os
 from typing import Any, Dict
 from unittest.mock import patch
 
@@ -186,7 +187,7 @@ async def test_download_files_directory_with_existing_parquet_files() -> None:
         result = await parquet_input.download_files(path)
 
         # Should check for files in directory
-        mock_glob.assert_called_once_with("/local/directory/*.parquet")
+        mock_glob.assert_called_once_with(os.path.join("/local/directory", "*.parquet"))
         # Should not download since files exist
         mock_download_files.assert_not_called()
         assert result is None
@@ -292,7 +293,9 @@ async def test_download_files_glob_patterns() -> None:
         await parquet_input.download_files(directory_path)
 
         # Should use *.parquet pattern for directories
-        mock_glob.assert_called_once_with("/data/parquet_files/*.parquet")
+        mock_glob.assert_called_once_with(
+            os.path.join("/data/parquet_files", "*.parquet")
+        )
 
     # Test file glob pattern
     file_path = "/data/specific_file.parquet"
