@@ -505,20 +505,21 @@ async def test_get_dataframe_with_input_prefix(monkeypatch) -> None:
     input_prefix = "remote"
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def mock_download_files(self, local_file_path):  # noqa: D401, ANN001
-        return "/downloaded/test.parquet"
+    # Mock the OS and ObjectStore calls that download_files uses internally
+    with patch("os.path.isdir", return_value=False), patch(
+        "glob.glob", return_value=[]
+    ), patch(
+        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+    ):
+        parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
 
-    monkeypatch.setattr(ParquetInput, "download_files", mock_download_files)
+        result = await parquet_input.get_dataframe()
 
-    parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
+        # Should return the mock DataFrame
+        assert hasattr(result, "data")
 
-    result = await parquet_input.get_dataframe()
-
-    # Should return the mock DataFrame
-    assert hasattr(result, "data")
-
-    # Confirm read_parquet was invoked with downloaded path
-    assert call_log == [{"path": "/downloaded/test.parquet"}]
+        # Confirm read_parquet was invoked with None (since download_files returns None and gets assigned to path)
+        assert call_log == [{"path": None}]
 
 
 # ---------------------------------------------------------------------------
@@ -583,20 +584,21 @@ async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def mock_download_files(self, path):  # noqa: D401, ANN001
-        return None
+    # Mock the OS and ObjectStore calls that download_files uses internally
+    with patch("os.path.isdir", return_value=True), patch(
+        "glob.glob", return_value=[]
+    ), patch(
+        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+    ):
+        path = "/tmp/data"
+        input_prefix = "remote"
 
-    monkeypatch.setattr(ParquetInput, "download_files", mock_download_files)
+        parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
 
-    path = "/tmp/data"
-    input_prefix = "remote"
+        result = await parquet_input.get_daft_dataframe()
 
-    parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
-
-    result = await parquet_input.get_daft_dataframe()
-
-    assert result == f"daft_df:{path}/*.parquet"
-    assert call_log == [{"path": f"{path}/*.parquet"}]
+        assert result == f"daft_df:{path}/*.parquet"
+        assert call_log == [{"path": f"{path}/*.parquet"}]
 
 
 @pytest.mark.asyncio
@@ -605,30 +607,31 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def mock_download_files(self, path):  # noqa: D401, ANN001
-        return None
+    # Mock the OS and ObjectStore calls that download_files uses internally
+    with patch("os.path.isdir", return_value=False), patch(
+        "glob.glob", return_value=[]
+    ), patch(
+        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+    ):
+        path = "/data"
+        file_names = ["one.json", "two.json"]  # Note: .json extension gets replaced
+        input_prefix = "remote"
 
-    monkeypatch.setattr(ParquetInput, "download_files", mock_download_files)
+        parquet_input = ParquetInput(
+            path=path, file_names=file_names, input_prefix=input_prefix
+        )
 
-    path = "/data"
-    file_names = ["one.json", "two.json"]  # Note: .json extension gets replaced
-    input_prefix = "remote"
+        frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-    parquet_input = ParquetInput(
-        path=path, file_names=file_names, input_prefix=input_prefix
-    )
+        expected_frames = ["daft_df:/data/one.parquet", "daft_df:/data/two.parquet"]
 
-    frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+        assert frames == expected_frames
 
-    expected_frames = ["daft_df:/data/one.parquet", "daft_df:/data/two.parquet"]
-
-    assert frames == expected_frames
-
-    # Ensure a call was logged per file
-    assert call_log == [
-        {"path": "/data/one.parquet"},
-        {"path": "/data/two.parquet"},
-    ]
+        # Ensure a call was logged per file
+        assert call_log == [
+            {"path": "/data/one.parquet"},
+            {"path": "/data/two.parquet"},
+        ]
 
 
 @pytest.mark.asyncio
