@@ -78,6 +78,7 @@ jobs:
           BRANCH_PREFIX: docs
           HEAD_REF: ${{ github.head_ref }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: |
           echo "changes_published=false" >> "$GITHUB_OUTPUT"
 
@@ -105,7 +106,7 @@ jobs:
       - name: Post or update PR comment
         if: steps.publish_docs.outputs.changes_published == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           BRANCH_PREFIX: docs
           REPO: ${{ github.repository }}
           BASE_REF: ${{ github.base_ref }}
