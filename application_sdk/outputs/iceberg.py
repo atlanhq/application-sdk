@@ -29,6 +29,7 @@ class IcebergOutput(Output):
         mode: str = "append",
         total_record_count: int = 0,
         chunk_count: int = 0,
+        chunk_size: int = 100000,
     ):
         """Initialize the Iceberg output class.
 
@@ -39,6 +40,7 @@ class IcebergOutput(Output):
             mode (str, optional): Write mode for the iceberg table. Defaults to "append".
             total_record_count (int, optional): Total record count written to the iceberg table. Defaults to 0.
             chunk_count (int, optional): Number of chunks written to the iceberg table. Defaults to 0.
+            chunk_size (int, optional): Number of records per chunk. Defaults to 100000.
         """
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
@@ -47,6 +49,7 @@ class IcebergOutput(Output):
         self.iceberg_table = iceberg_table
         self.mode = mode
         self.metrics = get_metrics()
+        self.chunk_size = chunk_size
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """
@@ -57,9 +60,11 @@ class IcebergOutput(Output):
 
             if len(dataframe) == 0:
                 return
-            # convert the pandas dataframe to a daft dataframe
-            daft_dataframe = daft.from_pandas(dataframe)
-            await self.write_daft_dataframe(daft_dataframe)
+            # convert the pandas dataframe to a daft dataframe in chunks
+            for i in range(0, len(dataframe), self.chunk_size):
+                chunk = dataframe[i : i + self.chunk_size]
+                daft_dataframe = daft.from_pandas(chunk)
+                await self.write_daft_dataframe(daft_dataframe)
 
             # Record metrics for successful write
             self.metrics.record_metric(

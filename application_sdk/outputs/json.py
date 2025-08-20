@@ -243,22 +243,22 @@ class JsonOutput(Output):
                     )
                 )
 
-            # If the buffer reaches the specified size, write it to the file
-            if self.chunk_size and len(buffer) >= self.chunk_size:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()  # Clear the buffer
+                # If the buffer reaches the specified size, write it to the file
+                if self.chunk_size and len(buffer) >= self.chunk_size:
+                    self.chunk_count += 1
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                    with open(output_file_name, "w") as f:
+                        f.writelines(buffer)
+                    buffer.clear()  # Clear the buffer
 
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                    # Record chunk metrics
+                    self.metrics.record_metric(
+                        name="json_chunks_written",
+                        value=1,
+                        metric_type=MetricType.COUNTER,
+                        labels={"type": "daft"},
+                        description="Number of chunks written to JSON files",
+                    )
 
             # Write any remaining rows in the buffer
             if buffer:
