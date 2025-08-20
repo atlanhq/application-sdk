@@ -1,6 +1,5 @@
 """Unit tests for output interface."""
 
-import os
 from typing import Any
 from unittest.mock import AsyncMock, mock_open, patch
 
@@ -114,7 +113,8 @@ class TestOutput:
             "orjson.dumps",
             return_value=b'{"total_record_count": 100, "chunk_count": 5}',
         ) as mock_orjson, patch(
-            "application_sdk.outputs.TEMPORARY_PATH", "/test"
+            "application_sdk.outputs.get_object_store_prefix",
+            return_value="path/statistics.json.ignore",
         ), patch(
             "application_sdk.services.objectstore.ObjectStore.upload_file",
             new_callable=AsyncMock,
@@ -128,14 +128,11 @@ class TestOutput:
             mock_orjson.assert_called_once_with(
                 {"total_record_count": 100, "chunk_count": 5}
             )
-            # Verify the upload call with OS-agnostic path comparison
-            mock_push.assert_awaited()
+            # Verify the upload call
+            mock_push.assert_awaited_once()
             upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
             assert upload_kwargs["source"] == "/test/path/statistics.json.ignore"
-            expected_dest = os.path.join("path", "statistics.json.ignore")
-            assert os.path.normpath(upload_kwargs["destination"]) == os.path.normpath(
-                expected_dest
-            )
+            assert upload_kwargs["destination"] == "path/statistics.json.ignore"
 
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):

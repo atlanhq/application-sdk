@@ -63,7 +63,8 @@ async def test_download_file_invoked_for_missing_files() -> None:
     file_names = ["a.json", "b.json"]
 
     with patch("os.path.exists", return_value=False) as mock_exists, patch(
-        "application_sdk.inputs.json.TEMPORARY_PATH", "/"
+        "application_sdk.inputs.json.get_object_store_prefix",
+        side_effect=lambda p: os.path.relpath(p, "/"),
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
@@ -76,11 +77,11 @@ async def test_download_file_invoked_for_missing_files() -> None:
         # One os.path.exists call per file
         assert mock_exists.call_count == len(file_names)
 
-        # Each file should be attempted to be downloaded
+        # Each file should be attempted to be downloaded - using keyword arguments format
         expected_calls = [
             call(
-                os.path.join(os.path.relpath(path, "/"), file_name),
-                os.path.join(path, file_name),
+                source=os.path.relpath(os.path.join(path, file_name), "/"),
+                destination=os.path.join(path, file_name),
             )
             for file_name in file_names
         ]
@@ -117,7 +118,8 @@ async def test_download_file_error_propagation() -> None:
 
     # Mock exists -> False so download attempted
     with patch("os.path.exists", return_value=False), patch(
-        "application_sdk.inputs.json.TEMPORARY_PATH", "/"
+        "application_sdk.inputs.json.get_object_store_prefix",
+        side_effect=lambda p: os.path.relpath(p, "/"),
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file",
         side_effect=SDKIOError("boom"),
