@@ -21,7 +21,6 @@ The services module provides unified interfaces for interacting with external st
    await ObjectStore.upload_file(source, destination, store_name=None)
    await ObjectStore.download_file(source, destination, store_name=None)
    content = await ObjectStore.get_content(key, store_name=None)
-   exists = await ObjectStore.exists(key, store_name=None)
 
    # Directory operations
    await ObjectStore.upload_prefix(source_dir, destination_prefix, store_name=None, recursive=True)
@@ -139,11 +138,6 @@ await ObjectStore.download_file(
     source="remote/data/file.json",
     destination="local/downloaded_file.json"
 )
-
-# Check if file exists
-exists = await ObjectStore.exists("remote/data/file.json")
-if exists:
-    print("File exists in object store")
 
 # Get file content directly
 content = await ObjectStore.get_content("remote/data/file.json")

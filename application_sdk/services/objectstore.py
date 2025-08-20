@@ -125,25 +125,6 @@ class ObjectStore:
             raise e
 
     @classmethod
-    async def exists(
-        cls, key: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
-    ) -> bool:
-        """Check if a file exists in the object store.
-
-        Args:
-            key: The path of the file in the object store.
-            store_name: Name of the Dapr object store binding to use.
-
-        Returns:
-            True if the file exists, False otherwise.
-        """
-        try:
-            await cls.get_content(key, store_name)
-            return True
-        except Exception:
-            return False
-
-    @classmethod
     async def delete(
         cls, key: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
     ) -> None:
@@ -210,6 +191,9 @@ class ObjectStore:
                 f"Error uploading file {destination} to object store: {str(e)}"
             )
             raise e
+        finally:
+            # Explicit cleanup to prevent memory leaks with large files
+            del file_content
 
         # Clean up local file after successful upload
         cls._cleanup_local_path(source)

@@ -425,8 +425,12 @@ class AtlanObservability(Generic[T], ABC):
                 # Merge with existing data if any
                 if existing_df is not None:
                     df = pd.concat([existing_df, new_df], ignore_index=True)
+                    # Explicit cleanup to prevent memory leaks with large DataFrames
+                    del existing_df
+                    del new_df
                 else:
                     df = new_df
+                    del new_df  # Still cleanup new_df reference
 
                 # Sort by timestamp to maintain order
                 df = df.sort_values("timestamp")
@@ -454,6 +458,8 @@ class AtlanObservability(Generic[T], ABC):
                             data=file_content,
                             binding_metadata=metadata,
                         )
+                    # Explicit cleanup to prevent memory leaks with large parquet files
+                    del file_content
 
             # Clean up old records if enabled
             if self._cleanup_enabled:
