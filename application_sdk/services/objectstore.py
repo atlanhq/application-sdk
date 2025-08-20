@@ -169,9 +169,20 @@ class ObjectStore:
         """Upload a single file to the object store.
 
         Args:
-            file_path: Local path to the file to upload.
-            store_key: Object store key where the file will be stored.
-            store_name: Name of the Dapr object store binding to use.
+            source (str): Local path to the file to upload.
+            destination (str): Object store key where the file will be stored.
+            store_name (str, optional): Name of the Dapr object store binding to use.
+                Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
+
+        Raises:
+            IOError: If the source file cannot be read.
+            Exception: If there's an error uploading to the object store.
+
+        Example:
+            >>> await ObjectStore.upload_file(
+            ...     source="/tmp/report.pdf",
+            ...     destination="reports/2024/january/report.pdf"
+            ... )
         """
         try:
             with open(source, "rb") as f:
@@ -214,9 +225,31 @@ class ObjectStore:
         """Upload all files from a directory to the object store.
 
         Args:
-            source: Local directory path containing files to upload.
-            destination: Object store prefix where files will be stored.
-            store_name: Name of the Dapr object store binding to use.
+            source (str): Local directory path containing files to upload.
+            destination (str): Object store prefix where files will be stored.
+            store_name (str, optional): Name of the Dapr object store binding to use.
+                Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
+            recursive (bool, optional): Whether to include subdirectories.
+                Defaults to True.
+
+        Raises:
+            ValueError: If the source path is not a valid directory.
+            Exception: If there's an error during the upload process.
+
+        Example:
+            >>> # Upload all files recursively
+            >>> await ObjectStore.upload_prefix(
+            ...     source="local/project/",
+            ...     destination="backups/project-v1/",
+            ...     recursive=True
+            ... )
+
+            >>> # Upload only root level files
+            >>> await ObjectStore.upload_prefix(
+            ...     source="local/logs/",
+            ...     destination="daily-logs/",
+            ...     recursive=False
+            ... )
         """
         if not os.path.isdir(source):
             raise ValueError(f"The provided path '{source}' is not a valid directory.")
@@ -254,9 +287,22 @@ class ObjectStore:
         """Download a single file from the object store.
 
         Args:
-            source: Object store key of the file to download.
-            destination: Local path where the file will be saved.
-            store_name: Name of the Dapr object store binding to use.
+            source (str): Object store key of the file to download.
+            destination (str): Local path where the file will be saved.
+            store_name (str, optional): Name of the Dapr object store binding to use.
+                Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
+
+        Raises:
+            Exception: If there's an error downloading from the object store.
+
+        Note:
+            The destination directory will be created automatically if it doesn't exist.
+
+        Example:
+            >>> await ObjectStore.download_file(
+            ...     source="reports/2024/january/report.pdf",
+            ...     destination="/tmp/downloaded_report.pdf"
+            ... )
         """
         # Ensure directory exists
 

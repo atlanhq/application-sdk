@@ -32,10 +32,32 @@ class EventStore:
 
     @classmethod
     def enrich_event_metadata(cls, event: Event):
-        """Enrich the event metadata with the workflow and activity information.
+        """Enrich the event metadata with workflow and activity context information.
+
+        This method automatically populates event metadata with context from the current
+        Temporal workflow and activity execution, including IDs, types, and execution state.
 
         Args:
-            event (Event): Event data.
+            event (Event): Event data to enrich with metadata.
+
+        Returns:
+            Event: The same event instance with enriched metadata.
+
+        Note:
+            This method safely handles cases where the code is not running within
+            a Temporal workflow or activity context.
+
+        Examples:
+            >>> from application_sdk.events.models import Event
+
+            >>> # Create basic event
+            >>> event = Event(event_type="data.processed", data={"count": 100})
+
+            >>> # Enrich with current context (if available)
+            >>> enriched = EventStore.enrich_event_metadata(event)
+            >>> print(f"Workflow ID: {enriched.metadata.workflow_id}")
+            >>> print(f"Activity: {enriched.metadata.activity_type}")
+            >>> print(f"Timestamp: {enriched.metadata.created_timestamp}")
         """
         if not event.metadata:
             event.metadata = EventMetadata()
@@ -70,10 +92,49 @@ class EventStore:
 
     @classmethod
     async def publish_event(cls, event: Event):
-        """Publish event with automatic fallback between pub/sub and HTTP binding.
+        """Publish event with automatic metadata enrichment and authentication.
+
+        This method handles the complete event publishing flow including metadata
+        enrichment, authentication header injection, and component availability validation.
+        It automatically falls back gracefully if the event store component is not available.
 
         Args:
             event (Event): Event data to publish.
+
+        Note:
+            The method will silently skip publishing if the event store component
+            is not registered, allowing applications to run without event publishing
+            capability.
+
+        Raises:
+            Exception: If there's an error during event publishing (logged but not re-raised).
+
+        Examples:
+            >>> from application_sdk.events.models import Event
+
+            >>> # Publish workflow status event
+            >>> status_event = Event(
+            ...     event_type="workflow.status_changed",
+            ...     data={
+            ...         "workflow_id": "wf-123",
+            ...         "old_status": "running",
+            ...         "new_status": "completed",
+            ...         "duration_seconds": 1800
+            ...     }
+            ... )
+            >>> await EventStore.publish_event(status_event)
+
+            >>> # Publish data processing event
+            >>> processing_event = Event(
+            ...     event_type="data.batch_processed",
+            ...     data={
+            ...         "batch_id": "batch-456",
+            ...         "records_processed": 10000,
+            ...         "success_count": 9995,
+            ...         "error_count": 5
+            ...     }
+            ... )
+            >>> await EventStore.publish_event(processing_event)
         """
         if not is_component_registered(EVENT_STORE_NAME):
             logger.warning(

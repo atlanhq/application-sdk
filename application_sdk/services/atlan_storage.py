@@ -1,4 +1,12 @@
-"""Atlan storage interface for upload operations and migration from objectstore."""
+"""Atlan storage service for upload operations and migration from object store.
+
+This module provides the AtlanStorage service for handling data migration between
+local object storage and Atlan's upstream storage system. It's specifically designed
+for the bucket cloning strategy used in customer-deployed applications.
+
+The service supports parallel file migration with comprehensive error handling and
+detailed reporting through the MigrationSummary model.
+"""
 
 import asyncio
 from typing import Dict, List
@@ -43,7 +51,6 @@ class MigrationSummary(BaseModel):
     destination: str = UPSTREAM_OBJECT_STORE_NAME
 
 
-# keeping any logic related to operations on atlan storage within this file.
 class AtlanStorage:
     """Handles upload operations to Atlan storage and migration from objectstore."""
 
@@ -51,14 +58,25 @@ class AtlanStorage:
 
     @classmethod
     async def _migrate_single_file(cls, file_path: str) -> tuple[str, bool, str]:
-        """
-        Migrate a single file from objectstore to Atlan storage.
+        """Migrate a single file from object store to Atlan storage.
+
+        This internal method handles the migration of a single file, including
+        error handling and logging. It's designed to be called concurrently
+        for multiple files.
 
         Args:
-            file_path (str): The path of the file to migrate
+            file_path (str): The path of the file to migrate in the object store.
 
         Returns:
-            tuple[str, bool, str]: (file_path, success, error_message)
+            tuple[str, bool, str]: A tuple containing:
+                - file_path: The path of the file that was processed
+                - success: Boolean indicating if migration was successful
+                - error_message: Error details if migration failed, empty string if successful
+
+        Note:
+            This method is internal and should not be called directly. Use
+            migrate_from_objectstore_to_atlan() instead for proper coordination
+            and error handling.
         """
         try:
             # Get file data from objectstore
@@ -91,14 +109,44 @@ class AtlanStorage:
     async def migrate_from_objectstore_to_atlan(
         cls, prefix: str = ""
     ) -> MigrationSummary:
-        """
-        Migrate all files from objectstore to Atlan storage under a given prefix.
+        """Migrate all files from object store to Atlan storage under a given prefix.
+
+        This method performs a parallel migration of files from the local object store
+        to Atlan's upstream storage system. It provides comprehensive error handling
+        and detailed reporting of the migration process.
 
         Args:
-            prefix (str): The prefix to filter which files to migrate. Empty string migrates all files.
+            prefix (str, optional): The prefix to filter which files to migrate.
+                Empty string migrates all files. Defaults to "".
 
         Returns:
-            MigrationSummary: Migration summary with counts and any failures
+            MigrationSummary: Comprehensive migration summary including:
+                - total_files: Number of files found for migration
+                - migrated_files: Number successfully migrated
+                - failed_migrations: Number that failed to migrate
+                - failures: List of failure details with file paths and errors
+                - prefix: The prefix used for filtering
+                - source/destination: Storage system identifiers
+
+        Raises:
+            Exception: If there's a critical error during the migration process.
+
+        Examples:
+            >>> # Migrate all files
+            >>> summary = await AtlanStorage.migrate_from_objectstore_to_atlan()
+            >>> print(f"Success rate: {summary.migrated_files/summary.total_files*100:.1f}%")
+
+            >>> # Migrate specific dataset
+            >>> summary = await AtlanStorage.migrate_from_objectstore_to_atlan(
+            ...     prefix="processed_data/2024/"
+            ... )
+            >>> if summary.total_files == 0:
+            ...     print("No files found with the specified prefix")
+            >>> elif summary.failed_migrations == 0:
+            ...     print(f"Successfully migrated all {summary.total_files} files")
+            >>> else:
+            ...     print(f"Migration completed with {summary.failed_migrations} failures")
+            ...     # Handle failures...
         """
         try:
             logger.info(

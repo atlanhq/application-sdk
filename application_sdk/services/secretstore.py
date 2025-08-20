@@ -28,17 +28,32 @@ class SecretStore:
 
     @classmethod
     async def get_credentials(cls, credential_guid: str) -> Dict[str, Any]:
-        """
-        Resolve credentials based on credential source.
+        """Resolve credentials based on credential source with automatic secret substitution.
+
+        This method retrieves credential configuration from the state store and resolves
+        any secret references by fetching actual values from the secret store.
 
         Args:
-            credential_guid: The GUID of the credential to resolve
+            credential_guid (str): The unique GUID of the credential configuration to resolve.
 
         Returns:
-            Dict with resolved credentials
+            Dict[str, Any]: Complete credential data with secrets resolved.
 
         Raises:
-            CommonError: If credential resolution fails
+            CommonError: If credential resolution fails due to missing configuration,
+                        secret store errors, or invalid credential format.
+
+        Examples:
+            >>> # Resolve database credentials
+            >>> creds = await SecretStore.get_credentials("db-cred-abc123")
+            >>> print(f"Connecting to {creds['host']}:{creds['port']}")
+            >>> # Password is automatically resolved from secret store
+
+            >>> # Handle resolution errors
+            >>> try:
+            ...     creds = await SecretStore.get_credentials("invalid-guid")
+            >>> except CommonError as e:
+            ...     logger.error(f"Failed to resolve credentials: {e}")
         """
 
         async def _get_credentials_async(credential_guid: str) -> Dict[str, Any]:
@@ -73,15 +88,32 @@ class SecretStore:
     def resolve_credentials(
         cls, credential_config: Dict[str, Any], secret_data: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """
-        Resolve credentials from secret data.
+        """Resolve credentials by substituting secret references with actual values.
+
+        This method processes credential configuration and replaces any reference
+        values with corresponding secrets from the secret data.
 
         Args:
-            credential_config: The credential configuration.
-            secret_data: The secret data.
+            credential_config (Dict[str, Any]): Base credential configuration with potential references.
+            secret_data (Dict[str, Any]): Secret data containing actual secret values.
 
         Returns:
-            The resolved credentials.
+            Dict[str, Any]: Credential configuration with all secret references resolved.
+
+        Examples:
+            >>> # Basic secret resolution
+            >>> config = {"host": "db.example.com", "password": "db_password_key"}
+            >>> secrets = {"db_password_key": "actual_secret_password"}
+            >>> resolved = SecretStore.resolve_credentials(config, secrets)
+            >>> print(resolved)  # {"host": "db.example.com", "password": "actual_secret_password"}
+
+            >>> # Resolution with nested 'extra' fields
+            >>> config = {
+            ...     "host": "db.example.com",
+            ...     "extra": {"ssl_cert": "cert_key"}
+            ... }
+            >>> secrets = {"cert_key": "-----BEGIN CERTIFICATE-----..."}
+            >>> resolved = SecretStore.resolve_credentials(config, secrets)
         """
         credentials = copy.deepcopy(credential_config)
 
@@ -103,14 +135,29 @@ class SecretStore:
 
     @classmethod
     def get_deployment_secret(cls) -> Dict[str, Any]:
-        """Get deployment config from the deployment secret store.
+        """Get deployment configuration from the deployment secret store.
 
         Validates that the deployment secret store component is registered
-        before attempting to fetch secrets to prevent errors.
+        before attempting to fetch secrets to prevent errors. This method
+        is commonly used to retrieve environment-specific configuration.
 
         Returns:
             Dict[str, Any]: Deployment configuration data, or empty dict if
                           component is unavailable or fetch fails.
+
+        Examples:
+            >>> # Get deployment configuration
+            >>> config = SecretStore.get_deployment_secret()
+            >>> if config:
+            ...     print(f"Environment: {config.get('environment')}")
+            ...     print(f"Region: {config.get('region')}")
+            >>> else:
+            ...     print("No deployment configuration available")
+
+            >>> # Use in application initialization
+            >>> deployment_config = SecretStore.get_deployment_secret()
+            >>> if deployment_config.get('debug_mode'):
+            ...     logging.getLogger().setLevel(logging.DEBUG)
         """
         if not is_component_registered(DEPLOYMENT_SECRET_STORE_NAME):
             logger.warning(
@@ -128,14 +175,36 @@ class SecretStore:
     def get_secret(
         cls, secret_key: str, component_name: str = SECRET_STORE_NAME
     ) -> Dict[str, Any]:
-        """Get secret from the Dapr component.
+        """Get secret from the Dapr secret store component.
+
+        Retrieves secret data from the specified Dapr component and processes
+        it into a standardized dictionary format.
 
         Args:
-            secret_key: Key of the secret to fetch
-            component_name: Name of the Dapr component to fetch from
+            secret_key (str): Key of the secret to fetch from the secret store.
+            component_name (str, optional): Name of the Dapr component to fetch from.
+                Defaults to SECRET_STORE_NAME.
 
         Returns:
-            Dict with processed secret data
+            Dict[str, Any]: Processed secret data as a dictionary.
+
+        Raises:
+            Exception: If the secret cannot be retrieved from the component.
+
+        Note:
+            In local development environment, returns empty dict to avoid
+            secret store dependency.
+
+        Examples:
+            >>> # Get database credentials
+            >>> db_secret = SecretStore.get_secret("database-credentials")
+            >>> print(f"Host: {db_secret.get('host')}")
+
+            >>> # Get from specific component
+            >>> api_secret = SecretStore.get_secret(
+            ...     "api-keys",
+            ...     component_name="external-secrets"
+            ... )
         """
         if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             return {}
@@ -184,15 +253,36 @@ class SecretStore:
     ) -> Dict[str, Any]:
         """Apply secret values to source data by substituting references.
 
-        This function replaces values in the source data with values
-        from the secret data when the source value exists as a key in the secrets.
+        This function replaces values in the source data with actual secret values
+        when the source value exists as a key in the secret data. It supports
+        nested structures and preserves the original data structure.
 
         Args:
-            source_data: Original data with potential references to secrets
-            secret_data: Secret data containing actual values
+            source_data (Dict[str, Any]): Original data with potential references to secrets.
+            secret_data (Dict[str, Any]): Secret data containing actual secret values.
 
         Returns:
-            Dict[str, Any]: Data with secret values applied
+            Dict[str, Any]: Deep copy of source data with secret references resolved.
+
+        Examples:
+            >>> # Simple secret substitution
+            >>> source = {
+            ...     "database_url": "postgresql://user:${db_password}@localhost/app",
+            ...     "api_key": "api_key_ref"
+            ... }
+            >>> secrets = {
+            ...     "api_key_ref": "sk-1234567890abcdef",
+            ...     "db_password": "secure_db_password"
+            ... }
+            >>> resolved = SecretStore.apply_secret_values(source, secrets)
+
+            >>> # With nested extra fields
+            >>> source = {
+            ...     "host": "api.example.com",
+            ...     "extra": {"token": "auth_token_ref"}
+            ... }
+            >>> secrets = {"auth_token_ref": "bearer_token_123"}
+            >>> resolved = SecretStore.apply_secret_values(source, secrets)
         """
         result_data = copy.deepcopy(source_data)
 
@@ -211,20 +301,36 @@ class SecretStore:
 
     @classmethod
     async def save_secret(cls, config: Dict[str, Any]) -> str:
-        """Store credentials in the state store.
+        """Store credentials in the state store (development environment only).
+
+        This method is designed for development and testing purposes only.
+        In production environments, secrets should be managed through proper
+        secret management systems.
 
         Args:
-            config: The credentials to store.
+            config (Dict[str, Any]): The credential configuration to store.
 
         Returns:
-            str: The generated credential GUID.
+            str: The generated credential GUID that can be used to retrieve the credentials.
 
         Raises:
-            Exception: If there's an error with the Dapr client operations.
+            ValueError: If called in production environment (non-local deployment).
+            Exception: If there's an error storing the credentials.
 
         Examples:
-            >>> SecretStore.save_secret({"username": "admin", "password": "password"})
-            "1234567890"
+            >>> # Development environment only
+            >>> config = {
+            ...     "host": "localhost",
+            ...     "port": 5432,
+            ...     "username": "dev_user",
+            ...     "password": "dev_password",
+            ...     "database": "app_dev"
+            ... }
+            >>> guid = await SecretStore.save_secret(config)
+            >>> print(f"Stored credentials with GUID: {guid}")
+
+            >>> # Later retrieve these credentials
+            >>> retrieved = await SecretStore.get_credentials(guid)
         """
         if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
             # NOTE: (development) temporary solution to store the credentials in the state store.

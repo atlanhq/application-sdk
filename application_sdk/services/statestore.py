@@ -27,6 +27,20 @@ class StateType(Enum):
 
     @classmethod
     def is_member(cls, type: str) -> bool:
+        """Check if a string value is a valid StateType member.
+
+        Args:
+            type (str): The string value to check.
+
+        Returns:
+            bool: True if the value is a valid StateType, False otherwise.
+
+        Examples:
+            >>> StateType.is_member("workflows")
+            True
+            >>> StateType.is_member("invalid")
+            False
+        """
         return type in cls._value2member_map_
 
 
@@ -34,15 +48,24 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
     """Build the state file path for the given id and type.
 
     Args:
-        id: The unique identifier for the state.
-        state_type: The type of state (workflows, credentials, etc.).
+        id (str): The unique identifier for the state.
+        state_type (StateType): The type of state (WORKFLOWS or CREDENTIALS).
 
     Returns:
         str: The constructed state file path.
 
-    Example:
-        >>> build_state_store_path("wf-123", "workflows")
-        './local/tmp/persistent-artifacts/apps/appName/workflows/wf-123/config.json'
+    Examples:
+        >>> from application_sdk.services.statestore import build_state_store_path, StateType
+
+        >>> # Workflow state path
+        >>> path = build_state_store_path("workflow-123", StateType.WORKFLOWS)
+        >>> print(path)
+        './local/tmp/persistent-artifacts/apps/appName/workflows/workflow-123/config.json'
+
+        >>> # Credential state path
+        >>> cred_path = build_state_store_path("db-cred-456", StateType.CREDENTIALS)
+        >>> print(cred_path)
+        './local/tmp/persistent-artifacts/apps/appName/credentials/db-cred-456/config.json'
     """
     return os.path.join(
         TEMPORARY_PATH,
@@ -60,22 +83,26 @@ class StateStore:
         """Get state from the store.
 
         Args:
-            id: The key to retrieve the state for.
-            type: The type of state to retrieve.
+            id (str): The unique identifier to retrieve the state for.
+            type (StateType): The type of state to retrieve (WORKFLOWS or CREDENTIALS).
 
         Returns:
-            Dict[str, Any]: The retrieved state data.
+            Dict[str, Any]: The retrieved state data. Returns empty dict if no state found.
 
         Raises:
-            ValueError: If no state is found for the given key.
-            IOError: If there's an error with the Dapr client operations.
+            IOError: If there's an error with the object store operations.
+            Exception: If there's an unexpected error during state retrieval.
 
-        Example:
-            >>> from application_sdk.services.statestore import StateStore
+        Examples:
+            >>> from application_sdk.services.statestore import StateStore, StateType
 
-            >>> state = StateStore.get_state("wf-123")
-            >>> print(state)
-            {'test': 'test'}
+            >>> # Get workflow state
+            >>> state = await StateStore.get_state("workflow-123", StateType.WORKFLOWS)
+            >>> print(f"Current status: {state.get('status', 'unknown')}")
+
+            >>> # Get credential configuration
+            >>> creds = await StateStore.get_state("db-cred-456", StateType.CREDENTIALS)
+            >>> print(f"Database: {creds.get('database')}")
         """
 
         state_file_path = build_state_store_path(id, type)
@@ -107,19 +134,37 @@ class StateStore:
 
     @classmethod
     async def save_state(cls, key: str, value: Any, id: str, type: StateType) -> None:
-        """Save state to the store.
+        """Save a single state value to the store.
+
+        This method updates a specific key within the state object, merging with existing state.
 
         Args:
-            key: The key to store the state under.
-            value: The dictionary value to store.
+            key (str): The key to store the state value under.
+            value (Any): The value to store (can be any JSON-serializable type).
+            id (str): The unique identifier for the state object.
+            type (StateType): The type of state (WORKFLOWS or CREDENTIALS).
 
         Raises:
-            Exception: If there's an error with the Dapr client operations.
+            Exception: If there's an error with the object store operations.
 
-        Example:
-            >>> from application_sdk.services.statestore import StateStore
+        Examples:
+            >>> from application_sdk.services.statestore import StateStore, StateType
 
-            >>> await StateStore.save_state("test", {"test": "test"}, "wf-123")
+            >>> # Update workflow progress
+            >>> await StateStore.save_state(
+            ...     key="progress",
+            ...     value=75,
+            ...     id="workflow-123",
+            ...     type=StateType.WORKFLOWS
+            ... )
+
+            >>> # Update workflow status with dict
+            >>> await StateStore.save_state(
+            ...     key="execution_info",
+            ...     value={"started_at": "2024-01-15T10:00:00Z", "worker_id": "worker-1"},
+            ...     id="workflow-123",
+            ...     type=StateType.WORKFLOWS
+            ... )
         """
         try:
             # get the current state from object store
@@ -152,21 +197,47 @@ class StateStore:
     ) -> Dict[str, Any]:
         """Save the entire state object to the object store.
 
+        This method merges the provided value with existing state and saves the complete object.
+
         Args:
-            id: The id of the state.
-            value: The value of the state.
-            type: The type of the state.
+            id (str): The unique identifier for the state object.
+            value (Dict[str, Any]): The state data to save/merge.
+            type (StateType): The type of state (WORKFLOWS or CREDENTIALS).
 
         Returns:
-            Dict[str, Any]: The updated state.
+            Dict[str, Any]: The complete updated state after merge.
 
         Raises:
-            ValueError: If the type is invalid.
-            Exception: If there's an error with the Dapr client operations.
+            Exception: If there's an error with the object store operations.
 
-        Example:
-            >>> from application_sdk.services.statestore import StateStore
-            >>> await StateStore.save_state_object("wf-123", {"test": "test"}, "workflow")
+        Examples:
+            >>> from application_sdk.services.statestore import StateStore, StateType
+
+            >>> # Save complete workflow state
+            >>> workflow_state = {
+            ...     "status": "running",
+            ...     "current_step": "data_processing",
+            ...     "progress": 50,
+            ...     "config": {"batch_size": 1000}
+            ... }
+            >>> updated = await StateStore.save_state_object(
+            ...     id="workflow-123",
+            ...     value=workflow_state,
+            ...     type=StateType.WORKFLOWS
+            ... )
+            >>> print(f"Final state has {len(updated)} keys")
+
+            >>> # Save credential configuration
+            >>> cred_config = {
+            ...     "credential_type": "database",
+            ...     "host": "db.example.com",
+            ...     "port": 5432
+            ... }
+            >>> await StateStore.save_state_object(
+            ...     id="db-cred-456",
+            ...     value=cred_config,
+            ...     type=StateType.CREDENTIALS
+            ... )
         """
         try:
             logger.info(f"Saving state object for {id} with type {type}")
