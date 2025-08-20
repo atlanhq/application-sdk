@@ -36,7 +36,7 @@ APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
-APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
+APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
 #: Port number for the application's HTTP server
 APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 #: Tenant ID for multi-tenant applications
