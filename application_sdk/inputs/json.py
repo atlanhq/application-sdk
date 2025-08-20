@@ -111,7 +111,10 @@ class JsonInput(Input):
                         lines=True,
                     )
                 )
-            return pd.concat(dataframes, ignore_index=True)
+            result = pd.concat(dataframes, ignore_index=True)
+            # Explicit cleanup to prevent double memory usage
+            del dataframes
+            return result
         except IOError as e:
             logger.error(
                 f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: Error reading data from JSON: {str(e)}",

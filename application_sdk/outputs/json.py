@@ -250,6 +250,8 @@ class JsonOutput(Output):
                     with open(output_file_name, "w") as f:
                         f.writelines(buffer)
                     buffer.clear()  # Clear the buffer
+                    # Create new buffer to avoid holding references to old strings
+                    buffer = []
 
                     # Record chunk metrics
                     self.metrics.record_metric(
@@ -266,7 +268,8 @@ class JsonOutput(Output):
                 output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
                 with open(output_file_name, "w") as f:
                     f.writelines(buffer)
-                buffer.clear()
+                # Explicit cleanup of string buffer
+                del buffer
 
                 # Record chunk metrics
                 self.metrics.record_metric(
@@ -327,6 +330,10 @@ class JsonOutput(Output):
             pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
             combined_dataframe = pd.concat(pd_buffer)
 
+            # Clear buffer immediately to free memory
+            self.buffer.clear()
+            self.current_buffer_size = 0
+
             # Write DataFrame to JSON file
             if not combined_dataframe.empty:
                 self.chunk_count += 1
@@ -351,8 +358,8 @@ class JsonOutput(Output):
                     destination=get_object_store_prefix(output_file_name),
                 )
 
-            self.buffer.clear()
-            self.current_buffer_size = 0
+            # Explicit cleanup of large DataFrame
+            del combined_dataframe
 
         except Exception as e:
             # Record metrics for failed write
