@@ -7,6 +7,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.constants import (
     APPLICATION_NAME,
     STATE_STORE_PATH_TEMPLATE,
@@ -41,10 +42,13 @@ def build_state_store_path(id: str, state_type: StateType) -> str:
 
     Example:
         >>> build_state_store_path("wf-123", "workflows")
-        'persistent-artifacts/apps/appName/workflows/wf-123/config.json'
+        './local/tmp/persistent-artifacts/apps/appName/workflows/wf-123/config.json'
     """
-    return STATE_STORE_PATH_TEMPLATE.format(
-        application_name=APPLICATION_NAME, state_type=state_type.value, id=id
+    return os.path.join(
+        TEMPORARY_PATH,
+        STATE_STORE_PATH_TEMPLATE.format(
+            application_name=APPLICATION_NAME, state_type=state_type.value, id=id
+        ),
     )
 
 
@@ -79,14 +83,13 @@ class StateStore:
 
         try:
             logger.info(f"Trying to download state object for {id} with type {type}")
-            local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
             await ObjectStore.download_file(
-                source=state_file_path,
-                destination=local_state_file_path,
+                source=get_object_store_prefix(state_file_path),
+                destination=state_file_path,
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
-            with open(local_state_file_path, "r") as file:
+            with open(state_file_path, "r") as file:
                 state = json.load(file)
 
             logger.info(f"State object downloaded for {id} with type {type}")
@@ -126,17 +129,16 @@ class StateStore:
             # update the state with the new value
             current_state[key] = value
 
-            local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
-            os.makedirs(os.path.dirname(local_state_file_path), exist_ok=True)
+            os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
 
             # save the state to a local file
-            with open(local_state_file_path, "w") as file:
+            with open(state_file_path, "w") as file:
                 json.dump(current_state, file)
 
             # save the state to the object store
             await ObjectStore.upload_file(
-                source=local_state_file_path,
-                destination=state_file_path,
+                source=state_file_path,
+                destination=get_object_store_prefix(state_file_path),
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
@@ -175,17 +177,16 @@ class StateStore:
             # update the state with the new value
             current_state.update(value)
 
-            local_state_file_path = os.path.join(TEMPORARY_PATH, state_file_path)
-            os.makedirs(os.path.dirname(local_state_file_path), exist_ok=True)
+            os.makedirs(os.path.dirname(state_file_path), exist_ok=True)
 
             # save the state to a local file
-            with open(local_state_file_path, "w") as file:
+            with open(state_file_path, "w") as file:
                 json.dump(current_state, file)
 
             # save the state to the object store
             await ObjectStore.upload_file(
-                source=local_state_file_path,
-                destination=state_file_path,
+                source=state_file_path,
+                destination=get_object_store_prefix(state_file_path),
                 store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
             logger.info(f"State object saved for {id} with type {type}")

@@ -5,7 +5,6 @@ in the application, including file outputs and object store interactions.
 """
 
 import inspect
-import os
 from abc import ABC, abstractmethod
 from typing import (
     TYPE_CHECKING,
@@ -23,8 +22,8 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
-from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 
@@ -225,7 +224,7 @@ class Output(ABC):
             with open(output_file_name, "w") as f:
                 f.write(orjson.dumps(statistics).decode("utf-8"))
 
-            destination_file_path = os.path.relpath(output_file_name, TEMPORARY_PATH)
+            destination_file_path = get_object_store_prefix(output_file_name)
             # Push the file to the object store
             await ObjectStore.upload_file(
                 source=output_file_name,

@@ -2,7 +2,7 @@ import glob
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
-from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.inputs import Input
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
@@ -43,34 +43,34 @@ class ParquetInput(Input):
         self.input_prefix = input_prefix
         self.file_names = file_names
 
-    async def download_files(self, local_file_path: str) -> Optional[str]:
+    async def download_files(self, local_path: str) -> Optional[str]:
         """Read a file from the object store.
 
         Args:
-            local_file_path (str): Path to the local file in the temp directory.
+            local_path (str): Path to the local data in the temp directory.
 
         Returns:
             Optional[str]: Path to the downloaded local file.
         """
-        parquet_files = glob.glob(local_file_path)
+        parquet_files = glob.glob(local_path)
         if not parquet_files:
             if self.input_prefix:
                 logger.info(
-                    f"Reading file from object store: {local_file_path} from {self.input_prefix}"
+                    f"Reading file from object store: {local_path} from {self.input_prefix}"
                 )
-                if os.path.isdir(local_file_path):
+                if os.path.isdir(local_path):
                     await ObjectStore.download_prefix(
-                        source=os.path.relpath(local_file_path, TEMPORARY_PATH),
-                        destination=local_file_path,
+                        source=get_object_store_prefix(local_path),
+                        destination=local_path,
                     )
                 else:
                     await ObjectStore.download_file(
-                        source=os.path.relpath(local_file_path, TEMPORARY_PATH),
-                        destination=local_file_path,
+                        source=get_object_store_prefix(local_path),
+                        destination=local_path,
                     )
             else:
                 raise ValueError(
-                    f"No parquet files found in {local_file_path} and no input prefix provided"
+                    f"No parquet files found in {local_path} and no input prefix provided"
                 )
 
     async def get_dataframe(self) -> "pd.DataFrame":

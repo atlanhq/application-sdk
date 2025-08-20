@@ -5,18 +5,16 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.common.utils import (
+    auto_heartbeater,
+    get_object_store_prefix,
+    get_workflow_id,
+)
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.credential_utils import get_credentials
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.common.utils import prepare_query, read_sql_files
-from application_sdk.constants import (
-    APP_TENANT_ID,
-    APPLICATION_NAME,
-    SQL_QUERIES_PATH,
-    TEMPORARY_PATH,
-)
+from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.sql_query import SQLQueryInput
@@ -24,6 +22,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.services.atlan_storage import AtlanStorage
+from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
 
@@ -144,7 +143,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self._state[workflow_id].handler = handler
 
         if "credential_guid" in workflow_args:
-            credentials = await get_credentials(workflow_args["credential_guid"])
+            credentials = await SecretStore.get_credentials(
+                workflow_args["credential_guid"]
+            )
             await sql_client.load(credentials)
 
         self._state[workflow_id].sql_client = sql_client
@@ -536,7 +537,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # Upload data from object store to Atlan storage
         # Use workflow_id/workflow_run_id as the prefix to migrate specific data
-        migration_prefix = os.path.relpath(workflow_args["output_path"], TEMPORARY_PATH)
+        migration_prefix = get_object_store_prefix(workflow_args["output_path"])
         logger.info(
             f"Starting migration from object store with prefix: {migration_prefix}"
         )

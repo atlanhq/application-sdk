@@ -1,8 +1,8 @@
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
-from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.inputs import Input
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
@@ -52,11 +52,10 @@ class JsonInput(Input):
                 if self.download_file_prefix is not None and not os.path.exists(
                     os.path.join(self.path, file_name)
                 ):
+                    destination_file_path = os.path.join(self.path, file_name)
                     await ObjectStore.download_file(
-                        os.path.join(
-                            os.path.relpath(self.path, TEMPORARY_PATH), file_name
-                        ),
-                        os.path.join(self.path, file_name),
+                        source=get_object_store_prefix(destination_file_path),
+                        destination=destination_file_path,
                     )
             except IOError as e:
                 logger.error(

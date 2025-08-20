@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, Literal, Optional
 
 from temporalio import activity
 
-from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -162,7 +162,7 @@ class ParquetOutput(Output):
             # Upload the file to object store
             await ObjectStore.upload_file(
                 source=file_path,
-                destination=os.path.relpath(file_path, TEMPORARY_PATH),
+                destination=get_object_store_prefix(file_path),
             )
         except Exception as e:
             # Record metrics for failed write
@@ -224,7 +224,7 @@ class ParquetOutput(Output):
             # Upload the file to object store
             await ObjectStore.upload_file(
                 source=file_path,
-                destination=os.path.relpath(file_path, TEMPORARY_PATH),
+                destination=get_object_store_prefix(file_path),
             )
         except Exception as e:
             # Record metrics for failed write
