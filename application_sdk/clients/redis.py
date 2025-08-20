@@ -73,24 +73,41 @@ class RedisClient:
 
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel for high availability."""
-        sentinel_hosts = [
-            (host.strip(), int(port))
-            for host_port in REDIS_SENTINEL_HOSTS.split(",")
-            for host, port in [host_port.strip().rsplit(":", 1)]
-        ]
+        try:
+            sentinel_hosts = [
+                (host.strip(), int(port))
+                for host_port in REDIS_SENTINEL_HOSTS.split(",")
+                for host, port in [host_port.strip().rsplit(":", 1)]
+            ]
+        except ValueError as e:
+            raise ValueError(
+                f"Invalid Sentinel host format in REDIS_SENTINEL_HOSTS: {e}"
+            )
 
         if not sentinel_hosts:
             raise ValueError("No Sentinel hosts configured")
 
         logger.info(f"Connecting to Redis via Sentinel: {sentinel_hosts}")
+        logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
 
-        sentinel = Sentinel(sentinel_hosts, socket_timeout=REDIS_SOCKET_TIMEOUT)
+        # Add sentinel-specific configuration
+        sentinel = Sentinel(
+            sentinel_hosts,
+            socket_timeout=REDIS_SOCKET_TIMEOUT,
+            sentinel_kwargs={
+                "password": REDIS_PASSWORD if REDIS_PASSWORD else None,
+                "socket_connect_timeout": REDIS_SOCKET_TIMEOUT,
+            },
+        )
+
         self.redis_client = sentinel.master_for(
             REDIS_SENTINEL_SERVICE_NAME,
             socket_timeout=REDIS_SOCKET_TIMEOUT,
             password=REDIS_PASSWORD,
             db=REDIS_DB,
             max_connections=REDIS_CONNECTION_POOL_SIZE,
+            retry_on_timeout=True,
+            health_check_interval=30,
         )
 
     def _connect_standalone(self) -> None:
@@ -152,6 +169,19 @@ class RedisClient:
             result = self.redis_client.eval(release_script, 1, resource_id, owner_id)
             return bool(result)
         except Exception:
+            return False
+
+    def health_check(self) -> bool:
+        """Check if Redis connection is healthy."""
+        if not self.connected or not self.redis_client:
+            return False
+
+        try:
+            self.redis_client.ping()
+            return True
+        except Exception as e:
+            logger.warning(f"Redis health check failed: {e}")
+            self.connected = False
             return False
 
     def disconnect(self) -> None:
