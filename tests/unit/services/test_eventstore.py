@@ -145,7 +145,7 @@ class TestEventStore:
         assert enriched_event.metadata.workflow_state == WorkflowStates.UNKNOWN.value
 
     @patch("application_sdk.services.eventstore.clients.DaprClient")
-    @patch("application_sdk.services.eventstore.AtlanAuthClient")
+    @patch("application_sdk.clients.atlan_auth.AtlanAuthClient")
     @patch("application_sdk.services.eventstore.is_component_registered")
     async def test_publish_event_success(
         self,

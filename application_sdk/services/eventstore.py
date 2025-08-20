@@ -10,7 +10,6 @@ from datetime import datetime
 from dapr import clients
 from temporalio import activity, workflow
 
-from application_sdk.clients.atlan_auth import AtlanAuthClient
 from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.constants import (
     APPLICATION_NAME,
@@ -150,6 +149,8 @@ class EventStore:
             binding_metadata = {"content-type": "application/json"}
 
             # Add auth token - HTTP bindings will use it, others will ignore it
+            from application_sdk.clients.atlan_auth import AtlanAuthClient
+
             auth_client = AtlanAuthClient()
             binding_metadata.update(await auth_client.get_authenticated_headers())
 
