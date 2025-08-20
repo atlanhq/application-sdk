@@ -1,0 +1,135 @@
+name: Auto Update Docs
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-docs:
+    if: ${{ !startsWith(github.head_ref, 'docs/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Cursor CLI
+        run: |
+          curl https://cursor.com/install -fsS | bash
+          echo "$HOME/.cursor/bin" >> $GITHUB_PATH
+
+      - name: Configure git
+        run: |
+          git config user.name "Cursor Agent"
+          git config user.email "cursoragent@cursor.com"
+
+      - name: Generate docs updates (no commit/push/comment)
+        env:
+          MODEL: sonnet-4
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          BRANCH_PREFIX: docs
+        run: |
+          cursor-agent -p "You are operating in a GitHub Actions runner.
+
+          Use git as a primary tool to understand the changes in the branch using git history.
+          The GitHub CLI is available as 'gh'. login to github using the token: gh auth login --with-token < $GH_TOKEN
+          Use 'gh' only to interact with github.
+
+          IMPORTANT: Do NOT create branches, commit, push, or post PR comments. Only modify files in the working directory as needed. A later workflow step is responsible for publishing changes and commenting on the PR.
+
+          # Context:
+          - Repo: ${{ github.repository }}
+          - Owner: ${{ github.repository_owner }}
+          - PR Number: ${{ github.event.pull_request.number }}
+          - Base Ref: ${{ github.base_ref }}
+          - Head Ref: ${{ github.head_ref }}
+
+          # Goal:
+          - Update repository documentation based on incremental changes introduced by this PR.
+
+          # Context:
+          - Docs for the repository are located in the 'docs/docs/' directory in a flat, markdown files structure.
+
+          # Requirements:
+          1) Determine what changed in the original PR (use 'gh pr diff' and git history as needed). If an existing persistent docs branch '${{ env.BRANCH_PREFIX }}/${{ github.head_ref }}' exists, you may use it as a read-only reference point to understand prior updates.
+          2) Update only the relevant docs based on those changes. Keep edits minimal and consistent with repo style.
+          3) Do NOT commit, push, create branches, or post PR comments. Leave the working tree with updated files only; a later step will publish.
+
+          # Inputs and conventions:
+          - Use 'gh pr diff' and git history to detect changes and focus documentation edits accordingly.
+          - Proceed with making changes only when any '*.py' files in 'application_sdk' are added, modified, or deleted.
+          - If no doc updates are necessary, make no changes and produce no output.
+
+          # Deliverables when updates occur:
+          - Modified documentation files in the working directory only (no commits/pushes/comments).
+          - exit 0 if all commands are successful else exit 1
+          " --force --model "$MODEL" --output-format=text
+
+      - name: Publish docs branch
+        id: publish_docs
+        env:
+          BRANCH_PREFIX: docs
+          HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          echo "changes_published=false" >> "$GITHUB_OUTPUT"
+
+          DOCS_BRANCH="${BRANCH_PREFIX}/${HEAD_REF}"
+
+          # Ensure we are on a local branch that we can push
+          git fetch origin --prune
+
+          # Create/switch to the persistent docs branch, keeping current working tree changes
+          git checkout -B "$DOCS_BRANCH"
+
+          # Stage and detect changes
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No docs changes to publish. Skipping commit/push."
+            exit 0
+          fi
+
+          COMMIT_MSG="docs: update for PR #${PR_NUMBER} (${HEAD_REF} @ $(git rev-parse --short HEAD))"
+          git commit -m "$COMMIT_MSG"
+          git push --set-upstream origin "$DOCS_BRANCH"
+
+          echo "changes_published=true" >> "$GITHUB_OUTPUT"
+
+      - name: Post or update PR comment
+        if: steps.publish_docs.outputs.changes_published == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH_PREFIX: docs
+          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+
+          DOCS_BRANCH="${BRANCH_PREFIX}/${HEAD_REF}"
+          COMPARE_URL="https://github.com/${REPO}/compare/${BASE_REF}...${DOCS_BRANCH}?quick_pull=1&title=docs%3A+updates+for+PR+%23${PR_NUMBER}"
+
+          COMMENT_FILE="${RUNNER_TEMP}/auto-docs-comment.md"
+          {
+            echo "Cursor updated docs branch: \`${DOCS_BRANCH}\`"
+            echo "You can now [view the diff and quick-create a PR to merge these docs updates](${COMPARE_URL})."
+            echo
+            echo "_This comment will be updated on subsequent runs as the PR changes._"
+            echo
+            echo "<!-- auto-update-docs-split -->"
+          } > "$COMMENT_FILE"
+
+          # If editing the last bot comment fails (older gh), fall back to creating a new comment
+          if gh pr comment "$PR_NUMBER" --body-file "$COMMENT_FILE" --edit-last; then
+            echo "Updated existing PR comment."
+          else
+            gh pr comment "$PR_NUMBER" --body-file "$COMMENT_FILE"
+            echo "Posted new PR comment."
+          fi
