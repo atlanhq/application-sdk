@@ -9,7 +9,7 @@ Workflows are the backbone of the application's long-running processes. They pro
 1.  **Orchestration:** Define the sequence, parallelism, and conditional logic for executing a series of `Activities`. They dictate *what* activities run and *when*.
 2.  **State Management (Implicit):** While workflows don't typically hold large amounts of business data directly (that's passed via arguments or handled by activities interacting with storage), their execution progress represents the state of the overall process.
 3.  **Reliability:** Leverage Temporal's features for handling failures, including automatic retries of activities, timeouts, and ensuring eventual completion of the process even if workers restart.
-4.  **Configuration Handling:** Receive initial configuration and typically load detailed arguments required for the entire process via `StateStoreInput`.
+4.  **Configuration Handling:** Receive initial configuration and typically load detailed arguments required for the entire process via the `StateStore` service.
 
 Essentially, workflows are durable functions that coordinate activities to achieve a specific business goal.
 
@@ -26,7 +26,7 @@ This is the abstract base class for all workflow implementations within the SDK.
 *   **`run(self, workflow_config: Dict[str, Any])` (Async Method):**
     *   **Purpose:** The entry point for the workflow's execution logic. Must be decorated with `@workflow.run`.
     *   **Input:** Receives an initial configuration dictionary (`workflow_config`), which *must* contain the `workflow_id`.
-    *   **Base Implementation:** The base `WorkflowInterface.run` method retrieves the full `workflow_args` using `StateStoreInput.extract_configuration(workflow_id)` and executes the `preflight_check` activity defined in the associated `activities_cls`. Subclasses typically call `await super().run(workflow_config)` first and then add their specific activity orchestration logic.
+    *   **Base Implementation:** The base `WorkflowInterface.run` method retrieves the full `workflow_args` using the `StateStore` service and executes the `preflight_check` activity defined in the associated `activities_cls`. Subclasses typically call `await super().run(workflow_config)` first and then add their specific activity orchestration logic.
 
 ## Provided Base Workflows
 
@@ -44,7 +44,7 @@ The SDK includes base workflow implementations for common patterns:
 
 ## Configuration
 
-Workflows are initiated with a minimal `workflow_config` dictionary containing the `workflow_id`. The first step in the `run` method (in the base `WorkflowInterface`) uses this `workflow_id` to call `StateStoreInput.extract_configuration(workflow_id)`, fetching the complete set of arguments (`workflow_args`) required for the execution. These `workflow_args` are passed down to the activities executed by the workflow.
+Workflows are initiated with a minimal `workflow_config` dictionary containing the `workflow_id`. The first step in the `run` method (in the base `WorkflowInterface`) uses this `workflow_id` with the `StateStore` service to fetch the complete set of arguments (`workflow_args`) required for the execution. These `workflow_args` are passed down to the activities executed by the workflow.
 
 ## Extending Workflows
 
@@ -101,11 +101,11 @@ While most customization typically happens in `Activities`, `Handlers`, or `Clie
 
     ```python
     # In my_connector/workflows.py
-    # ... (imports including MyExtendedActivities, StateStoreInput, RetryPolicy) ...
+    # ... (imports including MyExtendedActivities, StateStore, RetryPolicy) ...
     import asyncio
     from datetime import timedelta
     from temporalio.common import RetryPolicy
-    from application_sdk.inputs.statestore import StateStoreInput
+    from application_sdk.services.statestore import StateStore, StateType
     # Assume MyExtendedActivities defines: preflight_check, custom_step_one, custom_step_two
 
     @workflow.defn
