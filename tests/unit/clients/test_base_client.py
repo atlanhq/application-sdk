@@ -5,53 +5,53 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.clients.generic import GenericClient
+from application_sdk.clients.base import BaseClient
 from application_sdk.test_utils.hypothesis.strategies.clients.sql import (
     sql_credentials_strategy,
 )
 
 
 @pytest.fixture
-def generic_client():
-    """Create a GenericClient instance for testing."""
-    return GenericClient()
+def base_client():
+    """Create a BaseClient instance for testing."""
+    return BaseClient()
 
 
-class TestGenericClient:
-    """Test cases for GenericClient."""
+class TestBaseClient:
+    """Test cases for BaseClient."""
 
     def test_initialization_default(self):
-        """Test GenericClient initialization with default values."""
-        client = GenericClient()
+        """Test BaseClient initialization with default values."""
+        client = BaseClient()
         assert client.credentials == {}
 
     def test_initialization_with_credentials(self):
-        """Test GenericClient initialization with credentials."""
+        """Test BaseClient initialization with credentials."""
         credentials = {"username": "test", "password": "secret"}
-        client = GenericClient(credentials=credentials)
+        client = BaseClient(credentials=credentials)
         assert client.credentials == credentials
 
     @pytest.mark.asyncio
-    async def test_load_not_implemented(self, generic_client):
+    async def test_load_not_implemented(self, base_client):
         """Test that load method raises NotImplementedError."""
         credentials = {"username": "test", "password": "secret"}
 
         with pytest.raises(NotImplementedError, match="load method is not implemented"):
-            await generic_client.load(credentials=credentials)
+            await base_client.load(credentials=credentials)
 
     @pytest.mark.asyncio
-    async def test_handle_auth_error_not_implemented(self, generic_client):
+    async def test_handle_auth_error_not_implemented(self, base_client):
         """Test that _handle_auth_error method raises NotImplementedError by default."""
         with pytest.raises(
             NotImplementedError,
             match="Subclasses must implement _handle_auth_error to handle authentication errors",
         ):
-            await generic_client._handle_auth_error()
+            await base_client._handle_auth_error()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_success(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test successful HTTP GET request execution."""
         # Mock response
@@ -68,7 +68,7 @@ class TestGenericClient:
         headers = {"Authorization": "Bearer token"}
         params = {"limit": 10}
 
-        result = await generic_client.execute_http_get_request(
+        result = await base_client.execute_http_get_request(
             url=url, headers=headers, params=params
         )
 
@@ -78,9 +78,9 @@ class TestGenericClient:
         )
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_401_error(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with 401 error."""
         # Mock response with 401
@@ -95,14 +95,14 @@ class TestGenericClient:
 
         url = "https://api.example.com/test"
 
-        result = await generic_client.execute_http_get_request(url=url)
+        result = await base_client.execute_http_get_request(url=url)
 
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_401_error_with_auth_handler_exception(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with 401 error when auth handler raises exception."""
         # Mock response with 401
@@ -116,21 +116,19 @@ class TestGenericClient:
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         # Mock auth handler to raise an exception
-        generic_client._handle_auth_error = AsyncMock(
-            side_effect=Exception("Auth failed")
-        )
+        base_client._handle_auth_error = AsyncMock(side_effect=Exception("Auth failed"))
 
         url = "https://api.example.com/test"
 
-        result = await generic_client.execute_http_get_request(url=url, max_retries=1)
+        result = await base_client.execute_http_get_request(url=url, max_retries=1)
 
         assert result is None
-        generic_client._handle_auth_error.assert_called_once()
+        base_client._handle_auth_error.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_429_error(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with 429 error and retry."""
         # Mock response with 429
@@ -147,7 +145,7 @@ class TestGenericClient:
         url = "https://api.example.com/test"
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await generic_client.execute_http_get_request(
+            result = await base_client.execute_http_get_request(
                 url=url, max_retries=1, base_wait_time=1
             )
 
@@ -155,9 +153,9 @@ class TestGenericClient:
             mock_sleep.assert_called()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_429_error_invalid_retry_after(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with 429 error and invalid Retry-After header."""
         # Mock response with 429 and invalid Retry-After
@@ -174,7 +172,7 @@ class TestGenericClient:
         url = "https://api.example.com/test"
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await generic_client.execute_http_get_request(
+            result = await base_client.execute_http_get_request(
                 url=url, max_retries=1, base_wait_time=1
             )
 
@@ -182,9 +180,9 @@ class TestGenericClient:
             mock_sleep.assert_called()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_network_error(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with network error and retry."""
         # Mock async context manager that raises network error
@@ -195,7 +193,7 @@ class TestGenericClient:
         url = "https://api.example.com/test"
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await generic_client.execute_http_get_request(
+            result = await base_client.execute_http_get_request(
                 url=url, max_retries=2, base_wait_time=1
             )
 
@@ -203,9 +201,9 @@ class TestGenericClient:
             assert mock_sleep.call_count == 2
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_success_after_retry(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request that succeeds after retry."""
         # Mock response
@@ -223,7 +221,7 @@ class TestGenericClient:
         url = "https://api.example.com/test"
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await generic_client.execute_http_get_request(
+            result = await base_client.execute_http_get_request(
                 url=url, max_retries=2, base_wait_time=1
             )
 
@@ -231,9 +229,9 @@ class TestGenericClient:
             mock_sleep.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_with_auth_error_handler(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with custom auth error handler."""
         # Mock response with 401
@@ -247,19 +245,19 @@ class TestGenericClient:
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         # Add custom auth error handler
-        generic_client._handle_auth_error = AsyncMock()
+        base_client._handle_auth_error = AsyncMock()
 
         url = "https://api.example.com/test"
 
-        result = await generic_client.execute_http_get_request(url=url, max_retries=1)
+        result = await base_client.execute_http_get_request(url=url, max_retries=1)
 
         assert result is None
-        generic_client._handle_auth_error.assert_called_once()
+        base_client._handle_auth_error.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_timeout(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with timeout."""
         # Mock async context manager that raises timeout
@@ -270,7 +268,7 @@ class TestGenericClient:
         url = "https://api.example.com/test"
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await generic_client.execute_http_get_request(
+            result = await base_client.execute_http_get_request(
                 url=url, max_retries=1, timeout=5
             )
 
@@ -278,9 +276,9 @@ class TestGenericClient:
             mock_sleep.assert_called()
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_retry_limit_enforcement(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test that max_retries is properly limited to 10."""
         # Mock response with 429 to trigger retries
@@ -298,7 +296,7 @@ class TestGenericClient:
 
         with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
             # Try with max_retries=15, should be limited to 10
-            result = await generic_client.execute_http_get_request(
+            result = await base_client.execute_http_get_request(
                 url=url, max_retries=15, base_wait_time=1
             )
 
@@ -307,9 +305,9 @@ class TestGenericClient:
             assert mock_sleep.call_count == 10
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_get_request_unknown_status_code(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP GET request with unknown status code."""
         # Mock response with unknown status code
@@ -325,14 +323,14 @@ class TestGenericClient:
 
         url = "https://api.example.com/test"
 
-        result = await generic_client.execute_http_get_request(url=url, max_retries=1)
+        result = await base_client.execute_http_get_request(url=url, max_retries=1)
 
         assert result is None
 
     @pytest.mark.asyncio
-    @patch("application_sdk.clients.generic.httpx.AsyncClient")
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
     async def test_execute_http_post_request_401_error(
-        self, mock_async_client, generic_client
+        self, mock_async_client, base_client
     ):
         """Test HTTP POST request with 401 error."""
         # Mock response with 401
@@ -348,7 +346,7 @@ class TestGenericClient:
         url = "https://api.example.com/test"
         json_data = {"test": "data"}
 
-        result = await generic_client.execute_http_post_request(
+        result = await base_client.execute_http_post_request(
             url=url, json_data=json_data
         )
 
@@ -360,26 +358,26 @@ class TestGenericClient:
     )
     def test_initialization_with_various_credentials(self, credentials: Dict[str, Any]):
         """Property-based test for initialization with various credentials."""
-        client = GenericClient(credentials=credentials)
+        client = BaseClient(credentials=credentials)
         assert client.credentials == credentials
 
-    def test_credentials_attribute_access(self, generic_client):
+    def test_credentials_attribute_access(self, base_client):
         """Test that credentials attribute can be accessed and modified."""
-        assert generic_client.credentials == {}
+        assert base_client.credentials == {}
 
         # Test setting credentials
-        generic_client.credentials = {"new": "credentials"}
-        assert generic_client.credentials == {"new": "credentials"}
+        base_client.credentials = {"new": "credentials"}
+        assert base_client.credentials == {"new": "credentials"}
 
     @pytest.mark.asyncio
-    async def test_load_method_signature(self, generic_client):
+    async def test_load_method_signature(self, base_client):
         """Test that load method accepts the correct parameters."""
         credentials = {"username": "test", "password": "secret"}
 
         # Should not raise TypeError for wrong parameters
         with pytest.raises(NotImplementedError):
-            await generic_client.load(credentials=credentials)
+            await base_client.load(credentials=credentials)
 
         # Test with additional kwargs
         with pytest.raises(NotImplementedError):
-            await generic_client.load(credentials=credentials, extra_param="value")
+            await base_client.load(credentials=credentials, extra_param="value")

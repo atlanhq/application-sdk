@@ -10,9 +10,9 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-class GenericClient(ClientInterface):
+class BaseClient(ClientInterface):
     """
-    Generic client for non-SQL based applications.
+    Base client for non-SQL based applications.
 
     This class provides a base implementation for clients that need to connect
     to non-SQL data sources. It implements the ClientInterface and provides
@@ -28,7 +28,7 @@ class GenericClient(ClientInterface):
         or other authentication recovery mechanisms.
 
         Example:
-            >>> class MyClient(GenericClient):
+            >>> class MyClient(BaseClient):
             ...     async def _handle_auth_error(self):
             ...         # Implement token refresh logic here
             ...         await self.refresh_token()
@@ -40,7 +40,7 @@ class GenericClient(ClientInterface):
         credentials: Dict[str, Any] = {},
     ):
         """
-        Initialize the generic client.
+        Initialize the base client.
 
         Args:
             credentials (Dict[str, Any], optional): Client credentials for authentication. Defaults to {}.

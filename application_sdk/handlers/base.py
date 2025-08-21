@@ -1,30 +1,30 @@
 from typing import Any, Dict
 
-from application_sdk.clients.generic import GenericClient
+from application_sdk.clients.base import BaseClient
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
-class GenericHandler(HandlerInterface):
+class BaseHandler(HandlerInterface):
     """
-    Generic handler for non-SQL based applications.
+    Base handler for non-SQL based applications.
 
     This class provides a base implementation for handlers that need to interact with non-SQL data sources. It implements the HandlerInterface and provides basic functionality that can be extended by subclasses.
 
     Attributes:
-        client (GenericClient): The client instance for connecting to the target system.
+        client (BaseClient): The client instance for connecting to the target system.
     """
 
-    def __init__(self, client: GenericClient | None = None):
+    def __init__(self, client: BaseClient | None = None):
         """
-        Initialize the generic handler.
+        Initialize the base handler.
 
         Args:
-            client (GenericClient, optional): The client instance to use for connections. Defaults to GenericClient().
+            client (BaseClient, optional): The client instance to use for connections. Defaults to BaseClient().
         """
-        self.client = client or GenericClient()
+        self.client = client or BaseClient()
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
@@ -35,12 +35,12 @@ class GenericHandler(HandlerInterface):
         Args:
             credentials (Dict[str, Any]): Credentials for the client.
         """
-        logger.info("Loading generic handler")
+        logger.info("Loading base handler")
 
         # Load the client with credentials
         await self.client.load(credentials=credentials)
 
-        logger.info("Generic handler loaded successfully")
+        logger.info("Base handler loaded successfully")
 
     # The following methods are inherited from HandlerInterface and should be implemented
     # by subclasses to handle calls from their respective FastAPI endpoints:

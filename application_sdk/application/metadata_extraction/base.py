@@ -1,14 +1,14 @@
 from concurrent.futures import ThreadPoolExecutor
 from typing import List, Optional, Tuple, Type
 
-from application_sdk.activities.metadata_extraction.generic import (
-    GenericMetadataExtractionActivities,
+from application_sdk.activities.metadata_extraction.base import (
+    BaseMetadataExtractionActivities,
 )
 from application_sdk.application import BaseApplication
-from application_sdk.clients.generic import GenericClient
+from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.constants import MAX_CONCURRENT_ACTIVITIES
-from application_sdk.handlers.generic import GenericHandler
+from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.decorators.observability_decorator import (
     observability,
 )
@@ -25,9 +25,9 @@ metrics = get_metrics()
 traces = get_traces()
 
 
-class GenericMetadataExtractionApplication(BaseApplication):
+class BaseMetadataExtractionApplication(BaseApplication):
     """
-    Generic application abstraction for non-SQL metadata extraction workflows.
+    Base application abstraction for non-SQL metadata extraction workflows.
 
     This class provides a standard way to set up and run non-SQL metadata extraction
     workflows using Temporal, including workflow client, worker, and FastAPI server setup.
@@ -38,25 +38,25 @@ class GenericMetadataExtractionApplication(BaseApplication):
     def __init__(
         self,
         name: str,
-        client_class: Optional[Type[GenericClient]] = None,
-        handler_class: Optional[Type[GenericHandler]] = None,
+        client_class: Optional[Type[BaseClient]] = None,
+        handler_class: Optional[Type[BaseHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
         server: Optional[APIServer] = None,
     ):
         """
-        Initialize the generic metadata extraction application.
+        Initialize the base metadata extraction application.
 
         Args:
             name (str): Name of the application (used for workflow client and server identification).
-            client_class (Type[GenericClient]): Generic client class for source connectivity.
-            handler_class (Optional[Type[GenericHandler]]): Handler class for preflight checks and metadata logic. Defaults to GenericHandler.
+            client_class (Type[BaseClient]): Base client class for source connectivity.
+            handler_class (Optional[Type[BaseHandler]]): Handler class for preflight checks and metadata logic. Defaults to BaseHandler.
             transformer_class (Optional[Type[TransformerInterface]]): Transformer class for mapping to Atlas entities. Defaults to None.
             server (Optional[APIServer]): Server for the application. Defaults to None.
         """
         self.application_name = name
         self.transformer_class = transformer_class
-        self.client_class = client_class or GenericClient
-        self.handler_class = handler_class or GenericHandler
+        self.client_class = client_class or BaseClient
+        self.handler_class = handler_class or BaseHandler
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server
@@ -72,17 +72,17 @@ class GenericMetadataExtractionApplication(BaseApplication):
     async def setup_workflow(
         self,
         workflow_and_activities_classes: List[
-            Tuple[Type[WorkflowInterface], Type[GenericMetadataExtractionActivities]]
+            Tuple[Type[WorkflowInterface], Type[BaseMetadataExtractionActivities]]
         ],
         passthrough_modules: List[str] = [],
         activity_executor: Optional[ThreadPoolExecutor] = None,
         max_concurrent_activities: Optional[int] = MAX_CONCURRENT_ACTIVITIES,
     ):
         """
-        Set up the workflow client and start the worker for generic metadata extraction.
+        Set up the workflow client and start the worker for base metadata extraction.
 
         Args:
-            workflow_and_activities_classes (List[Tuple[Type[WorkflowInterface], Type[GenericMetadataExtractionActivities]]]): List of workflow and activities classes to register. Defaults to [(WorkflowInterface, GenericMetadataExtractionActivities)].
+            workflow_and_activities_classes (List[Tuple[Type[WorkflowInterface], Type[BaseMetadataExtractionActivities]]]): List of workflow and activities classes to register. Defaults to [(WorkflowInterface, BaseMetadataExtractionActivities)].
             passthrough_modules (List[str]): The modules to pass through to the worker. Defaults to [].
             activity_executor (ThreadPoolExecutor | None): Executor for running activities. Defaults to None.
             max_concurrent_activities (Optional[int]): Maximum number of concurrent activities. Defaults to MAX_CONCURRENT_ACTIVITIES.
@@ -122,7 +122,7 @@ class GenericMetadataExtractionApplication(BaseApplication):
         workflow_class: Type[WorkflowInterface],
     ) -> None:
         """
-        Set up the FastAPI server for the generic metadata extraction application.
+        Set up the FastAPI server for the base metadata extraction application.
 
         Args:
             workflow_class (Type[WorkflowInterface]): Workflow class to register with the server. Users must provide their own workflow implementation.

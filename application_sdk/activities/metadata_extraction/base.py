@@ -4,10 +4,10 @@ from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import get_workflow_id
-from application_sdk.clients.generic import GenericClient
+from application_sdk.clients.base import BaseClient
 from application_sdk.common.credential_utils import get_credentials
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
-from application_sdk.handlers.generic import GenericHandler
+from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.transformers import TransformerInterface
 
@@ -15,34 +15,34 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 
-class GenericMetadataExtractionActivitiesState(ActivitiesState):
-    """State for generic metadata extraction activities."""
+class BaseMetadataExtractionActivitiesState(ActivitiesState):
+    """State for base metadata extraction activities."""
 
-    client: Optional[Type[GenericClient]] = None
-    handler: Optional[Type[GenericHandler]] = None
+    client: Optional[Type[BaseClient]] = None
+    handler: Optional[Type[BaseHandler]] = None
     transformer: Optional[Type[TransformerInterface]] = None
 
 
-class GenericMetadataExtractionActivities(ActivitiesInterface):
-    """Generic activities for non-SQL metadata extraction workflows."""
+class BaseMetadataExtractionActivities(ActivitiesInterface):
+    """Base activities for non-SQL metadata extraction workflows."""
 
-    _state: Dict[str, GenericMetadataExtractionActivitiesState] = {}
+    _state: Dict[str, BaseMetadataExtractionActivitiesState] = {}
 
-    client_class: Type[GenericClient] = GenericClient
-    handler_class: Type[GenericHandler] = GenericHandler
+    client_class: Type[BaseClient] = BaseClient
+    handler_class: Type[BaseHandler] = BaseHandler
     transformer_class: Optional[Type[TransformerInterface]] = None
 
     def __init__(
         self,
-        client_class: Optional[Type[GenericClient]] = None,
-        handler_class: Optional[Type[GenericHandler]] = None,
+        client_class: Optional[Type[BaseClient]] = None,
+        handler_class: Optional[Type[BaseHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
     ):
-        """Initialize the generic metadata extraction activities.
+        """Initialize the base metadata extraction activities.
 
         Args:
-            client_class: Client class to use. Defaults to GenericClient.
-            handler_class: Handler class to use. Defaults to GenericHandler.
+            client_class: Client class to use. Defaults to BaseClient.
+            handler_class: Handler class to use. Defaults to BaseHandler.
             transformer_class: Transformer class to use. Users must provide their own transformer implementation.
         """
         if client_class:
@@ -62,7 +62,7 @@ class GenericMetadataExtractionActivities(ActivitiesInterface):
         """
         workflow_id = get_workflow_id()
         if not self._state.get(workflow_id):
-            self._state[workflow_id] = GenericMetadataExtractionActivitiesState()
+            self._state[workflow_id] = BaseMetadataExtractionActivitiesState()
 
         await super()._set_state(workflow_args)
 
