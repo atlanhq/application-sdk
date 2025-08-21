@@ -85,7 +85,7 @@ class JsonOutput(Output):
         output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
-        buffer_size: int = 100000,
+        buffer_size: int = 10000,
         chunk_size: Optional[int] = None,
         total_record_count: int = 0,
         chunk_count: int = 0,
@@ -102,8 +102,7 @@ class JsonOutput(Output):
             output_prefix (Optional[str], optional): Prefix for files where the files will be written and uploaded.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
-            buffer_size (int, optional): Size of the buffer in bytes.
-                Defaults to 10MB (1024 * 1024 * 10).
+            buffer_size (int, optional): Number of records to buffer before writing to a file.
             chunk_size (Optional[int], optional): Maximum number of records per chunk. If None, uses config value.
                 Defaults to None.
             total_record_count (int, optional): Initial total record count.
@@ -227,55 +226,91 @@ class JsonOutput(Output):
             Daft does not have built-in JSON writing support, so we are using orjson.
         """
         try:
-            buffer = []
-            for row in dataframe.iter_rows():
-                self.total_record_count += 1
-                # Convert datetime fields to epoch timestamps before serialization
-                row = convert_datetime_to_epoch(row)
-                # Remove null attributes from the row recursively, preserving specified fields
-                cleaned_row = self.process_null_fields(
-                    row, preserve_fields, null_to_empty_dict_fields
-                )
-                # Serialize the row and add it to the buffer
-                buffer.append(
-                    orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
-                        "utf-8"
+            # Stream rows to disk using a bounded bytes buffer to minimize memory usage
+            bytes_buffer = bytearray()
+            records_in_current_chunk = 0
+            current_file_handle = None
+
+            try:
+                for row in dataframe.iter_rows():
+                    self.total_record_count += 1
+
+                    # Convert datetime fields to epoch timestamps before serialization
+                    row = convert_datetime_to_epoch(row)
+
+                    # Remove null attributes from the row recursively, preserving specified fields
+                    cleaned_row = self.process_null_fields(
+                        row, preserve_fields, null_to_empty_dict_fields
                     )
-                )
 
-            # If the buffer reaches the specified size, write it to the file
-            if self.chunk_size and len(buffer) >= self.chunk_size:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()  # Clear the buffer
+                    # Serialize the row as bytes with a trailing newline
+                    line_bytes = orjson.dumps(
+                        cleaned_row, option=orjson.OPT_APPEND_NEWLINE
+                    )
 
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                    # Lazily open a new chunk file when we see the first row for it
+                    if current_file_handle is None:
+                        output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count + 1)}"
+                        current_file_handle = open(output_file_name, "wb")
+                        records_in_current_chunk = 0
 
-            # Write any remaining rows in the buffer
-            if buffer:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()
+                    # Accumulate into the bounded bytes buffer
+                    bytes_buffer.extend(line_bytes)
+                    records_in_current_chunk += 1
 
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                    # Explicit cleanup to prevent memory accumulation with large rows
+                    del cleaned_row, line_bytes
+
+                    # Flush to disk when the buffer exceeds configured size
+                    if len(bytes_buffer) >= self.buffer_size:
+                        current_file_handle.write(bytes_buffer)
+                        bytes_buffer.clear()
+
+                    # Rotate file when reaching configured records per chunk
+                    if self.chunk_size and records_in_current_chunk >= self.chunk_size:
+                        if bytes_buffer:
+                            current_file_handle.write(bytes_buffer)
+                            bytes_buffer.clear()
+                        current_file_handle.close()
+                        current_file_handle = None
+                        self.chunk_count += 1
+
+                        # Record chunk metrics
+                        self.metrics.record_metric(
+                            name="json_chunks_written",
+                            value=1,
+                            metric_type=MetricType.COUNTER,
+                            labels={"type": "daft"},
+                            description="Number of chunks written to JSON files",
+                        )
+
+                # Finalize the last (partial) chunk if any
+                if current_file_handle is not None:
+                    if bytes_buffer:
+                        current_file_handle.write(bytes_buffer)
+                        bytes_buffer.clear()
+                    current_file_handle.close()
+                    current_file_handle = None
+                    self.chunk_count += 1
+
+                    # Record chunk metrics
+                    self.metrics.record_metric(
+                        name="json_chunks_written",
+                        value=1,
+                        metric_type=MetricType.COUNTER,
+                        labels={"type": "daft"},
+                        description="Number of chunks written to JSON files",
+                    )
+            finally:
+                # Best-effort cleanup in case of exceptions
+                try:
+                    if current_file_handle is not None:
+                        if bytes_buffer:
+                            current_file_handle.write(bytes_buffer)
+                        current_file_handle.close()
+                except Exception:
+                    pass
+                bytes_buffer.clear()
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -327,6 +362,10 @@ class JsonOutput(Output):
             pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
             combined_dataframe = pd.concat(pd_buffer)
 
+            # Clear buffer immediately to free memory
+            self.buffer.clear()
+            self.current_buffer_size = 0
+
             # Write DataFrame to JSON file
             if not combined_dataframe.empty:
                 self.chunk_count += 1
@@ -351,8 +390,8 @@ class JsonOutput(Output):
                     destination=get_object_store_prefix(output_file_name),
                 )
 
-            self.buffer.clear()
-            self.current_buffer_size = 0
+            # Explicit cleanup of large DataFrame
+            del combined_dataframe
 
         except Exception as e:
             # Record metrics for failed write

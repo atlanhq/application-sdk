@@ -67,7 +67,13 @@ async def test_write_dataframe_with_data(iceberg_output: IcebergOutput) -> None:
         mock_from_pandas.return_value = mock_daft_df
 
         await iceberg_output.write_dataframe(test_data)
-        mock_from_pandas.assert_called_once_with(test_data)
+
+        # Check that the mock was called once
+        mock_from_pandas.assert_called_once()
+
+        # Verify the DataFrame passed to the mock is the same
+        call_args = mock_from_pandas.call_args[0][0]
+        pd.testing.assert_frame_equal(call_args, test_data)
 
 
 @pytest.mark.asyncio

@@ -99,10 +99,10 @@ class JsonInput(Input):
         Method to read the data from the json files in the path
         and return as a single combined pandas dataframe
         """
+        dataframes = []
         try:
             import pandas as pd
 
-            dataframes = []
             await self.download_files()
             for file_name in self.file_names or []:
                 dataframes.append(
@@ -111,13 +111,18 @@ class JsonInput(Input):
                         lines=True,
                     )
                 )
-            return pd.concat(dataframes, ignore_index=True)
+            result = pd.concat(dataframes, ignore_index=True)
+            return result
         except IOError as e:
             logger.error(
                 f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: Error reading data from JSON: {str(e)}",
                 error_code=IOError.OBJECT_STORE_DOWNLOAD_ERROR.code,
             )
             raise
+        finally:
+            # Explicit cleanup to prevent memory leaks with accumulated DataFrames
+            if dataframes:
+                del dataframes
 
     async def get_batched_daft_dataframe(
         self,

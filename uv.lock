@@ -208,7 +208,7 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
-    { name = "daft", extras = ["sql"], marker = "extra == 'daft'", specifier = ">=0.4.12" },
+    { name = "daft", extras = ["sql"], marker = "extra == 'daft'", specifier = ">=0.5.20" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
     { name = "duckdb", specifier = ">=1.1.3" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
@@ -687,20 +687,21 @@ wheels = [
 
 [[package]]
 name = "daft"
-version = "0.5.18"
+version = "0.5.20"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "fsspec" },
     { name = "pyarrow" },
     { name = "tqdm" },
+    { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e3/0d/09560f06a7f9169ee3a2c8a45622200b1438fa86b742db0576428adf77ad/daft-0.5.18.tar.gz", hash = "sha256:c903847583700dd98f37a914029f88ed7915e3aa65f2b97fea832293e5814306", size = 6080230, upload-time = "2025-08-08T10:17:34.484Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f4/ef/a612304c65bb93b020840dd235ca09d5f1e39bff286c1833bdc1ccae7b6a/daft-0.5.20.tar.gz", hash = "sha256:f6173f6a6df03ba9c8a06cb49a24ea40ccda014393d50257624d5dad2fa9f77b", size = 6117086, upload-time = "2025-08-20T22:58:55.45Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/de/b9/c3b8e681ec479b63a1da24d4b26db3777e7c2f222f7d3a75a4e051016e78/daft-0.5.18-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:13d52a0416b178ef860e66a0bc437b9ca386e9918846e94d759fc785c9a32d8f", size = 44509691, upload-time = "2025-08-08T10:17:06.671Z" },
-    { url = "https://files.pythonhosted.org/packages/d2/4d/a0d16eada7f8efee7b8ff15538599116579dfdee546ae7aa3ac543997041/daft-0.5.18-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:f4e27c1b3c4b85bcf4e9bbae1de3165680ca7b8d47dd3ed78fc93d116d53be21", size = 40681823, upload-time = "2025-08-08T10:17:10.465Z" },
-    { url = "https://files.pythonhosted.org/packages/b1/93/9ee16e46fc04eefa632e58b7333fb432649c340ffcda450fe0fe4f590b68/daft-0.5.18-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:f948990300f3d88ea505af49a2dc70d60720d510c5f28a05f88469ed6969efcd", size = 41796429, upload-time = "2025-08-08T10:17:13.755Z" },
-    { url = "https://files.pythonhosted.org/packages/02/4a/5dbda507c93b09e26edb235a95db56afe68edaa1e240286e9c5a94445c7b/daft-0.5.18-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:7b6d78fc45af586dcbcbe2734b4fb628d47604b56f1a0e9be606fa63166a0ce4", size = 44752470, upload-time = "2025-08-08T10:17:16.916Z" },
-    { url = "https://files.pythonhosted.org/packages/e0/21/0b8dadc76079b9d2dee25d73d8678b5b9ea727ac2c88cb29964d6a30af89/daft-0.5.18-cp39-abi3-win_amd64.whl", hash = "sha256:46657067776be7058b59b870faed3468e842f07a1dfb1901485edbcf7ac68cf3", size = 43232060, upload-time = "2025-08-08T10:17:20.1Z" },
+    { url = "https://files.pythonhosted.org/packages/db/a6/191f3c04c4cf91879fb22c28de07f994856d850867be39636c66d7ac3246/daft-0.5.20-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:06a3ea488c9e1d231afaafaaf9227b9681598faefe500dae3c04d16a92fcce78", size = 45692087, upload-time = "2025-08-20T22:58:30.195Z" },
+    { url = "https://files.pythonhosted.org/packages/28/09/a4b9eaefb7d4a59912358428cf5d44c41671156e8568edbf93f07fcd3241/daft-0.5.20-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:8d81aec21414622b990e5b8bc579ea2b4cc5d7a238554f7d4f98fc866a59bd8f", size = 41791496, upload-time = "2025-08-20T22:58:33.67Z" },
+    { url = "https://files.pythonhosted.org/packages/52/3e/b22889239a1de82cf8eab95b2ea8ff78e79d3cd6f5859ced0322404344fe/daft-0.5.20-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:8ec1cb73d233ccc4af361372f85bc50a0f1d1121560bae0a974b1ee8b31917f6", size = 42966947, upload-time = "2025-08-20T22:58:36.586Z" },
+    { url = "https://files.pythonhosted.org/packages/1d/a7/0c53a3b82b5b09e5e8a1470c274ac8d36f51525b42070958a42f7759b21c/daft-0.5.20-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:8c05afd72973b584ef5177d5e86102bc1c297f61f63d179f87a6dcbca72af544", size = 45906588, upload-time = "2025-08-20T22:58:39.385Z" },
+    { url = "https://files.pythonhosted.org/packages/d9/8c/5cd317db5b57bc93521d763ecd29f4d6ef8c40fb7d0842897a9c5eaf4324/daft-0.5.20-cp39-abi3-win_amd64.whl", hash = "sha256:e9578ac99f381518efc3c962c87713dac3b8be5d19b49bb2ad41d2ba790d6690", size = 44584775, upload-time = "2025-08-20T22:58:42.297Z" },
 ]
 
 [package.optional-dependencies]

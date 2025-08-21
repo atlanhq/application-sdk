@@ -109,6 +109,7 @@ class ParquetInput(Input):
         Returns:
             AsyncIterator["pd.DataFrame"]: Async iterator of pandas dataframes.
         """
+        df = None
         try:
             import pandas as pd
 
@@ -126,6 +127,10 @@ class ParquetInput(Input):
                 f"Error reading data from parquet file(s) in batches: {str(e)}"
             )
             raise
+        finally:
+            # Explicit cleanup to prevent memory leaks with large DataFrames
+            if df is not None:
+                del df
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
         """
