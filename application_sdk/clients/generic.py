@@ -5,7 +5,6 @@ from typing import Any, Dict, Optional
 import httpx
 
 from application_sdk.clients import ClientInterface
-from application_sdk.common.utils import send_heartbeat
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -63,7 +62,6 @@ class GenericClient(ClientInterface):
         - Automatic retry logic with exponential backoff for network errors and unexpected errors
         - Rate limiting support (429 responses) with exponential backoff
         - Extendable authentication error handling (401 responses) support with subclass override for function _handle_auth_error
-        - Heartbeat support during long waits
 
         Args:
             url (str): The URL to make the GET request to
@@ -135,8 +133,8 @@ class GenericClient(ClientInterface):
                         )  # Add jitter to prevent thundering herd
                         final_wait_time = int(wait_time * backoff_multiplier * jitter)
 
-                        # Sleep with heartbeat and increment attempt
-                        await self._sleep_with_heartbeat(final_wait_time)
+                        # Sleep and increment attempt
+                        await asyncio.sleep(final_wait_time)
                         attempt += 1
                         continue
 
@@ -199,8 +197,8 @@ class GenericClient(ClientInterface):
                     f"Unexpected error on attempt {attempt + 1}/{max_retries} (url={url}): {str(e)}"
                 )
 
-            # Sleep with heartbeat and increment attempt
-            await self._sleep_with_heartbeat(base_wait_time)
+            # Sleep and increment attempt
+            await asyncio.sleep(base_wait_time)
             attempt += 1
             continue
 
@@ -225,7 +223,6 @@ class GenericClient(ClientInterface):
         - Automatic retry logic with exponential backoff for network errors and unexpected errors
         - Rate limiting support (429 responses) with exponential backoff
         - Extendable authentication error handling (401 responses) support with subclass override for function _handle_auth_error
-        - Heartbeat support during long waits
 
         Args:
             url (str): The URL to make the POST request to
@@ -301,8 +298,8 @@ class GenericClient(ClientInterface):
                         )  # Add jitter to prevent thundering herd
                         final_wait_time = int(wait_time * backoff_multiplier * jitter)
 
-                        # Sleep with heartbeat and increment attempt
-                        await self._sleep_with_heartbeat(final_wait_time)
+                        # Sleep and increment attempt
+                        await asyncio.sleep(final_wait_time)
                         attempt += 1
                         continue
 
@@ -371,24 +368,10 @@ class GenericClient(ClientInterface):
                     f"Unexpected error on attempt {attempt + 1}/{max_retries} (url={url}): {str(e)}"
                 )
 
-            # Sleep with heartbeat and increment attempt
-            await self._sleep_with_heartbeat(base_wait_time)
+            # Sleep and increment attempt
+            await asyncio.sleep(base_wait_time)
             attempt += 1
             continue
 
         logger.error(f"All {max_retries} attempts failed for URL: {url}")
         return None
-
-    async def _sleep_with_heartbeat(self, sleep_time: int) -> None:
-        """
-        Sleep for the specified time while sending heartbeats every second.
-
-        This method is useful for long-running operations that need to maintain
-        activity heartbeats to prevent timeouts.
-
-        Args:
-            sleep_time (int): Total sleep time in seconds
-        """
-        for i in range(sleep_time):
-            await asyncio.sleep(1)
-            send_heartbeat()
