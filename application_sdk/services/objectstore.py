@@ -293,6 +293,7 @@ class ObjectStore:
         if not os.path.exists(os.path.dirname(destination)):
             os.makedirs(os.path.dirname(destination), exist_ok=True)
 
+        response_data = None
         try:
             response_data = await cls.get_content(source, store_name)
 
@@ -305,6 +306,10 @@ class ObjectStore:
                 f"Failed to download file {source} from object store: {str(e)}"
             )
             raise e
+        finally:
+            # Explicit cleanup to prevent memory leaks with large downloaded files
+            if response_data is not None:
+                del response_data
 
     @classmethod
     async def download_prefix(

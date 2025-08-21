@@ -85,7 +85,7 @@ class JsonOutput(Output):
         output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
-        buffer_size: int = 100000,
+        buffer_size: int = 10000,
         chunk_size: Optional[int] = None,
         total_record_count: int = 0,
         chunk_count: int = 0,
@@ -102,8 +102,7 @@ class JsonOutput(Output):
             output_prefix (Optional[str], optional): Prefix for files where the files will be written and uploaded.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
-            buffer_size (int, optional): Size of the buffer in bytes.
-                Defaults to 10MB (1024 * 1024 * 10).
+            buffer_size (int, optional): Number of records to buffer before writing to a file.
             chunk_size (Optional[int], optional): Maximum number of records per chunk. If None, uses config value.
                 Defaults to None.
             total_record_count (int, optional): Initial total record count.
@@ -258,6 +257,9 @@ class JsonOutput(Output):
                     # Accumulate into the bounded bytes buffer
                     bytes_buffer.extend(line_bytes)
                     records_in_current_chunk += 1
+
+                    # Explicit cleanup to prevent memory accumulation with large rows
+                    del cleaned_row, line_bytes
 
                     # Flush to disk when the buffer exceeds configured size
                     if len(bytes_buffer) >= self.buffer_size:

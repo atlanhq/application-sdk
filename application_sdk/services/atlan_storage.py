@@ -78,6 +78,7 @@ class AtlanStorage:
             migrate_from_objectstore_to_atlan() instead for proper coordination
             and error handling.
         """
+        file_data = None
         try:
             # Get file data from objectstore
             file_data = await ObjectStore.get_content(
@@ -104,6 +105,10 @@ class AtlanStorage:
             error_msg = str(e)
             logger.error(f"Failed to migrate file {file_path}: {error_msg}")
             return file_path, False, error_msg
+        finally:
+            # Explicit cleanup to prevent memory leaks with large files during parallel migrations
+            if file_data is not None:
+                del file_data
 
     @classmethod
     async def migrate_from_objectstore_to_atlan(

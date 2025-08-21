@@ -426,8 +426,7 @@ class AtlanObservability(Generic[T], ABC):
                 if existing_df is not None:
                     df = pd.concat([existing_df, new_df], ignore_index=True)
                     # Explicit cleanup to prevent memory leaks with large DataFrames
-                    del existing_df
-                    del new_df
+                    del existing_df, new_df
                 else:
                     df = new_df
                     del new_df  # Still cleanup new_df reference
