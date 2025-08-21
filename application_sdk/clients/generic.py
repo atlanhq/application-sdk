@@ -20,6 +20,19 @@ class GenericClient(ClientInterface):
 
     Attributes:
         credentials (Dict[str, Any]): Client credentials for authentication.
+
+    Extending the Client:
+        To handle authentication errors (401 responses), subclasses must implement
+        the `_handle_auth_error()` method. This method is called automatically
+        when a 401 Unauthorized response is received, allowing for token refresh
+        or other authentication recovery mechanisms.
+
+        Example:
+            >>> class MyClient(GenericClient):
+            ...     async def _handle_auth_error(self):
+            ...         # Implement token refresh logic here
+            ...         await self.refresh_token()
+            ...         # Update credentials or headers as needed
     """
 
     def __init__(
@@ -46,6 +59,126 @@ class GenericClient(ClientInterface):
         """
         raise NotImplementedError("load method is not implemented")
 
+    async def _handle_auth_error(self) -> None:
+        """
+        Handle authentication errors (401 Unauthorized responses).
+
+        This method is called automatically when a 401 Unauthorized response is received
+        during HTTP requests. Subclasses should override this method to implement
+        authentication recovery mechanisms such as token refresh.
+
+        The method is called before retrying the request, allowing the subclass to:
+        - Refresh expired tokens
+        - Update authentication headers
+        - Re-authenticate with the service
+        - Update stored credentials
+
+        Example:
+            >>> async def _handle_auth_error(self):
+            ...     # Refresh the access token
+            ...     new_token = await self.refresh_access_token()
+            ...     # Update the authorization header
+            ...     self.auth_headers = {"Authorization": f"Bearer {new_token}"}
+
+        Note:
+            This method is optional. If not implemented, 401 errors will not trigger
+            retries and will result in request failure.
+        """
+        # This is a hook method - subclasses should override to implement auth recovery
+        raise NotImplementedError(
+            "Subclasses must implement _handle_auth_error to handle authentication errors"
+        )
+
+    async def _handle_http_response(
+        self,
+        response: httpx.Response,
+        url: str,
+        attempt: int,
+        max_retries: int,
+        base_wait_time: int,
+    ) -> tuple[Optional[httpx.Response], bool]:
+        """
+        Handle HTTP response and determine if retry is needed.
+
+        Args:
+            response: The HTTP response to handle
+            url: The URL that was requested
+            attempt: Current attempt number
+            max_retries: Maximum number of retry attempts
+            base_wait_time: Base wait time for exponential backoff
+
+        Returns:
+            Tuple of (response_or_none, should_retry)
+        """
+        # Get status phrase once for all cases
+        try:
+            status_phrase = httpx.codes.get_reason_phrase(response.status_code)
+        except ValueError:
+            # Handle non-standard status codes
+            status_phrase = f"Unknown Status {response.status_code}"
+
+        # Success case - return immediately
+        if response.is_success:
+            return response, False  # Don't retry, return success
+
+        # Handle 401 Unauthorized - subclasses can create a custom function to handle auth errors
+        elif response.status_code == httpx.codes.UNAUTHORIZED:
+            logger.warning(
+                f"Received 401 {status_phrase} (attempt {attempt + 1}/{max_retries}) (url={url})"
+            )
+            # Subclasses can override _handle_auth_error to implement token refresh
+            try:
+                await self._handle_auth_error()
+                logger.info("Auth error handler called successfully, retrying request")
+                return None, True  # Retry after auth refresh
+            except NotImplementedError:
+                logger.error(
+                    "401 error - implement _handle_auth_error method to handle authentication"
+                )
+                return None, False  # Don't retry
+            except Exception as e:
+                logger.error(f"Auth error handler failed: {e}")
+                return None, False  # Don't retry on auth handler failure
+
+        # Handle 429 Too Many Requests - wait and retry with exponential backoff
+        elif response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            retry_after = response.headers.get("Retry-After")
+
+            try:
+                if retry_after and retry_after.isdigit():
+                    server_wait_time = int(retry_after)
+                    wait_time = max(server_wait_time, base_wait_time)
+                    logger.warning(
+                        f"Received 429 {status_phrase} (url={url}). Server suggests {server_wait_time}s, using {wait_time}s base wait time..."
+                    )
+                else:
+                    wait_time = base_wait_time
+                    logger.warning(
+                        f"Received 429 with invalid Retry-After: '{retry_after}' (url={url}). Using default {wait_time}s base wait time..."
+                    )
+            except Exception as e:
+                wait_time = base_wait_time
+                logger.warning(
+                    f"Received 429 {status_phrase} (url={url}). Error parsing Retry-After header: {e}. Using default {wait_time}s base wait time..."
+                )
+
+            # Apply exponential backoff with jitter
+            retry_number = attempt + 1
+            backoff_multiplier = 2 ** (retry_number - 1)
+            jitter = random.uniform(0.8, 1.2)  # Add jitter to prevent thundering herd
+            final_wait_time = int(wait_time * backoff_multiplier * jitter)
+
+            # Sleep and increment attempt
+            await asyncio.sleep(final_wait_time)
+            return None, True  # Retry after waiting
+
+        # Handle all other error status codes
+        else:
+            logger.error(
+                f"Request failed with status {response.status_code} {status_phrase} (url={url}): {response.text}"
+            )
+            return None, False  # Don't retry
+
     async def execute_http_get_request(
         self,
         url: str,
@@ -67,7 +200,7 @@ class GenericClient(ClientInterface):
             url (str): The URL to make the GET request to
             headers (Optional[Dict[str, str]]): HTTP headers to include in the request
             params (Optional[Dict[str, Any]]): Query parameters to include in the request
-            max_retries (int): Maximum number of retry attempts. Defaults to 3.
+            max_retries (int): Maximum number of retry attempts. Defaults to 3. Max is 10.
             base_wait_time (int): Base wait time in seconds for exponential backoff. Defaults to 10.
             timeout (int): Request timeout in seconds. Defaults to 10.
 
@@ -82,110 +215,20 @@ class GenericClient(ClientInterface):
             ... )
         """
         attempt = 0
-        while attempt < max_retries:
+        while attempt < min(max_retries, 10):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.get(url, headers=headers, params=params)
 
-                    # Handle 401 Unauthorized - subclasses can create a custom function to handle auth errors
-                    if response.status_code == 401:
-                        logger.warning(
-                            f"Received 401 Unauthorized (attempt {attempt + 1}/{max_retries}) (url={url})"
-                        )
-                        # Subclasses can override _handle_auth_error to implement token refresh
-                        if hasattr(self, "_handle_auth_error"):
-                            await self._handle_auth_error()
-                            attempt += 1
-                            continue
-                        else:
-                            logger.error(
-                                "401 error - implement _handle_auth_error method to handle authentication"
-                            )
-                            return None
+                    result, should_retry = await self._handle_http_response(
+                        response, url, attempt, max_retries, base_wait_time
+                    )
 
-                    # Handle 429 Too Many Requests - wait and retry with exponential backoff
-                    elif response.status_code == 429:
-                        retry_after = response.headers.get("Retry-After")
-
-                        try:
-                            if retry_after and retry_after.isdigit():
-                                server_wait_time = int(retry_after)
-                                wait_time = max(server_wait_time, base_wait_time)
-                                logger.warning(
-                                    f"Received 429 Too Many Requests (url={url}). Server suggests {server_wait_time}s, using {wait_time}s base wait time..."
-                                )
-                            else:
-                                wait_time = base_wait_time
-                                logger.warning(
-                                    f"Received 429 with invalid Retry-After: '{retry_after}' (url={url}). Using default {wait_time}s base wait time..."
-                                )
-                        except Exception as e:
-                            wait_time = base_wait_time
-                            logger.error(
-                                f"Received 429 Too Many Requests (url={url}). Error parsing Retry-After header: {e}. Using default {wait_time}s base wait time..."
-                            )
-
-                        # Apply exponential backoff with jitter
-                        retry_number = attempt + 1
-                        backoff_multiplier = 2 ** (retry_number - 1)
-                        jitter = random.uniform(
-                            0.8, 1.2
-                        )  # Add jitter to prevent thundering herd
-                        final_wait_time = int(wait_time * backoff_multiplier * jitter)
-
-                        # Sleep and increment attempt
-                        await asyncio.sleep(final_wait_time)
+                    if should_retry:
                         attempt += 1
                         continue
-
-                    # Handle expected failures - return None
-                    elif response.status_code in [403, 404, 422, 423, 424, 425]:
-                        status_messages = {
-                            403: "Forbidden - User does not have permission",
-                            404: "Not Found - Resource does not exist",
-                            422: "Unprocessable Entity - Request validation failed",
-                            423: "Locked - Resource is locked",
-                            424: "Failed Dependency - Request failed due to dependency",
-                            425: "Too Early - Request sent too early",
-                        }
-                        log_level = (
-                            logger.debug
-                            if response.status_code == 404
-                            else logger.warning
-                        )
-                        log_level(
-                            f"Received {response.status_code} {status_messages[response.status_code]} (url={url}): {response.text}"
-                        )
-                        return None
-
-                    # Handle server errors - return None
-                    elif response.status_code in [500, 503, 504]:
-                        status_messages = {
-                            500: "Internal Server Error",
-                            503: "Service Unavailable",
-                            504: "Gateway Timeout",
-                        }
-                        logger.error(
-                            f"Received {response.status_code} {status_messages[response.status_code]} (url={url}): {response.text}"
-                        )
-                        return None
-
-                    # Handle other errors
-                    elif not response.is_success:
-                        logger.error(
-                            f"Request failed with status {response.status_code} (url={url}): {response.text}"
-                        )
-                        return None
-
-                    # Success case
-                    elif response.is_success:
-                        return response
-
-                    # send to retry - unaccounted for status code
                     else:
-                        raise Exception(
-                            f"Unexpected status code {response.status_code}: {response.text}"
-                        )
+                        return result
 
             except httpx.RequestError as e:
                 logger.warning(
@@ -230,7 +273,7 @@ class GenericClient(ClientInterface):
             json_data (Optional[Dict[str, Any]]): JSON data to send in the request body
             headers (Optional[Dict[str, str]]): HTTP headers to include in the request
             params (Optional[Dict[str, Any]]): Query parameters to include in the request
-            max_retries (int): Maximum number of retry attempts. Defaults to 3.
+            max_retries (int): Maximum number of retry attempts. Defaults to 3. Max is 10.
             base_wait_time (int): Base wait time in seconds for exponential backoff. Defaults to 10.
             timeout (int): Request timeout in seconds. Defaults to 30.
 
@@ -245,112 +288,22 @@ class GenericClient(ClientInterface):
             ... )
         """
         attempt = 0
-        while attempt < max_retries:
+        while attempt < min(max_retries, 10):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     response = await client.post(
                         url, data=data, json=json_data, headers=headers, params=params
                     )
 
-                    # Handle 401 Unauthorized - subclasses can override to handle auth refresh
-                    if response.status_code == 401:
-                        logger.warning(
-                            f"Received 401 Unauthorized (attempt {attempt + 1}/{max_retries}) (url={url})"
-                        )
-                        # Subclasses can override _handle_auth_error to implement token refresh
-                        if hasattr(self, "_handle_auth_error"):
-                            await self._handle_auth_error()
-                            attempt += 1
-                            continue
-                        else:
-                            logger.error(
-                                "401 error - implement _handle_auth_error method to handle authentication"
-                            )
-                            return None
+                    result, should_retry = await self._handle_http_response(
+                        response, url, attempt, max_retries, base_wait_time
+                    )
 
-                    # Handle 429 Too Many Requests - wait and retry with exponential backoff
-                    elif response.status_code == 429:
-                        retry_after = response.headers.get("Retry-After")
-
-                        try:
-                            if retry_after and retry_after.isdigit():
-                                server_wait_time = int(retry_after)
-                                wait_time = max(server_wait_time, base_wait_time)
-                                logger.warning(
-                                    f"Received 429 Too Many Requests (url={url}). Server suggests {server_wait_time}s, using {wait_time}s base wait time..."
-                                )
-                            else:
-                                wait_time = base_wait_time
-                                logger.warning(
-                                    f"Received 429 with invalid Retry-After: '{retry_after}' (url={url}). Using default {wait_time}s base wait time..."
-                                )
-                        except Exception as e:
-                            wait_time = base_wait_time
-                            logger.error(
-                                f"Received 429 Too Many Requests (url={url}). Error parsing Retry-After header: {e}. Using default {wait_time}s base wait time..."
-                            )
-
-                        # Apply exponential backoff with jitter
-                        retry_number = attempt + 1
-                        backoff_multiplier = 2 ** (retry_number - 1)
-                        jitter = random.uniform(
-                            0.8, 1.2
-                        )  # Add jitter to prevent thundering herd
-                        final_wait_time = int(wait_time * backoff_multiplier * jitter)
-
-                        # Sleep and increment attempt
-                        await asyncio.sleep(final_wait_time)
+                    if should_retry:
                         attempt += 1
                         continue
-
-                    # Handle expected failures - return None
-                    elif response.status_code in [403, 404, 422, 423, 424, 425]:
-                        status_messages = {
-                            403: "Forbidden - User does not have permission",
-                            404: "Not Found - Resource does not exist",
-                            422: "Unprocessable Entity - Request validation failed",
-                            423: "Locked - Resource is locked",
-                            424: "Failed Dependency - Request failed due to dependency",
-                            425: "Too Early - Request sent too early",
-                        }
-                        log_level = (
-                            logger.debug
-                            if response.status_code == 404
-                            else logger.warning
-                        )
-                        log_level(
-                            f"Received {response.status_code} {status_messages[response.status_code]} (url={url}): {response.text}"
-                        )
-                        return None
-
-                    # Handle server errors - return None
-                    elif response.status_code in [500, 503, 504]:
-                        status_messages = {
-                            500: "Internal Server Error",
-                            503: "Service Unavailable",
-                            504: "Gateway Timeout",
-                        }
-                        logger.error(
-                            f"Received {response.status_code} {status_messages[response.status_code]} (url={url}): {response.text}"
-                        )
-                        return None
-
-                    # Handle other errors
-                    elif not response.is_success:
-                        logger.error(
-                            f"Request failed with status {response.status_code} (url={url}): {response.text}"
-                        )
-                        return None
-
-                    # Success case
-                    elif response.is_success:
-                        return response
-
-                    # send to retry - unaccounted for status code
                     else:
-                        raise Exception(
-                            f"Unexpected status code {response.status_code}: {response.text}"
-                        )
+                        return result
 
             except httpx.RequestError as e:
                 log_level = (

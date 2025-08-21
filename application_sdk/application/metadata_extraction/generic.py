@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional, Tuple, Type
+from typing import List, Optional, Tuple, Type
 
 from application_sdk.activities.metadata_extraction.generic import (
     GenericMetadataExtractionActivities,
@@ -115,48 +115,6 @@ class GenericMetadataExtractionApplication(BaseApplication):
             activity_executor=activity_executor,
             max_concurrent_activities=max_concurrent_activities,
         )
-
-    @observability(logger=logger, metrics=metrics, traces=traces)
-    async def start_workflow(
-        self,
-        workflow_args: Dict[str, Any],
-        workflow_class: Type[WorkflowInterface],
-    ) -> Any:
-        """
-        Start a new workflow execution for generic metadata extraction.
-
-        Args:
-            workflow_args (Dict[str, Any]): Arguments to pass to the workflow (credentials, connection, metadata, etc.).
-            workflow_class (Type[WorkflowInterface]): Workflow class to use. Users must provide their own workflow implementation.
-
-        Returns:
-            Any: The workflow response from the workflow client.
-
-        Raises:
-            ValueError: If the workflow client is not initialized.
-        """
-        if self.workflow_client is None:
-            raise ValueError("Workflow client not initialized")
-
-        workflow_response = await self.workflow_client.start_workflow(
-            workflow_args, workflow_class
-        )
-        return workflow_response
-
-    @observability(logger=logger, metrics=metrics, traces=traces)
-    async def start_worker(self, daemon: bool = True):
-        """
-        Start the worker for the generic metadata extraction application.
-
-        Args:
-            daemon (bool): Whether to run the worker in daemon mode. Defaults to True.
-
-        Raises:
-            ValueError: If the worker is not initialized.
-        """
-        if self.worker is None:
-            raise ValueError("Worker not initialized")
-        await self.worker.start(daemon=daemon)
 
     @observability(logger=logger, metrics=metrics, traces=traces)
     async def setup_server(
