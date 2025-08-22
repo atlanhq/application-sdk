@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 if TYPE_CHECKING:
-    import daft
+    import daft  # type: ignore
     import pandas as pd
 
 
@@ -32,7 +32,7 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
     if chunk_start is None:
         return f"{str(chunk_count)}.json"
     else:
-        return f"{chunk_start}-{chunk_count}.json"
+        return f"chunk-{chunk_start}-part{chunk_count}.json"
 
 
 def convert_datetime_to_epoch(data: Any) -> Any:
@@ -51,22 +51,6 @@ def convert_datetime_to_epoch(data: Any) -> Any:
     elif isinstance(data, list):
         return [convert_datetime_to_epoch(item) for item in data]
     return data
-
-
-def estimate_dataframe_json_size(dataframe: "pd.DataFrame") -> int:
-    """Estimate JSON size of a DataFrame by sampling a few records."""
-    if len(dataframe) == 0:
-        return 0
-
-    # Sample up to 10 records to estimate average size
-    sample_size = min(10, len(dataframe))
-    sample = dataframe.head(sample_size)
-    sample_json = sample.to_json(orient="records", lines=True)
-    if sample_json is not None:
-        avg_record_size = len(sample_json.encode("utf-8")) / sample_size
-        return int(avg_record_size * len(dataframe))
-
-    return 0
 
 
 class JsonOutput(Output):
@@ -193,7 +177,7 @@ class JsonOutput(Output):
 
             for chunk in chunks:
                 # Estimate size of this chunk
-                chunk_size_bytes = estimate_dataframe_json_size(chunk)
+                chunk_size_bytes = self.estimate_dataframe_file_size(chunk, "json")
 
                 # Check if adding this chunk would exceed size limit
                 if (
