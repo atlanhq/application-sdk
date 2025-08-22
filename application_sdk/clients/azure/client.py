@@ -4,6 +4,35 @@ Azure client implementation for the application-sdk framework.
 This module provides the main AzureClient class that serves as a unified interface
 for connecting to and interacting with Azure Storage services. It supports Service Principal
 authentication and provides service-specific subclients.
+
+Example:
+    >>> from application_sdk.clients.azure.client import AzureClient
+    >>> from application_sdk.clients.azure.auth import AzureAuthProvider
+    >>>
+    >>> # Create Azure client with Service Principal credentials
+    >>> credentials = {
+    ...     "tenant_id": "your-tenant-id",
+    ...     "client_id": "your-client-id",
+    ...     "client_secret": "your-client-secret"
+    ... }
+    >>>
+    >>> client = AzureClient(credentials)
+    >>> await client.load()
+    >>>
+    >>> # Check client health
+    >>> health_status = await client.health_check()
+    >>> print(f"Overall health: {health_status.overall_health}")
+    >>> print(f"Connection health: {health_status.connection_health}")
+    >>>
+    >>> # Access health status details
+    >>> for service_name, service_health in health_status.services.items():
+    ...     print(f"{service_name}: {service_health.status}")
+    ...     if service_health.error:
+    ...         print(f"  Error: {service_health.error}")
+    >>>
+    >>> # Get service-specific clients
+    >>> blob_service = client.get_service("blob")
+    >>> container_client = blob_service.get_container_client("my-container")
 """
 
 import asyncio
@@ -12,13 +41,43 @@ from typing import Any, Dict, Optional
 
 from azure.core.credentials import TokenCredential
 from azure.core.exceptions import AzureError, ClientAuthenticationError
+from pydantic import BaseModel
 
 from application_sdk.clients import ClientInterface
-from application_sdk.clients.azure.azure_auth import AzureAuthProvider
+from application_sdk.clients.azure.auth import AzureAuthProvider
 from application_sdk.common.error_codes import ClientError
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Azure Management API endpoint for token acquisition
+AZURE_MANAGEMENT_API_ENDPOINT = "https://management.azure.com/.default"
+
+
+class ServiceHealth(BaseModel):
+    """Model for individual service health status.
+
+    Attributes:
+        status: The health status of the service (e.g., "healthy", "error", "unknown")
+        error: Optional error message if the service is unhealthy
+    """
+
+    status: str
+    error: Optional[str] = None
+
+
+class HealthStatus(BaseModel):
+    """Model for overall Azure client health status.
+
+    Attributes:
+        connection_health: Whether the Azure connection is healthy
+        services: Dictionary mapping service names to their health status
+        overall_health: Overall health status considering connection and services
+    """
+
+    connection_health: bool
+    services: Dict[str, ServiceHealth]
+    overall_health: bool
 
 
 class AzureClient(ClientInterface):
@@ -173,18 +232,18 @@ class AzureClient(ClientInterface):
         """
         raise ValueError(f"Unsupported service type: {service_type}")
 
-    async def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> HealthStatus:
         """
         Perform health check on Azure connection and services.
 
         Returns:
-            Dict[str, Any]: Health status information.
+            HealthStatus: Health status information.
         """
-        health_status = {
-            "connection_health": self._connection_health,
-            "services": {},
-            "overall_health": False,
-        }
+        health_status = HealthStatus(
+            connection_health=self._connection_health,
+            services={},
+            overall_health=False,
+        )
 
         if not self._connection_health:
             return health_status
@@ -194,19 +253,34 @@ class AzureClient(ClientInterface):
             try:
                 if hasattr(service_client, "health_check"):
                     service_health = await service_client.health_check()
+                    # Handle different return types from service health checks
+                    if isinstance(service_health, dict):
+                        status = service_health.get("status", "unknown")
+                        error = service_health.get("error")
+                    elif hasattr(service_health, "status"):
+                        # Handle Pydantic models or objects with status attribute
+                        status = getattr(service_health, "status", "unknown")
+                        error = getattr(service_health, "error", None)
+                    else:
+                        # Fallback for unexpected return types
+                        status = "unknown"
+                        error = f"Unexpected health check return type: {type(service_health)}"
                 else:
-                    service_health = {"status": "unknown"}
+                    status = "unknown"
+                    error = None
 
-                health_status["services"][service_name] = service_health
+                health_status.services[service_name] = ServiceHealth(
+                    status=status,
+                    error=error,
+                )
             except Exception as e:
-                health_status["services"][service_name] = {
-                    "status": "error",
-                    "error": str(e),
-                }
+                health_status.services[service_name] = ServiceHealth(
+                    status="error", error=str(e)
+                )
 
         # Overall health is True if connection is healthy and at least one service is available
-        health_status["overall_health"] = (
-            self._connection_health and len(health_status["services"]) > 0
+        health_status.overall_health = (
+            self._connection_health and len(health_status.services) > 0
         )
 
         return health_status
@@ -228,7 +302,7 @@ class AzureClient(ClientInterface):
             await asyncio.get_event_loop().run_in_executor(
                 self._executor,
                 self.credential.get_token,
-                "https://management.azure.com/.default",
+                AZURE_MANAGEMENT_API_ENDPOINT,
             )
         except Exception as e:
             raise ClientAuthenticationError(f"Connection test failed: {str(e)}")

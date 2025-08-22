@@ -3,6 +3,58 @@ Azure authentication provider for the application-sdk framework.
 
 This module provides the AzureAuthProvider class that handles Azure
 Service Principal authentication for the application-sdk framework.
+
+Example:
+    >>> from application_sdk.clients.azure.auth import AzureAuthProvider
+    >>> import asyncio
+    >>>
+    >>> # Create authentication provider
+    >>> auth_provider = AzureAuthProvider()
+    >>>
+    >>> # Authenticate with Service Principal credentials
+    >>> credentials = {
+    ...     "tenant_id": "your-tenant-id",
+    ...     "client_id": "your-client-id",
+    ...     "client_secret": "your-client-secret"
+    ... }
+    >>>
+    >>> # Create credential
+    >>> credential = await auth_provider.create_credential(
+    ...     auth_type="service_principal",
+    ...     credentials=credentials
+    ... )
+    >>>
+    >>> # Alternative credential key formats are also supported
+    >>> alt_credentials = {
+    ...     "tenantId": "your-tenant-id",      # camelCase
+    ...     "clientId": "your-client-id",      # camelCase
+    ...     "clientSecret": "your-client-secret"  # camelCase
+    ... }
+    >>>
+    >>> credential = await auth_provider.create_credential(
+    ...     auth_type="service_principal",
+    ...     credentials=alt_credentials
+    ... )
+    >>>
+    >>> # Error handling for missing credentials
+    >>> try:
+    ...     await auth_provider.create_credential(
+    ...         auth_type="service_principal",
+    ...         credentials={"tenant_id": "only-tenant"}  # Missing client_id and client_secret
+    ...     )
+    ... except CommonError as e:
+    ...     print(f"Authentication failed: {e}")
+    ...     # Output: Authentication failed: Missing required credential keys: client_id, client_secret
+    >>>
+    >>> # Unsupported authentication type
+    >>> try:
+    ...     await auth_provider.create_credential(
+    ...         auth_type="unsupported_type",
+    ...         credentials=credentials
+    ...     )
+    ... except CommonError as e:
+    ...     print(f"Authentication failed: {e}")
+    ...     # Output: Authentication failed: Only 'service_principal' authentication is supported. Received: unsupported_type
 """
 
 import asyncio
@@ -99,10 +151,20 @@ class AzureAuthProvider:
             "clientSecret"
         )
 
-        if not all([tenant_id, client_id, client_secret]):
+        # Check which specific keys are missing and provide detailed error message
+        missing_keys = []
+        if not tenant_id:
+            missing_keys.append("tenant_id")
+        if not client_id:
+            missing_keys.append("client_id")
+        if not client_secret:
+            missing_keys.append("client_secret")
+
+        if missing_keys:
             raise CommonError(
                 f"{CommonError.CREDENTIALS_PARSE_ERROR}: "
-                "tenant_id, client_id, and client_secret are required for "
+                f"Missing required credential keys: {', '.join(missing_keys)}. "
+                "All of tenant_id, client_id, and client_secret are required for "
                 "service principal authentication"
             )
 

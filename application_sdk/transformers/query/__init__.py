@@ -205,9 +205,9 @@ class QueryBasedTransformer(TransformerInterface):
             Optional[daft.Expression]: The constructed struct expression or None if all fields are null
         """
         # DEBUG: Inspect the level and prefix values
-        logger.info(f"=== DEBUG: _build_struct called ===")
-        logger.info(f"level: {level} (type: {type(level)})")
-        logger.info(f"prefix: {prefix} (type: {type(prefix)})")
+        logger.debug(f"=== DEBUG: _build_struct called ===")
+        logger.debug(f"level: {level} (type: {type(level)})")
+        logger.debug(f"prefix: {prefix} (type: {type(prefix)})")
 
         # Check if level is None
         if level is None:
@@ -301,8 +301,8 @@ class QueryBasedTransformer(TransformerInterface):
         try:
             # Get all column names
             columns = dataframe.column_names
-            logger.info(f"=== DEBUG: get_grouped_dataframe_by_prefix ===")
-            logger.info(f"Input DataFrame columns: {columns}")
+            logger.debug(f"=== DEBUG: get_grouped_dataframe_by_prefix ===")
+            logger.debug(f"Input DataFrame columns: {columns}")
 
             # Group columns by their path components
             path_groups = {}
