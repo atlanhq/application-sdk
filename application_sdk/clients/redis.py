@@ -8,10 +8,13 @@ from redis.sentinel import Sentinel
 from application_sdk.constants import (
     REDIS_CONNECTION_POOL_SIZE,
     REDIS_DB,
+    REDIS_HOST,
     REDIS_PASSWORD,
+    REDIS_PORT,
     REDIS_SENTINEL_HOSTS,
     REDIS_SENTINEL_SERVICE_NAME,
     REDIS_SOCKET_TIMEOUT,
+    STRICT_LOCKING_ENABLED,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -51,25 +54,32 @@ class RedisClient:
         self.connected = False
 
     def connect(self) -> None:
-        """Establish connection to Redis (Sentinel or standalone mode).
+        """Establish connection to Redis only if strict locking is enabled."""
 
-        Gracefully handles connection failures to allow app to continue
-        functioning without distributed locking capabilities.
-        """
+        if not STRICT_LOCKING_ENABLED:
+            logger.info("Strict locking disabled - skipping Redis connection")
+            self.connected = False
+            return
+
+        # Only try to connect if strict locking is enabled
         try:
             if REDIS_SENTINEL_HOSTS:
                 self._connect_via_sentinel()
-            else:
+            elif REDIS_HOST and REDIS_PORT:
                 self._connect_standalone()
+            else:
+                raise ValueError("No Redis hosts configured")
 
             self.redis_client.ping()  # type: ignore
             self.connected = True
-            logger.info("Redis connection established successfully")
+            logger.info("Redis connection established for strict locking")
 
         except Exception as e:
-            logger.warning(f"Redis connection failed: {e}")
-            logger.warning("Application will continue without distributed locking")
-            self.connected = False
+            logger.error(f"Redis connection failed with strict locking enabled: {e}")
+            # In strict mode, Redis failure is critical
+            raise RuntimeError(
+                f"Cannot enable strict locking - Redis connection failed: {e}"
+            )
 
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel for high availability."""
@@ -112,9 +122,7 @@ class RedisClient:
 
     def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance."""
-        from application_sdk.constants import REDIS_HOST, REDIS_PORT
-
-        logger.info(f"Connecting to standalone Redis: {REDIS_HOST}:{REDIS_PORT}")
+        logger.debug(f"Connecting to standalone Redis: {REDIS_HOST}:{REDIS_PORT}")
 
         self.redis_client = redis.Redis(
             host=REDIS_HOST,
@@ -152,24 +160,43 @@ class RedisClient:
         except Exception:
             return False
 
-    def _release_lock(self, resource_id: str, owner_id: str) -> bool:
+    def _release_lock(self, resource_id: str, owner_id: str) -> tuple[bool, str]:
         """Safely release a lock with ownership verification."""
         if not self.connected or not self.redis_client:
-            return False
+            return False, "not_connected"
 
         try:
             release_script = """
             local current_owner = redis.call("GET", KEYS[1])
-            if current_owner == ARGV[1] then
-                return redis.call("DEL", KEYS[1])
+            if current_owner == false then
+                return -1  -- Key doesn't exist
+            elseif current_owner ~= ARGV[1] then
+                return -2  -- Wrong owner
             else
-                return 0
+                return redis.call("DEL", KEYS[1])  -- Success (returns 1)
             end
             """
             result = self.redis_client.eval(release_script, 1, resource_id, owner_id)
-            return bool(result)
-        except Exception:
-            return False
+
+            # Fix: Cast result to int and handle type safety
+            if not isinstance(result, int):
+                logger.warning(
+                    f"Unexpected eval result type: {type(result)}, value: {result}"
+                )
+                return False, "unexpected_result_type"
+
+            if result >= 1:
+                return True, "success"
+            elif result == -1:
+                return True, "already_released"  # Not an error - TTL expired
+            elif result == -2:
+                return False, "wrong_owner"
+            else:
+                return False, "unknown_error"
+
+        except Exception as e:
+            logger.warning(f"Lock release failed: {e}")
+            return False, "redis_error"
 
     def health_check(self) -> bool:
         """Check if Redis connection is healthy."""

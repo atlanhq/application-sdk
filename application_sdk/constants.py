@@ -193,9 +193,9 @@ LOCK_METADATA_KEY = "__lock_metadata__"
 
 # Redis Lock Configuration
 #: Redis host for direct connection (when not using Sentinel)
-REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_HOST = os.getenv("REDIS_HOST", "")
 #: Redis port for direct connection (when not using Sentinel)
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_PORT = int(os.getenv("REDIS_PORT", ""))
 #: Redis database number
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 #: Redis password
@@ -210,3 +210,5 @@ REDIS_CONNECTION_POOL_SIZE = int(os.getenv("REDIS_CONNECTION_POOL_SIZE", "10"))
 REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", "5.0"))
 #: Redis health check interval in seconds
 REDIS_HEALTH_CHECK_INTERVAL = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))
+#: Whether to enable strict locking
+STRICT_LOCKING_ENABLED = os.getenv("STRICT_LOCKING_ENABLED", "false").lower() == "true"
