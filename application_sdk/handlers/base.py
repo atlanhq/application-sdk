@@ -1,4 +1,4 @@
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from application_sdk.clients.base import BaseClient
 from application_sdk.handlers import HandlerInterface
@@ -17,7 +17,7 @@ class BaseHandler(HandlerInterface):
         client (BaseClient): The client instance for connecting to the target system.
     """
 
-    def __init__(self, client: BaseClient | None = None):
+    def __init__(self, client: Optional[BaseClient] = None):
         """
         Initialize the base handler.
 

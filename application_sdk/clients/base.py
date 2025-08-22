@@ -1,6 +1,6 @@
 import asyncio
 import random
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 
@@ -96,7 +96,7 @@ class BaseClient(ClientInterface):
         attempt: int,
         max_retries: int,
         base_wait_time: int,
-    ) -> tuple[Optional[httpx.Response], bool]:
+    ) -> Tuple[Optional[httpx.Response], bool]:
         """
         Handle HTTP response and determine if retry is needed.
 

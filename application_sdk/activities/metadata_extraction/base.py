@@ -18,9 +18,9 @@ activity.logger = logger
 class BaseMetadataExtractionActivitiesState(ActivitiesState):
     """State for base metadata extraction activities."""
 
-    client: Optional[Type[BaseClient]] = None
-    handler: Optional[Type[BaseHandler]] = None
-    transformer: Optional[Type[TransformerInterface]] = None
+    client: Optional[BaseClient] = None
+    handler: Optional[BaseHandler] = None
+    transformer: Optional[TransformerInterface] = None
 
 
 class BaseMetadataExtractionActivities(ActivitiesInterface):
