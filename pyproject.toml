@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc31"
+version = "0.1.1rc32"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -49,7 +49,7 @@ pandas = [
     "pandas>=2.2.3"
 ]
 daft = [
-    "daft[sql]>=0.4.12",
+    "daft>=0.4.12",
 ]
 iceberg = [
     "pyiceberg>=0.8.1",
