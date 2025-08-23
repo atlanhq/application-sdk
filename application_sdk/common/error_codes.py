@@ -276,6 +276,15 @@ class CommonError(AtlanError):
     CREDENTIALS_RESOLUTION_ERROR = ErrorCode(
         ErrorComponent.COMMON, "401", "03", "Credentials resolution error"
     )
+    AZURE_CREDENTIAL_ERROR = ErrorCode(
+        ErrorComponent.COMMON, "401", "04", "Azure credential error"
+    )
+    AZURE_CONNECTION_ERROR = ErrorCode(
+        ErrorComponent.COMMON, "503", "01", "Azure connection error"
+    )
+    AZURE_SERVICE_ERROR = ErrorCode(
+        ErrorComponent.COMMON, "500", "01", "Azure service error"
+    )
 
 
 class DocGenError(AtlanError):

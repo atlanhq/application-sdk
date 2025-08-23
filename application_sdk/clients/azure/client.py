@@ -46,6 +46,7 @@ from pydantic import BaseModel
 from application_sdk.clients import ClientInterface
 from application_sdk.clients.azure.auth import AzureAuthProvider
 from application_sdk.common.error_codes import ClientError
+from application_sdk.common.utils import run_sync
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -182,9 +183,21 @@ class AzureClient(ClientInterface):
         except AzureError as e:
             logger.error(f"Azure connection error: {str(e)}")
             raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+        except ValueError as e:
+            logger.error(f"Invalid Azure client parameters: {str(e)}")
+            raise ClientError(
+                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
+            )
+        except TypeError as e:
+            logger.error(f"Wrong Azure client parameter types: {str(e)}")
+            raise ClientError(
+                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameter types - {str(e)}"
+            )
         except Exception as e:
             logger.error(f"Unexpected error loading Azure client: {str(e)}")
-            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+            raise ClientError(
+                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
+            )
 
     async def close(self) -> None:
         """Close Azure connections and clean up resources."""
@@ -227,10 +240,11 @@ class AzureClient(ClientInterface):
             Any: The requested service client.
 
         Raises:
-            ValueError: If service_type is not supported.
-            ClientError: If client creation fails.
+            ClientError: If service_type is not supported or client creation fails.
         """
-        raise ValueError(f"Unsupported service type: {service_type}")
+        raise ClientError(
+            f"{ClientError.REQUEST_VALIDATION_ERROR}: Unsupported service type: {service_type}"
+        )
 
     async def health_check(self) -> HealthStatus:
         """
@@ -293,19 +307,31 @@ class AzureClient(ClientInterface):
             ClientAuthenticationError: If connection test fails.
         """
         if not self.credential:
-            raise ClientAuthenticationError(
-                "No credential available for connection test"
+            raise ClientError(
+                f"{ClientError.AUTH_CREDENTIALS_ERROR}: No credential available for connection test"
             )
 
         try:
             # Test the credential by getting a token
-            await asyncio.get_event_loop().run_in_executor(
-                self._executor,
-                self.credential.get_token,
-                AZURE_MANAGEMENT_API_ENDPOINT,
+            await run_sync(self.credential.get_token)(AZURE_MANAGEMENT_API_ENDPOINT)
+        except ClientAuthenticationError as e:
+            logger.error(
+                f"Azure connection test failed - authentication error: {str(e)}"
+            )
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+        except AzureError as e:
+            logger.error(f"Azure connection test failed - service error: {str(e)}")
+            raise ClientError(f"{ClientError.CLIENT_AUTH_ERROR}: {str(e)}")
+        except ValueError as e:
+            logger.error(f"Azure connection test failed - invalid parameters: {str(e)}")
+            raise ClientError(
+                f"{ClientError.INPUT_VALIDATION_ERROR}: Invalid parameters - {str(e)}"
             )
         except Exception as e:
-            raise ClientAuthenticationError(f"Connection test failed: {str(e)}")
+            logger.error(f"Azure connection test failed - unexpected error: {str(e)}")
+            raise ClientError(
+                f"{ClientError.CLIENT_AUTH_ERROR}: Unexpected error - {str(e)}"
+            )
 
     def __enter__(self):
         """Context manager entry."""
