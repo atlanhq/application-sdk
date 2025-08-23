@@ -131,7 +131,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "0.1.1rc30"
+version = "0.1.1rc32"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -149,7 +149,7 @@ dependencies = [
 
 [package.optional-dependencies]
 daft = [
-    { name = "daft", extra = ["sql"] },
+    { name = "daft" },
 ]
 iam-auth = [
     { name = "boto3" },
@@ -208,7 +208,7 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
-    { name = "daft", extras = ["sql"], marker = "extra == 'daft'", specifier = ">=0.4.12" },
+    { name = "daft", marker = "extra == 'daft'", specifier = ">=0.4.12" },
     { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
     { name = "duckdb", specifier = ">=1.1.3" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
@@ -560,28 +560,6 @@ wheels = [
 ]
 
 [[package]]
-name = "connectorx"
-version = "0.4.3"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c1/a3/6640323778323268a9a5c0090cc1951c31d0387af12af3c94d42b212427b/connectorx-0.4.3-cp311-cp311-macosx_10_7_x86_64.whl", hash = "sha256:5ffb92d51116a67a57d75c7427505e102b5ab8e71d96df2bbf5a0f0073284241", size = 36269796, upload-time = "2025-04-11T16:23:45.81Z" },
-    { url = "https://files.pythonhosted.org/packages/63/0c/31ec422b3daaf242c899acbe16249ab2c20dd1ed399bc80dacc46c7adb4d/connectorx-0.4.3-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:1fe7e4426982f91dcba74a0937696a339287f198e8c55d3186784b2ced2bff01", size = 34480226, upload-time = "2025-04-11T16:24:03.266Z" },
-    { url = "https://files.pythonhosted.org/packages/ae/66/1291628b6295c9f931263df6dd299e4b0820ce123068d63d1cf98df6c249/connectorx-0.4.3-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:34fa1c734ec670087ac9c2f4e2f66f594ae783773bc87f55324b26cf8521e4a3", size = 41676123, upload-time = "2025-04-11T16:24:22.709Z" },
-    { url = "https://files.pythonhosted.org/packages/9c/0e/f03f4d47a36ca3446b0c446b8e35bd796e0bdf7f9dd360a913c13e41b4c9/connectorx-0.4.3-cp311-cp311-manylinux_2_35_aarch64.whl", hash = "sha256:40ea58bd899d8d2cb37776dae53226a98e698587d8f9e37dbcf3a6e37e2209f8", size = 38901237, upload-time = "2025-04-11T16:23:28.898Z" },
-    { url = "https://files.pythonhosted.org/packages/b3/7f/4df0d2db54499958345f1af915431177df180a66435163d015b660712b69/connectorx-0.4.3-cp311-none-win_amd64.whl", hash = "sha256:241b84cf5a866f175f3ed204bf4c17bcbdfe50c05d745a48d193d7f164a32ae2", size = 32948137, upload-time = "2025-04-11T16:24:40.947Z" },
-    { url = "https://files.pythonhosted.org/packages/aa/f1/df5c7be74ec02d69afb22c9ca9e9bd5a6b18d9b0de47d6e1c810fb4a4695/connectorx-0.4.3-cp312-cp312-macosx_10_7_x86_64.whl", hash = "sha256:a461fa210f69419a04a21f596fe593ed104c5d22100c468042ee55b15219d3bd", size = 36272231, upload-time = "2025-04-11T16:23:50.143Z" },
-    { url = "https://files.pythonhosted.org/packages/10/b8/c7711d41db17e1d574ab0d53dd648a2fcda603cfee0abb2f027647531ce1/connectorx-0.4.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ba7afa7749a28d13ef4c0ca7cbd0e118d367db77f576c8a1fba42694dc9e3534", size = 34479924, upload-time = "2025-04-11T16:24:08.466Z" },
-    { url = "https://files.pythonhosted.org/packages/83/43/18d59d706aed986e56a0b7d5ab11ad5ce6ae145514afc8b1ae5ff2a067b8/connectorx-0.4.3-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:be944d72a8f64443efee5a0a992479d5d59608d36c348f24770b32a3b92537cf", size = 41675045, upload-time = "2025-04-11T16:24:27.297Z" },
-    { url = "https://files.pythonhosted.org/packages/d5/e5/21ac4560dc50f31f1a1031c40fef96bad3da791758549cb9d400772b72c4/connectorx-0.4.3-cp312-cp312-manylinux_2_35_aarch64.whl", hash = "sha256:a347c22fe4b8d4f37f478ad3b8f2fa7dd2eccd9cc42c5493a2e4246221df3218", size = 38893303, upload-time = "2025-04-11T16:23:33.19Z" },
-    { url = "https://files.pythonhosted.org/packages/b8/07/c21750870ab8cf6fd5b1e3068cb99630b294ef89f431627d3d00ea54179e/connectorx-0.4.3-cp312-none-win_amd64.whl", hash = "sha256:58906d50564b059086dd2283e975b6a8874ce78edfb2672623f2d003ed987675", size = 32932339, upload-time = "2025-04-11T16:24:44.621Z" },
-    { url = "https://files.pythonhosted.org/packages/e0/87/2cd961d3ad08944487fdd1d7b1b9b3b596d7bd98eea0f7e203cabf9a0e7b/connectorx-0.4.3-cp313-cp313-macosx_10_7_x86_64.whl", hash = "sha256:bcae0f740ec17d14692692fb66b9beb32e1d9112c7940d1cee48efc52eb8c441", size = 36273792, upload-time = "2025-04-11T16:23:54.588Z" },
-    { url = "https://files.pythonhosted.org/packages/68/53/b5e216c7966f860aba462d944b3266ce0e16ab502697df84fa5ea9326e0c/connectorx-0.4.3-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:2713f737f8cc8768598d287a5807c34588fef63a572750b54c49400be6e8aa8e", size = 34480916, upload-time = "2025-04-11T16:24:12.283Z" },
-    { url = "https://files.pythonhosted.org/packages/6b/ce/35508d6b8974cf8d4edb4439e93346dc9a2ea8a4c679a2ee3e831f8245f4/connectorx-0.4.3-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:2fcf42c9577e314d21caac0fa532ce485404ce3be082642e02543344ee0ca3b0", size = 41678049, upload-time = "2025-04-11T16:24:31.732Z" },
-    { url = "https://files.pythonhosted.org/packages/0c/3c/c7771b3af357f4ca32f9efd7eb440d705ac7e52abbb5111d987be3f22207/connectorx-0.4.3-cp313-cp313-manylinux_2_35_aarch64.whl", hash = "sha256:152746a662fec8bfbe520f127d2ca77a780fdc70ad1c199aadd7544612b291cc", size = 38891685, upload-time = "2025-04-11T16:23:37.012Z" },
-    { url = "https://files.pythonhosted.org/packages/b8/a9/0c80560fe59d4b7643ca6acd20c25b240335eb1c23a502bed1d102e0a485/connectorx-0.4.3-cp313-none-win_amd64.whl", hash = "sha256:b9408ee082985a66fedbf12328c655dc2a8d86e4c5127666ffcd81d0c79c4b76", size = 32945561, upload-time = "2025-04-11T16:24:48.32Z" },
-]
-
-[[package]]
 name = "constantly"
 version = "23.10.4"
 source = { registry = "https://pypi.org/simple" }
@@ -701,13 +679,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b1/93/9ee16e46fc04eefa632e58b7333fb432649c340ffcda450fe0fe4f590b68/daft-0.5.18-cp39-abi3-manylinux_2_24_aarch64.whl", hash = "sha256:f948990300f3d88ea505af49a2dc70d60720d510c5f28a05f88469ed6969efcd", size = 41796429, upload-time = "2025-08-08T10:17:13.755Z" },
     { url = "https://files.pythonhosted.org/packages/02/4a/5dbda507c93b09e26edb235a95db56afe68edaa1e240286e9c5a94445c7b/daft-0.5.18-cp39-abi3-manylinux_2_24_x86_64.whl", hash = "sha256:7b6d78fc45af586dcbcbe2734b4fb628d47604b56f1a0e9be606fa63166a0ce4", size = 44752470, upload-time = "2025-08-08T10:17:16.916Z" },
     { url = "https://files.pythonhosted.org/packages/e0/21/0b8dadc76079b9d2dee25d73d8678b5b9ea727ac2c88cb29964d6a30af89/daft-0.5.18-cp39-abi3-win_amd64.whl", hash = "sha256:46657067776be7058b59b870faed3468e842f07a1dfb1901485edbcf7ac68cf3", size = 43232060, upload-time = "2025-08-08T10:17:20.1Z" },
-]
-
-[package.optional-dependencies]
-sql = [
-    { name = "connectorx" },
-    { name = "sqlalchemy" },
-    { name = "sqlglot" },
 ]
 
 [[package]]
@@ -3113,15 +3084,6 @@ wheels = [
 [package.optional-dependencies]
 asyncio = [
     { name = "greenlet" },
-]
-
-[[package]]
-name = "sqlglot"
-version = "27.1.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/36/83/cb11690b1a2b56ae9c3581d6768baab1c65b4bb083d884fa56cfcc426db0/sqlglot-27.1.0.tar.gz", hash = "sha256:be8f5fde14a49744ab8c519ab1ea955668c1895b759ab18a7065b4e5d6de1c8e", size = 5379716, upload-time = "2025-07-18T16:26:56.975Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/91/c1/2358aa77cfccacaddae963355c8a031d4331371e524dafec500a237c0060/sqlglot-27.1.0-py3-none-any.whl", hash = "sha256:e70c7c9553bd3efca04a1115de65d4136fb8ce9f05c32f388962293e09e982d4", size = 485717, upload-time = "2025-07-18T16:26:54.279Z" },
 ]
 
 [[package]]

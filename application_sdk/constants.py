@@ -36,7 +36,7 @@ APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
-APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
+APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
 #: Port number for the application's HTTP server
 APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 #: Tenant ID for multi-tenant applications
@@ -128,6 +128,11 @@ DEPLOYMENT_OBJECT_STORE_NAME = os.getenv("DEPLOYMENT_OBJECT_STORE_NAME", "object
 UPSTREAM_OBJECT_STORE_NAME = os.getenv("UPSTREAM_OBJECT_STORE_NAME", "objectstore")
 #: Name of the pubsub component in DAPR
 EVENT_STORE_NAME = os.getenv("EVENT_STORE_NAME", "eventstore")
+#: DAPR binding operation for creating resources
+DAPR_BINDING_OPERATION_CREATE = "create"
+#: Version of worker start events used in the application
+WORKER_START_EVENT_VERSION = "v1"
+
 #: Whether to enable Atlan storage upload
 ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true"
 # Dapr Client Configuration
@@ -135,6 +140,7 @@ ENABLE_ATLAN_UPLOAD = os.getenv("ENABLE_ATLAN_UPLOAD", "false").lower() == "true
 DAPR_MAX_GRPC_MESSAGE_LENGTH = int(
     os.getenv("DAPR_MAX_GRPC_MESSAGE_LENGTH", "104857600")
 )
+
 #: Name of the deployment secret store component in DAPR
 DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
     "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"
