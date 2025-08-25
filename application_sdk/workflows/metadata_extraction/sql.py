@@ -118,17 +118,11 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         if activity_statistics.typename is None:
             raise ValueError("Invalid typename")
 
-        logger.info(f"Activity statistics: {activity_statistics}")
-
         batches, chunk_starts = self.get_transform_batches(
             activity_statistics.chunk_count,
             activity_statistics.typename,
             activity_statistics.partitions,
         )
-
-        logger.info(f"Type name: {activity_statistics.typename}")
-        logger.info(f"Batches: {batches}")
-        logger.info(f"Chunk starts: {chunk_starts}")
 
         for i in range(len(batches)):
             transform_activities.append(
