@@ -617,7 +617,10 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
         "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
     ):
         path = "/data"
-        file_names = ["one.json", "two.json"]  # Note: .json extension gets replaced
+        file_names = [
+            "one.parquet",
+            "two.parquet",
+        ]  # Note: .json extension gets replaced
         input_prefix = "remote"
 
         parquet_input = ParquetInput(

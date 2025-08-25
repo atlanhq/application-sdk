@@ -107,11 +107,12 @@ class TestOutput:
         """Test write_statistics successful case."""
         self.output.total_record_count = 100
         self.output.chunk_count = 5
+        self.output.statistics = [1, 2, 1, 2, 1]
 
         # Mock the open function, orjson.dumps, and push_file_to_object_store
         with patch("builtins.open", mock_open()) as mock_file, patch(
             "orjson.dumps",
-            return_value=b'{"total_record_count": 100, "chunk_count": 5}',
+            return_value=b'{"total_record_count": 100, "chunk_count": 5, "partitions": [1,2,1,2,1]}',
         ) as mock_orjson, patch(
             "application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store",
             new_callable=AsyncMock,
@@ -120,10 +121,18 @@ class TestOutput:
             stats = await self.output.write_statistics()
 
             # Assertions
-            assert stats == {"total_record_count": 100, "chunk_count": 5}
+            assert stats == {
+                "total_record_count": 100,
+                "chunk_count": 5,
+                "partitions": [1, 2, 1, 2, 1],
+            }
             mock_file.assert_called_once_with("/test/path/statistics.json.ignore", "w")
             mock_orjson.assert_called_once_with(
-                {"total_record_count": 100, "chunk_count": 5}
+                {
+                    "total_record_count": 100,
+                    "chunk_count": 5,
+                    "partitions": [1, 2, 1, 2, 1],
+                }
             )
             mock_push.assert_awaited_once_with(
                 "/test/prefix", "/test/path/statistics.json.ignore"
