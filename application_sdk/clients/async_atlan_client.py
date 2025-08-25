@@ -38,7 +38,7 @@ async def get_client(
 
     # Priority 1: Token-based auth (recommended for production)
     if final_token_guid:
-        if final_base_url or final_api_key:  # Check original params, not env vars
+        if final_base_url or final_api_key:
             logger.warning(
                 "Token auth takes precedence - ignoring base_url/api_key parameters as well as ATLAN_BASE_URL and ATLAN_API_KEY environment variables."
             )
