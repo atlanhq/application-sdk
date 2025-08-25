@@ -172,8 +172,9 @@ class ParquetOutput(Output):
                     chunk_part += 1
                     await self._flush_buffer(chunk_part)
 
-            chunk_part += 1
-            await self._flush_buffer(chunk_part)
+            if self.buffer and self.current_buffer_size > 0:
+                chunk_part += 1
+                await self._flush_buffer(chunk_part)
 
             # Record metrics for successful write
             self.metrics.record_metric(
