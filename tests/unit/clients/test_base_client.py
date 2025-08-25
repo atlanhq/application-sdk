@@ -1,8 +1,9 @@
-import asyncio
 from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+from httpx import Headers
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.clients.base import BaseClient
@@ -24,12 +25,20 @@ class TestBaseClient:
         """Test BaseClient initialization with default values."""
         client = BaseClient()
         assert client.credentials == {}
+        assert client.http_headers == {}
+        assert client.http_retry_transport is not None
 
     def test_initialization_with_credentials(self):
         """Test BaseClient initialization with credentials."""
         credentials = {"username": "test", "password": "secret"}
         client = BaseClient(credentials=credentials)
         assert client.credentials == credentials
+
+    def test_initialization_with_http_headers(self):
+        """Test BaseClient initialization with HTTP headers."""
+        headers = {"Authorization": "Bearer token", "User-Agent": "TestApp/1.0"}
+        client = BaseClient(http_headers=headers)
+        assert client.http_headers == headers
 
     @pytest.mark.asyncio
     async def test_load_not_implemented(self, base_client):
@@ -38,15 +47,6 @@ class TestBaseClient:
 
         with pytest.raises(NotImplementedError, match="load method is not implemented"):
             await base_client.load(credentials=credentials)
-
-    @pytest.mark.asyncio
-    async def test_handle_auth_error_not_implemented(self, base_client):
-        """Test that _handle_auth_error method raises NotImplementedError by default."""
-        with pytest.raises(
-            NotImplementedError,
-            match="Subclasses must implement _handle_auth_error to handle authentication errors",
-        ):
-            await base_client._handle_auth_error()
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
@@ -73,24 +73,60 @@ class TestBaseClient:
         )
 
         assert result == mock_response
+        # Verify that headers were merged correctly
+        expected_headers = Headers(base_client.http_headers)
+        expected_headers.update(headers)
         mock_client_instance.get.assert_called_once_with(
-            url, headers=headers, params=params
+            url, headers=expected_headers, params=params, auth=httpx.USE_CLIENT_DEFAULT
         )
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_401_error(
+    async def test_execute_http_get_request_with_client_headers(
         self, mock_async_client, base_client
     ):
-        """Test HTTP GET request with 401 error."""
-        # Mock response with 401
+        """Test HTTP GET request with client-level headers."""
+        # Set client-level headers
+        base_client.http_headers = {
+            "User-Agent": "TestApp/1.0",
+            "Accept": "application/json",
+        }
+
+        # Mock response
         mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.is_success = False
+        mock_response.status_code = 200
 
         # Mock async context manager
         mock_client_instance = AsyncMock()
         mock_client_instance.get.return_value = mock_response
+        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+        url = "https://api.example.com/test"
+        method_headers = {"Authorization": "Bearer token"}
+
+        result = await base_client.execute_http_get_request(
+            url=url, headers=method_headers
+        )
+
+        assert result == mock_response
+        # Verify that headers were merged correctly
+        expected_headers = Headers(base_client.http_headers)
+        expected_headers.update(method_headers)
+        mock_client_instance.get.assert_called_once_with(
+            url, headers=expected_headers, params=None, auth=httpx.USE_CLIENT_DEFAULT
+        )
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    async def test_execute_http_get_request_http_status_error(
+        self, mock_async_client, base_client
+    ):
+        """Test HTTP GET request with HTTP status error."""
+        # Mock async context manager that raises HTTPStatusError
+        mock_client_instance = AsyncMock()
+        mock_client_instance.get.side_effect = httpx.HTTPStatusError(
+            "HTTP error", request=MagicMock(), response=MagicMock(status_code=401)
+        )
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         url = "https://api.example.com/test"
@@ -101,246 +137,134 @@ class TestBaseClient:
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_401_error_with_auth_handler_exception(
+    async def test_execute_http_get_request_general_exception(
         self, mock_async_client, base_client
     ):
-        """Test HTTP GET request with 401 error when auth handler raises exception."""
-        # Mock response with 401
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.is_success = False
-
-        # Mock async context manager
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.return_value = mock_response
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        # Mock auth handler to raise an exception
-        base_client._handle_auth_error = AsyncMock(side_effect=Exception("Auth failed"))
-
-        url = "https://api.example.com/test"
-
-        result = await base_client.execute_http_get_request(url=url, max_retries=1)
-
-        assert result is None
-        base_client._handle_auth_error.assert_called_once()
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_429_error(
-        self, mock_async_client, base_client
-    ):
-        """Test HTTP GET request with 429 error and retry."""
-        # Mock response with 429
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_response.is_success = False
-        mock_response.headers = {"Retry-After": "5"}
-
-        # Mock async context manager
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.return_value = mock_response
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        url = "https://api.example.com/test"
-
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await base_client.execute_http_get_request(
-                url=url, max_retries=1, base_wait_time=1
-            )
-
-            assert result is None
-            mock_sleep.assert_called()
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_429_error_invalid_retry_after(
-        self, mock_async_client, base_client
-    ):
-        """Test HTTP GET request with 429 error and invalid Retry-After header."""
-        # Mock response with 429 and invalid Retry-After
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_response.is_success = False
-        mock_response.headers = {"Retry-After": "invalid"}
-
-        # Mock async context manager
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.return_value = mock_response
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        url = "https://api.example.com/test"
-
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await base_client.execute_http_get_request(
-                url=url, max_retries=1, base_wait_time=1
-            )
-
-            assert result is None
-            mock_sleep.assert_called()
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_network_error(
-        self, mock_async_client, base_client
-    ):
-        """Test HTTP GET request with network error and retry."""
-        # Mock async context manager that raises network error
+        """Test HTTP GET request with general exception."""
+        # Mock async context manager that raises general exception
         mock_client_instance = AsyncMock()
         mock_client_instance.get.side_effect = Exception("Network error")
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         url = "https://api.example.com/test"
 
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await base_client.execute_http_get_request(
-                url=url, max_retries=2, base_wait_time=1
-            )
+        result = await base_client.execute_http_get_request(url=url)
 
-            assert result is None
-            assert mock_sleep.call_count == 2
+        assert result is None
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_success_after_retry(
+    async def test_execute_http_get_request_with_auth(
         self, mock_async_client, base_client
     ):
-        """Test HTTP GET request that succeeds after retry."""
+        """Test HTTP GET request with authentication."""
         # Mock response
         mock_response = MagicMock()
         mock_response.status_code = 200
 
-        # Mock async context manager that fails first, then succeeds
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.side_effect = [
-            Exception("Network error"),  # First call fails
-            mock_response,  # Second call succeeds
-        ]
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        url = "https://api.example.com/test"
-
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await base_client.execute_http_get_request(
-                url=url, max_retries=2, base_wait_time=1
-            )
-
-            assert result == mock_response
-            mock_sleep.assert_called_once()
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_with_auth_error_handler(
-        self, mock_async_client, base_client
-    ):
-        """Test HTTP GET request with custom auth error handler."""
-        # Mock response with 401
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.is_success = False
-
-        # Mock async context manager
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.return_value = mock_response
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        # Add custom auth error handler
-        base_client._handle_auth_error = AsyncMock()
-
-        url = "https://api.example.com/test"
-
-        result = await base_client.execute_http_get_request(url=url, max_retries=1)
-
-        assert result is None
-        base_client._handle_auth_error.assert_called_once()
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_timeout(
-        self, mock_async_client, base_client
-    ):
-        """Test HTTP GET request with timeout."""
-        # Mock async context manager that raises timeout
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.side_effect = asyncio.TimeoutError("Request timeout")
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        url = "https://api.example.com/test"
-
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            result = await base_client.execute_http_get_request(
-                url=url, max_retries=1, timeout=5
-            )
-
-            assert result is None
-            mock_sleep.assert_called()
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_retry_limit_enforcement(
-        self, mock_async_client, base_client
-    ):
-        """Test that max_retries is properly limited to 10."""
-        # Mock response with 429 to trigger retries
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_response.is_success = False
-        mock_response.headers = {"Retry-After": "1"}
-
         # Mock async context manager
         mock_client_instance = AsyncMock()
         mock_client_instance.get.return_value = mock_response
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         url = "https://api.example.com/test"
+        auth = ("username", "password")
 
-        with patch("asyncio.sleep", new_callable=AsyncMock) as mock_sleep:
-            # Try with max_retries=15, should be limited to 10
-            result = await base_client.execute_http_get_request(
-                url=url, max_retries=15, base_wait_time=1
-            )
+        result = await base_client.execute_http_get_request(url=url, auth=auth)
 
-            assert result is None
-            # Should have slept 10 times (limited by min(max_retries, 10))
-            assert mock_sleep.call_count == 10
+        assert result == mock_response
+        mock_client_instance.get.assert_called_once_with(
+            url, headers=Headers(base_client.http_headers), params=None, auth=auth
+        )
 
     @pytest.mark.asyncio
     @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_get_request_unknown_status_code(
+    async def test_execute_http_post_request_success(
         self, mock_async_client, base_client
     ):
-        """Test HTTP GET request with unknown status code."""
-        # Mock response with unknown status code
+        """Test successful HTTP POST request execution."""
+        # Mock response
         mock_response = MagicMock()
-        mock_response.status_code = 999  # Unknown status code
-        mock_response.is_success = False
-        mock_response.text = "Unknown error"
-
-        # Mock async context manager
-        mock_client_instance = AsyncMock()
-        mock_client_instance.get.return_value = mock_response
-        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
-
-        url = "https://api.example.com/test"
-
-        result = await base_client.execute_http_get_request(url=url, max_retries=1)
-
-        assert result is None
-
-    @pytest.mark.asyncio
-    @patch("application_sdk.clients.base.httpx.AsyncClient")
-    async def test_execute_http_post_request_401_error(
-        self, mock_async_client, base_client
-    ):
-        """Test HTTP POST request with 401 error."""
-        # Mock response with 401
-        mock_response = MagicMock()
-        mock_response.status_code = 401
-        mock_response.is_success = False
+        mock_response.status_code = 200
 
         # Mock async context manager
         mock_client_instance = AsyncMock()
         mock_client_instance.post.return_value = mock_response
+        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+        url = "https://api.example.com/test"
+        json_data = {"test": "data"}
+        headers = {"Content-Type": "application/json"}
+
+        result = await base_client.execute_http_post_request(
+            url=url, json_data=json_data, headers=headers
+        )
+
+        assert result == mock_response
+        # Verify that headers were merged correctly
+        expected_headers = Headers(base_client.http_headers)
+        expected_headers.update(headers)
+        mock_client_instance.post.assert_called_once_with(
+            url,
+            data=None,
+            json=json_data,
+            content=None,
+            files=None,
+            headers=expected_headers,
+            params=None,
+            cookies=None,
+            auth=httpx.USE_CLIENT_DEFAULT,
+            follow_redirects=True,
+        )
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    async def test_execute_http_post_request_with_files(
+        self, mock_async_client, base_client
+    ):
+        """Test HTTP POST request with file upload."""
+        # Mock response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        # Mock async context manager
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.return_value = mock_response
+        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+        url = "https://api.example.com/upload"
+        data = {"description": "Test file"}
+        files = {"file": ("test.txt", b"file content", "text/plain")}
+
+        result = await base_client.execute_http_post_request(
+            url=url, data=data, files=files
+        )
+
+        assert result == mock_response
+        mock_client_instance.post.assert_called_once_with(
+            url,
+            data=data,
+            json=None,
+            content=None,
+            files=files,
+            headers=Headers(base_client.http_headers),
+            params=None,
+            cookies=None,
+            auth=httpx.USE_CLIENT_DEFAULT,
+            follow_redirects=True,
+        )
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    async def test_execute_http_post_request_http_status_error(
+        self, mock_async_client, base_client
+    ):
+        """Test HTTP POST request with HTTP status error."""
+        # Mock async context manager that raises HTTPStatusError
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.side_effect = httpx.HTTPStatusError(
+            "HTTP error", request=MagicMock(), response=MagicMock(status_code=500)
+        )
         mock_async_client.return_value.__aenter__.return_value = mock_client_instance
 
         url = "https://api.example.com/test"
@@ -351,6 +275,77 @@ class TestBaseClient:
         )
 
         assert result is None
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    async def test_execute_http_post_request_general_exception(
+        self, mock_async_client, base_client
+    ):
+        """Test HTTP POST request with general exception."""
+        # Mock async context manager that raises general exception
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.side_effect = Exception("Network error")
+        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+        url = "https://api.example.com/test"
+        json_data = {"test": "data"}
+
+        result = await base_client.execute_http_post_request(
+            url=url, json_data=json_data
+        )
+
+        assert result is None
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    async def test_execute_http_post_request_with_custom_timeout(
+        self, mock_async_client, base_client
+    ):
+        """Test HTTP POST request with custom timeout."""
+        # Mock response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        # Mock async context manager
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.return_value = mock_response
+        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+        url = "https://api.example.com/test"
+        timeout = 60
+
+        result = await base_client.execute_http_post_request(url=url, timeout=timeout)
+
+        assert result == mock_response
+        # Verify that timeout was passed to AsyncClient
+        mock_async_client.assert_called_once_with(
+            timeout=timeout, transport=base_client.http_retry_transport, verify=True
+        )
+
+    @pytest.mark.asyncio
+    @patch("application_sdk.clients.base.httpx.AsyncClient")
+    async def test_execute_http_post_request_with_verify_false(
+        self, mock_async_client, base_client
+    ):
+        """Test HTTP POST request with SSL verification disabled."""
+        # Mock response
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+
+        # Mock async context manager
+        mock_client_instance = AsyncMock()
+        mock_client_instance.post.return_value = mock_response
+        mock_async_client.return_value.__aenter__.return_value = mock_client_instance
+
+        url = "https://api.example.com/test"
+
+        result = await base_client.execute_http_post_request(url=url, verify=False)
+
+        assert result == mock_response
+        # Verify that verify=False was passed to AsyncClient
+        mock_async_client.assert_called_once_with(
+            timeout=30, transport=base_client.http_retry_transport, verify=False
+        )
 
     @given(credentials=sql_credentials_strategy)
     @settings(
@@ -369,6 +364,14 @@ class TestBaseClient:
         base_client.credentials = {"new": "credentials"}
         assert base_client.credentials == {"new": "credentials"}
 
+    def test_http_headers_attribute_access(self, base_client):
+        """Test that http_headers attribute can be accessed and modified."""
+        assert base_client.http_headers == {}
+
+        # Test setting headers
+        base_client.http_headers = {"Authorization": "Bearer token"}
+        assert base_client.http_headers == {"Authorization": "Bearer token"}
+
     @pytest.mark.asyncio
     async def test_load_method_signature(self, base_client):
         """Test that load method accepts the correct parameters."""
@@ -381,3 +384,9 @@ class TestBaseClient:
         # Test with additional kwargs
         with pytest.raises(NotImplementedError):
             await base_client.load(credentials=credentials, extra_param="value")
+
+    def test_http_retry_transport_initialization(self, base_client):
+        """Test that http_retry_transport is properly initialized."""
+        assert base_client.http_retry_transport is not None
+        # Should be an instance of httpx.AsyncHTTPTransport by default
+        assert isinstance(base_client.http_retry_transport, httpx.AsyncHTTPTransport)
