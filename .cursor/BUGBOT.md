@@ -14,7 +14,7 @@
 - **Cognitive Load**: Can a new developer understand this change with less cognitive load?
 - **Magic Numbers/Strings**: All constants properly defined and named in @application_sdk/constants.py
 - **Spell Check**: No typos in code, comments, docstrings, or documentation
-- **Exception Handling Standards**: All exception handling must follow these principles. See detailed guidelines in [exception-handling.mdc](mdc:.cursor/rules/exception-handling.mdc).
+- **Exception Handling Standards**: All exception handling must follow these principles. See detailed guidelines in [exception-handling.mdc](@.cursor/rules/exception-handling.mdc).
 
 ### 🏗️ Architecture & Design
 
@@ -32,7 +32,7 @@
 
 ### 🧪 Testing
 
-- **Testing Standards**: Testing standards are defined in [testing.mdc](mdc:.cursor/rules/testing.mdc)
+- **Testing Standards**: Testing standards are defined in [testing.mdc](@.cursor/rules/testing.mdc)
 - **Test Coverage**: New code has corresponding tests (unit/integration/e2e as appropriate)
 - **Edge Cases**: Error conditions and boundary cases are tested
 - **Mock Strategy**: External dependencies properly mocked/isolated
@@ -43,7 +43,7 @@
 - **Input Validation**: All external inputs validated and sanitized
 - **Secrets Management**: No secrets in code; proper credential handling
 - **SQL Injection**: Parameterized queries used for all SQL operations
-- **Performance Standards**: All performance considerations must follow these principles. See detailed guidelines in [performance.mdc](mdc:.cursor/rules/performance.mdc).
+- **Performance Standards**: All performance considerations must follow these principles. See detailed guidelines in [performance.mdc](@.cursor/rules/performance.mdc).
 - **Memory Management**: Resources properly closed, large datasets processed in chunks
 - **DataFrame Optimization**: Appropriate dtypes, avoid unnecessary copies, use chunked processing
 - **SQL Query Efficiency**: Use LIMIT, specific columns, proper WHERE clauses, connection pooling
@@ -54,7 +54,7 @@
 
 ### 📊 Observability & Logging
 
-- **Logging Standards**: logging standards are defined in [logging.mdc](mdc:.cursor/rules/logging.mdc)
+- **Logging Standards**: logging standards are defined in [logging.mdc](@.cursor/rules/logging.mdc)
 - **Metrics**: Key operations include appropriate metrics
 - **Error Context**: Error logs include sufficient context for debugging
 - **Trace Information**: Critical paths include trace information

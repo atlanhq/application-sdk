@@ -1,6 +1,52 @@
 # Changelog
 
 
+## v0.1.1rc32 (August 20, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc31...v0.1.1rc32
+
+### Bug Fixes
+
+- update app host (#664) (by @Onkar Ravgan in [24d23cb](https://github.com/atlanhq/application-sdk/commit/24d23cb))
+- file references in cursor rules (#662) (by @Nishchith Shetty in [2395ce3](https://github.com/atlanhq/application-sdk/commit/2395ce3))
+- Parquet file output path with None file names (#659) (by @Onkar Ravgan in [8841660](https://github.com/atlanhq/application-sdk/commit/8841660))
+
+## v0.1.1rc31 (August 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc30...v0.1.1rc31
+
+### Features
+
+- support for app registration via events (#635) (by @Nishant Munjal in [330b585](https://github.com/atlanhq/application-sdk/commit/330b585))
+
+### Bug Fixes
+
+- error logs related to deployment secrets (#651) (by @Nishchith Shetty in [09f6e5c](https://github.com/atlanhq/application-sdk/commit/09f6e5c))
+
+
+
+## v0.1.1rc30 (August 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc29...v0.1.1rc30
+
+### Bug Fixes
+
+- download_files_from_object_store with correct files list (#652) (by @Nishchith Shetty in [e2ed7bd](https://github.com/atlanhq/application-sdk/commit/e2ed7bd))
+
+## v0.1.1rc29 (August 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc28...v0.1.1rc29
+
+### Features
+
+- increase DAPR gRPC message limit from 16MB to 100MB (#649) (by @Nishchith Shetty in [ae0d218](https://github.com/atlanhq/application-sdk/commit/ae0d218))
+
+### Bug Fixes
+
+- error logs for eventstore, objectstore and metrics (#647) (by @Nishchith Shetty in [70b71b6](https://github.com/atlanhq/application-sdk/commit/70b71b6))
+
+
+
 ## v0.1.1rc28 (August 12, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc27...v0.1.1rc28

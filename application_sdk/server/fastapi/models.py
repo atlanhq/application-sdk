@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, RootModel
 
-from application_sdk.outputs.eventstore import Event, EventFilter
+from application_sdk.events.models import Event, EventFilter
 from application_sdk.workflows import WorkflowInterface
 
 
