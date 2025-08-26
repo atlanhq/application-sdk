@@ -12,6 +12,7 @@ from typing import Any, Dict
 from temporalio import activity
 
 from application_sdk.clients.redis import get_redis_client
+from application_sdk.common.error_codes import ActivityError, ClientError
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -60,11 +61,13 @@ async def acquire_distributed_lock(
 
             # Health check after failed acquisition
             if not redis_client.health_check():
-                raise RuntimeError("Redis health check failed during lock acquisition")
+                logger.error("Redis health check failed during lock acquisition")
+                raise ActivityError.LOCK_ACQUISITION_ERROR
 
         except Exception as e:
             # In strict mode: always fail on Redis errors
-            raise RuntimeError(f"Redis error during lock acquisition: {e}")
+            logger.error(f"Redis error during lock acquisition: {e}")
+            raise ActivityError.LOCK_ACQUISITION_ERROR
 
         # Wait before retrying
         await asyncio.sleep(random.uniform(0.1, 0.5))
@@ -93,4 +96,5 @@ async def release_distributed_lock(resource_id: str, owner_id: str) -> bool:
 
     except Exception as e:
         logger.error(f"Error releasing lock {resource_id}: {e}")
+        # Don't raise exception for lock release failures - log and return False
         return False

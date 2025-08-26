@@ -255,4 +255,6 @@ REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", "5.0"))
 #: Redis health check interval in seconds
 REDIS_HEALTH_CHECK_INTERVAL = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))
 #: Whether to enable strict locking
-STRICT_LOCKING_ENABLED = os.getenv("STRICT_LOCKING_ENABLED", "false").lower() == "true"
+FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE = (
+    os.getenv("FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE", "false").lower() == "true"
+)

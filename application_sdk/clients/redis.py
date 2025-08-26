@@ -5,7 +5,9 @@ from typing import Optional
 import redis
 from redis.sentinel import Sentinel
 
+from application_sdk.common.error_codes import ClientError
 from application_sdk.constants import (
+    FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE,
     REDIS_CONNECTION_POOL_SIZE,
     REDIS_DB,
     REDIS_HOST,
@@ -14,7 +16,6 @@ from application_sdk.constants import (
     REDIS_SENTINEL_HOSTS,
     REDIS_SENTINEL_SERVICE_NAME,
     REDIS_SOCKET_TIMEOUT,
-    STRICT_LOCKING_ENABLED,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -36,7 +37,7 @@ class RedisClient:
     def connect(self) -> None:
         """Establish connection to Redis only if strict locking is enabled."""
 
-        if not STRICT_LOCKING_ENABLED:
+        if not FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE:
             logger.info("Strict locking disabled - skipping Redis connection")
             self.connected = False
             return
@@ -48,7 +49,7 @@ class RedisClient:
             elif REDIS_HOST and REDIS_PORT:
                 self._connect_standalone()
             else:
-                raise ValueError("No Redis hosts configured")
+                raise ClientError.REQUEST_VALIDATION_ERROR
 
             self.redis_client.ping()  # type: ignore
             self.connected = True
@@ -57,9 +58,7 @@ class RedisClient:
         except Exception as e:
             logger.error(f"Redis connection failed with strict locking enabled: {e}")
             # In strict mode, Redis failure is critical
-            raise RuntimeError(
-                f"Cannot enable strict locking - Redis connection failed: {e}"
-            )
+            raise ClientError.CLIENT_AUTH_ERROR
 
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel for high availability."""
@@ -70,12 +69,12 @@ class RedisClient:
                 for host, port in [host_port.strip().rsplit(":", 1)]
             ]
         except ValueError as e:
-            raise ValueError(
-                f"Invalid Sentinel host format in REDIS_SENTINEL_HOSTS: {e}"
-            )
+            logger.error(f"Invalid Sentinel host format in REDIS_SENTINEL_HOSTS: {e}")
+            raise ClientError.INPUT_VALIDATION_ERROR
 
         if not sentinel_hosts:
-            raise ValueError("No Sentinel hosts configured")
+            logger.error("No Sentinel hosts configured")
+            raise ClientError.REQUEST_VALIDATION_ERROR
 
         logger.info(f"Connecting to Redis via Sentinel: {sentinel_hosts}")
         logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
