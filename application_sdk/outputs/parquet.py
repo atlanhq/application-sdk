@@ -344,7 +344,7 @@ class ParquetOutput(Output):
 
                 # Record chunk metrics
                 self.metrics.record_metric(
-                    name="json_chunks_written",
+                    name="parquet_chunks_written",
                     value=1,
                     metric_type=MetricType.COUNTER,
                     labels={"type": "pandas"},
@@ -367,7 +367,7 @@ class ParquetOutput(Output):
                 value=1,
                 metric_type=MetricType.COUNTER,
                 labels={"type": "pandas", "error": str(e)},
-                description="Number of errors while writing to JSON files",
+                description="Number of errors while writing to Parquet files",
             )
             logger.error(f"Error flushing buffer to parquet: {str(e)}")
             raise e
