@@ -21,33 +21,13 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
-class DistributedLock:
-    """Context manager for distributed locks with automatic cleanup."""
-
-    def __init__(
-        self, client: "RedisClient", resource_id: str, owner_id: str, ttl: int
-    ):
-        self.client = client
-        self.resource_id = resource_id
-        self.owner_id = owner_id
-        self.ttl = ttl
-        self.acquired = False
-
-    def __enter__(self) -> bool:
-        """Attempt to acquire the distributed lock."""
-        self.acquired = self.client._acquire_lock(
-            self.resource_id, self.owner_id, self.ttl
-        )
-        return self.acquired
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Release the lock if it was acquired."""
-        if self.acquired:
-            self.client._release_lock(self.resource_id, self.owner_id)
-
-
 class RedisClient:
-    """High-availability Redis client for distributed operations."""
+    """High-availability Redis client for distributed operations.
+
+    This client provides low-level Redis operations for distributed locking.
+    Lock orchestration is handled by dedicated activities in lock_management.py
+    to avoid Temporal workflow deadlock detection issues.
+    """
 
     def __init__(self):
         self.redis_client = None
@@ -133,22 +113,12 @@ class RedisClient:
             max_connections=REDIS_CONNECTION_POOL_SIZE,
         )
 
-    def lock(
-        self, resource_id: str, owner_id: str, ttl_seconds: int = 300
-    ) -> "DistributedLock":
-        """Create a distributed lock with automatic cleanup.
-
-        Usage:
-            with redis_client.lock("resource_name", "owner_id", 60) as acquired:
-                if acquired:
-                    # Critical section - lock is held
-                    perform_exclusive_operation()
-                # Lock is automatically released here
-        """
-        return DistributedLock(self, resource_id, owner_id, ttl_seconds)
-
     def _acquire_lock(self, resource_id: str, owner_id: str, ttl_seconds: int) -> bool:
-        """Atomically acquire a distributed lock."""
+        """Atomically acquire a distributed lock.
+
+        Note: This is a low-level method used by lock management activities.
+        Use acquire_distributed_lock activity for workflow orchestration.
+        """
         if not self.connected or not self.redis_client:
             return False
 
@@ -161,7 +131,11 @@ class RedisClient:
             return False
 
     def _release_lock(self, resource_id: str, owner_id: str) -> tuple[bool, str]:
-        """Safely release a lock with ownership verification."""
+        """Safely release a lock with ownership verification.
+
+        Note: This is a low-level method used by lock management activities.
+        Use release_distributed_lock activity for workflow orchestration.
+        """
         if not self.connected or not self.redis_client:
             return False, "not_connected"
 
