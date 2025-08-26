@@ -1,6 +1,6 @@
 import random
 import time
-from typing import Any, Dict
+from typing import Any
 
 from dapr.clients import DaprClient
 from temporalio import activity
@@ -21,14 +21,6 @@ LOCK_METADATA_KEY = "__lock_metadata__"
 
 class LockActivityInboundInterceptor(ActivityInboundInterceptor):
     """Interceptor that manages distributed locks for activities when they are picked up by workers."""
-
-    def __init__(self, next: ActivityInboundInterceptor):
-        super().__init__(next)
-        self.activities = {}
-
-    def set_activities(self, activities: Dict[str, Any]) -> None:
-        """Set the activities dictionary for metadata lookup."""
-        self.activities = activities
 
     async def execute_activity(self, input: ExecuteActivityInput) -> Any:
         # Check if activity needs locking using metadata
@@ -107,10 +99,6 @@ class LockActivityInboundInterceptor(ActivityInboundInterceptor):
 class LockInterceptor(Interceptor):
     """Main interceptor class that Temporal uses to create the interceptor chain."""
 
-    def __init__(self, activities: Dict[str, Any]):
-        self.activities = activities
-        super().__init__()
-
     def intercept_activity(
         self, next: ActivityInboundInterceptor
     ) -> ActivityInboundInterceptor:
@@ -122,6 +110,4 @@ class LockInterceptor(Interceptor):
         Returns:
             ActivityInboundInterceptor: The activity interceptor.
         """
-        interceptor = LockActivityInboundInterceptor(super().intercept_activity(next))
-        interceptor.set_activities(self.activities)
-        return interceptor
+        return LockActivityInboundInterceptor(super().intercept_activity(next))

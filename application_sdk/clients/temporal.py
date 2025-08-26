@@ -550,7 +550,7 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor=activity_executor,
             interceptors=[
                 EventInterceptor(),
-                LockInterceptor(activities_dict),
+                LockInterceptor(),
             ],
         )
 
