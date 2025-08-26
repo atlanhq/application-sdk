@@ -8,15 +8,7 @@ from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.common import RetryPolicy
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import (
-    ActivityInboundInterceptor,
-    ExecuteActivityInput,
-    ExecuteWorkflowInput,
-    Interceptor,
-    Worker,
-    WorkflowInboundInterceptor,
-    WorkflowInterceptorClassInput,
-)
+from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -539,6 +531,10 @@ class TemporalWorkflowClient(WorkflowClient):
 
         # Add the publish_event to the activities list
         extended_activities = list(activities) + [publish_event]
+        # Convert activities sequence to dict for metadata lookup
+        activities_dict = {
+            getattr(a, "__name__", str(a)): a for a in extended_activities
+        }
 
         return Worker(
             self.client,
@@ -552,7 +548,10 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
-            interceptors=[EventInterceptor()],
+            interceptors=[
+                EventInterceptor(),
+                LockInterceptor(activities_dict),
+            ],
         )
 
     async def get_workflow_run_status(

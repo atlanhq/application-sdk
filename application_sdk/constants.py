@@ -146,6 +146,8 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
     "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"
 )
 
+#: Name of the lock store component in DAPR
+LOCK_STORE_NAME = os.getenv("LOCK_STORE_NAME", "lockstore")
 
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
