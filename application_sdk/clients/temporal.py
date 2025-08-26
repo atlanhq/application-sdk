@@ -14,6 +14,7 @@ from temporalio.worker.workflow_sandbox import (
 from application_sdk.clients.workflow import WorkflowClient
 from application_sdk.constants import (
     APPLICATION_NAME,
+    LOCK_METADATA_KEY,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -260,14 +261,37 @@ class TemporalWorkflowClient(WorkflowClient):
                 thread_name_prefix="activity-pool-",
             )
 
+        # Auto-detect if any activities need locking
+        needs_locking = any(
+            hasattr(activity, LOCK_METADATA_KEY) for activity in activities
+        )
+
+        # Automatically include lock management activities if needed
+        final_activities = list(activities)
+        if needs_locking:
+            from application_sdk.activities.lock_management import (
+                acquire_distributed_lock,
+                release_distributed_lock,
+            )
+
+            final_activities.extend(
+                [
+                    acquire_distributed_lock,
+                    release_distributed_lock,
+                ]
+            )
+            logger.info(
+                "Auto-registered lock management activities for @needs_lock decorated activities"
+            )
+
         # Convert activities sequence to dict for metadata lookup
-        activities_dict = {getattr(a, "__name__", str(a)): a for a in activities}
+        activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
 
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
             workflows=workflow_classes,
-            activities=activities,
+            activities=final_activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
                     *passthrough_modules

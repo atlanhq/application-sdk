@@ -1,9 +1,10 @@
 """Redis lock interceptor for Temporal workflows.
 
 Manages distributed locks for activities decorated with @needs_lock using
-the global Redis client connected at app startup.
+separate lock acquisition and release activities to avoid workflow deadlocks.
 """
 
+from datetime import timedelta
 from typing import Any, Dict, Optional, Type
 
 from temporalio import workflow
@@ -15,7 +16,6 @@ from temporalio.worker import (
     WorkflowOutboundInterceptor,
 )
 
-from application_sdk.clients.redis import get_redis_client
 from application_sdk.constants import (
     APPLICATION_NAME,
     LOCK_METADATA_KEY,
@@ -84,44 +84,45 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
             raise ValueError("Start to close timeout is required")
         ttl_seconds = int(input.start_to_close_timeout.total_seconds())
 
-        # Strict locking enabled - Redis must be working
-        redis_client = get_redis_client()
-        # Proceed with strict lock acquisition
-        return await self._execute_with_lock(
-            input, lock_name, max_locks, ttl_seconds, redis_client
+        # Orchestrate lock acquisition -> business activity -> lock release
+        return await self._execute_with_lock_orchestration(
+            input, lock_name, max_locks, ttl_seconds
         )
 
-    async def _execute_with_lock(
+    async def _execute_with_lock_orchestration(
         self,
         input: StartActivityInput,
         lock_name: str,
         max_locks: int,
         ttl_seconds: int,
-        redis_client: Any,
     ) -> workflow.ActivityHandle[Any]:
-        """Execute activity with distributed lock acquisition."""
+        """Execute activity with distributed lock orchestration."""
         owner_id = f"{APPLICATION_NAME}:{workflow.info().workflow_id}"
 
-        while True:
-            slot = workflow.random().randint(0, max_locks - 1)
-            resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
+        # Step 1: Acquire lock via dedicated activity (can take >2s safely)
+        lock_result = await workflow.execute_activity(
+            "acquire_distributed_lock",
+            args=[lock_name, max_locks, ttl_seconds, owner_id],
+            start_to_close_timeout=timedelta(minutes=5),
+        )
 
+        logger.debug(f"Lock acquired: {lock_result}, executing {input.activity}")
+
+        try:
+            # Step 2: Execute the business activity
+            return await self.next.start_activity(input)
+        finally:
+            # Step 3: Release lock (fire-and-forget with short timeout)
             try:
-                with redis_client.lock(resource_id, owner_id, ttl_seconds) as acquired:
-                    if acquired:
-                        logger.debug(
-                            f"Lock acquired for slot {slot}, executing {input.activity}"
-                        )
-                        return await self.next.start_activity(input)
-
-                    # Health check after failed acquisition
-                    if not redis_client.health_check():
-                        raise RuntimeError(
-                            "Redis health check failed during lock acquisition"
-                        )
-
+                await workflow.execute_local_activity(
+                    "release_distributed_lock",
+                    args=[lock_result["resource_id"], lock_result["owner_id"]],
+                    start_to_close_timeout=timedelta(seconds=5),
+                )
+                logger.debug(f"Lock released: {lock_result['resource_id']}")
             except Exception as e:
-                # In strict mode: always fail on Redis errors
-                raise RuntimeError(f"Redis error during lock acquisition: {e}")
-
-            await workflow.sleep(workflow.random().uniform(0, 0.5))
+                # Silent failure - TTL will handle cleanup
+                logger.warning(
+                    f"Lock release failed for {lock_result['resource_id']}: {e}. "
+                    f"TTL will handle cleanup."
+                )
