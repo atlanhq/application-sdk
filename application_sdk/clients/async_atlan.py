@@ -30,7 +30,7 @@ async def get_client(
     Args:
     base_url: Atlan base URL (overrides ATLAN_BASE_URL)
     api_key: Atlan API key (overrides ATLAN_API_KEY)
-    api_token_guid: API token GUID (overrides API_TOKEN_GUID)
+    api_token_guid: API token GUID (overrides ATLAN_API_TOKEN_GUID)
     """
     # Resolve final values (parameters override env vars)
     final_token_guid = api_token_guid or ATLAN_API_TOKEN_GUID
