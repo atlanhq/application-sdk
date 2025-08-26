@@ -78,39 +78,46 @@ class RedisClient:
 
         logger.info(f"Connecting to Redis via Sentinel: {sentinel_hosts}")
         logger.info(f"Service name: {REDIS_SENTINEL_SERVICE_NAME}")
+        try:
+            # Add sentinel-specific configuration
+            sentinel = Sentinel(
+                sentinel_hosts,
+                socket_timeout=REDIS_SOCKET_TIMEOUT,
+                sentinel_kwargs={
+                    "password": REDIS_PASSWORD if REDIS_PASSWORD else None,
+                    "socket_connect_timeout": REDIS_SOCKET_TIMEOUT,
+                },
+            )
 
-        # Add sentinel-specific configuration
-        sentinel = Sentinel(
-            sentinel_hosts,
-            socket_timeout=REDIS_SOCKET_TIMEOUT,
-            sentinel_kwargs={
-                "password": REDIS_PASSWORD if REDIS_PASSWORD else None,
-                "socket_connect_timeout": REDIS_SOCKET_TIMEOUT,
-            },
-        )
+            self.redis_client = sentinel.master_for(
+                REDIS_SENTINEL_SERVICE_NAME,
+                socket_timeout=REDIS_SOCKET_TIMEOUT,
+                password=REDIS_PASSWORD,
+                db=REDIS_DB,
+                max_connections=REDIS_CONNECTION_POOL_SIZE,
+                retry_on_timeout=True,
+                health_check_interval=30,
+            )
 
-        self.redis_client = sentinel.master_for(
-            REDIS_SENTINEL_SERVICE_NAME,
-            socket_timeout=REDIS_SOCKET_TIMEOUT,
-            password=REDIS_PASSWORD,
-            db=REDIS_DB,
-            max_connections=REDIS_CONNECTION_POOL_SIZE,
-            retry_on_timeout=True,
-            health_check_interval=30,
-        )
+        except Exception as e:
+            logger.error(f"Redis connection failed with strict locking enabled: {e}")
+            raise ClientError.CLIENT_AUTH_ERROR
 
     def _connect_standalone(self) -> None:
         """Connect to standalone Redis instance."""
         logger.debug(f"Connecting to standalone Redis: {REDIS_HOST}:{REDIS_PORT}")
-
-        self.redis_client = redis.Redis(
-            host=REDIS_HOST,
-            port=REDIS_PORT,
-            password=REDIS_PASSWORD,
-            db=REDIS_DB,
-            socket_timeout=REDIS_SOCKET_TIMEOUT,
-            max_connections=REDIS_CONNECTION_POOL_SIZE,
-        )
+        try:
+            self.redis_client = redis.Redis(
+                host=REDIS_HOST,
+                port=REDIS_PORT,
+                password=REDIS_PASSWORD,
+                db=REDIS_DB,
+                socket_timeout=REDIS_SOCKET_TIMEOUT,
+                max_connections=REDIS_CONNECTION_POOL_SIZE,
+            )
+        except Exception as e:
+            logger.error(f"Redis connection failed with strict locking enabled: {e}")
+            raise ClientError.CLIENT_AUTH_ERROR
 
     def _acquire_lock(self, resource_id: str, owner_id: str, ttl_seconds: int) -> bool:
         """Atomically acquire a distributed lock.
@@ -150,8 +157,6 @@ class RedisClient:
             end
             """
             result = self.redis_client.eval(release_script, 1, resource_id, owner_id)
-
-            # Fix: Cast result to int and handle type safety
             if not isinstance(result, int):
                 logger.warning(
                     f"Unexpected eval result type: {type(result)}, value: {result}"
