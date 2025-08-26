@@ -1,10 +1,9 @@
-from typing import Callable, Optional, Any
+from typing import Any, Callable, Optional
 
+from application_sdk.constants import LOCK_METADATA_KEY
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-LOCK_METADATA_KEY = "__lock_metadata__"
 
 
 def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):

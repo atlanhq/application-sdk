@@ -10,13 +10,14 @@ from temporalio.worker import (
     Interceptor,
 )
 
-from application_sdk.constants import APPLICATION_NAME, LOCK_STORE_NAME
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    LOCK_METADATA_KEY,
+    LOCK_STORE_NAME,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-
-LOCK_METADATA_KEY = "__lock_metadata__"
 
 
 class LockActivityInboundInterceptor(ActivityInboundInterceptor):
@@ -35,13 +36,15 @@ class LockActivityInboundInterceptor(ActivityInboundInterceptor):
                 metadata = client.get_metadata()
                 components = metadata.registered_components
                 if not any(comp.name == LOCK_STORE_NAME for comp in components):
-                    logger.warning(
+                    logger.error(
                         f"Dapr component {LOCK_STORE_NAME} is not available, skipping lock acquisition, please use dapr lock component for testing locks locally"
                     )
-                    return await super().execute_activity(input)
+                    raise Exception(
+                        f"Dapr component {LOCK_STORE_NAME} is not available, skipping lock acquisition, please use dapr lock component for testing locks locally"
+                    )
         except Exception as e:
-            logger.warning(f"Failed to check Dapr components: {e}")
-            return await super().execute_activity(input)
+            logger.error(f"Failed to check Dapr components: {e}")
+            raise e
 
         lock_config = getattr(input.fn, LOCK_METADATA_KEY)
         # Get lock configuration
@@ -63,37 +66,45 @@ class LockActivityInboundInterceptor(ActivityInboundInterceptor):
                 f"Attempting to acquire lock {lock_id} for activity {input.fn.__name__}"
             )
 
-            with DaprClient() as client:
-                with client.try_lock(
-                    store_name=LOCK_STORE_NAME,
-                    resource_id=lock_id,
-                    lock_owner=owner_id,
-                    expiry_in_seconds=activity_timeout,
-                ) as lock:
-                    if lock.success:
-                        logger.debug(
-                            f"Lock acquired {slot} for activity {input.fn.__name__}, executing activity"
-                        )
-                        try:
-                            # Execute activity with lock held
-                            result = await super().execute_activity(input)
+            try:
+                with DaprClient() as client:
+                    with client.try_lock(
+                        store_name=LOCK_STORE_NAME,
+                        resource_id=lock_id,
+                        lock_owner=owner_id,
+                        expiry_in_seconds=activity_timeout,
+                    ) as lock:
+                        if lock.success:
                             logger.debug(
-                                f"Activity {input.fn.__name__} completed successfully"
+                                f"Lock acquired {slot} for activity {input.fn.__name__}, executing activity"
                             )
-                            return result
-                        except Exception as e:
-                            logger.error(f"Activity {input.fn.__name__} failed: {e}")
-                            raise
-                        finally:
-                            # Lock is automatically released when with block ends
+                            try:
+                                # Execute activity with lock held
+                                result = await super().execute_activity(input)
+                                logger.debug(
+                                    f"Activity {input.fn.__name__} completed successfully"
+                                )
+                                return result
+                            except Exception as e:
+                                logger.error(
+                                    f"Activity {input.fn.__name__} failed: {e}"
+                                )
+                                raise
+                            finally:
+                                # Lock is automatically released when with block ends
+                                logger.debug(
+                                    f"Lock released for activity {input.fn.__name__}"
+                                )
+                        else:
                             logger.debug(
-                                f"Lock released for activity {input.fn.__name__}"
+                                f"Failed to acquire lock for slot {slot}, retrying..."
                             )
-                    else:
-                        logger.debug(
-                            f"Failed to acquire lock for slot {slot}, retrying..."
-                        )
-                        time.sleep(random.uniform(10, 20))
+                            time.sleep(random.uniform(10, 20))
+            except Exception as e:
+                logger.error(
+                    f"Failed to acquire lock for activity {input.fn.__name__}: {e}"
+                )
+                raise e
 
 
 class LockInterceptor(Interceptor):
