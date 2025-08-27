@@ -61,9 +61,9 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         super().__init__(next)
         self.activities = activities
 
-    async def start_activity(  # type: ignore
+    async def start_activity(  # type: ignore[override]
         self, input: StartActivityInput
-    ) -> workflow.ActivityHandle[Any]:  # type: ignore
+    ) -> workflow.ActivityHandle[Any]:
         """Start activity with distributed lock if required."""
 
         # Check if activity needs locking
