@@ -34,7 +34,7 @@ class FetchMetadataRequest(RootModel[Dict[str, Any]]):
 
 class FetchMetadataResponse(BaseModel):
     success: bool
-    data: List[Dict[str, str]]
+    data: Any
 
 
 class PreflightCheckRequest(BaseModel):

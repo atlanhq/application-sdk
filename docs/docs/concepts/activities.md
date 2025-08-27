@@ -34,6 +34,11 @@ The SDK provides pre-built base activity classes for common tasks, primarily foc
     *   **Activities:** Includes `preflight_check`, `fetch_queries`, `transform_data`.
     *   **Extensibility:** Defines `fetch_queries_sql` as a class attribute for customization.
 
+*   **`BaseMetadataExtractionActivities`** (in `application_sdk.activities.metadata_extraction.base`):
+    *   **Purpose:** Provides a standard set of activities for extracting metadata from non-SQL data sources (e.g., REST APIs, file systems).
+    *   **Activities:** Includes `preflight_check`, `fetch_metadata`, and `transform_data` from the parent class `ActivitiesInterface`. Adds credential handling in the set_state method along with the `handler` instances.
+    *   **Extensibility:** Designed to be subclassed for specific non-SQL data sources with custom client, handler, and transformer implementations.
+
 ## Usage Patterns
 
 ### 1. Reusing Base Activities (No Customization)
