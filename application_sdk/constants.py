@@ -239,7 +239,7 @@ LOCK_METADATA_KEY = "__lock_metadata__"
 #: Redis host for direct connection (when not using Sentinel)
 REDIS_HOST = os.getenv("REDIS_HOST", "")
 #: Redis port for direct connection (when not using Sentinel)
-REDIS_PORT = int(os.getenv("REDIS_PORT", ""))
+REDIS_PORT = os.getenv("REDIS_PORT", "")
 #: Redis database number
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 #: Redis password
