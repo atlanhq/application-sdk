@@ -21,6 +21,17 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+_LOCK_RELEASE_LUA_SCRIPT = """
+    local current_owner = redis.call("GET", KEYS[1])
+    if current_owner == false then
+        return -1  -- Key doesn't exist
+    elseif current_owner ~= ARGV[1] then
+        return -2  -- Wrong owner
+    else
+        return redis.call("DEL", KEYS[1])  -- Success (returns 1)
+    end
+"""
+
 
 class RedisClient:
     """High-availability Redis client for distributed operations.
@@ -146,17 +157,9 @@ class RedisClient:
             return False, "not_connected"
 
         try:
-            release_script = """
-            local current_owner = redis.call("GET", KEYS[1])
-            if current_owner == false then
-                return -1  -- Key doesn't exist
-            elseif current_owner ~= ARGV[1] then
-                return -2  -- Wrong owner
-            else
-                return redis.call("DEL", KEYS[1])  -- Success (returns 1)
-            end
-            """
-            result = self.redis_client.eval(release_script, 1, resource_id, owner_id)
+            result = self.redis_client.eval(
+                _LOCK_RELEASE_LUA_SCRIPT, 1, resource_id, owner_id
+            )
             if not isinstance(result, int):
                 logger.warning(
                     f"Unexpected eval result type: {type(result)}, value: {result}"
