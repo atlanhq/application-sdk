@@ -72,7 +72,7 @@ async def test_write_dataframe_single_chunk(
     base_output_path: str, df: pd.DataFrame
 ) -> None:
     with patch(
-        "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
+        "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push:
         json_output = JsonOutput(  # type: ignore
             output_suffix="tests/raw",
@@ -106,7 +106,7 @@ async def test_write_dataframe_multiple_chunks(
     base_output_path: str, df: pd.DataFrame, chunk_size: int
 ) -> None:
     with patch(
-        "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
+        "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push:
         json_output = JsonOutput(  # type: ignore
             output_suffix="tests/raw",

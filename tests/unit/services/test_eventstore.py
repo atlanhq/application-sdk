@@ -12,7 +12,7 @@ from application_sdk.events.models import (
     EventTypes,
     WorkflowStates,
 )
-from application_sdk.outputs.eventstore import EventStore
+from application_sdk.services.eventstore import EventStore
 
 
 class TestEvent:
@@ -77,8 +77,8 @@ class TestEventStore:
             },
         )
 
-    @patch("application_sdk.outputs.eventstore.workflow")
-    @patch("application_sdk.outputs.eventstore.activity")
+    @patch("application_sdk.services.eventstore.workflow")
+    @patch("application_sdk.services.eventstore.activity")
     def test_enrich_event_metadata_with_workflow_context(
         self, mock_activity, mock_workflow, sample_event
     ):
@@ -99,8 +99,8 @@ class TestEventStore:
         assert enriched_event.metadata.workflow_id == "test_workflow_id"
         assert enriched_event.metadata.workflow_run_id == "test_run_id"
 
-    @patch("application_sdk.outputs.eventstore.workflow")
-    @patch("application_sdk.outputs.eventstore.activity")
+    @patch("application_sdk.services.eventstore.workflow")
+    @patch("application_sdk.services.eventstore.activity")
     def test_enrich_event_metadata_with_activity_context(
         self, mock_activity, mock_workflow, sample_event
     ):
@@ -128,8 +128,8 @@ class TestEventStore:
         assert enriched_event.metadata.workflow_run_id == "test_run_id"
         assert enriched_event.metadata.workflow_state == WorkflowStates.RUNNING.value
 
-    @patch("application_sdk.outputs.eventstore.workflow")
-    @patch("application_sdk.outputs.eventstore.activity")
+    @patch("application_sdk.services.eventstore.workflow")
+    @patch("application_sdk.services.eventstore.activity")
     def test_enrich_event_metadata_no_context(
         self, mock_activity, mock_workflow, sample_event
     ):
@@ -144,9 +144,9 @@ class TestEventStore:
         assert enriched_event.metadata.activity_type is None
         assert enriched_event.metadata.workflow_state == WorkflowStates.UNKNOWN.value
 
-    @patch("application_sdk.outputs.eventstore.clients.DaprClient")
-    @patch("application_sdk.outputs.eventstore.AtlanAuthClient")
-    @patch("application_sdk.outputs.eventstore.is_component_registered")
+    @patch("application_sdk.services.eventstore.clients.DaprClient")
+    @patch("application_sdk.clients.atlan_auth.AtlanAuthClient")
+    @patch("application_sdk.services.eventstore.is_component_registered")
     async def test_publish_event_success(
         self,
         mock_is_component_registered,
@@ -182,9 +182,9 @@ class TestEventStore:
 
     async def test_publish_event_always_enriches_metadata(self, sample_event):
         """Test publishing event always enriches metadata."""
-        with patch("application_sdk.outputs.eventstore.clients.DaprClient"):
+        with patch("application_sdk.services.eventstore.clients.DaprClient"):
             with patch(
-                "application_sdk.outputs.eventstore.is_component_registered",
+                "application_sdk.services.eventstore.is_component_registered",
                 return_value=True,
             ):
                 # Should always call enrich_event_metadata

@@ -5,13 +5,18 @@ including workflow ID retrieval, automatic heartbeating, and periodic heartbeat 
 """
 
 import asyncio
+import os
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
 
-from application_sdk.constants import APPLICATION_NAME, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    TEMPORARY_PATH,
+    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -70,6 +75,21 @@ def build_output_path() -> str:
         workflow_id=get_workflow_id(),
         run_id=get_workflow_run_id(),
     )
+
+
+def get_object_store_prefix(path: str) -> str:
+    """Get the object store prefix for the path.
+    Args:
+        path: The path to the output directory.
+
+    Returns:
+        The object store prefix for the path.
+
+    Example:
+        >>> get_object_store_prefix("./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456")
+        "artifacts/apps/appName/workflows/wf-123/run-456"
+    """
+    return os.path.relpath(path, TEMPORARY_PATH)
 
 
 def auto_heartbeater(fn: F) -> F:

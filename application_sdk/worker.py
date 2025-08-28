@@ -22,7 +22,7 @@ from application_sdk.events.models import (
     WorkerStartEventData,
 )
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.eventstore import EventStore
+from application_sdk.services.eventstore import EventStore
 
 logger = get_logger(__name__)
 

@@ -29,7 +29,6 @@ from application_sdk.activities.common.utils import (
 from application_sdk.common.error_codes import OrchestratorError
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
-from application_sdk.inputs.statestore import StateStoreInput, StateType
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -190,7 +189,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
 
         try:
             # This already handles the Dapr call internally
-            workflow_args = StateStoreInput.get_state(workflow_id, StateType.WORKFLOWS)
+            from application_sdk.services.statestore import StateStore, StateType
+
+            workflow_args = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
             workflow_args["output_prefix"] = workflow_args.get(
                 "output_prefix", TEMPORARY_PATH
             )
