@@ -71,6 +71,10 @@ class RedisClient:
             # In strict mode, Redis failure is critical
             raise ClientError.CLIENT_AUTH_ERROR
 
+    def load(self) -> None:
+        """Load the Redis client."""
+        self.connect()
+
     def _connect_via_sentinel(self) -> None:
         """Connect to Redis via Sentinel for high availability."""
         try:

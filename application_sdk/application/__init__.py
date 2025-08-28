@@ -122,7 +122,7 @@ class BaseApplication:
         await self.workflow_client.load()
 
         # Connect to Redis for distributed locking (optional)
-        self.redis_client.connect()
+        self.redis_client.load()
 
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
