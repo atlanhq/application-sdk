@@ -5,10 +5,10 @@ from temporalio import activity
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
 from application_sdk.activities.common.utils import get_workflow_id
 from application_sdk.clients.base import BaseClient
-from application_sdk.common.credential_utils import get_credentials
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME
 from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
 
 logger = get_logger(__name__)
@@ -76,7 +76,9 @@ class BaseMetadataExtractionActivities(ActivitiesInterface):
                 f"Retrieving credentials for credential_guid: {workflow_args['credential_guid']}"
             )
             try:
-                credentials = await get_credentials(workflow_args["credential_guid"])
+                credentials = await SecretStore.get_credentials(
+                    workflow_args["credential_guid"]
+                )
                 logger.info(
                     f"Successfully retrieved credentials with keys: {list(credentials.keys())}"
                 )
