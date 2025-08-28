@@ -48,7 +48,7 @@ async def test_not_download_file_that_exists(
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob"
     ) as mock_glob, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         # Mock existing parquet files
         mock_glob.return_value = ["existing.parquet"]
@@ -70,7 +70,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         parquet_input = ParquetInput(
             path=path, chunk_size=100000, input_prefix=prefix, file_names=None
@@ -79,7 +79,10 @@ async def test_download_file_invoked_for_missing_files() -> None:
         await parquet_input.download_files(path)
 
         # Should attempt to download the file
-        mock_download.assert_called_once_with(prefix, path)
+        mock_download.assert_called_once()
+        # Verify call was made with keyword arguments
+        args, kwargs = mock_download.call_args
+        assert kwargs["destination"] == path
 
 
 @pytest.mark.asyncio
@@ -90,7 +93,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob"
     ) as mock_glob, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ) as mock_download:
         # Mock existing parquet files
         mock_glob.return_value = ["/local/exists.parquet"]
@@ -132,16 +135,18 @@ async def test_download_files_directory_path_calls_correct_method() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ) as mock_download_files, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download_file:
         parquet_input = ParquetInput(input_prefix=input_prefix)
 
         await parquet_input.download_files(path)
 
         # Should call download_files_from_object_store for directories
-        mock_download_files.assert_called_once_with(input_prefix, path)
+        mock_download_files.assert_called_once()
+        args, kwargs = mock_download_files.call_args
+        assert kwargs["destination"] == path
         mock_download_file.assert_not_called()
 
 
@@ -154,16 +159,18 @@ async def test_download_files_file_path_calls_correct_method() -> None:
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ) as mock_download_files, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download_file:
         parquet_input = ParquetInput(input_prefix=input_prefix)
 
         await parquet_input.download_files(path)
 
         # Should call download_file_from_object_store for files
-        mock_download_file.assert_called_once_with(input_prefix, path)
+        mock_download_file.assert_called_once()
+        args, kwargs = mock_download_file.call_args
+        assert kwargs["destination"] == path
         mock_download_files.assert_not_called()
 
 
@@ -179,7 +186,7 @@ async def test_download_files_directory_with_existing_parquet_files() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob"
     ) as mock_glob, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ) as mock_download_files:
         mock_glob.return_value = existing_files
 
@@ -201,7 +208,7 @@ async def test_download_files_file_with_existing_parquet_file() -> None:
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob"
     ) as mock_glob, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download_file:
         mock_glob.return_value = [path]  # File exists
 
@@ -223,9 +230,9 @@ async def test_download_files_with_logging() -> None:
 
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
-    ), patch("application_sdk.inputs.parquet.logger") as mock_logger:
+    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"), patch(
+        "application_sdk.inputs.parquet.logger"
+    ) as mock_logger:
         parquet_input = ParquetInput(input_prefix=input_prefix)
 
         await parquet_input.download_files(path)
@@ -247,7 +254,7 @@ async def test_download_files_error_propagation_from_object_store() -> None:
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store",
+        "application_sdk.services.objectstore.ObjectStore.download_file",
         side_effect=SDKIOError("Download failed"),
     ):
         parquet_input = ParquetInput(input_prefix=input_prefix)
@@ -267,7 +274,7 @@ async def test_download_files_directory_error_propagation() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store",
+        "application_sdk.services.objectstore.ObjectStore.download_prefix",
         side_effect=SDKIOError("Directory download failed"),
     ):
         parquet_input = ParquetInput(input_prefix=input_prefix)
@@ -285,7 +292,7 @@ async def test_download_files_glob_patterns() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob"
     ) as mock_glob, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ):
         mock_glob.return_value = []
 
@@ -302,7 +309,7 @@ async def test_download_files_glob_patterns() -> None:
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob"
     ) as mock_glob, patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ):
         mock_glob.return_value = []
 
@@ -328,18 +335,22 @@ async def test_download_files_with_various_file_extensions() -> None:
         with patch("os.path.isdir", return_value=is_dir), patch(
             "glob.glob", return_value=[]
         ), patch(
-            "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+            "application_sdk.services.objectstore.ObjectStore.download_prefix"
         ) as mock_download_files, patch(
-            "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+            "application_sdk.services.objectstore.ObjectStore.download_file"
         ) as mock_download_file:
             parquet_input = ParquetInput(input_prefix="remote")
             await parquet_input.download_files(path)
 
             if is_dir:
-                mock_download_files.assert_called_once_with("remote", path)
+                mock_download_files.assert_called_once()
+                args, kwargs = mock_download_files.call_args
+                assert kwargs["destination"] == path
                 mock_download_file.assert_not_called()
             else:
-                mock_download_file.assert_called_once_with("remote", path)
+                mock_download_file.assert_called_once()
+                args, kwargs = mock_download_file.call_args
+                assert kwargs["destination"] == path
                 mock_download_files.assert_not_called()
 
 
@@ -350,9 +361,7 @@ async def test_download_files_return_value() -> None:
 
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
-    ):
+    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"):
         parquet_input = ParquetInput(input_prefix="remote")
         result = await parquet_input.download_files(path)
 
@@ -368,7 +377,7 @@ async def test_download_files_mixed_scenarios() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ) as mock_download:
         parquet_input = ParquetInput(input_prefix="remote")
         await parquet_input.download_files("/empty/dir")
@@ -378,7 +387,7 @@ async def test_download_files_mixed_scenarios() -> None:
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         parquet_input = ParquetInput(input_prefix="remote")
         await parquet_input.download_files("/missing/file.parquet")
@@ -388,7 +397,7 @@ async def test_download_files_mixed_scenarios() -> None:
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob", return_value=["/dir/existing.parquet"]
     ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
+        "application_sdk.services.objectstore.ObjectStore.download_prefix"
     ) as mock_download:
         parquet_input = ParquetInput(input_prefix="remote")
         await parquet_input.download_files("/dir")
@@ -511,9 +520,7 @@ async def test_get_dataframe_with_input_prefix(monkeypatch) -> None:
     # Mock the OS and ObjectStore calls that download_files uses internally
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
-    ):
+    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"):
         parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
 
         result = await parquet_input.get_dataframe()
@@ -590,9 +597,7 @@ async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
     # Mock the OS and ObjectStore calls that download_files uses internally
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
-    ):
+    ), patch("application_sdk.services.objectstore.ObjectStore.download_prefix"):
         path = "/tmp/data"
         input_prefix = "remote"
 
@@ -613,9 +618,7 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
     # Mock the OS and ObjectStore calls that download_files uses internally
     with patch("os.path.isdir", return_value=False), patch(
         "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_file_from_object_store"
-    ):
+    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"):
         path = "/data"
         file_names = ["one.json", "two.json"]  # Note: .json extension gets replaced
         input_prefix = "remote"
@@ -646,9 +649,7 @@ async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> Non
     # Mock the OS and ObjectStore calls that download_files uses internally
     with patch("os.path.isdir", return_value=True), patch(
         "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.inputs.objectstore.ObjectStoreInput.download_files_from_object_store"
-    ):
+    ), patch("application_sdk.services.objectstore.ObjectStore.download_prefix"):
         path = "/data"
         input_prefix = "remote"
 

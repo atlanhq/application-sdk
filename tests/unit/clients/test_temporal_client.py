@@ -16,7 +16,7 @@ class MockWorkflow(WorkflowInterface):
 def temporal_client() -> TemporalWorkflowClient:
     """Create a TemporalWorkflowClient instance for testing."""
     with patch(
-        "application_sdk.clients.temporal.SecretStoreInput.get_deployment_secret",
+        "application_sdk.clients.temporal.SecretStore.get_deployment_secret",
         return_value={},
     ):
         return TemporalWorkflowClient(
@@ -31,11 +31,11 @@ def temporal_client() -> TemporalWorkflowClient:
 def mock_dapr_output_client() -> Generator[Mock, None, None]:
     """Mock Dapr output clients."""
     with patch(
-        "application_sdk.clients.temporal.StateStoreOutput"
+        "application_sdk.clients.temporal.StateStore"
     ) as mock_state_output, patch(
-        "application_sdk.inputs.statestore.StateStoreInput.get_state"
+        "application_sdk.services.statestore.StateStore.get_state"
     ) as mock_get_state, patch(
-        "application_sdk.outputs.objectstore.ObjectStoreOutput.push_file_to_object_store"
+        "application_sdk.services.objectstore.ObjectStore.upload_file"
     ) as mock_push_file:
         mock_state_output.save_state = AsyncMock()
         mock_state_output.save_state_object = AsyncMock()
@@ -48,7 +48,7 @@ def mock_dapr_output_client() -> Generator[Mock, None, None]:
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
 )
-@patch("application_sdk.clients.temporal.SecretStoreInput.get_deployment_secret")
+@patch("application_sdk.clients.temporal.SecretStore.get_deployment_secret")
 async def test_load(
     mock_get_config: AsyncMock,
     mock_connect: AsyncMock,
@@ -76,7 +76,7 @@ async def test_load(
     assert temporal_client.client == mock_client
 
 
-@patch("application_sdk.outputs.secretstore.SecretStoreOutput")
+@patch("application_sdk.services.secretstore.SecretStore")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
@@ -121,7 +121,7 @@ async def test_start_workflow(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.outputs.secretstore.SecretStoreOutput")
+@patch("application_sdk.services.secretstore.SecretStore")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
@@ -179,7 +179,7 @@ async def test_start_workflow_with_workflow_id(
     assert result["run_id"] == "test_run_id"
 
 
-@patch("application_sdk.outputs.secretstore.SecretStoreOutput")
+@patch("application_sdk.services.secretstore.SecretStore")
 @patch(
     "application_sdk.clients.temporal.Client.connect",
     new_callable=AsyncMock,
