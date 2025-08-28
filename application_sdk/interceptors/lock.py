@@ -99,7 +99,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         ttl_seconds: int,
     ) -> workflow.ActivityHandle[Any]:
         """Execute activity with distributed lock orchestration."""
-        owner_id = f"{APPLICATION_NAME}:{workflow.info().workflow_id}"
+        owner_id = f"{APPLICATION_NAME}:{workflow.info().run_id}"
 
         # Step 1: Acquire lock via dedicated activity (can take >2s safely)
         lock_result = await workflow.execute_activity(
