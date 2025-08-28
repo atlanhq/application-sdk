@@ -33,6 +33,107 @@ Subclasses **must** implement the following asynchronous methods:
     *   **Purpose:** Fetch metadata from the target system. The specific type and format of metadata depend on the implementation and the arguments passed (e.g., fetching databases vs. schemas). Should return the fetched metadata, often as a list of dictionaries.
     *   **Used By:** The `/workflows/v1/metadata` endpoint in `Application`.
 
+## `BaseHandler` (`application_sdk.handlers.base.py`)
+
+This is a concrete implementation of `HandlerInterface` specifically designed for interacting with non-SQL data sources.
+
+### Key Features
+
+*   **Uses `BaseClient`:** It requires an instance of a `BaseClient` subclass (passed during initialization) to communicate with the target system.
+*   **Client Management:** Automatically manages the lifecycle of the associated `BaseClient` instance.
+*   **Default Implementation:** Provides a basic implementation of the `load()` method that initializes the client with credentials.
+*   **Extensibility:** Designed to be subclassed for specific non-SQL data sources (e.g., REST APIs).
+
+### Default Implementation
+
+The `BaseHandler` provides a basic implementation that:
+
+*   **`__init__(client=None)`:** Initializes the handler with an optional `BaseClient` instance. If no client is provided, it creates a default `BaseClient()`.
+*   **`load(credentials)`:** Calls `load()` on the associated client with the provided credentials.
+
+### Example `BaseHandler` Subclass
+
+```python
+# Example for a hypothetical REST API source
+# In my_api_connector/handlers.py
+from typing import Any, Dict, List
+# Absolute imports
+from application_sdk.handlers.base import BaseHandler
+# Assuming you have a client for this API
+from .clients import MyApiClient
+
+class MyApiHandler(BaseHandler):
+    def __init__(self, client: MyApiClient = None):
+        """Initialize the handler with a custom API client."""
+        super().__init__(client or MyApiClient())
+
+    async def test_auth(self, **kwargs: Any) -> bool:
+        """Test API authentication using the client."""
+        try:
+            # Use the client to validate credentials against the API
+            response = await self.client.execute_http_get_request(
+                url="https://api.example.com/auth/test",
+                headers={"Authorization": f"Bearer {kwargs.get('api_token')}"}
+            )
+            return response is not None and response.status_code == 200
+        except Exception as e:
+            logger.error(f"Authentication test failed: {e}")
+            return False
+
+    async def preflight_check(self, **kwargs: Any) -> Dict[str, Any]:
+        """Perform API preflight checks."""
+        try:
+            # Test connectivity
+            ping_response = await self.client.execute_http_get_request(
+                url="https://api.example.com/health"
+            )
+            connectivity_ok = ping_response is not None and ping_response.status_code == 200
+
+            # Test permissions
+            permissions_response = await self.client.execute_http_get_request(
+                url="https://api.example.com/permissions"
+            )
+            permissions_ok = permissions_response is not None and permissions_response.status_code == 200
+
+            if connectivity_ok and permissions_ok:
+                return {
+                        "connectivityCheck": {"success": connectivity_ok, "successMessage": "API reachable", "failureMessage": ""},
+                        "permissionCheck": {"success": permissions_ok, "successMessage": "Read access verified", "failureMessage": ""}
+                    }
+            else:
+                return {
+                    "connectivityCheck": {"success": connectivity_ok, "successMessage": "", "failureMessage": "API not reachable"},
+                    "permissionCheck": {"success": permissions_ok, "successMessage": "", "failureMessage": "Read access not verified"}
+                }
+        except Exception as e:
+            logger.error(f"Preflight check failed: {e}")
+            return {
+                "connectivityCheck": {"success": connectivity_ok, "successMessage": "", "failureMessage": "API not reachable"},
+                "permissionCheck": {"success": permissions_ok, "successMessage": "", "failureMessage": "Read access not verified"}
+            }
+
+    async def fetch_metadata(self, **kwargs: Any) -> Any:
+        """Fetch metadata from the API."""
+        try:
+            # Use the client to fetch metadata (e.g., list available datasets)
+            metadata_type = kwargs.get("metadata_type", "datasets")
+
+            response = await self.client.execute_http_get_request(
+                url=f"https://api.example.com/metadata/{metadata_type}",
+                params=kwargs.get("filters", {})
+            )
+
+            if response and response.status_code == 200:
+                return response.json()
+            else:
+                return []
+        except Exception as e:
+            logger.error(f"Failed to fetch metadata: {e}")
+            return []
+
+# Usage: Pass an instance of MyApiHandler to Application or Activities
+```
+
 ## `BaseSQLHandler` (`application_sdk.handlers.sql.py`)
 
 This is a concrete implementation of `HandlerInterface` specifically designed for interacting with SQL-based data sources.
@@ -206,4 +307,4 @@ class MyPostgresHandler(BaseSQLHandler):
 
 ## Summary
 
-Handlers are essential components that contain the specific logic for interacting with a target data source. They implement the `HandlerInterface` contract and are used by both the `Application` (for standard API endpoints) and `Activities` (for workflow steps). For SQL sources, subclassing `BaseSQLHandler` provides a convenient starting point, while non-SQL sources require implementing `HandlerInterface` directly.
+Handlers are essential components that contain the specific logic for interacting with a target data source. They implement the `HandlerInterface` contract and are used by both the `Application` (for standard API endpoints) and `Activities` (for workflow steps). For SQL sources, subclassing `BaseSQLHandler` provides a convenient starting point, while non-SQL sources require either subclassing `BaseHandler` or implementing `HandlerInterface` directly.

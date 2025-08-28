@@ -6,6 +6,8 @@ import pytest
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.application import BaseApplication
+from application_sdk.clients.base import BaseClient
+from application_sdk.handlers.base import BaseHandler
 from application_sdk.server import ServerInterface
 from application_sdk.workflows import WorkflowInterface
 
@@ -31,6 +33,31 @@ class MockServerInterface(ServerInterface):
         pass
 
 
+class MockClientClass(BaseClient):
+    """Mock client class for testing."""
+
+    pass
+
+
+class MockHandlerClass(BaseHandler):
+    """Mock handler class for testing."""
+
+    def __init__(self, client):
+        self.client = client
+
+    async def test_auth(self, *args, **kwargs):
+        """Mock implementation of test_auth."""
+        return True
+
+    async def preflight_check(self, *args, **kwargs):
+        """Mock implementation of preflight_check."""
+        return {"status": "ok"}
+
+    async def fetch_metadata(self, *args, **kwargs):
+        """Mock implementation of fetch_metadata."""
+        return {"metadata": "test"}
+
+
 class TestBaseApplication:
     """Test cases for BaseApplication class."""
 
@@ -44,6 +71,8 @@ class TestBaseApplication:
         assert app.workflow_client is not None
         assert app.application_manifest is None
         assert app.event_subscriptions == {}
+        assert app.client_class == BaseClient
+        assert app.handler_class == BaseHandler
 
     def test_initialization_with_server(self):
         """Test application initialization with server."""
@@ -52,6 +81,15 @@ class TestBaseApplication:
 
         assert app.application_name == "test-app"
         assert app.server == mock_server
+
+    def test_initialization_with_custom_client_and_handler(self):
+        """Test application initialization with custom client and handler classes."""
+        app = BaseApplication(
+            "test-app", client_class=MockClientClass, handler_class=MockHandlerClass
+        )
+
+        assert app.client_class == MockClientClass
+        assert app.handler_class == MockHandlerClass
 
     def test_initialization_with_manifest(self):
         """Test application initialization with application manifest."""
@@ -284,12 +322,49 @@ class TestBaseApplication:
         mock_server_instance = Mock()
         mock_api_server.return_value = mock_server_instance
 
-        app = BaseApplication("test-app")
+        app = BaseApplication("test-app", handler_class=MockHandlerClass)
 
         await app.setup_server(MockWorkflowInterface)
 
         assert app.server == mock_server_instance
         mock_api_server.assert_called_once()
+        # Verify that APIServer was called with the correct handler
+        call_args = mock_api_server.call_args
+        assert call_args[1]["workflow_client"] == mock_workflow_client
+        assert call_args[1]["ui_enabled"] is True
+        # The handler should be an instance of MockHandlerClass with a BaseClient
+        handler = call_args[1]["handler"]
+        assert isinstance(handler, MockHandlerClass)
+        assert isinstance(handler.client, BaseClient)
+        mock_server_instance.register_workflow.assert_called_once()
+
+    @patch("application_sdk.application.get_workflow_client")
+    @patch("application_sdk.application.APIServer")
+    async def test_setup_server_with_custom_client_and_handler(
+        self, mock_api_server, mock_get_workflow_client
+    ):
+        """Test server setup with custom client and handler classes."""
+        mock_workflow_client = AsyncMock()
+        mock_get_workflow_client.return_value = mock_workflow_client
+        mock_server_instance = Mock()
+        mock_api_server.return_value = mock_server_instance
+
+        app = BaseApplication(
+            "test-app", client_class=MockClientClass, handler_class=MockHandlerClass
+        )
+
+        await app.setup_server(MockWorkflowInterface)
+
+        assert app.server == mock_server_instance
+        mock_api_server.assert_called_once()
+        # Verify that APIServer was called with the correct handler
+        call_args = mock_api_server.call_args
+        assert call_args[1]["workflow_client"] == mock_workflow_client
+        assert call_args[1]["ui_enabled"] is True
+        # The handler should be an instance of MockHandlerClass with a MockClientClass
+        handler = call_args[1]["handler"]
+        assert isinstance(handler, MockHandlerClass)
+        assert isinstance(handler.client, MockClientClass)
         mock_server_instance.register_workflow.assert_called_once()
 
     @patch("application_sdk.application.get_workflow_client")
@@ -316,7 +391,9 @@ class TestBaseApplication:
                 ]
             }
         }
-        app = BaseApplication("test-app", application_manifest=manifest)
+        app = BaseApplication(
+            "test-app", application_manifest=manifest, handler_class=MockHandlerClass
+        )
         app.register_event_subscription("test_id", MockWorkflowInterface)
 
         await app.setup_server(MockWorkflowInterface)
@@ -348,7 +425,9 @@ class TestBaseApplication:
                 ]
             }
         }
-        app = BaseApplication("test-app", application_manifest=manifest)
+        app = BaseApplication(
+            "test-app", application_manifest=manifest, handler_class=MockHandlerClass
+        )
         # Don't register workflow class for event subscription
 
         with pytest.raises(
