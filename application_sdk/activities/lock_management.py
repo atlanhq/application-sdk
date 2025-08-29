@@ -97,10 +97,6 @@ async def release_distributed_lock(
                 logger.info(
                     f"Lock released successfully: {resource_id}, result: {result.value}"
                 )
-            else:
-                logger.warning(
-                    f"Lock release failed: {resource_id}, result: {result.value}"
-                )
             return released
 
         except Exception as e:
