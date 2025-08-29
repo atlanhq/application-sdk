@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.clients.base import BaseClient
+from application_sdk.clients.redis import get_redis_client
 from application_sdk.clients.utils import get_workflow_client
 from application_sdk.events.models import EventRegistration
 from application_sdk.handlers.base import BaseHandler
@@ -49,7 +50,10 @@ class BaseApplication:
 
         self.workflow_client = get_workflow_client(application_name=name)
 
-        self.application_manifest: Dict[str, Any] = application_manifest
+        # Initialize Redis client (follows same pattern as workflow client)
+        self.redis_client = get_redis_client()
+
+        self.application_manifest: Dict[str, Any] = application_manifest or {}
         self.bootstrap_event_registration()
 
         self.client_class = client_class or BaseClient
@@ -116,6 +120,9 @@ class BaseApplication:
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
         await self.workflow_client.load()
+
+        # Connect to Redis for distributed locking (optional)
+        self.redis_client.connect()
 
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes

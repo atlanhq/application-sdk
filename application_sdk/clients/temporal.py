@@ -34,6 +34,8 @@ from application_sdk.events.models import (
     EventTypes,
     WorkflowStates,
 )
+from application_sdk.interceptors.events import EventInterceptor
+from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 from application_sdk.services.secretstore import SecretStore
@@ -550,7 +552,7 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor=activity_executor,
             interceptors=[
                 EventInterceptor(),
-                LockInterceptor(),
+                RedisLockInterceptor(activities_dict),
             ],
         )
 
