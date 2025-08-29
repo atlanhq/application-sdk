@@ -102,31 +102,34 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
     ) -> workflow.ActivityHandle[Any]:
         """Execute activity with distributed lock orchestration."""
         owner_id = f"{APPLICATION_NAME}:{workflow.info().run_id}"
-
-        # Step 1: Acquire lock via dedicated activity (can take >2s safely)
-        lock_result = await workflow.execute_activity(
-            "acquire_distributed_lock",
-            args=[lock_name, max_locks, ttl_seconds, owner_id],
-            start_to_close_timeout=timedelta(minutes=5),
-        )
-
-        logger.debug(f"Lock acquired: {lock_result}, executing {input.activity}")
+        lock_result = None
 
         try:
-            # Step 2: Execute the business activity
+            # Step 1: Acquire lock via dedicated activity (can take >2s safely)
+            lock_result = await workflow.execute_activity(
+                "acquire_distributed_lock",
+                args=[lock_name, max_locks, ttl_seconds, owner_id],
+                start_to_close_timeout=timedelta(minutes=5),
+            )
+
+            logger.debug(f"Lock acquired: {lock_result}, executing {input.activity}")
+
+            # Step 2: Execute the business activity and return its handle
             return await self.next.start_activity(input)
+
         finally:
             # Step 3: Release lock (fire-and-forget with short timeout)
-            try:
-                await workflow.execute_local_activity(
-                    "release_distributed_lock",
-                    args=[lock_result["resource_id"], lock_result["owner_id"]],
-                    start_to_close_timeout=timedelta(seconds=5),
-                )
-                logger.debug(f"Lock released: {lock_result['resource_id']}")
-            except Exception as e:
-                # Silent failure - TTL will handle cleanup
-                logger.warning(
-                    f"Lock release failed for {lock_result['resource_id']}: {e}. "
-                    f"TTL will handle cleanup."
-                )
+            if lock_result is not None:
+                try:
+                    await workflow.execute_activity(
+                        "release_distributed_lock",
+                        args=[lock_result["resource_id"], lock_result["owner_id"]],
+                        start_to_close_timeout=timedelta(seconds=5),
+                    )
+                    logger.debug(f"Lock released: {lock_result['resource_id']}")
+                except Exception as e:
+                    # Silent failure - TTL will handle cleanup
+                    logger.warning(
+                        f"Lock release failed for {lock_result['resource_id']}: {e}. "
+                        f"TTL will handle cleanup."
+                    )

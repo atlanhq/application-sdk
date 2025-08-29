@@ -371,7 +371,7 @@ class ActivityError(AtlanError):
         ErrorComponent.ACTIVITY, "503", "01", "Distributed lock acquisition error"
     )
     LOCK_RELEASE_ERROR = ErrorCode(
-        ErrorComponent.ACTIVITY, "500", "08", "Distributed lock release error"
+        ErrorComponent.ACTIVITY, "500", "09", "Distributed lock release error"
     )
     LOCK_TIMEOUT_ERROR = ErrorCode(
         ErrorComponent.ACTIVITY, "408", "00", "Lock acquisition timeout"
