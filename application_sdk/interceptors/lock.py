@@ -79,9 +79,12 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         lock_name = lock_config.get("lock_name", input.activity)
         max_locks = lock_config.get("max_locks", 5)
         if not input.schedule_to_close_timeout:
-            logger.error("Schedule to  close timeout is required for locked activities")
+            logger.error(
+                f"Activity '{input.activity}' with @needs_lock decorator requires schedule_to_close_timeout"
+            )
             raise WorkflowError(
-                f"{WorkflowError.WORKFLOW_CONFIG_ERROR}: Schedule to close timeout is required for locked activities"
+                f"{WorkflowError.WORKFLOW_CONFIG_ERROR}: Activity '{input.activity}' with @needs_lock decorator must be called with schedule_to_close_timeout parameter. "
+                f"Example: workflow.execute_activity('{input.activity}', schedule_to_close_timeout=timedelta(minutes=10))"
             )
         ttl_seconds = int(input.schedule_to_close_timeout.total_seconds())
 
