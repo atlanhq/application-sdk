@@ -44,7 +44,24 @@ class BaseHandler(HandlerInterface):
 
     # The following methods are inherited from HandlerInterface and should be implemented
     # by subclasses to handle calls from their respective FastAPI endpoints:
-    #
     # - test_auth(**kwargs) -> bool: Called by /workflow/v1/auth endpoint
     # - preflight_check(**kwargs) -> Any: Called by /workflow/v1/check endpoint
     # - fetch_metadata(**kwargs) -> Any: Called by /workflow/v1/metadata endpoint
+
+    async def test_auth(self, **kwargs: Any) -> bool:
+        """
+        Test the authentication of the handler.
+        """
+        raise NotImplementedError("test_auth is not implemented")
+
+    async def preflight_check(self, **kwargs: Any) -> Any:
+        """
+        Check the preflight of the handler.
+        """
+        raise NotImplementedError("preflight_check is not implemented")
+
+    async def fetch_metadata(self, **kwargs: Any) -> Any:
+        """
+        Fetch the metadata of the handler.
+        """
+        raise NotImplementedError("fetch_metadata is not implemented")
