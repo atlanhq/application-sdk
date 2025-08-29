@@ -18,7 +18,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
     DEPLOYMENT_NAME_KEY,
-    LOCK_METADATA_KEY,
+    IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -26,7 +26,6 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
-
 from application_sdk.interceptors.events import EventInterceptor
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
@@ -365,13 +364,8 @@ class TemporalWorkflowClient(WorkflowClient):
         # Start with provided activities and add system activities
         final_activities = list(activities) + [publish_event]
 
-        # Auto-detect if any activities need locking
-        needs_locking = any(
-            hasattr(activity, LOCK_METADATA_KEY) for activity in activities
-        )
-
         # Add lock management activities if needed
-        if needs_locking:
+        if not IS_LOCKING_DISABLED:
             from application_sdk.activities.lock_management import (
                 acquire_distributed_lock,
                 release_distributed_lock,
