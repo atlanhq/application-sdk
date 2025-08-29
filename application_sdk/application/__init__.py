@@ -49,7 +49,7 @@ class BaseApplication:
 
         self.workflow_client = get_workflow_client(application_name=name)
 
-        self.application_manifest: Dict[str, Any] = application_manifest or {}
+        self.application_manifest: Dict[str, Any] = application_manifest
         self.bootstrap_event_registration()
 
         self.client_class = client_class or BaseClient
