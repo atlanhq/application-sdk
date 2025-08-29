@@ -8,6 +8,7 @@ from datetime import timedelta
 from typing import Any, Dict, Optional, Type
 
 from temporalio import workflow
+from temporalio.common import RetryPolicy
 from temporalio.worker import (
     Interceptor,
     StartActivityInput,
@@ -106,10 +107,12 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
 
         try:
             # Step 1: Acquire lock via dedicated activity (can take >2s safely)
+            start_to_close_timeout = workflow.info().execution_timeout
             lock_result = await workflow.execute_activity(
                 "acquire_distributed_lock",
                 args=[lock_name, max_locks, ttl_seconds, owner_id],
-                start_to_close_timeout=timedelta(minutes=5),
+                start_to_close_timeout=start_to_close_timeout,
+                retry_policy=RetryPolicy(maximum_attempts=1),
             )
 
             logger.debug(f"Lock acquired: {lock_result}, executing {input.activity}")
@@ -125,6 +128,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                         "release_distributed_lock",
                         args=[lock_result["resource_id"], lock_result["owner_id"]],
                         start_to_close_timeout=timedelta(seconds=5),
+                        retry_policy=RetryPolicy(maximum_attempts=1),
                     )
                     logger.debug(f"Lock released: {lock_result['resource_id']}")
                 except Exception as e:
