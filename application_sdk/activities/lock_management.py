@@ -12,7 +12,7 @@ from typing import Any, Dict
 from temporalio import activity
 
 from application_sdk.clients.redis import get_redis_client
-from application_sdk.common.error_codes import ActivityError, ClientError
+from application_sdk.common.error_codes import ActivityError
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
