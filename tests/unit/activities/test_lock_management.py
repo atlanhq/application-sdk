@@ -187,6 +187,32 @@ class TestAcquireDistributedLock:
         assert call_args[1] == "test_owner"
         assert call_args[2] == 100
 
+    async def test_acquire_lock_invalid_max_locks_zero(self):
+        """Test that max_locks=0 raises ActivityError."""
+        with pytest.raises(ActivityError) as exc_info:
+            await acquire_distributed_lock(
+                lock_name="test_resource",
+                max_locks=0,
+                ttl_seconds=60,
+                owner_id="test_owner",
+            )
+
+        assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)
+        assert "max_locks must be greater than 0, got 0" in str(exc_info.value)
+
+    async def test_acquire_lock_invalid_max_locks_negative(self):
+        """Test that negative max_locks raises ActivityError."""
+        with pytest.raises(ActivityError) as exc_info:
+            await acquire_distributed_lock(
+                lock_name="test_resource",
+                max_locks=-5,
+                ttl_seconds=60,
+                owner_id="test_owner",
+            )
+
+        assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)
+        assert "max_locks must be greater than 0, got -5" in str(exc_info.value)
+
 
 class TestReleaseDistributedLock:
     """Test cases for release_distributed_lock activity."""

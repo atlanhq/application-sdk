@@ -30,7 +30,7 @@ async def acquire_distributed_lock(
 
     Args:
         lock_name: Name of the resource to lock
-        max_locks: Maximum number of concurrent locks allowed
+        max_locks: Maximum number of concurrent locks allowed (must be > 0)
         ttl_seconds: Time-to-live for the lock in seconds
         owner_id: Unique identifier for the lock owner
 
@@ -43,8 +43,14 @@ async def acquire_distributed_lock(
         }
 
     Raises:
-        RuntimeError: If lock acquisition fails due to Redis errors
+        ActivityError: If lock acquisition fails due to Redis errors or invalid parameters
     """
+    # Input validation
+    if max_locks <= 0:
+        raise ActivityError(
+            f"{ActivityError.LOCK_ACQUISITION_ERROR}: max_locks must be greater than 0, got {max_locks}"
+        )
+
     async with RedisClient() as redis_client:
         while True:
             slot = random.randint(0, max_locks - 1)
