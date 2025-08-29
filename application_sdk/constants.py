@@ -240,21 +240,11 @@ LOCK_METADATA_KEY = "__lock_metadata__"
 REDIS_HOST = os.getenv("REDIS_HOST", "")
 #: Redis port for direct connection (when not using Sentinel)
 REDIS_PORT = os.getenv("REDIS_PORT", "")
-#: Redis database number
-REDIS_DB = int(os.getenv("REDIS_DB", "0"))
-#: Redis password
+#: Redis password (required for authenticated Redis instances)
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
-#: Redis Sentinel service name
+#: Redis Sentinel service name (default: mymaster)
 REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
 #: Redis Sentinel hosts (comma-separated host:port pairs)
 REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
-#: Redis connection pool size
-REDIS_CONNECTION_POOL_SIZE = int(os.getenv("REDIS_CONNECTION_POOL_SIZE", "10"))
-#: Redis socket timeout in seconds
-REDIS_SOCKET_TIMEOUT = float(os.getenv("REDIS_SOCKET_TIMEOUT", "5.0"))
-#: Redis health check interval in seconds
-REDIS_HEALTH_CHECK_INTERVAL = int(os.getenv("REDIS_HEALTH_CHECK_INTERVAL", "30"))
 #: Whether to enable strict locking
-FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE = (
-    os.getenv("FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE", "false").lower() == "true"
-)
+IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"

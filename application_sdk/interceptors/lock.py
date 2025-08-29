@@ -19,7 +19,7 @@ from temporalio.worker import (
 from application_sdk.common.error_codes import WorkflowError
 from application_sdk.constants import (
     APPLICATION_NAME,
-    FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE,
+    IS_LOCKING_DISABLED,
     LOCK_METADATA_KEY,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -71,11 +71,8 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         if (
             not activity_fn
             or not hasattr(activity_fn, LOCK_METADATA_KEY)
-            or not FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE
+            or IS_LOCKING_DISABLED
         ):
-            logger.debug(
-                f"Strict locking disabled, executing {input.activity} without lock"
-            )
             return await self.next.start_activity(input)
 
         lock_config = getattr(activity_fn, LOCK_METADATA_KEY)
@@ -83,7 +80,9 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         max_locks = lock_config.get("max_locks", 5)
         if not input.start_to_close_timeout:
             logger.error("Start to close timeout is required for locked activities")
-            raise WorkflowError.WORKFLOW_CONFIG_ERROR
+            raise WorkflowError(
+                f"{WorkflowError.WORKFLOW_CONFIG_ERROR}: Start to close timeout is required for locked activities"
+            )
         ttl_seconds = int(input.start_to_close_timeout.total_seconds())
 
         # Orchestrate lock acquisition -> business activity -> lock release

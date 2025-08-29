@@ -11,7 +11,7 @@ from typing import Any, Dict
 
 from temporalio import activity
 
-from application_sdk.clients.redis import get_redis_client
+from application_sdk.clients.redis import RedisClient
 from application_sdk.common.error_codes import ActivityError
 from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
@@ -21,7 +21,10 @@ logger = get_logger(__name__)
 
 @activity.defn
 async def acquire_distributed_lock(
-    lock_name: str, max_locks: int, ttl_seconds: int, owner_id: str
+    lock_name: str,
+    max_locks: int,
+    ttl_seconds: int = 100,
+    owner_id: str = "default_owner",
 ) -> Dict[str, Any]:
     """Acquire a distributed lock with retry logic.
 
@@ -42,39 +45,42 @@ async def acquire_distributed_lock(
     Raises:
         RuntimeError: If lock acquisition fails due to Redis errors
     """
-    redis_client = get_redis_client()
+    async with RedisClient() as redis_client:
+        while True:
+            slot = random.randint(0, max_locks - 1)
+            resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
 
-    while True:
-        slot = random.randint(0, max_locks - 1)
-        resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
+            try:
+                # Acquire lock - connection will stay open until context exits
+                acquired = await redis_client._acquire_lock(
+                    resource_id, owner_id, ttl_seconds
+                )
+                if acquired:
+                    logger.info(
+                        f"Lock acquired for slot {slot}, resource: {resource_id}"
+                    )
+                    return {
+                        "slot_id": slot,
+                        "resource_id": resource_id,
+                        "owner_id": owner_id,
+                    }
+                # If not acquired, continue retrying (lock held by another owner)
 
-        try:
-            # Acquire lock directly without context manager to keep it held
-            acquired = redis_client._acquire_lock(resource_id, owner_id, ttl_seconds)
-            if acquired:
-                logger.info(f"Lock acquired for slot {slot}, resource: {resource_id}")
-                return {
-                    "slot_id": slot,
-                    "resource_id": resource_id,
-                    "owner_id": owner_id,
-                }
+            except Exception as e:
+                # Redis connection or operation failed - propagate as activity error
+                logger.error(f"Redis error during lock acquisition: {e}")
+                raise ActivityError(
+                    f"{ActivityError.LOCK_ACQUISITION_ERROR}: Redis error during lock acquisition for {resource_id}"
+                )
 
-            # Health check after failed acquisition
-            if not redis_client.health_check():
-                logger.error("Redis health check failed during lock acquisition")
-                raise ActivityError.LOCK_ACQUISITION_ERROR
-
-        except Exception as e:
-            # In strict mode: always fail on Redis errors
-            logger.error(f"Redis error during lock acquisition: {e}")
-            raise ActivityError.LOCK_ACQUISITION_ERROR
-
-        # Wait before retrying
-        await asyncio.sleep(random.uniform(0.1, 0.5))
+            # Wait before retrying
+            await asyncio.sleep(random.uniform(0.1, 0.5))
 
 
 @activity.defn
-async def release_distributed_lock(resource_id: str, owner_id: str) -> bool:
+async def release_distributed_lock(
+    resource_id: str, owner_id: str = "default_owner"
+) -> bool:
     """Release a distributed lock.
 
     Args:
@@ -84,17 +90,21 @@ async def release_distributed_lock(resource_id: str, owner_id: str) -> bool:
     Returns:
         True if lock was released successfully, False otherwise
     """
-    redis_client = get_redis_client()
+    async with RedisClient() as redis_client:
+        try:
+            released, result = await redis_client._release_lock(resource_id, owner_id)
+            if released:
+                logger.info(
+                    f"Lock released successfully: {resource_id}, result: {result.value}"
+                )
+            else:
+                logger.warning(
+                    f"Lock release failed: {resource_id}, result: {result.value}"
+                )
+            return released
 
-    try:
-        released, reason = redis_client._release_lock(resource_id, owner_id)
-        if released:
-            logger.info(f"Lock released successfully: {resource_id}")
-        else:
-            logger.warning(f"Lock release failed: {resource_id}, reason: {reason}")
-        return released
-
-    except Exception as e:
-        logger.error(f"Error releasing lock {resource_id}: {e}")
-        # Don't raise exception for lock release failures - log and return False
-        return False
+        except Exception as e:
+            logger.error(f"Redis error during lock release for {resource_id}: {e}")
+            # Don't raise exception for lock release failures - log and return False
+            # Lock release is best-effort and shouldn't fail the workflow
+            return False
