@@ -1,5 +1,14 @@
 # Changelog
 
+
+## v0.1.1rc36 (August 29, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc35...v0.1.1rc36
+
+### Features
+
+- implement abstract methods in BaseHandler (by @Mustafa in [c7c1937](https://github.com/atlanhq/application-sdk/commit/c7c1937))
+
 ## v0.1.1rc35 (August 28, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc34...v0.1.1rc35
