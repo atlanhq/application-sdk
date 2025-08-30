@@ -17,8 +17,12 @@ from typing import (
     Union,
 )
 
+from sqlalchemy.exc import OperationalError
+
 from application_sdk.common.error_codes import CommonError
+from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.parquet import ParquetOutput
 
 logger = get_logger(__name__)
 
@@ -110,6 +114,7 @@ def prepare_query(
     query: Optional[str],
     workflow_args: Dict[str, Any],
     temp_table_regex_sql: Optional[str] = "",
+    posix_regex: Optional[bool] = False,
 ) -> Optional[str]:
     """
     Prepares a SQL query by applying include and exclude filters, and optional
@@ -132,6 +137,7 @@ def prepare_query(
             exclude_empty_tables (bool): Whether to exclude empty tables,
             exclude_views (bool): Whether to exclude views.
         temp_table_regex_sql (str): SQL snippet for excluding temporary tables. Defaults to "".
+        posix_regex (bool): Whether to use POSIX regex. Defaults to False.
 
     Returns:
         Optional[str]: The prepared SQL query with filters applied, or None if an error occurs during preparation.
@@ -158,6 +164,12 @@ def prepare_query(
             include_filter, exclude_filter
         )
 
+        if posix_regex:
+            normalized_include_regex_posix = transform_posix_regex(
+                normalized_include_regex
+            )
+        normalized_exclude_regex_posix = transform_posix_regex(normalized_exclude_regex)
+
         # Extract database names from the normalized regex patterns
         include_databases = extract_database_names_from_regex_common(
             normalized_regex=normalized_include_regex,
@@ -176,6 +188,10 @@ def prepare_query(
         )
         exclude_views = workflow_args.get("metadata", {}).get("exclude_views", False)
 
+        if posix_regex:
+            normalized_include_regex = normalized_include_regex_posix
+            normalized_exclude_regex = normalized_exclude_regex_posix
+
         return query.format(
             include_databases=include_databases,
             exclude_databases=exclude_databases,
@@ -193,6 +209,37 @@ def prepare_query(
             error_code=CommonError.QUERY_PREPARATION_ERROR.code,
         )
         return None
+
+
+def transform_posix_regex(regex_pattern: str) -> str:
+    """
+    Transform regex pattern for POSIX compatibility.
+
+    Rules:
+    1. Add ^ before each database name before \.
+    2. Add an additional . between \. and * if * follows \.
+
+    Example: 'dev\.public$|dev\.atlan_test_schema$|wide_world_importers\.*'
+    Becomes: '^dev\.public$|^dev\.atlan_test_schema$|^wide_world_importers\..*'
+    """
+    if not regex_pattern:
+        return regex_pattern
+
+    # Split by | to handle each pattern separately
+    patterns = regex_pattern.split("|")
+    transformed_patterns = []
+
+    for pattern in patterns:
+        # Add ^ at the beginning if it's not already there
+        if not pattern.startswith("^"):
+            pattern = "^" + pattern
+
+    # Add additional . between \. and * if * follows \.
+    pattern = re.sub(r"\\\.\*", r"\..*", pattern)
+
+    transformed_patterns.append(pattern)
+
+    return "|".join(transformed_patterns)
 
 
 def parse_filter_input(
@@ -432,3 +479,156 @@ def run_sync(func):
             return await loop.run_in_executor(pool, func, *args, **kwargs)
 
     return wrapper
+
+
+async def get_database_names(
+    sql_client, workflow_args, fetch_database_sql
+) -> Optional[List[str]]:
+    """
+    Get the database names from the workflow args if include-filter is present
+    Args:
+        workflow_args: The workflow args
+    Returns:
+        List[str]: The database names
+    """
+    database_names = parse_filter_input(
+        workflow_args.get("metadata", {}).get("include-filter", {})
+    )
+
+    database_names = [
+        re.sub(r"^[^\w]+|[^\w]+$", "", database_name)
+        for database_name in database_names
+    ]
+    if not database_names:
+        # if database_names are not provided in the include-filter, we'll run the query to get all the database names
+        # because by default for an empty include-filter, we fetch details corresponding to all the databases.
+        temp_table_regex_sql = workflow_args.get("metadata", {}).get(
+            "temp-table-regex", ""
+        )
+        prepared_query = prepare_query(
+            query=fetch_database_sql,
+            workflow_args=workflow_args,
+            temp_table_regex_sql=temp_table_regex_sql,
+            posix_regex=True,
+        )
+        # We'll run the query to get all the database names
+        database_sql_input = SQLQueryInput(
+            engine=sql_client.engine,
+            query=prepared_query,  # type: ignore
+            chunk_size=None,
+        )
+        database_dataframe = await database_sql_input.get_dataframe()
+        database_names = list(database_dataframe["database_name"])
+    return database_names
+
+
+async def multidb_query_executor(
+    sql_client,
+    fetch_database_sql,
+    extract_temp_table_regex_column_sql,
+    extract_temp_table_regex_table_sql,
+    sql_query: Optional[str],
+    workflow_args: Dict[str, Any],
+    output_suffix: str,
+    typename: str,
+    write_to_file: bool = True,
+):
+    """
+    Create new connection for each database and
+    execute the query and write the dataframe
+    """
+    database_names = await get_database_names(
+        sql_client, workflow_args, fetch_database_sql
+    )
+    if not sql_client or not sql_client.engine:
+        logger.error("SQL client or engine not initialized")
+        raise ValueError("SQL client or engine not initialized")
+    parquet_output = None
+    if write_to_file:
+        output_prefix = workflow_args.get("output_prefix")
+        output_path = workflow_args.get("output_path")
+        if not output_prefix or not output_path:
+            logger.error("Output prefix or path not provided in workflow_args.")
+            raise ValueError(
+                "Output prefix and path must be specified in workflow_args."
+            )
+        parquet_output = ParquetOutput(
+            output_prefix=output_prefix,
+            output_path=output_path,
+            output_suffix=output_suffix,
+        )
+    successful_databases = []
+    failed_databases = []
+    dataframe_list = []
+    for database_name in database_names or []:
+        try:
+            # create the engine with the new database name
+            # Parse extra field if it's a JSON string
+            if isinstance(sql_client.credentials.get("extra"), str):
+                try:
+                    extra_dict = json.loads(sql_client.credentials["extra"])
+                    extra_dict["database"] = database_name
+                    sql_client.credentials["extra"] = extra_dict
+                except json.JSONDecodeError:
+                    logger.error(
+                        f"Failed to parse extra field as JSON: {sql_client.credentials.get('extra')}"
+                    )
+                    raise ValueError("Invalid JSON in extra field")
+            else:
+                sql_client.credentials["extra"]["database"] = database_name
+            await sql_client.load(sql_client.credentials)
+            fetch_sql = sql_query.replace("{database_name}", database_name)  # type: ignore
+            if typename == "column":
+                temp_table_regex_sql = extract_temp_table_regex_column_sql
+            elif typename == "table":
+                temp_table_regex_sql = extract_temp_table_regex_table_sql
+            else:
+                temp_table_regex_sql = ""
+            prepared_query = prepare_query(
+                query=fetch_sql,
+                workflow_args=workflow_args,
+                temp_table_regex_sql=temp_table_regex_sql,
+                posix_regex=True,
+            )
+            sql_input = SQLQueryInput(
+                engine=sql_client.engine,  # type: ignore
+                query=prepared_query,  # type: ignore
+            )
+            dataframe = await sql_input.get_batched_dataframe()
+            if write_to_file:
+                await parquet_output.write_batched_dataframe(dataframe)  # type: ignore
+            else:
+                dataframe_list.append(dataframe)
+            successful_databases.append(database_name)
+            logger.info(f"Successfully processed database: {database_name}")
+        except OperationalError as e:
+            # Log the error but continue with the next database
+            error_msg = str(e)
+            logger.warning(
+                f"Failed to connect to database '{database_name}': {error_msg}. Skipping to next database."
+            )
+            failed_databases.append(database_name)
+            continue
+        except Exception as e:
+            # Log other errors but continue with the next database
+            logger.warning(
+                f"Unexpected error processing database '{database_name}': {str(e)}. Skipping to next database."
+            )
+            failed_databases.append(database_name)
+            continue
+    # Log summary of results
+    if successful_databases:
+        logger.info(
+            f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
+        )
+    if failed_databases:
+        logger.warning(
+            f"Failed to process {len(failed_databases)} databases: {failed_databases}"
+        )
+    if not successful_databases:
+        logger.warning("No databases were processed")
+    if write_to_file and parquet_output:
+        statistics = await parquet_output.get_statistics(typename=typename)
+        return statistics
+    else:
+        return dataframe_list
