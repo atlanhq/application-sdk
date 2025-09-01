@@ -73,6 +73,10 @@ scale_data_generator = [
     "numpy>=1.23.5,<3.0.0",
 ]
 
+distributed_lock = [
+    "redis[hiredis]>=5.2.0",
+]
+
 # Development dependencies - Install using: uv sync --group dev
 [dependency-groups]
 dev = [

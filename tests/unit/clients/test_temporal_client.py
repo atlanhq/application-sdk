@@ -3,7 +3,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from application_sdk.clients.temporal import TemporalWorkflowClient, publish_event
+from application_sdk.clients.temporal import TemporalWorkflowClient
+from application_sdk.interceptors.events import publish_event
 from application_sdk.workflows import WorkflowInterface
 
 
