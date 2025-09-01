@@ -116,14 +116,14 @@ class BaseRedisClient:
         """Process lock release Lua script result.
 
         Args:
-            result: Result from Redis eval command
-            resource_id: Resource ID for logging
+            result (int | None): Result from Redis eval command.
+            resource_id (str): Resource ID for logging.
 
         Returns:
-            Tuple of (success: bool, result: LockReleaseResult)
+            tuple[bool, LockReleaseResult]: A tuple ``(success, outcome)``.
 
         Raises:
-            ClientError: If result type is unexpected or unknown
+            ClientError: If result type is unexpected or unknown.
         """
         if not isinstance(result, int):
             logger.error(
@@ -269,17 +269,17 @@ class RedisClient(BaseRedisClient):
         """Synchronously release a lock with ownership verification.
 
         Args:
-            resource_id: Unique identifier for the resource to unlock
-            owner_id: Identifier for the lock owner
+            resource_id (str): Unique identifier for the resource to unlock.
+            owner_id (str): Identifier for the lock owner.
 
         Returns:
-            Tuple of (success: bool, result: LockReleaseResult)
-            - (True, LockReleaseResult.SUCCESS): Lock released successfully
-            - (True, LockReleaseResult.ALREADY_RELEASED): Lock was already released (TTL expired)
-            - (False, LockReleaseResult.WRONG_OWNER): Lock owned by different owner
+            tuple[bool, LockReleaseResult]: Result of the release operation.
+                - (True, LockReleaseResult.SUCCESS): Lock released successfully.
+                - (True, LockReleaseResult.ALREADY_RELEASED): Lock was already released (TTL expired).
+                - (False, LockReleaseResult.WRONG_OWNER): Lock owned by a different owner.
 
         Raises:
-            ClientError: If Redis connection or operation fails
+            ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
             logger.error("Sync Redis client not initialized")
@@ -416,17 +416,17 @@ class RedisClientAsync(BaseRedisClient):
         """Asynchronously release a lock with ownership verification.
 
         Args:
-            resource_id: Unique identifier for the resource to unlock
-            owner_id: Identifier for the lock owner
+            resource_id (str): Unique identifier for the resource to unlock.
+            owner_id (str): Identifier for the lock owner.
 
         Returns:
-            Tuple of (success: bool, result: LockReleaseResult)
-            - (True, LockReleaseResult.SUCCESS): Lock released successfully
-            - (True, LockReleaseResult.ALREADY_RELEASED): Lock was already released (TTL expired)
-            - (False, LockReleaseResult.WRONG_OWNER): Lock owned by different owner
+            tuple[bool, LockReleaseResult]: Result of the release operation.
+                - (True, LockReleaseResult.SUCCESS): Lock released successfully.
+                - (True, LockReleaseResult.ALREADY_RELEASED): Lock was already released (TTL expired).
+                - (False, LockReleaseResult.WRONG_OWNER): Lock owned by a different owner.
 
         Raises:
-            ClientError: If Redis connection or operation fails
+            ClientError: If Redis connection or operation fails.
         """
         if not self.redis_client:
             logger.error("Redis client not initialized")

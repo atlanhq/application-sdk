@@ -29,21 +29,19 @@ async def acquire_distributed_lock(
     """Acquire a distributed lock with retry logic.
 
     Args:
-        lock_name: Name of the resource to lock
-        max_locks: Maximum number of concurrent locks allowed (must be > 0)
-        ttl_seconds: Time-to-live for the lock in seconds
-        owner_id: Unique identifier for the lock owner
+        lock_name (str): Name of the resource to lock.
+        max_locks (int): Maximum number of concurrent locks allowed; must be > 0.
+        ttl_seconds (int): Time-to-live for the lock in seconds.
+        owner_id (str): Unique identifier for the lock owner.
 
     Returns:
-        Dictionary containing lock information:
-        {
-            "slot_id": int,
-            "resource_id": str,
-            "owner_id": str
-        }
+        dict[str, Any]: Lock information with the following keys:
+            - slot_id (int): Allocated lock slot.
+            - resource_id (str): Fully qualified lock resource ID.
+            - owner_id (str): Owner identifier.
 
     Raises:
-        ActivityError: If lock acquisition fails due to Redis errors or invalid parameters
+        ActivityError: If lock acquisition fails due to Redis errors or invalid parameters.
     """
     # Input validation
     if max_locks <= 0:

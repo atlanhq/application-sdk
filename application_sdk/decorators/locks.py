@@ -13,23 +13,17 @@ def needs_lock(max_locks: int = 5, lock_name: Optional[str] = None):
     definition that will be used by the workflow interceptor to acquire
     locks before executing activities.
 
-    NOTE: Activities with @needs_lock MUST be called with schedule_to_close_timeout
-    to ensure proper lock TTL calculation that covers retries.
+    Note:
+        Activities decorated with ``needs_lock`` must be called with
+        ``schedule_to_close_timeout`` to ensure proper lock TTL calculation
+        that covers retries.
 
     Args:
-        max_locks: Maximum number of concurrent locks allowed
-        lock_name: Optional custom name for the lock (defaults to activity name)
-
-    Example:
-        ```python
-        @activity.defn
-        @needs_lock(max_locks=3)
-        async def my_activity(ctx, input: str) -> str:
-            return process_with_lock(input)
-        ```
+        max_locks (int): Maximum number of concurrent locks allowed.
+        lock_name (str | None): Optional custom name for the lock (defaults to activity name).
 
     Raises:
-        WorkflowError: If activity is called without schedule_to_close_timeout
+        WorkflowError: If activity is called without ``schedule_to_close_timeout``.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
