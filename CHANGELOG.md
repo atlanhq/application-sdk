@@ -1,5 +1,34 @@
 # Changelog
 
+
+## v0.1.1rc36 (September 01, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc35...v0.1.1rc36
+
+### Features
+
+- Update to pyatlan 8.0.2 to get fix for AsyncWorkflowSearchResponse async iterator (#680) (by @Ernest Hill in [a33bc4c](https://github.com/atlanhq/application-sdk/commit/a33bc4c))
+- implement Redis client with sync/async support and distributed locking (#621) (by @Mustafa in [e384ceb](https://github.com/atlanhq/application-sdk/commit/e384ceb))
+- implement abstract methods in BaseHandler (by @Mustafa in [c7c1937](https://github.com/atlanhq/application-sdk/commit/c7c1937))
+
+## v0.1.1rc35 (August 28, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc34...v0.1.1rc35
+
+### Features
+
+- improve services abstraction (#658) (by @Nishchith Shetty in [f5a4c4e](https://github.com/atlanhq/application-sdk/commit/f5a4c4e))
+
+
+
+## v0.1.1rc34 (August 27, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc33...v0.1.1rc34
+
+### Features
+
+- Generic Client and Handlers for non-SQL connectors with http request methods (allows custom retry transport) (#660) (by @Prateek Rai in [b077a90](https://github.com/atlanhq/application-sdk/commit/b077a90))
+
 ## v0.1.1rc33 (August 26, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc32...v0.1.1rc33

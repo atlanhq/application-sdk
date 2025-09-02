@@ -3,11 +3,12 @@ from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 from temporalio import activity
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -254,7 +255,10 @@ class ParquetOutput(Output):
             )
 
             # Upload the file to object store
-            await self.upload_file(file_path)
+            await ObjectStore.upload_file(
+                source=file_path,
+                destination=get_object_store_prefix(file_path),
+            )
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -266,39 +270,6 @@ class ParquetOutput(Output):
             )
             logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
             raise
-
-    async def upload_file(self, local_file_path: str) -> None:
-        """Upload a file to the object store.
-
-        Args:
-            local_file_path (str): Path to the local file to upload.
-        """
-        try:
-            if os.path.isdir(local_file_path):
-                logger.info(
-                    f"Uploading files: {local_file_path} to {self.output_prefix}"
-                )
-                await ObjectStoreOutput.push_files_to_object_store(
-                    self.output_prefix, local_file_path
-                )
-            else:
-                logger.info(
-                    f"Uploading file: {local_file_path} to {self.output_prefix}"
-                )
-                await ObjectStoreOutput.push_file_to_object_store(
-                    self.output_prefix, local_file_path
-                )
-        except Exception as e:
-            # Record metrics for failed upload
-            self.metrics.record_metric(
-                name="parquet_upload_errors",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={"error": str(e)},
-                description="Number of errors while uploading Parquet files to object store",
-            )
-            logger.error(f"Error uploading file to object store: {str(e)}")
-            raise e
 
     def get_full_path(self) -> str:
         """Get the full path of the output file.
@@ -352,8 +323,9 @@ class ParquetOutput(Output):
                 )
 
                 # Push the file to the object store
-                await ObjectStoreOutput.push_file_to_object_store(
-                    self.output_prefix, output_file_name
+                await ObjectStore.upload_file(
+                    source=output_file_name,
+                    destination=get_object_store_prefix(output_file_name),
                 )
 
             self.buffer.clear()

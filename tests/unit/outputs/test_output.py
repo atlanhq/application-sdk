@@ -109,12 +109,15 @@ class TestOutput:
         self.output.chunk_count = 5
         self.output.statistics = [1, 2, 1, 2, 1]
 
-        # Mock the open function, orjson.dumps, and push_file_to_object_store
+        # Mock the open function, orjson.dumps, and object store upload
         with patch("builtins.open", mock_open()) as mock_file, patch(
             "orjson.dumps",
             return_value=b'{"total_record_count": 100, "chunk_count": 5, "partitions": [1,2,1,2,1]}',
         ) as mock_orjson, patch(
-            "application_sdk.outputs.ObjectStoreOutput.push_file_to_object_store",
+            "application_sdk.outputs.get_object_store_prefix",
+            return_value="path/statistics.json.ignore",
+        ), patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file",
             new_callable=AsyncMock,
         ) as mock_push:
             # Call the method
@@ -134,9 +137,11 @@ class TestOutput:
                     "partitions": [1, 2, 1, 2, 1],
                 }
             )
-            mock_push.assert_awaited_once_with(
-                "/test/prefix", "/test/path/statistics.json.ignore"
-            )
+            # Verify the upload call
+            mock_push.assert_awaited_once()
+            upload_kwargs = mock_push.await_args.kwargs  # type: ignore[attr-defined]
+            assert upload_kwargs["source"] == "/test/path/statistics.json.ignore"
+            assert upload_kwargs["destination"] == "path/statistics.json.ignore"
 
     @pytest.mark.asyncio
     async def test_write_statistics_error(self):

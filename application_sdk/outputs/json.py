@@ -5,11 +5,12 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 import orjson
 from temporalio import activity
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
@@ -277,9 +278,10 @@ class JsonOutput(Output):
                 description="Number of records written to JSON files from daft DataFrame",
             )
 
-            # Push the file to the object store
-            await ObjectStoreOutput.push_files_to_object_store(
-                self.output_prefix, self.output_path
+            # Push files to the object store
+            await ObjectStore.upload_prefix(
+                source=self.output_path,
+                destination=get_object_store_prefix(self.output_path),
             )
 
         except Exception as e:
@@ -362,8 +364,9 @@ class JsonOutput(Output):
                 )
 
                 # Push the file to the object store
-                await ObjectStoreOutput.push_file_to_object_store(
-                    self.output_prefix, output_file_name
+                await ObjectStore.upload_file(
+                    source=output_file_name,
+                    destination=get_object_store_prefix(output_file_name),
                 )
 
             self.buffer.clear()
