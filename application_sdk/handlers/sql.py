@@ -7,6 +7,7 @@ from packaging import version
 
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.utils import (
+    multidb_query_executor,
     parse_filter_input,
     prepare_query,
     read_sql_files,
@@ -56,9 +57,13 @@ class BaseSQLHandler(HandlerInterface):
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
+    multidb: bool = False
 
-    def __init__(self, sql_client: BaseSQLClient | None = None):
+    def __init__(
+        self, sql_client: BaseSQLClient | None = None, multidb: Optional[bool] = False
+    ):
         self.sql_client = sql_client
+        self.multidb = multidb
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
@@ -180,7 +185,9 @@ class BaseSQLHandler(HandlerInterface):
                 )
         return schemas
 
-    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(
+        self, payload: Dict[str, Any], multidb: Optional[bool]
+    ) -> Dict[str, Any]:
         """
         Method to perform preflight checks
         """
@@ -193,7 +200,7 @@ class BaseSQLHandler(HandlerInterface):
                 results["versionCheck"],
             ) = await asyncio.gather(
                 self.check_schemas_and_databases(payload),
-                self.tables_check(payload),
+                self.tables_check(payload, multidb),
                 self.check_client_version(),
             )
 
@@ -295,28 +302,30 @@ class BaseSQLHandler(HandlerInterface):
         return True, ""
 
     async def tables_check(
-        self,
-        payload: Dict[str, Any],
+        self, payload: Dict[str, Any], multidb: bool = False
     ) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
         logger.info("Starting tables check")
-        query = prepare_query(
-            query=self.tables_check_sql,
-            workflow_args=payload,
-            temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
-        )
-        if not query:
-            raise ValueError("tables_check_sql is not defined")
-        sql_input = SQLQueryInput(
-            engine=self.sql_client.engine, query=query, chunk_size=None
-        )
-        sql_input = await sql_input.get_dataframe()
+        if multidb:
+            dataframe_list = await multidb_query_executor(
+                sql_client=self.sql_client,
+                fetch_database_sql=self.fetch_databases_sql,
+                extract_temp_table_regex_column_sql=self.extract_temp_table_regex_table_sql,
+                extract_temp_table_regex_table_sql=self.extract_temp_table_regex_table_sql,
+                sql_query=self.tables_check_sql,
+                workflow_args=payload,
+                output_suffix="raw/table",
+                typename="table",
+                write_to_file=False,
+            )
         try:
             result = 0
-            for row in sql_input.to_dict(orient="records"):
-                result += row["count"]
+            for df_generator in dataframe_list:
+                for dataframe in df_generator:
+                    for row in dataframe.to_dict(orient="records"):  # type: ignore
+                        result += row["count"]
             return {
                 "success": True,
                 "successMessage": f"Tables check successful. Table count: {result}",
@@ -330,6 +339,36 @@ class BaseSQLHandler(HandlerInterface):
                 "failureMessage": "Tables check failed",
                 "error": str(exc),
             }
+
+        else:
+            query = prepare_query(
+                query=self.tables_check_sql,
+                workflow_args=payload,
+                temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
+            )
+            if not query:
+                raise ValueError("tables_check_sql is not defined")
+            sql_input = SQLQueryInput(
+                engine=self.sql_client.engine, query=query, chunk_size=None
+            )
+            sql_input = await sql_input.get_dataframe()
+            try:
+                result = 0
+                for row in sql_input.to_dict(orient="records"):
+                    result += row["count"]
+                return {
+                    "success": True,
+                    "successMessage": f"Tables check successful. Table count: {result}",
+                    "failureMessage": "",
+                }
+            except Exception as exc:
+                logger.error("Error during tables check", exc_info=True)
+                return {
+                    "success": False,
+                    "successMessage": "",
+                    "failureMessage": "Tables check failed",
+                    "error": str(exc),
+                }
 
     async def check_client_version(self) -> Dict[str, Any]:
         """
