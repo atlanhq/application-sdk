@@ -90,6 +90,7 @@ nav:
       - Server: concepts/server.md
       - Application: concepts/application.md
       - Clients: concepts/clients.md
+      - Services: concepts/services.md
       - Common: concepts/common.md
       - Handlers: concepts/handlers.md
       - Inputs: concepts/inputs.md

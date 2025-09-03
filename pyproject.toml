@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc26"
+version = "0.1.1rc36"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -24,7 +24,7 @@ dependencies = [
     "opentelemetry-exporter-otlp>=1.27.0",
     "psutil>=7.0.0",
     "fastapi[standard]>=0.115.0",
-    "pyatlan>=7.1.1",
+    "pyatlan>=8.0.2",
     "pydantic>=2.10.6",
     "loguru>=0.7.3",
     "uvloop>=0.21.0; sys_platform != 'win32'",
@@ -49,7 +49,7 @@ pandas = [
     "pandas>=2.2.3"
 ]
 daft = [
-    "getdaft[sql]>=0.4.12",
+    "daft>=0.4.12",
 ]
 iceberg = [
     "pyiceberg>=0.8.1",
@@ -76,6 +76,10 @@ scale_data_generator = [
     "pyarrow>=20.0.0",
     "faker>=37.1.0",
     "numpy>=1.23.5,<3.0.0",
+]
+
+distributed_lock = [
+    "redis[hiredis]>=5.2.0",
 ]
 
 # Development dependencies - Install using: uv sync --group dev

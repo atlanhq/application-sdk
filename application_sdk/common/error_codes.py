@@ -81,6 +81,18 @@ class ClientError(AtlanError):
     AUTH_CONFIG_ERROR = ErrorCode(
         ErrorComponent.CLIENT, "400", "00", "Authentication configuration error"
     )
+    REDIS_CONNECTION_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "503", "00", "Redis connection failed"
+    )
+    REDIS_TIMEOUT_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "408", "00", "Redis operation timeout"
+    )
+    REDIS_AUTH_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "401", "05", "Redis authentication failed"
+    )
+    REDIS_PROTOCOL_ERROR = ErrorCode(
+        ErrorComponent.CLIENT, "502", "00", "Redis protocol error"
+    )
 
 
 class ApiError(AtlanError):
@@ -174,7 +186,7 @@ class IOError(AtlanError):
     INPUT_PROCESSING_ERROR = ErrorCode(
         ErrorComponent.IO, "500", "01", "Input processing error"
     )
-    SQL_QUERY_ERROR = ErrorCode(ErrorComponent.IO, "400", "00", "SQL query error")
+    SQL_QUERY_ERROR = ErrorCode(ErrorComponent.IO, "400", "01", "SQL query error")
     SQL_QUERY_BATCH_ERROR = ErrorCode(
         ErrorComponent.IO, "500", "02", "SQL query batch error"
     )
@@ -268,10 +280,10 @@ class CommonError(AtlanError):
         ErrorComponent.COMMON, "400", "01", "Query preparation error"
     )
     FILTER_PREPARATION_ERROR = ErrorCode(
-        ErrorComponent.COMMON, "400", "00", "Filter preparation error"
+        ErrorComponent.COMMON, "400", "02", "Filter preparation error"
     )
     CREDENTIALS_PARSE_ERROR = ErrorCode(
-        ErrorComponent.COMMON, "400", "02", "Credentials parse error"
+        ErrorComponent.COMMON, "400", "03", "Credentials parse error"
     )
     CREDENTIALS_RESOLUTION_ERROR = ErrorCode(
         ErrorComponent.COMMON, "401", "03", "Credentials resolution error"
@@ -375,4 +387,13 @@ class ActivityError(AtlanError):
     )
     ATLAN_UPLOAD_ERROR = ErrorCode(
         ErrorComponent.ACTIVITY, "500", "08", "Atlan upload error"
+    )
+    LOCK_ACQUISITION_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "503", "01", "Distributed lock acquisition error"
+    )
+    LOCK_RELEASE_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "500", "09", "Distributed lock release error"
+    )
+    LOCK_TIMEOUT_ERROR = ErrorCode(
+        ErrorComponent.ACTIVITY, "408", "00", "Lock acquisition timeout"
     )

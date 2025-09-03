@@ -1,6 +1,6 @@
 # Outputs
 
-This module provides a standardized way to write data to various destinations within the Application SDK framework. It mirrors the `inputs` module by defining a common `Output` interface and offering concrete implementations for common formats like JSON Lines and Parquet, along with helpers for interacting with object stores, state stores, and secret stores.
+This module provides a standardized way to write data to various destinations within the Application SDK framework. It mirrors the `inputs` module by defining a common `Output` interface and offering concrete implementations for common formats like JSON Lines and Parquet.
 
 ## Core Concepts
 
@@ -17,11 +17,7 @@ This module provides a standardized way to write data to various destinations wi
 
     *   **`JsonOutput` (`json.py`)**: Writes DataFrames to JSON Lines files (`.json`).
     *   **`ParquetOutput` (`parquet.py`)**: Writes DataFrames to Parquet files (`.parquet`).
-    *   **`ObjectStoreOutput` (`objectstore.py`)**: Uploads local files or directories to a configured Dapr object store binding. Used *internally* by other outputs like `JsonOutput` and `ParquetOutput`.
-    *   **`SecretStoreOutput` (`secretstore.py`)**: Saves sensitive data (like credentials) securely, typically via the StateStore using a Dapr binding.
-    *   **`StateStoreOutput` (`statestore.py`)**: Saves configuration or state data to the configured Dapr state store binding.
     *   **`IcebergOutput` (`iceberg.py`)**: Writes DataFrames to Apache Iceberg tables.
-    *   **`EventStore` (`eventstore.py`)**: Publishes events (like workflow/activity start/end) to a configured Dapr pub/sub binding.
 
 ## `JsonOutput` (`json.py`)
 
@@ -33,7 +29,7 @@ Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, option
 *   **Chunking:** Automatically splits large DataFrames into multiple output files based on the `chunk_size` parameter.
 *   **Buffering (Pandas):** For Pandas DataFrames, uses an internal buffer to accumulate data before writing chunks, controlled by `buffer_size`.
 *   **File Naming:** Uses a `path_gen` function to name output files, typically incorporating chunk numbers (e.g., `1.json`, `2-100.json`). Can be customized.
-*   **Object Store Integration:** After writing files locally to the specified `output_path`, it uses `ObjectStoreOutput` internally to upload the generated files to the location specified by `output_prefix`.
+*   **Object Store Integration:** After writing files locally to the specified `output_path`, it uploads the generated files to the location specified by `output_prefix`.
 *   **Statistics:** Tracks `total_record_count` and `chunk_count` and saves them via `write_statistics`.
 
 ### Initialization
@@ -104,12 +100,9 @@ async def query_executor(
 
 ## Other Output Handlers
 
-*   **`ParquetOutput`:** Similar to `JsonOutput` but writes DataFrames to Parquet format files. Uses `daft.DataFrame.write_parquet()` or `pandas.DataFrame.to_parquet()`. Also integrates with `ObjectStoreOutput` for uploading.
-*   **`ObjectStoreOutput`:** Provides class methods (`push_file_to_object_store`, `push_files_to_object_store`) to upload local files/directories to the configured Dapr object store binding. Used by `JsonOutput` and `ParquetOutput`.
-*   **`StateStoreOutput` / `SecretStoreOutput`:** Save workflow configuration and credentials using the Dapr state store binding. Used internally by `TemporalWorkflowClient` when starting workflows.
+*   **`ParquetOutput`:** Similar to `JsonOutput` but writes DataFrames to Parquet format files. Uses `daft.DataFrame.write_parquet()` or `pandas.DataFrame.to_parquet()`. Also uploads files to object storage after local processing.
 *   **`IcebergOutput`:** Writes DataFrames directly to an Iceberg table using `pyiceberg`.
-*   **`EventStore`:** Publishes structured events (defined in `eventstore.py`) to a Dapr pub/sub binding. Used by `EventInterceptor` in `temporal.py` to track workflow/activity start and end events.
 
 ## Summary
 
-The `outputs` module complements the `inputs` module by providing classes to write data processed within activities. `JsonOutput` and `ParquetOutput` are commonly used for saving intermediate DataFrames to local files (and then uploading them to an object store via `ObjectStoreOutput`), making the data available for subsequent activities like transformations. Other outputs handle specific tasks like saving state/secrets, writing to Iceberg, or publishing events.
+The `outputs` module complements the `inputs` module by providing classes to write data processed within activities. `JsonOutput` and `ParquetOutput` are commonly used for saving intermediate DataFrames to local files (and then uploading them to object storage), making the data available for subsequent activities like transformations.

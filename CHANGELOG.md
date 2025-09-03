@@ -1,6 +1,106 @@
 # Changelog
 
 
+## v0.1.1rc36 (September 01, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc35...v0.1.1rc36
+
+### Features
+
+- Update to pyatlan 8.0.2 to get fix for AsyncWorkflowSearchResponse async iterator (#680) (by @Ernest Hill in [a33bc4c](https://github.com/atlanhq/application-sdk/commit/a33bc4c))
+- implement Redis client with sync/async support and distributed locking (#621) (by @Mustafa in [e384ceb](https://github.com/atlanhq/application-sdk/commit/e384ceb))
+- implement abstract methods in BaseHandler (by @Mustafa in [c7c1937](https://github.com/atlanhq/application-sdk/commit/c7c1937))
+
+## v0.1.1rc35 (August 28, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc34...v0.1.1rc35
+
+### Features
+
+- improve services abstraction (#658) (by @Nishchith Shetty in [f5a4c4e](https://github.com/atlanhq/application-sdk/commit/f5a4c4e))
+
+
+
+## v0.1.1rc34 (August 27, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc33...v0.1.1rc34
+
+### Features
+
+- Generic Client and Handlers for non-SQL connectors with http request methods (allows custom retry transport) (#660) (by @Prateek Rai in [b077a90](https://github.com/atlanhq/application-sdk/commit/b077a90))
+
+## v0.1.1rc33 (August 26, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc32...v0.1.1rc33
+
+
+
+## v0.1.1rc32 (August 20, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc31...v0.1.1rc32
+
+### Bug Fixes
+
+- update app host (#664) (by @Onkar Ravgan in [24d23cb](https://github.com/atlanhq/application-sdk/commit/24d23cb))
+- file references in cursor rules (#662) (by @Nishchith Shetty in [2395ce3](https://github.com/atlanhq/application-sdk/commit/2395ce3))
+- Parquet file output path with None file names (#659) (by @Onkar Ravgan in [8841660](https://github.com/atlanhq/application-sdk/commit/8841660))
+
+## v0.1.1rc31 (August 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc30...v0.1.1rc31
+
+### Features
+
+- support for app registration via events (#635) (by @Nishant Munjal in [330b585](https://github.com/atlanhq/application-sdk/commit/330b585))
+
+### Bug Fixes
+
+- error logs related to deployment secrets (#651) (by @Nishchith Shetty in [09f6e5c](https://github.com/atlanhq/application-sdk/commit/09f6e5c))
+
+
+
+## v0.1.1rc30 (August 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc29...v0.1.1rc30
+
+### Bug Fixes
+
+- download_files_from_object_store with correct files list (#652) (by @Nishchith Shetty in [e2ed7bd](https://github.com/atlanhq/application-sdk/commit/e2ed7bd))
+
+## v0.1.1rc29 (August 13, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc28...v0.1.1rc29
+
+### Features
+
+- increase DAPR gRPC message limit from 16MB to 100MB (#649) (by @Nishchith Shetty in [ae0d218](https://github.com/atlanhq/application-sdk/commit/ae0d218))
+
+### Bug Fixes
+
+- error logs for eventstore, objectstore and metrics (#647) (by @Nishchith Shetty in [70b71b6](https://github.com/atlanhq/application-sdk/commit/70b71b6))
+
+
+
+## v0.1.1rc28 (August 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc27...v0.1.1rc28
+
+### Features
+
+- add pyatlan Client to Application SDK (#642) (by @Ernest Hill in [c00d682](https://github.com/atlanhq/application-sdk/commit/c00d682))
+
+## v0.1.1rc27 (August 12, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc26...v0.1.1rc27
+
+### Bug Fixes
+
+- remove ATLAN_LOCAL_DEVELOPMENT env, infer usage based on components (#641) (by @Nishchith Shetty in [58462e7](https://github.com/atlanhq/application-sdk/commit/58462e7))
+- replace getdaft with daft (#639) (by @Nishchith Shetty in [de79e93](https://github.com/atlanhq/application-sdk/commit/de79e93))
+- cleanup local path post upload to object store (#640) (by @Nishchith Shetty in [4195425](https://github.com/atlanhq/application-sdk/commit/4195425))
+
+
+
 ## v0.1.1rc26 (August 07, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc25...v0.1.1rc26

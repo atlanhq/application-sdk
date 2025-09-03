@@ -1,9 +1,11 @@
 import glob
+import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.inputs import Input
-from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -41,27 +43,39 @@ class ParquetInput(Input):
         self.input_prefix = input_prefix
         self.file_names = file_names
 
-    async def download_files(self, remote_file_path: str) -> Optional[str]:
+    async def download_files(self, local_path: str) -> Optional[str]:
         """Read a file from the object store.
 
         Args:
-            remote_file_path (str): Path to the remote file in object store.
+            local_path (str): Path to the local data in the temp directory.
 
         Returns:
             Optional[str]: Path to the downloaded local file.
         """
-        parquet_files = glob.glob(remote_file_path)
+        # if the path is a directory, then check if the directory has any parquet files
+        parquet_files = []
+        if os.path.isdir(local_path):
+            parquet_files = glob.glob(os.path.join(local_path, "*.parquet"))
+        else:
+            parquet_files = glob.glob(local_path)
         if not parquet_files:
             if self.input_prefix:
                 logger.info(
-                    f"Reading file from object store: {remote_file_path} from {self.input_prefix}"
+                    f"Reading file from object store: {local_path} from {self.input_prefix}"
                 )
-                ObjectStoreInput.download_files_from_object_store(
-                    self.input_prefix, remote_file_path
-                )
+                if os.path.isdir(local_path):
+                    await ObjectStore.download_prefix(
+                        source=get_object_store_prefix(local_path),
+                        destination=local_path,
+                    )
+                else:
+                    await ObjectStore.download_file(
+                        source=get_object_store_prefix(local_path),
+                        destination=local_path,
+                    )
             else:
                 raise ValueError(
-                    f"No parquet files found in {remote_file_path} and no input prefix provided"
+                    f"No parquet files found in {local_path} and no input prefix provided"
                 )
 
     async def get_dataframe(self) -> "pd.DataFrame":
@@ -156,10 +170,9 @@ class ParquetInput(Input):
                         await self.download_files(path)
                         yield daft.read_parquet(path)
             else:
-                path = f"{self.path}/*.parquet"
-                if self.input_prefix and path:
-                    await self.download_files(path)
-                yield daft.read_parquet(path)
+                if self.path and self.input_prefix:
+                    await self.download_files(self.path)
+                    yield daft.read_parquet(f"{self.path}/*.parquet")
 
         except Exception as error:
             logger.error(

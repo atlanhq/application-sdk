@@ -11,6 +11,11 @@ from application_sdk.worker import Worker
 def mock_workflow_client():
     workflow_client = Mock(spec=WorkflowClient)
     workflow_client.worker_task_queue = "test_queue"
+    workflow_client.application_name = "test_app"
+    workflow_client.namespace = "test_namespace"
+    workflow_client.host = "localhost"
+    workflow_client.port = "7233"
+    workflow_client.get_connection_string = Mock(return_value="localhost:7233")
 
     worker = Mock()
     worker.run = AsyncMock()

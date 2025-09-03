@@ -2,9 +2,11 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple, Type
 
 from application_sdk.activities import ActivitiesInterface
+from application_sdk.clients.base import BaseClient
 from application_sdk.clients.utils import get_workflow_client
+from application_sdk.events.models import EventRegistration
+from application_sdk.handlers.base import BaseHandler
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.eventstore import EventRegistration
 from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi import APIServer, HttpWorkflowTrigger
 from application_sdk.server.fastapi.models import EventWorkflowTrigger
@@ -28,6 +30,8 @@ class BaseApplication:
         name: str,
         server: Optional[ServerInterface] = None,
         application_manifest: Optional[dict] = None,
+        client_class: Optional[Type[BaseClient]] = None,
+        handler_class: Optional[Type[BaseHandler]] = None,
     ):
         """
         Initialize the application.
@@ -47,6 +51,9 @@ class BaseApplication:
 
         self.application_manifest: Dict[str, Any] = application_manifest
         self.bootstrap_event_registration()
+
+        self.client_class = client_class or BaseClient
+        self.handler_class = handler_class or BaseHandler
 
     def bootstrap_event_registration(self):
         self.event_subscriptions = {}
@@ -168,6 +175,7 @@ class BaseApplication:
         self.server = APIServer(
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
+            handler=self.handler_class(client=self.client_class()),
         )
 
         if self.event_subscriptions:

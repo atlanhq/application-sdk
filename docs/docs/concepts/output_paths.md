@@ -104,15 +104,14 @@ The same path structure applies to other object store providers:
 
 ### Saving State Data
 ```python
-from application_sdk.outputs.statestore import StateStoreOutput
-from application_sdk.inputs.statestore import StateType
+from application_sdk.services.statestore import StateStore, StateType
 
 # Save workflow configuration state
-await StateStoreOutput.save_state(
+await StateStore.save_state(
     key="current_batch",
     value={"batch_id": 123, "processed_count": 1000},
     id="wf-metadata-extraction-456",
-    type=StateType.WORKFLOW
+    type=StateType.WORKFLOWS
 )
 # State saved to: {object_store}/{STATE_STORE_PATH_TEMPLATE}
 ```
