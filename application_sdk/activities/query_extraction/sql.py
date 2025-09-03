@@ -7,17 +7,20 @@ from pydantic import BaseModel, Field
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
-from application_sdk.activities.common.utils import auto_heartbeater, get_workflow_id
+from application_sdk.activities.common.utils import (
+    auto_heartbeater,
+    get_object_store_prefix,
+    get_workflow_id,
+)
 from application_sdk.clients.sql import BaseSQLClient
-from application_sdk.common.credential_utils import get_credentials
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
-from application_sdk.inputs.objectstore import ObjectStoreInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.objectstore import ObjectStoreOutput
 from application_sdk.outputs.parquet import ParquetOutput
+from application_sdk.services.objectstore import ObjectStore
+from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.atlas import AtlasTransformer
 
@@ -129,7 +132,9 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         workflow_id = get_workflow_id()
         sql_client = self.sql_client_class()
         if "credential_guid" in workflow_args:
-            credentials = await get_credentials(workflow_args["credential_guid"])
+            credentials = await SecretStore.get_credentials(
+                workflow_args["credential_guid"]
+            )
             await sql_client.load(credentials)
 
         handler = self.handler_class(sql_client)
@@ -412,14 +417,14 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             f.write(last_marker)
 
         logger.info(f"Last marker: {last_marker}")
-        await ObjectStoreOutput.push_file_to_object_store(
-            workflow_args["output_prefix"],
-            marker_file_path,
-            object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+        await ObjectStore.upload_file(
+            source=marker_file_path,
+            destination=get_object_store_prefix(marker_file_path),
+            store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
         logger.info(f"Marker file written to {marker_file_path}")
 
-    def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
+    async def read_marker(self, workflow_args: Dict[str, Any]) -> Optional[int]:
         """Read the marker from the output path.
 
         This method reads the current marker value from a marker file to determine the
@@ -442,15 +447,12 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             marker_file_path = os.path.join(output_path, "markerfile")
             logger.info(f"Downloading marker file from {marker_file_path}")
 
-            os.makedirs(workflow_args["output_prefix"], exist_ok=True)
-
-            ObjectStoreInput.download_file_from_object_store(
-                workflow_args["output_prefix"],
-                marker_file_path,
-                object_store_name=UPSTREAM_OBJECT_STORE_NAME,
+            await ObjectStore.download_file(
+                source=get_object_store_prefix(marker_file_path),
+                destination=marker_file_path,
+                store_name=UPSTREAM_OBJECT_STORE_NAME,
             )
 
-            logger.info(f"Output prefix: {workflow_args['output_prefix']}")
             logger.info(f"Marker file downloaded to {marker_file_path}")
             if not os.path.exists(marker_file_path):
                 logger.warning(f"Marker file does not exist at {marker_file_path}")
@@ -487,7 +489,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
 
-        current_marker = self.read_marker(workflow_args)
+        current_marker = await self.read_marker(workflow_args)
         if current_marker:
             miner_args.current_marker = current_marker
 
@@ -522,8 +524,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         with open(metadata_file_path, "w") as f:
             f.write(json.dumps(parallel_markers))
 
-        await ObjectStoreOutput.push_file_to_object_store(
-            workflow_args["output_prefix"], metadata_file_path
+        await ObjectStore.upload_file(
+            source=metadata_file_path,
+            destination=get_object_store_prefix(metadata_file_path),
+            store_name=UPSTREAM_OBJECT_STORE_NAME,
         )
 
         try:

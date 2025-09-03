@@ -36,7 +36,7 @@ APPLICATION_NAME = os.getenv("ATLAN_APPLICATION_NAME", "default")
 #: Name of the deployment, used to distinguish between different deployments of the same application
 DEPLOYMENT_NAME = os.getenv("ATLAN_DEPLOYMENT_NAME", LOCAL_ENVIRONMENT)
 #: Host address for the application's HTTP server
-APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "localhost"))
+APP_HOST = str(os.getenv("ATLAN_APP_HTTP_HOST", "0.0.0.0"))
 #: Port number for the application's HTTP server
 APP_PORT = int(os.getenv("ATLAN_APP_HTTP_PORT", "8000"))
 #: Tenant ID for multi-tenant applications
@@ -146,7 +146,6 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
     "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"
 )
 
-
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -230,3 +229,21 @@ ATLAN_BASE_URL = os.getenv("ATLAN_BASE_URL")
 ATLAN_API_KEY = os.getenv("ATLAN_API_KEY")
 ATLAN_CLIENT_ID = os.getenv("CLIENT_ID")
 ATLAN_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+# Lock Configuration
+LOCK_METADATA_KEY = "__lock_metadata__"
+
+# Redis Lock Configuration
+#: Redis host for direct connection (when not using Sentinel)
+REDIS_HOST = os.getenv("REDIS_HOST", "")
+#: Redis port for direct connection (when not using Sentinel)
+REDIS_PORT = os.getenv("REDIS_PORT", "")
+#: Redis password (required for authenticated Redis instances)
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD")
+#: Redis Sentinel service name (default: mymaster)
+REDIS_SENTINEL_SERVICE_NAME = os.getenv("REDIS_SENTINEL_SERVICE_NAME", "mymaster")
+#: Redis Sentinel hosts (comma-separated host:port pairs)
+REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
+#: Whether to enable strict locking
+IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
+#: Retry interval for lock acquisition
+LOCK_RETRY_INTERVAL = int(os.getenv("LOCK_RETRY_INTERVAL", "5"))
