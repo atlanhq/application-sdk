@@ -68,6 +68,47 @@ async def bad_create_user(request: dict):  # No validation!
 - Use dependency override for testing
 - Implement proper cleanup for dependencies
 
+**Async Pattern Enforcement:**
+
+- **Always use async/await for I/O operations**: Database queries, external API calls, file operations
+- **Non-blocking operations**: Ensure that async endpoints don't accidentally use blocking operations
+- **Proper context switching**: Use async context managers for resource management
+- **Background task usage**: Use FastAPI BackgroundTasks for non-critical operations that shouldn't block responses
+
+```python
+# ✅ DO: Proper async patterns
+from fastapi import BackgroundTasks
+
+@router.post("/users/", response_model=UserResponse)
+async def create_user_async(
+    user_data: CreateUserRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncConnection = Depends(get_async_db)
+) -> UserResponse:
+    """Create user with proper async patterns."""
+
+    # Main operation - blocking response
+    async with db.transaction():
+        user = await user_service.create_user_async(db, user_data)
+
+    # Non-critical operations in background (don't block response)
+    background_tasks.add_task(send_welcome_email, user.email)
+    background_tasks.add_task(update_analytics, "user_created")
+
+    return user
+
+# ❌ REJECT: Mixed async/sync patterns
+@router.post("/users/")
+async def bad_async_patterns(user_data: dict):
+    # Blocking database call in async function
+    user = sync_db_connection.execute(f"INSERT INTO users...")  # Blocks event loop
+
+    # Synchronous email sending that blocks response
+    email_client.send_email(user.email, "Welcome")  # Should be background task
+
+    return {"status": "created"}
+```
+
 ```python
 # ✅ DO: Proper FastAPI router with dependencies
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -113,6 +154,80 @@ async def get_user(
         )
 
     return user
+```
+
+**Logging Standards:**
+
+- **Appropriate log levels**: Use correct log levels for different types of messages
+
+  - DEBUG: Development/debugging information
+  - INFO: General operational information, successful operations
+  - WARNING: Potentially problematic situations that don't prevent operation
+  - ERROR: Error conditions that may still allow operation to continue
+  - CRITICAL: Serious errors that may prevent program from continuing
+
+- **Context inclusion**: Include request IDs, user information, and operation context
+- **Structured logging**: Use consistent log formats that can be parsed by log aggregation tools
+- **No sensitive data**: Never log passwords, tokens, or personal information
+
+```python
+# ✅ DO: Proper logging levels and context
+import logging
+
+logger = logging.getLogger(__name__)
+
+@router.post("/users/{user_id}/reset-password")
+async def reset_password(user_id: int, request_id: str = Depends(get_request_id)):
+    """Reset user password with proper logging."""
+
+    # INFO: Normal operation
+    logger.info(f"Password reset requested for user {user_id}", extra={
+        "request_id": request_id,
+        "user_id": user_id,
+        "operation": "password_reset"
+    })
+
+    try:
+        await password_service.reset_password(user_id)
+
+        # INFO: Successful completion
+        logger.info(f"Password reset completed for user {user_id}", extra={
+            "request_id": request_id,
+            "user_id": user_id,
+            "status": "success"
+        })
+
+    except UserNotFoundError:
+        # WARNING: Expected error that doesn't prevent system operation
+        logger.warning(f"Password reset attempted for non-existent user {user_id}", extra={
+            "request_id": request_id,
+            "user_id": user_id,
+            "error_type": "user_not_found"
+        })
+        raise HTTPException(status_code=404, detail="User not found")
+
+    except DatabaseConnectionError as e:
+        # ERROR: Unexpected error that prevents operation but system can continue
+        logger.error(f"Database connection failed during password reset", extra={
+            "request_id": request_id,
+            "user_id": user_id,
+            "error": str(e),
+            "operation": "password_reset"
+        })
+        raise HTTPException(status_code=500, detail="Service temporarily unavailable")
+
+# ❌ REJECT: Inappropriate log levels and missing context
+@router.post("/users/login")
+async def bad_logging_example(credentials: dict):
+    logger.error("User login attempted")  # Should be INFO, not ERROR
+
+    if not credentials.get("username"):
+        logger.debug("Login failed - no username")  # Should be WARNING with context
+        return {"error": "Bad request"}
+
+    logger.critical("Processing login")  # Should be DEBUG or INFO, not CRITICAL
+
+    # No context, wrong levels, missing request tracking
 ```
 
 ### Phase 3: Server Testing Requirements
@@ -226,6 +341,19 @@ async def create_users_bulk(
 - Endpoints without proper HTTP status codes
 - Blocking operations in async endpoints
 
+**Logging Anti-Patterns:**
+
+- **Wrong log levels**: Using ERROR for normal operations, DEBUG for production warnings
+- **Missing context**: Log messages without request IDs, user context, or operation details
+- **Sensitive data**: Logging passwords, tokens, personal information
+- **Inconsistent formats**: Different log formats that can't be parsed consistently
+
+**Async Pattern Anti-Patterns:**
+
+- **Blocking in async**: Using synchronous database calls or file operations in async endpoints
+- **Missing background tasks**: Long-running operations that block API responses
+- **Sync/async mixing**: Inconsistent use of async patterns within the same service
+
 **Input Validation Anti-Patterns:**
 
 ```python
@@ -247,33 +375,48 @@ async def good_endpoint(user_data: CreateUserRequest):
 **Error Handling Anti-Patterns:**
 
 ```python
-# ❌ REJECT: Poor error handling
+# ❌ REJECT: Poor error handling and logging
 @app.get("/users/{user_id}")
 async def bad_get_user(user_id: int):
+    logger.error(f"Getting user {user_id}")  # Wrong log level
     try:
         user = await user_service.get_user(user_id)
         return user  # No response model
     except Exception as e:
+        logger.debug(f"User lookup failed: {e}")  # Should be ERROR with context
         return {"error": str(e)}  # Wrong HTTP status, exposes internals
 
-# ✅ REQUIRE: Proper error handling
+# ✅ REQUIRE: Proper error handling and logging
 @app.get("/users/{user_id}", response_model=UserResponse)
-async def good_get_user(user_id: int):
+async def good_get_user(user_id: int, request_id: str = Depends(get_request_id)):
+    logger.info(f"Retrieving user {user_id}", extra={"request_id": request_id})
+
     try:
         user = await user_service.get_user(user_id)
         if not user:
+            logger.warning(f"User {user_id} not found", extra={
+                "request_id": request_id,
+                "user_id": user_id
+            })
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
         return user
     except ValidationError as e:
+        logger.warning(f"Invalid user ID format: {user_id}", extra={
+            "request_id": request_id,
+            "error": str(e)
+        })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid request: {e}"
         )
     except Exception as e:
-        logger.error(f"User retrieval failed: {e}", exc_info=True)
+        logger.error(f"User retrieval failed for {user_id}: {e}", extra={
+            "request_id": request_id,
+            "user_id": user_id
+        }, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"
@@ -293,3 +436,7 @@ When reviewing server code, emphasize:
 4. **Maintainability Impact**: "Well-structured FastAPI applications with proper dependency injection and router organization make it easier for teams to add features and maintain the codebase as it grows."
 
 5. **Observability Impact**: "API logging and monitoring are critical for debugging production issues. Proper request correlation IDs and structured logging make the difference between quick problem resolution and extended outages."
+
+6. **Async Pattern Impact**: "Proper async patterns are essential for handling concurrent requests efficiently. Blocking operations in async code can degrade performance for all users and cause connection pool exhaustion."
+
+7. **Logging Quality Impact**: "Appropriate log levels and structured context are crucial for operational visibility. Wrong log levels create noise and hide real issues, while missing context makes debugging nearly impossible."

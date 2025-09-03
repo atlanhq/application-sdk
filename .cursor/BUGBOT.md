@@ -71,6 +71,43 @@ Review for critical issues first - these take priority over everything else.
 
 **Mental Question: "Is this code maintainable and reliable?"**
 
+#### Code Organization and File Structure
+
+**Critical organization patterns:**
+
+- **File Location Consistency**: Code must be placed in appropriate directories
+  - Decorators belong in `application_sdk/decorators/`, not scattered across modules
+  - Interceptors should be consolidated, not duplicated across files
+  - Similar functionality must be grouped together
+  - Dead code or "no need" code must be removed immediately
+
+**Import Organization Standards:**
+
+- Imports must be at the top of files (flag any imports inside functions unless required)
+- Import order: standard library → third-party → local application
+- Group imports by source and separate with blank lines
+- Remove unused imports immediately
+- No circular dependencies between modules
+
+**File Naming and Directory Structure:**
+
+- Use descriptive file names that clearly indicate purpose
+- Follow SDK naming conventions: `Base` prefix, not `Generic`
+- Avoid creating directories for single files
+- Move shared constants to `application_sdk/constants.py`
+- Files with similar responsibilities should be in the same directory
+
+```python
+# ❌ REJECT: Poor file organization
+# Having decorators scattered across multiple files
+application_sdk/lock/__init__.py  # Contains decorators
+application_sdk/observability/decorators/  # Contains other decorators
+
+# ✅ REQUIRE: Centralized organization
+application_sdk/decorators/locks.py  # All lock decorators
+application_sdk/decorators/observability_decorator.py  # All observability decorators
+```
+
 #### Python Code Organization and Style
 
 **Critical Python patterns:**
@@ -91,16 +128,6 @@ Review for critical issues first - these take priority over everything else.
 - Constants must describe their purpose, not just their value
 - Variables named `temp`, `test`, `debug`, `foo`, `bar` are forbidden
 
-#### Import and Dependency Organization
-
-**Always enforce:**
-
-- No unused imports or dependencies
-- Consistent import ordering within files
-- No circular dependencies between modules
-- Standard library → third-party → local application imports
-- Group imports by source and separate with blank lines
-
 #### Function and Class Structure
 
 **Universal quality rules:**
@@ -112,16 +139,85 @@ Review for critical issues first - these take priority over everything else.
 - No functions with more than 7 parameters
 - Extract complex logic into well-named helper functions
 
+**Code Consolidation Requirements:**
+
+- **Always flag repetitive logic**: If similar code appears in multiple methods, extract it into a shared function
+- **Separate class responsibilities**: Classes doing multiple unrelated things must be split (e.g., RedisClient handling both client and lock functionality)
+- **Centralize shared constants**: Magic strings or numbers used across files must be moved to constants
+- **Extract testable functions**: Complex logic that can't be easily unit tested must be broken into smaller, testable functions
+
+#### Configuration and Environment Management
+
+**Configuration consistency patterns:**
+
+- **Environment variable naming**: Use consistent, descriptive names (e.g., `FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE` not `REDIS_ERROR_MODE`)
+- **Default value strategy**: Define which parameters should be programmatic vs environment-driven
+- **Development/Production compatibility**: All features must work in both local development and production environments
+- **Configuration validation**: All environment variables must be validated on application startup
+- **Parameter inference**: Values that can be inferred (like application name, run ID) should not require explicit passing
+
+```python
+# ❌ REJECT: Poor configuration management
+max_locks = os.getenv("MAX_LOCKS")  # No validation, no defaults
+REDIS_ERROR = "true"  # Hardcoded, not configurable
+
+# ✅ REQUIRE: Proper configuration management
+FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE = os.getenv("FAIL_WORKFLOW_ON_REDIS_UNAVAILABLE", "false").lower() == "true"
+max_locks = int(os.getenv("MAX_LOCKS", "10"))  # Default with validation
+```
+
 #### Documentation Requirements
 
 **Always require:**
 
-- Public functions must have Google-style docstrings explaining purpose and parameters
-- Complex algorithms must have explanatory comments
-- Magic numbers must be extracted to `application_sdk/constants.py` with explanations
-- Regular expressions must have comments explaining what they match
-- Non-obvious business logic must be documented with context
-- All functions must have type hints for parameters and return values
+- **Complete docstrings**: Public functions must have Google-style docstrings with usage examples and parameter documentation
+- **Parameter documentation**: All parameters must be documented with types, defaults, and constraints
+- **TODO management**: TODO/FIXME comments must include issue references and deadlines, or be removed
+- **Complex algorithms**: Must have explanatory comments explaining business logic and "why"
+- **Magic numbers**: Must be extracted to `application_sdk/constants.py` with explanations
+
+**Documentation quality standards:**
+
+```python
+# ✅ DO: Complete documentation
+def create_distributed_lock(
+    lock_name: str,
+    max_locks: int = 10,
+    ttl_seconds: int = 300,
+    owner_id: Optional[str] = None
+) -> LockManager:
+    """
+    Create a distributed lock manager for coordinating resource access.
+
+    Args:
+        lock_name: Unique identifier for the lock resource
+        max_locks: Maximum number of concurrent lock holders (default: 10)
+        ttl_seconds: Lock expiration time in seconds (default: 300)
+        owner_id: Lock owner identifier, defaults to application_name:run_id
+
+    Returns:
+        LockManager: Configured lock manager instance
+
+    Raises:
+        ValueError: If max_locks <= 0 or lock_name is empty
+        ConnectionError: If unable to connect to lock store
+
+    Example:
+        >>> lock_mgr = create_distributed_lock("metadata_extraction", max_locks=5)
+        >>> async with lock_mgr.acquire():
+        ...     await process_metadata()
+    """
+```
+
+#### Import and Dependency Organization
+
+**Always enforce:**
+
+- No unused imports or dependencies
+- Consistent import ordering within files
+- No circular dependencies between modules
+- Standard library → third-party → local application imports
+- Group imports by source and separate with blank lines
 
 ---
 
@@ -166,32 +262,32 @@ Review for critical issues first - these take priority over everything else.
 
 **Critical exception handling rules:**
 
-- Always re-raise exceptions after logging unless in non-critical operations
-- Use specific exception types instead of generic `Exception`
-- Error messages must include debugging context
-- Failed operations must be logged with appropriate detail
-- Retryable vs non-retryable errors must be distinguished
-- Error responses must not leak sensitive information
-- Custom exceptions must be defined in `application_sdk/common/error_codes.py`
+- **Always re-raise exceptions** after logging unless in non-critical operations
+- **Use SDK-specific exceptions**: Use `ClientError` and internal error codes from `application_sdk/common/error_codes.py`, not generic exceptions
+- **Add comprehensive try-catch**: Operations that can fail must be wrapped in try-catch with specific exception types
+- **Error context**: Error messages must include debugging context (operation, parameters, state)
+- **Resource cleanup**: Failed operations must be logged with appropriate detail
+- **Non-critical operations**: May swallow exceptions to prevent cascading failures
 
 ```python
-# ✅ DO: Proper exception handling
+# ✅ DO: Proper error handling with SDK exceptions
+from application_sdk.common.error_codes import ClientError
+
 try:
     result = database_connection.execute_query(query)
     return result
 except ConnectionError as e:
     logger.error(f"Database connection failed for query {query[:50]}...: {e}")
-    raise  # Re-raise to propagate the error
+    raise ClientError(f"Database connection failed: {e}")
 except ValueError as e:
     logger.error(f"Invalid query parameters: {e}")
-    raise
+    raise ClientError(f"Query validation failed: {e}")
 
-# ❌ DON'T: Swallowing exceptions
+# ❌ DON'T: Generic exceptions without context
 try:
     result = some_operation()
 except Exception as e:
-    logger.error(f"Error: {e}")
-    # Missing raise - this swallows the exception!
+    logger.error(f"Error: {e}")  # No context, generic exception
 ```
 
 ---
@@ -224,6 +320,13 @@ except Exception as e:
 
 #### Performance and Scalability Patterns
 
+**Performance optimization opportunities:**
+
+- **Parallelization identification**: Flag operations that could benefit from parallel processing (file downloads, uploads, batch operations)
+- **Async enforcement**: Ensure blocking operations don't interfere with async workflows
+- **Resource limits**: Validate constraints like Redis key length limits, connection pool sizes
+- **Batch processing**: Encourage batching for operations that can be grouped
+
 **Scale-aware review questions:**
 
 - Will this design work with enterprise-scale datasets (millions of records)?
@@ -238,6 +341,17 @@ except Exception as e:
 - Use appropriate DataFrame dtypes for memory efficiency
 - Use connection pooling for database operations
 - Close resources in finally blocks or context managers
+
+```python
+# ✅ DO: Identify parallelization opportunities
+# Flag this pattern for parallelization suggestion
+for file in files:
+    await download_file(file)  # Sequential, could be parallel
+
+# Suggest this improvement:
+tasks = [download_file(file) for file in files]
+await asyncio.gather(*tasks)  # Parallel processing
+```
 
 ---
 
@@ -309,6 +423,90 @@ except Exception as e:
 - Mutable global state that could cause race conditions
 - Direct manipulation of shared data structures without synchronization
 
+### Python-Specific Anti-Patterns
+
+**Always flag:**
+
+- **Mutable default arguments**: Using mutable objects (dict, list) as default parameter values
+- **Mixed type annotations**: Inconsistent typing approaches in function signatures
+- **Blocking operations in async code**: Using `time.sleep()` instead of `await asyncio.sleep()`
+- **Unreachable code blocks**: `if False:` blocks, conditions that can never be True
+- **Invalid range operations**: Operations like `random.randint(0, max_value-1)` where `max_value` could be 0
+
+```python
+# ❌ REJECT: Mutable default arguments
+def bad_function(items: list = []):  # Shared mutable default!
+    items.append("new_item")
+    return items
+
+def bad_config(settings: dict = {}):  # Shared mutable default!
+    settings["new_key"] = "value"
+    return settings
+
+# ✅ REQUIRE: Immutable defaults with None
+def good_function(items: Optional[list] = None) -> list:
+    if items is None:
+        items = []
+    items.append("new_item")
+    return items
+
+def good_config(settings: Optional[dict] = None) -> dict:
+    if settings is None:
+        settings = {}
+    settings["new_key"] = "value"
+    return settings
+
+# ❌ REJECT: Mixed typing approaches
+def bad_typing_mix(
+    param1: str,
+    param2,  # No type hint
+    param3: "SomeClass",  # String type hint
+    param4: List[dict]  # Correct typing
+):
+    pass
+
+# ✅ REQUIRE: Consistent type annotations
+from typing import List, Optional
+from some_module import SomeClass
+
+def good_typing_consistency(
+    param1: str,
+    param2: int,  # Proper type hint
+    param3: SomeClass,  # Direct import, not string
+    param4: List[dict]
+) -> dict:
+    pass
+
+# ❌ REJECT: Blocking in async code
+async def bad_async_function():
+    await some_io_operation()
+    time.sleep(5)  # Blocks entire event loop!
+    await another_operation()
+
+# ✅ REQUIRE: Proper async patterns
+async def good_async_function():
+    await some_io_operation()
+    await asyncio.sleep(5)  # Non-blocking async sleep
+    await another_operation()
+
+# ❌ REJECT: Unreachable code and invalid ranges
+def bad_validation(max_value: int):
+    if False:  # Unreachable code
+        print("This never executes")
+
+    # Can crash if max_value is 0
+    random_slot = random.randint(0, max_value - 1)  # ValueError if max_value <= 0
+    return random_slot
+
+# ✅ REQUIRE: Proper validation and reachable code
+def good_validation(max_value: int) -> int:
+    if max_value <= 0:
+        raise ValueError(f"max_value must be positive, got: {max_value}")
+
+    random_slot = random.randint(0, max_value - 1)
+    return random_slot
+```
+
 ### Performance Anti-Patterns
 
 **Always flag:**
@@ -319,6 +517,17 @@ except Exception as e:
 - Missing indexes on frequently queried database columns
 - Synchronous operations blocking async workflows
 - Loading entire DataFrames when chunked processing should be used
+
+### Code Organization Anti-Patterns
+
+**Always reject:**
+
+- **Scattered functionality**: Related code spread across multiple inappropriate locations
+- **Import organization violations**: Imports not at the top, wrong order, or unused imports
+- **File misplacement**: Decorators outside `decorators/`, constants not in `constants.py`
+- **Dead code**: Any code marked as "no need" or unused
+- **DRY violations**: Repeated logic that should be extracted into shared functions
+- **Naming inconsistencies**: Using different naming patterns for similar concepts
 
 ---
 
@@ -388,7 +597,7 @@ except Exception as e:
 **Documentation requirements:**
 
 - Architecture decisions must be documented in conceptual docs
-- Public APIs must have comprehensive docstrings
+- Public APIs must have comprehensive docstrings with examples
 - Breaking changes must update corresponding documentation
 - Module changes must update concept documentation mapping
 

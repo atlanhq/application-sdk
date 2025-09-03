@@ -22,6 +22,46 @@ This directory contains all test implementations for the Application SDK. Tests 
 - No hardcoded secrets or credentials in test code
 - Test data must be anonymized and safe for version control
 
+**Mock Accuracy Requirements:**
+
+- **Exact method name matching**: Mock patches must match actual method names precisely
+- **API signature consistency**: Mocked methods must have signatures matching real implementations
+- **Return type matching**: Mock return values must match actual method return types
+- **Patch target accuracy**: Mock patches must target the correct module and method paths
+
+```python
+# ✅ DO: Accurate mocking
+from unittest.mock import AsyncMock, patch
+
+class TestObjectStoreUpload:
+    """Test object store functionality with correct mocking."""
+
+    @patch('application_sdk.services.objectstore.ObjectStore.upload_file')  # Correct method name
+    async def test_file_upload_success(self, mock_upload):
+        """Test successful file upload with proper mock."""
+
+        # Mock return value matches actual method signature
+        mock_upload.return_value = {"status": "success", "key": "test_file.json"}
+
+        output = JsonOutput()
+        result = await output.upload_data([{"test": "data"}], "test_path")
+
+        # Verify mock was called correctly
+        mock_upload.assert_called_once()
+        call_args = mock_upload.call_args
+        assert "test_path" in call_args[0]  # Verify path parameter
+
+# ❌ NEVER: Incorrect mocking
+class BadTestExample:
+    @patch('application_sdk.services.ObjectStore.upload')  # Wrong method name!
+    async def test_bad_upload(self, mock_upload):
+        """This test will fail because method name is wrong."""
+        # Mock won't intercept calls to 'upload_file' method
+        pass
+```
+
+**Test Isolation and Cleanup:**
+
 ```python
 # ✅ DO: Proper test isolation and cleanup
 import pytest
@@ -87,12 +127,15 @@ class BadTestExample:
 - Create reusable test factories for complex objects
 - Implement proper teardown for all fixtures
 
-```python
-# ✅ DO: Proper test organization and mocking
-import pytest
-from hypothesis import given, strategies as st
-from unittest.mock import AsyncMock, patch
+**Mock Verification Patterns:**
 
+- **Method name validation**: Always verify that mocked method names exist in the actual class
+- **Parameter validation**: Check that mocked methods are called with expected parameters
+- **Call count verification**: Verify methods are called the expected number of times
+- **Return value consistency**: Ensure mock return values match production behavior
+
+```python
+# ✅ DO: Comprehensive mock verification
 class TestSQLMetadataExtractor:
     """Test suite for SQL metadata extraction functionality."""
 
@@ -100,6 +143,7 @@ class TestSQLMetadataExtractor:
     async def mock_sql_client(self):
         """Mock SQL client with controlled responses."""
         client = AsyncMock()
+        # Return value matches actual method signature
         client.execute_query.return_value = [
             {"table_name": "users", "column_count": 5},
             {"table_name": "orders", "column_count": 8}
@@ -119,13 +163,15 @@ class TestSQLMetadataExtractor:
         # Act
         result = await metadata_extractor.extract_tables(database_name)
 
-        # Assert
+        # Assert - Verify results
         assert len(result) == 2
         assert result[0].name == "users"
         assert result[1].name == "orders"
 
-        # Verify mock interactions
+        # Assert - Verify mock interactions
         mock_sql_client.execute_query.assert_called_once()
+        call_args = mock_sql_client.execute_query.call_args
+        assert database_name in str(call_args)
 
     @given(st.text(min_size=1, max_size=50))
     async def test_extract_with_various_database_names(self, metadata_extractor, database_name):
@@ -157,6 +203,60 @@ class TestSQLMetadataExtractor:
 - Verify mock interactions when testing behavior
 - Include negative test cases (what should NOT happen)
 - Test async code properly with `pytest-asyncio`
+
+**Test Method Accuracy:**
+
+- **Verify mocked method existence**: Before writing tests, confirm that the mocked method actually exists
+- **Check method signatures**: Ensure test calls match actual method signatures
+- **Validate return types**: Mock return values should match actual method return types
+- **Update tests with API changes**: When APIs change, update corresponding mocks
+
+```python
+# ✅ DO: Comprehensive test with proper assertions and mock accuracy
+class TestFileUploadOperations:
+    """Test file upload operations with accurate mocking."""
+
+    # Verify this matches the actual ObjectStore.upload_file method signature
+    @patch('application_sdk.services.objectstore.ObjectStore.upload_file')
+    async def test_upload_multiple_files_success(self, mock_upload_file):
+        """Test successful upload of multiple files."""
+
+        # Mock return value matches actual method
+        mock_upload_file.return_value = {"status": "success", "bytes_uploaded": 1024}
+
+        # Arrange
+        files = ["file1.json", "file2.json", "file3.json"]
+        uploader = FileUploader()
+
+        # Act
+        results = await uploader.upload_files(files)
+
+        # Assert - Verify results
+        assert len(results) == 3
+        assert all(r["status"] == "success" for r in results)
+
+        # Assert - Verify mock interactions
+        assert mock_upload_file.call_count == 3
+
+        # Verify each call had correct parameters
+        for i, call in enumerate(mock_upload_file.call_args_list):
+            args, kwargs = call
+            assert files[i] in str(args)
+
+# ❌ DON'T: Inaccurate mocking
+class BadUploadTest:
+    @patch('application_sdk.services.ObjectStore.upload')  # Wrong method name!
+    async def test_bad_upload_mocking(self, mock_upload):
+        """This test won't work because 'upload' method doesn't exist."""
+
+        uploader = FileUploader()
+        await uploader.upload_files(["test.json"])
+
+        # This assertion will fail because the wrong method was mocked
+        mock_upload.assert_called_once()
+```
+
+**Comprehensive Error Testing:**
 
 ```python
 # ✅ DO: Comprehensive test with proper assertions
@@ -240,6 +340,13 @@ async def test_bad_user_creation(self, user_service):
 - Tests that test implementation details instead of behavior
 - Missing test documentation
 
+**Mock Accuracy Anti-Patterns:**
+
+- **Wrong method names**: Mocking methods that don't exist or have incorrect names
+- **Incorrect patch targets**: Patching the wrong module or class path
+- **Signature mismatches**: Mock calls that don't match actual method signatures
+- **Return type inconsistencies**: Mock return values that don't match actual types
+
 **Test Reliability Anti-Patterns:**
 
 ```python
@@ -254,6 +361,12 @@ async def test_bad_api_integration():
     response = await requests.get("https://api.example.com/users")
     assert response.status_code == 200  # Could fail due to network
 
+# ❌ REJECT: Incorrect mocking
+@patch('application_sdk.services.ObjectStore.upload')  # Method doesn't exist!
+def test_bad_mock_name(mock_upload):
+    result = object_store.upload_file("test.json")  # Calls 'upload_file', not 'upload'
+    mock_upload.assert_called_once()  # Will fail
+
 # ❌ REJECT: Shared state between tests
 user_counter = 0
 
@@ -267,7 +380,7 @@ def test_bad_shared_state_2():
     user_counter += 1
     assert user_counter == 2  # Brittle dependency
 
-# ✅ REQUIRE: Deterministic, isolated tests
+# ✅ REQUIRE: Deterministic, isolated tests with accurate mocking
 @pytest.fixture
 def test_user_factory():
     """Factory for creating test users with predictable data."""
@@ -282,11 +395,19 @@ def test_user_factory():
         )
     return create_user
 
-def test_good_isolated_behavior(test_user_factory):
-    """Test user creation with isolated test data."""
+@patch('application_sdk.services.objectstore.ObjectStore.upload_file')  # Correct method name
+def test_good_isolated_behavior(mock_upload_file, test_user_factory):
+    """Test user creation with isolated test data and accurate mocking."""
+    mock_upload_file.return_value = {"status": "success", "key": "user_data.json"}
+
     user = test_user_factory()
     assert user.username.startswith("testuser_")
     assert "@example.com" in user.email
+
+    # Test actual upload functionality
+    result = upload_user_data(user)
+    mock_upload_file.assert_called_once()
+    assert result["status"] == "success"
 ```
 
 **Test Mocking Anti-Patterns:**
@@ -301,8 +422,12 @@ async def test_bad_overmocked_user_creation():
 
 # ✅ REQUIRE: Mock external dependencies only
 @patch('email_client.send_welcome_email')  # Mock external service
-async def test_good_user_creation_sends_email(mock_email, user_service):
+@patch('application_sdk.services.objectstore.ObjectStore.upload_file')  # Correct method name
+async def test_good_user_creation_sends_email(mock_email, mock_upload, user_service):
     """Test that user creation triggers welcome email."""
+    mock_upload.return_value = {"status": "success"}
+    mock_email.return_value = {"delivered": True}
+
     user_data = CreateUserRequest(username="test", email="test@example.com", age=25)
 
     result = await user_service.create_user(user_data)
@@ -310,6 +435,7 @@ async def test_good_user_creation_sends_email(mock_email, user_service):
     # Verify the business behavior
     assert result.id is not None
     mock_email.assert_called_once_with("test@example.com", result.id)
+    mock_upload.assert_called()  # Verify data was stored
 ```
 
 ## Educational Context for Test Reviews
@@ -325,6 +451,8 @@ When reviewing test code, emphasize:
 4. **Feedback Speed**: "Fast, reliable tests enable rapid development cycles. Tests that take too long to run or require complex setup discourage developers from running them frequently."
 
 5. **Documentation Value**: "Well-written tests serve as executable documentation of system behavior. They should clearly show how components are intended to work and what edge cases are handled."
+
+6. **Mock Accuracy Impact**: "Incorrect mocking creates false confidence. Tests that mock non-existent methods or wrong signatures can pass while the real code fails. Always verify that mocks match actual implementations."
 
 ## Test Command Reference
 
