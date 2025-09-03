@@ -1,5 +1,7 @@
-from typing import Optional
+import re
+from typing import Any, Dict, Optional
 
+import boto3
 from sqlalchemy.engine.url import URL
 
 from application_sdk.constants import AWS_SESSION_NAME
@@ -16,11 +18,11 @@ def get_region_name_from_hostname(hostname: str) -> str:
     Returns:
         str: AWS region name
     """
-    match = re.search(r"\.([a-z]{2}-[a-z]+-\d)\.", host)
+    match = re.search(r"\.([a-z]{2}-[a-z]+-\d)\.", hostname)
     if match:
         return match.group(1)
     # Some services may use - instead of . (rare)
-    match = re.search(r"-([a-z]{2}-[a-z]+-\d)\.", host)
+    match = re.search(r"-([a-z]{2}-[a-z]+-\d)\.", hostname)
     if match:
         return match.group(1)
     return None
@@ -116,7 +118,7 @@ def generate_aws_rds_token_with_iam_user(
         raise Exception(f"Failed to get user credentials: {str(e)}")
 
 
-def get_cluster_identifier(self, aws_client) -> Optional[str]:
+def get_cluster_identifier(aws_client) -> Optional[str]:
     """
     Retrieve the cluster identifier from AWS Redshift clusters.
 
@@ -140,30 +142,7 @@ def get_cluster_identifier(self, aws_client) -> Optional[str]:
     return None
 
 
-def create_aws_session(self, credentials: Dict[str, Any]) -> boto3.Session:
-    """
-    Create a boto3 session with AWS credentials.
-
-    Args:
-        credentials: Dictionary containing AWS credentials
-
-    Returns:
-        boto3.Session: Configured boto3 session
-    """
-    aws_access_key_id = credentials.get("aws_access_key_id") or credentials.get(
-        "username"
-    )
-    aws_secret_access_key = credentials.get("aws_secret_access_key") or credentials.get(
-        "password"
-    )
-
-    return boto3.Session(
-        aws_access_key_id=aws_access_key_id,
-        aws_secret_access_key=aws_secret_access_key,
-    )
-
-
-def create_aws_session(self, credentials: Dict[str, Any]) -> boto3.Session:
+def create_aws_session(credentials: Dict[str, Any]) -> boto3.Session:
     """
     Create a boto3 session with AWS credentials.
 
@@ -187,7 +166,7 @@ def create_aws_session(self, credentials: Dict[str, Any]) -> boto3.Session:
 
 
 def get_cluster_credentials(
-    self, aws_client, credentials: Dict[str, Any], extra: Dict[str, Any]
+    aws_client, credentials: Dict[str, Any], extra: Dict[str, Any]
 ) -> Dict[str, str]:
     """
     Retrieve cluster credentials using IAM authentication.
@@ -200,7 +179,7 @@ def get_cluster_credentials(
         Dict[str, str]: Dictionary containing DbUser and DbPassword
     """
     database = extra["database"]
-    cluster_identifier = credentials.get("cluster_id") or self.get_cluster_identifier(
+    cluster_identifier = credentials.get("cluster_id") or get_cluster_identifier(
         aws_client
     )
     return aws_client.get_cluster_credentials_with_iam(
@@ -209,7 +188,7 @@ def get_cluster_credentials(
     )
 
 
-def create_aws_client(self, session: boto3.Session, region: str, service: str):
+def create_aws_client(session: boto3.Session, region: str, service: str):
     """
     Create a Redshift client using the provided session and region.
 
@@ -224,7 +203,6 @@ def create_aws_client(self, session: boto3.Session, region: str, service: str):
 
 
 def create_engine_url(
-    self,
     credentials: Dict[str, Any],
     cluster_credentials: Dict[str, str],
     extra: Dict[str, Any],
