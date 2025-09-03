@@ -1,9 +1,10 @@
 import os
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -13,7 +14,7 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 if TYPE_CHECKING:
-    import daft
+    import daft  # type: ignore
     import pandas as pd
 
 
@@ -46,6 +47,7 @@ class ParquetOutput(Output):
         typename: Optional[str] = None,
         write_mode: Literal["append", "overwrite", "overwrite-partitions"] = "append",
         chunk_size: Optional[int] = 100000,
+        buffer_size: Optional[int] = 100000,
         total_record_count: int = 0,
         chunk_count: int = 0,
         chunk_start: Optional[int] = None,
@@ -78,11 +80,19 @@ class ParquetOutput(Output):
         self.typename = typename
         self.write_mode = write_mode
         self.chunk_size = chunk_size
+        self.buffer_size = buffer_size
+        self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
+        self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
+        self.max_file_size_bytes = int(
+            DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.9
+        )  # 90% of DAPR limit as safety buffer
         self.chunk_start = chunk_start
         self.start_marker = start_marker
         self.end_marker = end_marker
+        self.statistics = []
         self.metrics = get_metrics()
 
         # Create output directory
@@ -117,7 +127,7 @@ class ParquetOutput(Output):
         if chunk_start is None:
             return f"{str(chunk_count)}.parquet"
         else:
-            return f"{str(chunk_start+chunk_count)}.parquet"
+            return f"chunk-{str(chunk_start)}-part{str(chunk_count)}.parquet"
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -126,20 +136,46 @@ class ParquetOutput(Output):
             dataframe (pd.DataFrame): The DataFrame to write.
         """
         try:
+            chunk_part = 0
             if len(dataframe) == 0:
                 return
 
-            # Update counters
-            self.chunk_count += 1
-            self.total_record_count += len(dataframe)
-            file_path = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count, self.start_marker, self.end_marker)}"
-
-            # Write the dataframe to parquet using pandas native method
-            dataframe.to_parquet(
-                file_path,
-                index=False,
-                compression="snappy",  # Using snappy compression by default
+            # Split the DataFrame into chunks
+            partition = (
+                self.chunk_size
+                if self.chunk_start is None
+                else min(self.chunk_size, self.buffer_size)
             )
+            chunks = [
+                dataframe[i : i + partition]  # type: ignore
+                for i in range(0, len(dataframe), partition)
+            ]
+
+            for chunk in chunks:
+                # Estimate size of this chunk
+                chunk_size_bytes = self.estimate_dataframe_file_size(chunk, "parquet")
+
+                # Check if adding this chunk would exceed size limit
+                if (
+                    self.current_buffer_size_bytes + chunk_size_bytes
+                    > self.max_file_size_bytes
+                    and self.current_buffer_size > 0
+                ):
+                    # Flush current buffer before adding this chunk
+                    chunk_part += 1
+                    await self._flush_buffer(chunk_part)
+
+                self.buffer.append(chunk)
+                self.current_buffer_size += len(chunk)
+                self.current_buffer_size_bytes += chunk_size_bytes
+
+                if self.current_buffer_size >= partition:  # type: ignore
+                    chunk_part += 1
+                    await self._flush_buffer(chunk_part)
+
+            if self.buffer and self.current_buffer_size > 0:
+                chunk_part += 1
+                await self._flush_buffer(chunk_part)
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -159,11 +195,8 @@ class ParquetOutput(Output):
                 description="Number of chunks written to Parquet files",
             )
 
-            # Upload the file to object store
-            await ObjectStore.upload_file(
-                source=file_path,
-                destination=get_object_store_prefix(file_path),
-            )
+            self.chunk_count += 1
+            self.statistics.append(chunk_part)
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -245,3 +278,68 @@ class ParquetOutput(Output):
             str: The full path of the output file.
         """
         return self.output_path
+
+    async def _flush_buffer(self, chunk_part):
+        """Flush the current buffer to a Parquet file.
+
+        This method combines all DataFrames in the buffer, writes them to a Parquet file,
+        and uploads the file to the object store.
+
+        Note:
+            If the buffer is empty or has no records, the method returns without writing.
+        """
+        import pandas as pd
+
+        if not self.buffer or not self.current_buffer_size:
+            return
+
+        if not all(isinstance(df, pd.DataFrame) for df in self.buffer):
+            raise TypeError(
+                "_flush_buffer encountered non-DataFrame elements in buffer. This should not happen."
+            )
+
+        try:
+            # Now it's safe to cast for pd.concat
+            pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
+            combined_dataframe = pd.concat(pd_buffer)
+
+            # Write DataFrame to Parquet file
+            if not combined_dataframe.empty:
+                self.total_record_count += len(combined_dataframe)
+                output_file_name = (
+                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                )
+                combined_dataframe.to_parquet(
+                    output_file_name, index=False, compression="snappy"
+                )
+
+                # Record chunk metrics
+                self.metrics.record_metric(
+                    name="parquet_chunks_written",
+                    value=1,
+                    metric_type=MetricType.COUNTER,
+                    labels={"type": "pandas"},
+                    description="Number of chunks written to Parquet files",
+                )
+
+                # Push the file to the object store
+                await ObjectStore.upload_file(
+                    source=output_file_name,
+                    destination=get_object_store_prefix(output_file_name),
+                )
+
+            self.buffer.clear()
+            self.current_buffer_size = 0
+            self.current_buffer_size_bytes = 0
+
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="parquet_write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "pandas", "error": str(e)},
+                description="Number of errors while writing to Parquet files",
+            )
+            logger.error(f"Error flushing buffer to parquet: {str(e)}")
+            raise e

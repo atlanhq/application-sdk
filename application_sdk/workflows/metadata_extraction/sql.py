@@ -107,7 +107,11 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
 
-        if activity_statistics is None or activity_statistics.chunk_count == 0:
+        if (
+            activity_statistics is None
+            or activity_statistics.chunk_count == 0
+            or not activity_statistics.partitions
+        ):
             # to handle the case where the fetch_fn returns None or no chunks
             return
 
@@ -115,7 +119,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             raise ValueError("Invalid typename")
 
         batches, chunk_starts = self.get_transform_batches(
-            activity_statistics.chunk_count, activity_statistics.typename
+            activity_statistics.chunk_count,
+            activity_statistics.typename,
+            activity_statistics.partitions,
         )
 
         for i in range(len(batches)):
@@ -144,7 +150,9 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             total_record_count += metadata_model.total_record_count
             chunk_count += metadata_model.chunk_count
 
-    def get_transform_batches(self, chunk_count: int, typename: str):
+    def get_transform_batches(
+        self, chunk_count: int, typename: str, partitions: List[int]
+    ):
         """Get batches for parallel transformation processing.
 
         Args:
@@ -159,12 +167,17 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         batches: List[List[str]] = []
         chunk_start_numbers: List[int] = []
 
-        for i in range(chunk_count):
+        for i, partition in enumerate(partitions):
             # Track starting chunk number (which is just i)
             chunk_start_numbers.append(i)
 
             # Each batch contains exactly one chunk
-            batches.append([f"{typename}/{i+1}.json"])
+            batches.append(
+                [
+                    f"{typename}/chunk-{i}-part{file+1}.parquet"
+                    for file in range(partition)
+                ]
+            )
 
         return batches, chunk_start_numbers
 
