@@ -192,11 +192,8 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             from application_sdk.services.statestore import StateStore, StateType
 
             workflow_args = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
-            workflow_args["output_prefix"] = workflow_args.get(
-                "output_prefix", TEMPORARY_PATH
-            )
             workflow_args["output_path"] = os.path.join(
-                workflow_args["output_prefix"], build_output_path()
+                TEMPORARY_PATH, build_output_path()
             )
             workflow_args["workflow_id"] = workflow_id
             workflow_args["workflow_run_id"] = get_workflow_run_id()

@@ -190,7 +190,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         Args:
             workflow_args (Dict[str, Any]): Dictionary containing workflow configuration including:
                 - credential_guid (str, optional): GUID for accessing credentials
-                - output_prefix (str): Prefix for output files
                 - output_path (str): Path where output files will be stored
 
         Returns:
@@ -210,7 +209,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_input = await sql_input.get_dataframe()
 
             raw_output = ParquetOutput(
-                output_prefix=workflow_args["output_prefix"],
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
@@ -394,7 +392,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             parallel_markers (List[Dict[str, Any]]): List of parallelized query markers containing
                 metadata about each chunk including start, end, and count information.
             workflow_args (Dict[str, Any]): Dictionary containing workflow configuration including:
-                - output_prefix (str): Prefix for output files
                 - miner_args (Dict[str, Any]): Mining arguments containing crossover_marker_file_path
 
         Returns:

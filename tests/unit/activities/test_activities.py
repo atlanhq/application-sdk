@@ -201,10 +201,9 @@ class TestActivitiesInterfaceActivities:
 
         result = await mock_activities.get_workflow_args(workflow_config)
 
-        # The result should include the output_prefix and output_path added by get_workflow_args
+        # The result should include the and output_path added by get_workflow_args
         assert result["workflow_id"] == expected_config["workflow_id"]
         assert result["config"] == expected_config["config"]
-        assert "output_prefix" in result
         assert "output_path" in result
 
         mock_get_state.assert_called_once_with("test-123", StateType.WORKFLOWS)

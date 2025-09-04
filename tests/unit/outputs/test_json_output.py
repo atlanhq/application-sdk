@@ -34,12 +34,10 @@ async def test_init(base_output_path: str, config: Dict[str, Any]) -> None:
     json_output = JsonOutput(  # type: ignore
         output_path=safe_path,
         output_suffix=config["output_suffix"],
-        output_prefix=config["output_prefix"],
         chunk_size=config["chunk_size"],
     )
 
     assert json_output.output_path.endswith(config["output_suffix"])
-    assert json_output.output_prefix == config["output_prefix"]
     assert json_output.chunk_size == config["chunk_size"]
     assert os.path.exists(json_output.output_path)
 
@@ -49,7 +47,6 @@ async def test_write_dataframe_empty(base_output_path: str) -> None:
     json_output = JsonOutput(  # type: ignore
         output_suffix="tests/raw",
         output_path=base_output_path,
-        output_prefix="test_prefix",
         chunk_size=100000,
         typename=None,
         chunk_count=0,
@@ -77,7 +74,6 @@ async def test_write_dataframe_single_chunk(
         json_output = JsonOutput(  # type: ignore
             output_suffix="tests/raw",
             output_path=base_output_path,
-            output_prefix="test_prefix",
             chunk_size=len(df)
             + 1,  # Ensure single chunk by making chunk size larger than df
             typename=None,
@@ -111,7 +107,6 @@ async def test_write_dataframe_multiple_chunks(
         json_output = JsonOutput(  # type: ignore
             output_suffix="tests/raw",
             output_path=base_output_path,
-            output_prefix="test_prefix",
             chunk_size=chunk_size,
             typename=None,
             chunk_count=0,
@@ -138,7 +133,6 @@ async def test_write_dataframe_error(base_output_path: str) -> None:
     json_output = JsonOutput(  # type: ignore
         output_suffix="tests/raw",
         output_path=base_output_path,
-        output_prefix="test_prefix",
         chunk_size=100000,
         typename=None,
         chunk_count=0,

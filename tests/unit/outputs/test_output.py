@@ -26,9 +26,8 @@ class TestOutput:
     class ConcreteOutput(Output):
         """Concrete implementation of Output for testing."""
 
-        def __init__(self, output_path: str, output_prefix: str):
+        def __init__(self, output_path: str):
             self.output_path = output_path
-            self.output_prefix = output_prefix
             self.total_record_count = 0
             self.chunk_count = 0
 
@@ -44,7 +43,7 @@ class TestOutput:
 
     def setup_method(self):
         """Set up test fixtures."""
-        self.output = self.ConcreteOutput("/test/path", "/test/prefix")
+        self.output = self.ConcreteOutput("/test/path")
 
     @pytest.mark.asyncio
     async def test_write_batched_dataframe_sync(self):

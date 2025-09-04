@@ -67,7 +67,6 @@ class JsonOutput(Output):
     Attributes:
         output_path (Optional[str]): Base path where JSON files will be written.
         output_suffix (str): Suffix added to file paths when uploading to object store.
-        output_prefix (Optional[str]): Prefix for output files and object store paths.
         typename (Optional[str]): Type identifier for the data being written.
         chunk_start (Optional[int]): Starting index for chunk numbering.
         buffer_size (int): Size of the write buffer in bytes.
@@ -82,7 +81,6 @@ class JsonOutput(Output):
         self,
         output_suffix: str,
         output_path: Optional[str] = None,
-        output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 100000,
@@ -99,7 +97,6 @@ class JsonOutput(Output):
         Args:
             output_path (str): Path where JSON files will be written.
             output_suffix (str): Prefix for files when uploading to object store.
-            output_prefix (Optional[str], optional): Prefix for files where the files will be written and uploaded.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
             buffer_size (int, optional): Size of the buffer in bytes.
@@ -115,7 +112,6 @@ class JsonOutput(Output):
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
-        self.output_prefix = output_prefix
         self.typename = typename
         self.chunk_start = chunk_start
         self.total_record_count = total_record_count

@@ -29,16 +29,15 @@ Writes Pandas or Daft DataFrames to one or more JSON Lines files locally, option
 *   **Chunking:** Automatically splits large DataFrames into multiple output files based on the `chunk_size` parameter.
 *   **Buffering (Pandas):** For Pandas DataFrames, uses an internal buffer to accumulate data before writing chunks, controlled by `buffer_size`.
 *   **File Naming:** Uses a `path_gen` function to name output files, typically incorporating chunk numbers (e.g., `1.json`, `2-100.json`). Can be customized.
-*   **Object Store Integration:** After writing files locally to the specified `output_path`, it uploads the generated files to the location specified by `output_prefix`.
+*   **Object Store Integration:** After writing files locally to the specified `output_path`.
 *   **Statistics:** Tracks `total_record_count` and `chunk_count` and saves them via `write_statistics`.
 
 ### Initialization
 
-`JsonOutput(output_suffix, output_path=..., output_prefix=..., typename=..., chunk_start=..., chunk_size=..., ...)`
+`JsonOutput(output_suffix, output_path=..., typename=..., chunk_start=..., chunk_size=..., ...)`
 
 *   `output_suffix` (str): A suffix added to the base `output_path`. Often used for specific runs or data types.
 *   `output_path` (str): The base *local* directory where files will be temporarily written (e.g., `/data/workflow_run_123`). The final local path becomes `{output_path}/{output_suffix}/{typename}`.
-*   `output_prefix` (str): The prefix/path in the **object store** where the locally written files will be uploaded.
 *   `typename` (str, optional): A subdirectory name added under `{output_path}/{output_suffix}` (e.g., `tables`, `columns`). Helps organize output.
 *   `chunk_start` (int, optional): Starting index for chunk numbering in filenames.
 *   `chunk_size` (int, optional): Maximum number of records per output file chunk (default: 100,000).
@@ -66,17 +65,15 @@ async def query_executor(
     sql_input = SQLQueryInput(engine=sql_engine, query=prepared_query)
 
     # Get output path details from workflow_args
-    output_prefix = workflow_args.get("output_prefix") # Object store path
     output_path = workflow_args.get("output_path")     # Base local path
 
-    if not output_prefix or not output_path:
-        raise ValueError("output_prefix and output_path are required in workflow_args")
+    if not output_path:
+        raise ValueError("output_path are required in workflow_args")
 
     # Instantiate JsonOutput
     json_output = JsonOutput(
         output_suffix=output_suffix,
         output_path=output_path,         # Local base path
-        output_prefix=output_prefix,     # Object store base path
         typename=typename,
         # chunk_size=... (optional)
     )
@@ -86,7 +83,7 @@ async def query_executor(
         daft_df = await sql_input.get_daft_dataframe()
 
         # Write the DataFrame using the Output class
-        # This writes locally then uploads to object store path: {output_prefix}/{output_suffix}/{typename}/
+        # This writes locally then uploads to object store path: {output_suffix}/{typename}/
         await json_output.write_daft_dataframe(daft_df)
 
         # Get statistics (record count, chunk count) after writing

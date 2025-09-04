@@ -49,7 +49,6 @@ class Output(ABC):
     """
 
     output_path: str
-    output_prefix: str
     total_record_count: int
     chunk_count: int
 

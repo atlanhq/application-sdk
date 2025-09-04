@@ -178,33 +178,26 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
     def _validate_output_args(
         self, workflow_args: Dict[str, Any]
-    ) -> Tuple[str, str, str, str, str]:
+    ) -> Tuple[str, str, str, str]:
         """Validates output prefix and path arguments.
 
         Args:
             workflow_args: Arguments passed to the workflow.
 
         Returns:
-            Tuple containing output_prefix and output_path.
+            Tuple containing output_path.
 
         Raises:
-            ValueError: If output_prefix or output_path is not provided.
+            ValueError: If output_path is not provided.
         """
-        output_prefix = workflow_args.get("output_prefix")
         output_path = workflow_args.get("output_path")
         typename = workflow_args.get("typename")
         workflow_id = workflow_args.get("workflow_id")
         workflow_run_id = workflow_args.get("workflow_run_id")
-        if (
-            not output_prefix
-            or not output_path
-            or not typename
-            or not workflow_id
-            or not workflow_run_id
-        ):
+        if not output_path or not typename or not workflow_id or not workflow_run_id:
             logger.warning("Missing required workflow arguments")
             raise ValueError("Missing required workflow arguments")
-        return output_prefix, output_path, typename, workflow_id, workflow_run_id
+        return output_path, typename, workflow_id, workflow_run_id
 
     async def query_executor(
         self,
@@ -227,7 +220,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                    will be replaced using `workflow_args`.
             workflow_args: Dictionary containing arguments for the workflow, used for
                            preparing the query and defining output paths. Expected keys:
-                           - "output_prefix": Prefix for the output path.
                            - "output_path": Base directory for the output.
             output_suffix: Suffix to append to the output file name.
             typename: Type name used for generating output statistics.
@@ -250,17 +242,15 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             sql_input = SQLQueryInput(engine=sql_engine, query=sql_query)
             dataframe = await sql_input.get_batched_dataframe()
 
-            output_prefix = workflow_args.get("output_prefix")
             output_path = workflow_args.get("output_path")
 
-            if not output_prefix or not output_path:
+            if not output_path:
                 logger.error("Output prefix or path not provided in workflow_args.")
                 raise ValueError(
                     "Output prefix and path must be specified in workflow_args."
                 )
 
             parquet_output = ParquetOutput(
-                output_prefix=output_prefix,
                 output_path=output_path,
                 output_suffix=output_suffix,
             )
@@ -479,13 +469,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        output_prefix, output_path, typename, workflow_id, workflow_run_id = (
+        output_path, typename, workflow_id, workflow_run_id = (
             self._validate_output_args(workflow_args)
         )
 
         raw_input = ParquetInput(
             path=os.path.join(output_path, "raw"),
-            input_prefix=output_prefix,
             file_names=workflow_args.get("file_names"),
             chunk_size=None,
         )
@@ -493,7 +482,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
-            output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )

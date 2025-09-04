@@ -84,7 +84,7 @@ from application_sdk.inputs.parquet import ParquetInput
 @activity.defn
 @auto_heartbeater
 async def transform_data(self, workflow_args: Dict[str, Any]):
-    output_prefix, output_path, typename, workflow_id, workflow_run_id = self._validate_output_args(workflow_args)
+    output_path, typename, workflow_id, workflow_run_id = self._validate_output_args(workflow_args)
     file_names = workflow_args.get("file_names", []) # List of files to process
 
     # Path where files were likely written by a previous activity's Output

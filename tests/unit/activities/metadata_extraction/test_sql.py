@@ -94,7 +94,6 @@ def sample_workflow_args():
     return {
         "workflow_id": "test-workflow-123",
         "workflow_run_id": "test-run-456",
-        "output_prefix": "test_prefix",
         "output_path": "/test/path",
         "typename": "DATABASE",
         "credential_guid": "test-credential-guid",

@@ -25,7 +25,6 @@ class ParquetOutput(Output):
 
     Attributes:
         output_path (str): Base path where Parquet files will be written.
-        output_prefix (str): Prefix for files when uploading to object store.
         output_suffix (str): Suffix for output files.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
         mode (str): Write mode for parquet files ("append" or "overwrite").
@@ -42,7 +41,6 @@ class ParquetOutput(Output):
         self,
         output_path: str = "",
         output_suffix: str = "",
-        output_prefix: str = "",
         typename: Optional[str] = None,
         write_mode: Literal["append", "overwrite", "overwrite-partitions"] = "append",
         chunk_size: Optional[int] = 100000,
@@ -57,7 +55,6 @@ class ParquetOutput(Output):
         Args:
             output_path (str): Base path where Parquet files will be written.
             output_suffix (str): Suffix for output files.
-            output_prefix (str): Prefix for files when uploading to object store.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
             mode (str, optional): Write mode for parquet files. Defaults to "append".
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
@@ -74,7 +71,6 @@ class ParquetOutput(Output):
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
-        self.output_prefix = output_prefix
         self.typename = typename
         self.write_mode = write_mode
         self.chunk_size = chunk_size
