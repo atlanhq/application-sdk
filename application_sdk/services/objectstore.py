@@ -29,6 +29,30 @@ class ObjectStore:
     OBJECT_DELETE_OPERATION = "delete"
 
     @classmethod
+    def _create_file_metadata(cls, key: str) -> dict[str, str]:
+        """Create metadata for file operations (get, delete, create).
+
+        Args:
+            key: The file key/path.
+
+        Returns:
+            Metadata dictionary with key, fileName, and blobName fields.
+        """
+        return {"key": key, "fileName": key, "blobName": key}
+
+    @classmethod
+    def _create_list_metadata(cls, prefix: str) -> dict[str, str]:
+        """Create metadata for list operations.
+
+        Args:
+            prefix: The prefix to list files under.
+
+        Returns:
+            Metadata dictionary with prefix and fileName fields, or empty dict if no prefix.
+        """
+        return {"prefix": prefix, "fileName": prefix} if prefix else {}
+
+    @classmethod
     async def list_files(
         cls, prefix: str = "", store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
     ) -> List[str]:
@@ -45,12 +69,11 @@ class ObjectStore:
             Exception: If there's an error listing files from the object store.
         """
         try:
-            metadata = {"prefix": prefix, "fileName": prefix} if prefix else {}
             data = json.dumps({"prefix": prefix}).encode("utf-8") if prefix else ""
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_LIST_OPERATION,
-                metadata=metadata,
+                metadata=cls._create_list_metadata(prefix),
                 data=data,
                 store_name=store_name,
             )
@@ -106,12 +129,11 @@ class ObjectStore:
             Exception: If there's an error getting the file from the object store.
         """
         try:
-            metadata = {"key": key, "fileName": key, "blobName": key}
             data = json.dumps({"key": key}).encode("utf-8") if key else ""
 
             response_data = await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_GET_OPERATION,
-                metadata=metadata,
+                metadata=cls._create_file_metadata(key),
                 data=data,
                 store_name=store_name,
             )
@@ -158,12 +180,11 @@ class ObjectStore:
             Exception: If there's an error deleting the file from the object store.
         """
         try:
-            metadata = {"key": key, "fileName": key, "blobName": key}
             data = json.dumps({"key": key}).encode("utf-8")
 
             await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_DELETE_OPERATION,
-                metadata=metadata,
+                metadata=cls._create_file_metadata(key),
                 data=data,
                 store_name=store_name,
             )
@@ -241,17 +262,11 @@ class ObjectStore:
             logger.error(f"Error reading file {source}: {str(e)}")
             raise e
 
-        metadata = {
-            "key": destination,
-            "blobName": destination,
-            "fileName": destination,
-        }
-
         try:
             await cls._invoke_dapr_binding(
                 operation=cls.OBJECT_CREATE_OPERATION,
                 data=file_content,
-                metadata=metadata,
+                metadata=cls._create_file_metadata(destination),
                 store_name=store_name,
             )
             logger.debug(f"Successfully uploaded file: {destination}")

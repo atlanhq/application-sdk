@@ -29,7 +29,6 @@ class ParquetOutput(Output):
         output_prefix (str): Prefix for files when uploading to object store.
         output_suffix (str): Suffix for output files.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
-        mode (str): Write mode for parquet files ("append" or "overwrite").
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks created.
@@ -38,6 +37,11 @@ class ParquetOutput(Output):
         start_marker (Optional[str]): Start marker for query extraction.
         end_marker (Optional[str]): End marker for query extraction.
     """
+
+    # Write mode constants
+    WRITE_MODE_APPEND = "append"
+    WRITE_MODE_OVERWRITE = "overwrite"
+    WRITE_MODE_OVERWRITE_PARTITIONS = "overwrite-partitions"
 
     def __init__(
         self,
@@ -179,7 +183,7 @@ class ParquetOutput(Output):
                 name="parquet_write_records",
                 value=len(dataframe),
                 metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": "append"},
+                labels={"type": "pandas", "mode": self.WRITE_MODE_APPEND},
                 description="Number of records written to Parquet files from pandas DataFrame",
             )
 
@@ -188,7 +192,7 @@ class ParquetOutput(Output):
                 name="parquet_chunks_written",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": "append"},
+                labels={"type": "pandas", "mode": self.WRITE_MODE_APPEND},
                 description="Number of chunks written to Parquet files",
             )
 
@@ -200,7 +204,11 @@ class ParquetOutput(Output):
                 name="parquet_write_errors",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": "append", "error": str(e)},
+                labels={
+                    "type": "pandas",
+                    "mode": self.WRITE_MODE_APPEND,
+                    "error": str(e),
+                },
                 description="Number of errors while writing to Parquet files",
             )
             logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
@@ -210,7 +218,9 @@ class ParquetOutput(Output):
         self,
         dataframe: "daft.DataFrame",  # noqa: F821
         partition_cols: Optional[List] = None,
-        write_mode: Literal["append", "overwrite", "overwrite-partitions"] = "append",
+        write_mode: Literal[
+            "append", "overwrite", "overwrite-partitions"
+        ] = WRITE_MODE_APPEND,
         morsel_size: int = 100_000,
     ):
         """Write a daft DataFrame to Parquet files and upload to object store.
@@ -223,7 +233,8 @@ class ParquetOutput(Output):
             dataframe (daft.DataFrame): The DataFrame to write.
             partition_cols (Optional[List]): Column names or expressions to use for Hive partitioning.
                 Can be strings (column names) or daft column expressions. If None (default), no partitioning is applied.
-            write_mode (Literal["append", "overwrite", "overwrite-partitions"]): Write mode for parquet files ('overwrite', 'append', etc.).
+            write_mode (Literal["append", "overwrite", "overwrite-partitions"]): Write mode for parquet files.
+                Use WRITE_MODE_APPEND, WRITE_MODE_OVERWRITE, or WRITE_MODE_OVERWRITE_PARTITIONS.
             morsel_size (int): Default number of rows in a morsel used for the new local executor, when running locally on just a single machine,
                 Daft does not use partitions. Instead of using partitioning to control parallelism, the local execution engine performs a streaming-based
                 execution on small "morsels" of data, which provides much more stable memory utilization while improving the user experience with not having
@@ -276,7 +287,7 @@ class ParquetOutput(Output):
             )
 
             #  Upload the entire directory (contains multiple parquet files created by Daft)
-            if write_mode == "overwrite":
+            if write_mode == self.WRITE_MODE_OVERWRITE:
                 # Delete the directory from object store
                 await ObjectStore.delete_prefix(
                     prefix=get_object_store_prefix(self.output_path)
