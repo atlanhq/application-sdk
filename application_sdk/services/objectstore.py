@@ -26,6 +26,7 @@ class ObjectStore:
     OBJECT_CREATE_OPERATION = "create"
     OBJECT_GET_OPERATION = "get"
     OBJECT_LIST_OPERATION = "list"
+    OBJECT_DELETE_OPERATION = "delete"
 
     @classmethod
     async def list_files(
@@ -144,20 +145,69 @@ class ObjectStore:
             return False
 
     @classmethod
-    async def delete(
+    async def delete_file(
         cls, key: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
     ) -> None:
-        """Delete a file or all files under a prefix from the object store.
+        """Delete a single file from the object store.
 
         Args:
-            key: The file path or prefix to delete.
+            key: The file path to delete.
             store_name: Name of the Dapr object store binding to use.
 
-        Note:
-            This method is not implemented as it's not commonly used in the current codebase.
-            Can be implemented when needed based on the underlying object store capabilities.
+        Raises:
+            Exception: If there's an error deleting the file from the object store.
         """
-        raise NotImplementedError("Delete operation not yet implemented")
+        try:
+            metadata = {"key": key, "fileName": key, "blobName": key}
+            data = json.dumps({"key": key}).encode("utf-8")
+
+            await cls._invoke_dapr_binding(
+                operation=cls.OBJECT_DELETE_OPERATION,
+                metadata=metadata,
+                data=data,
+                store_name=store_name,
+            )
+            logger.debug(f"Successfully deleted file: {key}")
+        except Exception as e:
+            logger.error(f"Error deleting file {key}: {str(e)}")
+            raise e
+
+    @classmethod
+    async def delete_prefix(
+        cls, prefix: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
+    ) -> None:
+        """Delete all files under a prefix from the object store.
+
+        Args:
+            prefix: The prefix path to delete all files under.
+            store_name: Name of the Dapr object store binding to use.
+
+        Raises:
+            Exception: If there's an error deleting files from the object store.
+        """
+        try:
+            # First, list all files under the prefix
+            files_to_delete = await cls.list_files(prefix=prefix, store_name=store_name)
+
+            if not files_to_delete:
+                logger.info(f"No files found under prefix: {prefix}")
+                return
+
+            logger.info(f"Deleting {len(files_to_delete)} files under prefix: {prefix}")
+
+            # Delete each file individually
+            for file_path in files_to_delete:
+                try:
+                    await cls.delete_file(key=file_path, store_name=store_name)
+                except Exception as e:
+                    logger.warning(f"Failed to delete file {file_path}: {str(e)}")
+                    # Continue with other files even if one fails
+
+            logger.info(f"Successfully deleted all files under prefix: {prefix}")
+
+        except Exception as e:
+            logger.error(f"Error deleting files under prefix {prefix}: {str(e)}")
+            raise e
 
     @classmethod
     async def upload_file(
@@ -211,8 +261,8 @@ class ObjectStore:
             )
             raise e
 
-        # Clean up local file after successful upload
-        cls._cleanup_local_path(source)
+            # Clean up local file after successful upload
+            cls._cleanup_local_path(source)
 
     @classmethod
     async def upload_prefix(

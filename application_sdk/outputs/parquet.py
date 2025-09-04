@@ -275,7 +275,13 @@ class ParquetOutput(Output):
                 description="Number of write operations to Parquet files",
             )
 
-            # Upload the entire directory (contains multiple parquet files created by Daft)
+            #  Upload the entire directory (contains multiple parquet files created by Daft)
+            if write_mode == "overwrite":
+                # Delete the directory from object store
+                await ObjectStore.delete_prefix(
+                    prefix=get_object_store_prefix(self.output_path)
+                )
+
             await ObjectStore.upload_prefix(
                 source=self.output_path,
                 destination=get_object_store_prefix(self.output_path),
