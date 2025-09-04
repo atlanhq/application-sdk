@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0  # Need full history for release notes
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.11'
 
