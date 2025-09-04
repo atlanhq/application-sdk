@@ -282,9 +282,12 @@ class TestParquetOutputWriteDaftDataframe:
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
             "application_sdk.services.objectstore.ObjectStore.upload_prefix"
         ) as mock_upload, patch(
+            "application_sdk.services.objectstore.ObjectStore.delete_prefix"
+        ) as mock_delete, patch(
             "application_sdk.outputs.parquet.get_object_store_prefix"
         ) as mock_prefix:
             mock_upload.return_value = AsyncMock()
+            mock_delete.return_value = AsyncMock()
             mock_prefix.return_value = "test/output/path"
             mock_ctx.return_value.__enter__ = MagicMock()
             mock_ctx.return_value.__exit__ = MagicMock()
@@ -309,6 +312,9 @@ class TestParquetOutputWriteDaftDataframe:
                 write_mode="overwrite",  # Overridden
                 partition_cols=["department", "year"],  # Overridden
             )
+
+            # Check that delete_prefix was called for overwrite mode
+            mock_delete.assert_called_once_with(prefix="test/output/path")
 
     @pytest.mark.asyncio
     async def test_write_daft_dataframe_with_default_parameters(
