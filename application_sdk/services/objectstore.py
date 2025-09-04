@@ -262,7 +262,7 @@ class ObjectStore:
             raise e
 
             # Clean up local file after successful upload
-            cls._cleanup_local_path(source)
+        cls._cleanup_local_path(source)
 
     @classmethod
     async def upload_prefix(
