@@ -207,7 +207,7 @@ class ObjectStore:
 
         except Exception as e:
             logger.error(f"Error deleting files under prefix {prefix}: {str(e)}")
-            raise e
+            raise
 
     @classmethod
     async def upload_file(
