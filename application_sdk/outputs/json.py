@@ -6,6 +6,7 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -15,7 +16,7 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 if TYPE_CHECKING:
-    import daft
+    import daft  # type: ignore
     import pandas as pd
 
 
@@ -32,7 +33,7 @@ def path_gen(chunk_start: int | None, chunk_count: int) -> str:
     if chunk_start is None:
         return f"{str(chunk_count)}.json"
     else:
-        return f"{str(chunk_start+chunk_count)}.json"
+        return f"chunk-{chunk_start}-part{chunk_count}.json"
 
 
 def convert_datetime_to_epoch(data: Any) -> Any:
@@ -124,6 +125,10 @@ class JsonOutput(Output):
         self.chunk_size = chunk_size or 100000
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
+        self.max_file_size_bytes = int(
+            DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.9
+        )  # 90% of DAPR limit as safety buffer
         self.path_gen = path_gen
         self.start_marker = start_marker
         self.end_marker = end_marker
@@ -172,8 +177,21 @@ class JsonOutput(Output):
             ]
 
             for chunk in chunks:
+                # Estimate size of this chunk
+                chunk_size_bytes = self.estimate_dataframe_file_size(chunk, "json")
+
+                # Check if adding this chunk would exceed size limit
+                if (
+                    self.current_buffer_size_bytes + chunk_size_bytes
+                    > self.max_file_size_bytes
+                    and self.current_buffer_size > 0
+                ):
+                    # Flush current buffer before adding this chunk
+                    await self._flush_buffer()
+
                 self.buffer.append(chunk)
                 self.current_buffer_size += len(chunk)
+                self.current_buffer_size_bytes += chunk_size_bytes
 
                 if self.current_buffer_size >= partition:
                     await self._flush_buffer()
@@ -237,45 +255,19 @@ class JsonOutput(Output):
                     row, preserve_fields, null_to_empty_dict_fields
                 )
                 # Serialize the row and add it to the buffer
-                buffer.append(
-                    orjson.dumps(cleaned_row, option=orjson.OPT_APPEND_NEWLINE).decode(
-                        "utf-8"
-                    )
-                )
-
-            # If the buffer reaches the specified size, write it to the file
-            if self.chunk_size and len(buffer) >= self.chunk_size:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()  # Clear the buffer
-
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                serialized_row = orjson.dumps(
+                    cleaned_row, option=orjson.OPT_APPEND_NEWLINE
+                ).decode("utf-8")
+                buffer.append(serialized_row)
+                self.current_buffer_size_bytes += len(serialized_row)
+                if (self.chunk_size and len(buffer) >= self.chunk_size) or (
+                    self.current_buffer_size_bytes > self.max_file_size_bytes
+                ):
+                    await self.flush_daft_buffer(buffer)
 
             # Write any remaining rows in the buffer
             if buffer:
-                self.chunk_count += 1
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
-                with open(output_file_name, "w") as f:
-                    f.writelines(buffer)
-                buffer.clear()
-
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="json_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "daft"},
-                    description="Number of chunks written to JSON files",
-                )
+                await self.flush_daft_buffer(buffer)
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -302,6 +294,32 @@ class JsonOutput(Output):
                 description="Number of errors while writing to JSON files",
             )
             logger.error(f"Error writing daft dataframe to json: {str(e)}")
+
+    async def flush_daft_buffer(self, buffer: List[str]):
+        """Flush the current buffer to a JSON file.
+
+        This method combines all DataFrames in the buffer, writes them to a JSON file,
+        and uploads the file to the object store.
+        """
+        self.chunk_count += 1
+        output_file_name = (
+            f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+        )
+        with open(output_file_name, "w") as f:
+            f.writelines(buffer)
+        buffer.clear()  # Clear the buffer
+
+        self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0
+
+        # Record chunk metrics
+        self.metrics.record_metric(
+            name="json_chunks_written",
+            value=1,
+            metric_type=MetricType.COUNTER,
+            labels={"type": "daft"},
+            description="Number of chunks written to JSON files",
+        )
 
     async def _flush_buffer(self):
         """Flush the current buffer to a JSON file.
@@ -353,6 +371,7 @@ class JsonOutput(Output):
 
             self.buffer.clear()
             self.current_buffer_size = 0
+            self.current_buffer_size_bytes = 0
 
         except Exception as e:
             # Record metrics for failed write

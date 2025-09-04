@@ -10,7 +10,7 @@ from application_sdk.services.objectstore import ObjectStore
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    import daft
+    import daft  # type: ignore
     import pandas as pd
 
 
@@ -136,7 +136,7 @@ class ParquetInput(Input):
             daft.DataFrame: Combined daft dataframe from all parquet files.
         """
         try:
-            import daft
+            import daft  # type: ignore
 
             if self.file_names:
                 path = f"{self.path}/{self.file_names[0].split('/')[0]}"
@@ -161,11 +161,11 @@ class ParquetInput(Input):
             a batch of data from the parquet file(s).
         """
         try:
-            import daft
+            import daft  # type: ignore
 
             if self.file_names:
                 for file_name in self.file_names:
-                    path = f"{self.path}/{file_name.replace('.json', '.parquet')}"
+                    path = f"{self.path}/{file_name}"
                     if self.input_prefix and path:
                         await self.download_files(path)
                         yield daft.read_parquet(path)

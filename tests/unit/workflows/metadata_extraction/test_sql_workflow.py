@@ -54,20 +54,23 @@ def test_get_transform_batches():
     test_cases = [
         {
             "chunk_count": 10,
+            "partitions": [1, 2, 1, 3, 5, 2, 1, 2, 1, 2],
             "typename": "test",
             "expected_batch_count": 10,  # One batch per chunk
-            "expected_total_files": 10,
+            "expected_total_files": 20,
             "description": "Multiple chunks",
         },
         {
             "chunk_count": 3,
+            "partitions": [1, 2, 1],
             "typename": "test",
             "expected_batch_count": 3,
-            "expected_total_files": 3,
+            "expected_total_files": 4,
             "description": "Few chunks",
         },
         {
             "chunk_count": 1,
+            "partitions": [1],
             "typename": "test",
             "expected_batch_count": 1,
             "expected_total_files": 1,
@@ -77,7 +80,9 @@ def test_get_transform_batches():
 
     for case in test_cases:
         batches, chunk_starts = workflow.get_transform_batches(
-            int(case["chunk_count"]), str(case["typename"])
+            int(case["chunk_count"]),
+            str(case["typename"]),
+            partitions=case["partitions"],
         )
 
         # Verify number of batches
@@ -90,13 +95,11 @@ def test_get_transform_batches():
 
         # Verify file naming format and batch size
         for i, batch in enumerate(batches):
-            assert (
-                len(batch) == 1
-            ), f"Each batch should contain exactly one file: {case['description']}"
-            file = batch[0]
-            assert file.startswith(f"{case['typename']}/")
-            assert file.endswith(".json")
-            assert file == f"{case['typename']}/{i+1}.json"
+            assert len(batch) == case["partitions"][i], case["description"]
+            for j, file in enumerate(batch):
+                assert file.startswith(f"{case['typename']}/")
+                assert file.endswith(".parquet")
+                assert file == f"{case['typename']}/chunk-{i}-part{j+1}.parquet"
 
         # Verify chunk start numbers are sequential
         assert chunk_starts == list(
@@ -112,13 +115,13 @@ async def test_fetch_and_transform():
     # Mock fetch function
     mock_fetch = AsyncMock()
     mock_fetch.return_value = ActivityStatistics(
-        total_record_count=10, chunk_count=2, typename="test"
+        total_record_count=10, chunk_count=2, typename="test", partitions=[1, 2]
     ).model_dump()
 
     # Mock transform function
     mock_transform = AsyncMock()
     mock_transform.return_value = ActivityStatistics(
-        total_record_count=5, chunk_count=1, typename="test"
+        total_record_count=5, chunk_count=1, typename="test", partitions=[1]
     ).model_dump()
 
     workflow.activities_cls.transform_data = mock_transform
@@ -145,7 +148,7 @@ async def test_fetch_and_transform_error_handling():
     mock_fetch_none = AsyncMock(return_value=None)
     with patch("temporalio.workflow.execute_activity_method") as mock_execute:
         mock_execute.return_value = ActivityStatistics(
-            total_record_count=0, chunk_count=0, typename="test"
+            total_record_count=0, chunk_count=0, typename="test", partitions=[]
         ).model_dump()
         await workflow.fetch_and_transform(
             mock_fetch_none, {}, RetryPolicy(maximum_attempts=1)
@@ -154,7 +157,7 @@ async def test_fetch_and_transform_error_handling():
     # Test with invalid typename
     mock_fetch_invalid = AsyncMock(
         return_value=ActivityStatistics(
-            total_record_count=10, chunk_count=2, typename=None
+            total_record_count=10, chunk_count=2, typename=None, partitions=[1, 2]
         ).model_dump()
     )
 
