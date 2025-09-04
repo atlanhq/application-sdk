@@ -191,7 +191,7 @@ class ObjectStore:
             logger.debug(f"Successfully deleted file: {key}")
         except Exception as e:
             logger.error(f"Error deleting file {key}: {str(e)}")
-            raise e
+            raise
 
     @classmethod
     async def delete_prefix(
