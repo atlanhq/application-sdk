@@ -4,10 +4,7 @@ from typing import TYPE_CHECKING, List, Literal, Optional, Union
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
-from application_sdk.constants import (
-    DAFT_DEFAULT_MORSEL_SIZE,
-    DAPR_MAX_GRPC_MESSAGE_LENGTH,
-)
+from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.outputs import Output
@@ -214,6 +211,7 @@ class ParquetOutput(Output):
         dataframe: "daft.DataFrame",  # noqa: F821
         partition_cols: Optional[List] = None,
         write_mode: Literal["append", "overwrite", "overwrite-partitions"] = "append",
+        morsel_size: int = 100_000,
     ):
         """Write a daft DataFrame to Parquet files and upload to object store.
 
@@ -242,7 +240,7 @@ class ParquetOutput(Output):
             # Use Daft's execution context for temporary configuration
             with daft.execution_config_ctx(
                 parquet_target_filesize=self.max_file_size_bytes,
-                default_morsel_size=int(DAFT_DEFAULT_MORSEL_SIZE),
+                default_morsel_size=morsel_size,
             ):
                 # Daft automatically handles file splitting and naming
                 dataframe.write_parquet(

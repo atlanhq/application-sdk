@@ -147,9 +147,6 @@ DEPLOYMENT_SECRET_STORE_NAME = os.getenv(
     "DEPLOYMENT_SECRET_STORE_NAME", "deployment-secret-store"
 )
 
-# Daft Constants
-DAFT_DEFAULT_MORSEL_SIZE = os.getenv("DAFT_DEFAULT_MORSEL_SIZE", "100000")
-
 # Logger Constants
 #: Log level for the application (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
