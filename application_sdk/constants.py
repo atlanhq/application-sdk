@@ -8,7 +8,6 @@ The constants are organized into the following categories:
 - Workflow Configuration
 - SQL Client Configuration
 - DAPR Configuration
-- Daft Configuration
 - Logging Configuration
 - OpenTelemetry Configuration
 
