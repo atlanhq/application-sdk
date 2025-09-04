@@ -276,7 +276,7 @@ class ObjectStore:
             )
             raise e
 
-            # Clean up local file after successful upload
+        # Clean up local file after successful upload
         cls._cleanup_local_path(source)
 
     @classmethod
