@@ -224,6 +224,7 @@ class ParquetOutput(Output):
             partition_cols (Optional[List]): Column names or expressions to use for Hive partitioning.
                 Can be strings (column names) or daft column expressions. If None (default), no partitioning is applied.
             write_mode (Literal["append", "overwrite", "overwrite-partitions"]): Write mode for parquet files ('overwrite', 'append', etc.).
+            morsel_size (int): Number of rows used for the daft local executor when materialising a dataframe
 
         Note:
             - Daft automatically handles file chunking based on parquet_target_filesize
