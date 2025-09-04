@@ -345,7 +345,7 @@ class TestParquetOutputWriteDaftDataframe:
             )
 
     @pytest.mark.asyncio
-    async def test_write_daft_dataframe_dapr_limit_configuration(
+    async def test_write_daft_dataframe_with_execution_configuration(
         self, base_output_path: str
     ):
         """Test that DAPR limit is properly configured."""
@@ -373,7 +373,9 @@ class TestParquetOutputWriteDaftDataframe:
             # Verify the call was made with parquet_target_filesize parameter
             call_args = mock_ctx.call_args
             assert "parquet_target_filesize" in call_args.kwargs
+            assert "default_morsel_size" in call_args.kwargs
             assert call_args.kwargs["parquet_target_filesize"] > 0
+            assert call_args.kwargs["default_morsel_size"] > 0
 
     @pytest.mark.asyncio
     async def test_write_daft_dataframe_error_handling(self, base_output_path: str):
