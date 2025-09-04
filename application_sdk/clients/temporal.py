@@ -151,7 +151,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 await asyncio.sleep(refresh_interval)
 
                 # Get fresh token
-                token = await self.auth_manager.get_access_token()
+                token = await self.auth_manager.get_access_token(force_refresh=True)
                 if self.client:
                     self.client.api_key = token
                 logger.info("Updated client RPC metadata with fresh token")
