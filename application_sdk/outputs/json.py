@@ -86,8 +86,8 @@ class JsonOutput(Output):
         output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
-        buffer_size: int = 100000,
-        chunk_size: Optional[int] = None,
+        buffer_size: int = 5000,
+        chunk_size: Optional[int] = 5000,
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
@@ -122,7 +122,7 @@ class JsonOutput(Output):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
-        self.chunk_size = chunk_size or 100000
+        self.chunk_size = chunk_size or 5000
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
@@ -257,7 +257,7 @@ class JsonOutput(Output):
                 # Serialize the row and add it to the buffer
                 serialized_row = orjson.dumps(
                     cleaned_row, option=orjson.OPT_APPEND_NEWLINE
-                ).decode("utf-8")
+                )
                 buffer.append(serialized_row)
                 self.current_buffer_size_bytes += len(serialized_row)
                 if (self.chunk_size and len(buffer) >= self.chunk_size) or (
@@ -305,7 +305,7 @@ class JsonOutput(Output):
         output_file_name = (
             f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
         )
-        with open(output_file_name, "w") as f:
+        with open(output_file_name, "wb") as f:
             f.writelines(buffer)
         buffer.clear()  # Clear the buffer
 
