@@ -70,6 +70,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_procedures,
             activities.transform_data,
             activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
+            activities.test_cleanup,
         ]
         return base_activities
 
@@ -261,6 +262,13 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             maximum_attempts=6,
             backoff_coefficient=2,
         )
+        await workflow.execute_activity_method(
+            self.activities_cls.test_cleanup,
+            retry_policy=retry_policy,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+        )
+
         if ENABLE_ATLAN_UPLOAD:
             workflow_args["typename"] = "atlan-upload"
             await workflow.execute_activity_method(

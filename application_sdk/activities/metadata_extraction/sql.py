@@ -171,6 +171,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             state = self._state.get(workflow_id)
             if state and state.sql_client is not None:
                 await state.sql_client.close()
+            logger.info("SQL client closed")
         except Exception as e:
             logger.warning("Failed to close SQL client", exc_info=e)
 
@@ -568,3 +569,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_count=upload_stats.total_files,
             typename="atlan-upload-completed",
         )
+
+    @activity.defn
+    @auto_heartbeater
+    async def test_cleanup(self):
+        """Cleanup State"""
+        await self._clean_state()
