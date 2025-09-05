@@ -93,6 +93,7 @@ class JsonOutput(Output):
         path_gen: Callable[[int | None, int], str] = path_gen,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
+        retain_local_copy: bool = False,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
@@ -113,6 +114,8 @@ class JsonOutput(Output):
                 Defaults to 0.
             path_gen (Callable, optional): Function to generate file paths.
                 Defaults to path_gen function.
+            retain_local_copy (bool, optional): Whether to retain the local copy of the files.
+                Defaults to False.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -133,6 +136,7 @@ class JsonOutput(Output):
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.metrics = get_metrics()
+        self.retain_local_copy = retain_local_copy
 
         if not self.output_path:
             raise ValueError("output_path is required")
@@ -282,6 +286,7 @@ class JsonOutput(Output):
             await ObjectStore.upload_prefix(
                 source=self.output_path,
                 destination=get_object_store_prefix(self.output_path),
+                retain_local_copy=self.retain_local_copy,
             )
 
         except Exception as e:
@@ -367,6 +372,7 @@ class JsonOutput(Output):
                 await ObjectStore.upload_file(
                     source=output_file_name,
                     destination=get_object_store_prefix(output_file_name),
+                    retain_local_copy=self.retain_local_copy,
                 )
 
             self.buffer.clear()
