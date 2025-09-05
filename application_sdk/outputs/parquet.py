@@ -60,6 +60,7 @@ class ParquetOutput(Output):
         chunk_start: Optional[int] = None,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
+        retain_local_copy: bool = False,
     ):
         """Initialize the Parquet output handler.
 
@@ -79,6 +80,8 @@ class ParquetOutput(Output):
                 Defaults to None.
             end_marker (Optional[str], optional): End marker for query extraction.
                 Defaults to None.
+            retain_local_copy (bool, optional): Whether to retain the local copy of the files.
+                Defaults to False.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -99,6 +102,7 @@ class ParquetOutput(Output):
         self.end_marker = end_marker
         self.statistics = []
         self.metrics = get_metrics()
+        self.retain_local_copy = retain_local_copy
 
         # Create output directory
         self.output_path = os.path.join(self.output_path, self.output_suffix)
@@ -302,6 +306,7 @@ class ParquetOutput(Output):
             await ObjectStore.upload_prefix(
                 source=self.output_path,
                 destination=get_object_store_prefix(self.output_path),
+                retain_local_copy=self.retain_local_copy,
             )
 
         except Exception as e:
