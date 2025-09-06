@@ -554,7 +554,9 @@ class APIServer(ServerInterface):
                 raise Exception("Handler not initialized")
 
             await self.handler.load(body.credentials)
-            preflight_check = await self.handler.preflight_check(body.model_dump())
+            preflight_check = await self.handler.preflight_check(
+                body.model_dump(), self.handler.multidb
+            )
 
             # Record successful preflight check
             metrics.record_metric(
