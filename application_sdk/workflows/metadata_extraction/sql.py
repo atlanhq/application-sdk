@@ -100,6 +100,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
             heartbeat_timeout=self.default_heartbeat_timeout,
+            summary=f"Fetch {fetch_fn.__name__.replace('fetch_', '')}",
         )
         if raw_statistics is None:
             return
@@ -137,6 +138,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                     retry_policy=retry_policy,
                     start_to_close_timeout=self.default_start_to_close_timeout,
                     heartbeat_timeout=self.default_heartbeat_timeout,
+                    summary=f"Transform {activity_statistics.typename} batch {i+1}",
                 )
             )
 
@@ -216,6 +218,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
+                summary=f"Load workflow args for {workflow_id}",
             )
 
             logger.info(f"Starting extraction workflow for {workflow_id}")
@@ -269,6 +272,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
                 retry_policy=retry_policy,
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
+                summary="Upload artifacts to Atlan",
             )
         else:
             logger.info("Atlan upload skipped for workflow (disabled)")
