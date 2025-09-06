@@ -359,14 +359,15 @@ class ObjectStore:
     async def download_file(
         cls,
         source: str,
-        destination: str,
+        destination: str = TEMPORARY_PATH,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Download a single file from the object store.
 
         Args:
             source (str): Object store key of the file to download.
-            destination (str): Local path where the file will be saved.
+            destination (str, optional): Local path where the file will be saved.
+                If not provided, defaults to TEMPORARY_PATH + source.
             store_name (str, optional): Name of the Dapr object store binding to use.
                 Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
 
@@ -377,23 +378,28 @@ class ObjectStore:
             The destination directory will be created automatically if it doesn't exist.
 
         Example:
+            >>> # Download to default location (TEMPORARY_PATH + source)
+            >>> await ObjectStore.download_file(source="reports/2024/january/report.pdf")
+            >>> # Downloads to: ./local/tmp/reports/2024/january/report.pdf
+
+            >>> # Download to custom location
             >>> await ObjectStore.download_file(
             ...     source="reports/2024/january/report.pdf",
             ...     destination="/tmp/downloaded_report.pdf"
             ... )
         """
-        # Ensure directory exists
 
         if not os.path.exists(os.path.dirname(destination)):
             os.makedirs(os.path.dirname(destination), exist_ok=True)
 
         try:
             response_data = await cls.get_content(source, store_name)
+            local_file_path = os.path.join(destination, source.lstrip("/"))
 
-            with open(destination, "wb") as f:
+            with open(local_file_path, "wb") as f:
                 f.write(response_data)
 
-            logger.info(f"Successfully downloaded file: {source}")
+            logger.info(f"Successfully downloaded file: {source} to {local_file_path}")
         except Exception as e:
             logger.warning(
                 f"Failed to download file {source} from object store: {str(e)}"

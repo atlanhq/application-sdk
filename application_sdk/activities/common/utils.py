@@ -79,17 +79,42 @@ def build_output_path() -> str:
 
 def get_object_store_prefix(path: str) -> str:
     """Get the object store prefix for the path.
+
+    This function handles two types of paths:
+    1. Paths under TEMPORARY_PATH - converts them to relative object store paths
+    2. User-provided paths - returns them as-is (already relative object store paths)
+
     Args:
-        path: The path to the output directory.
+        path: The path to convert to object store prefix.
 
     Returns:
         The object store prefix for the path.
 
-    Example:
+    Examples:
+        >>> # Temporary path case
         >>> get_object_store_prefix("./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456")
         "artifacts/apps/appName/workflows/wf-123/run-456"
+
+        >>> # User-provided path case
+        >>> get_object_store_prefix("datasets/sales/2024/")
+        "datasets/sales/2024/"
     """
-    return os.path.relpath(path, TEMPORARY_PATH)
+    # Normalize paths for comparison
+    abs_path = os.path.abspath(path)
+    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+
+    # Check if path is under TEMPORARY_PATH
+    try:
+        # If path is under temp directory, convert to relative object store path
+        if abs_path.startswith(abs_temp_path):
+            return os.path.relpath(path, TEMPORARY_PATH)
+        else:
+            # Path is already a relative object store path, return as-is
+            return path.lstrip("./")  # Remove leading ./ if present
+    except ValueError:
+        # os.path.relpath can raise ValueError on Windows with different drives
+        # In this case, treat as user-provided path
+        return path.lstrip("./")
 
 
 def auto_heartbeater(fn: F) -> F:
