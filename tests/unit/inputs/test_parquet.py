@@ -54,7 +54,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
 
-    with patch("os.path.isfile", side_effect=[False, True]), patch(
+    with patch("os.path.isfile", side_effect=[False, False, True]), patch(
         "os.path.isdir", return_value=False
     ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"

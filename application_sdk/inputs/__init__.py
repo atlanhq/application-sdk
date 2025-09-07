@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Union
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
+from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 
@@ -49,36 +50,55 @@ class Input(ABC):
         def _find_files() -> List[str]:
             """Find files at self.path, optionally filtering by self.file_names."""
 
-            if os.path.isfile(self.path) and self.path.endswith(file_extension):
-                # Single file - check if it matches target files (if specified)
-                if hasattr(self, "file_names") and self.file_names:
-                    file_name = os.path.basename(self.path)
-                    if not any(
-                        self.path.endswith(target) or file_name == target
-                        for target in self.file_names
-                    ):
-                        return []
-                return [self.path]
-            elif os.path.isdir(self.path):
-                # Directory - find all files in directory
-                all_files = glob.glob(
-                    os.path.join(self.path, "**", f"*{file_extension}"), recursive=True
-                )
+            def _check_path(path_to_check: str) -> List[str]:
+                """Check a specific path for files."""
+                if os.path.isfile(path_to_check) and path_to_check.endswith(
+                    file_extension
+                ):
+                    # Single file - check if it matches target files (if specified)
+                    if hasattr(self, "file_names") and self.file_names:
+                        file_name = os.path.basename(path_to_check)
+                        if not any(
+                            path_to_check.endswith(target) or file_name == target
+                            for target in self.file_names
+                        ):
+                            return []
+                    return [path_to_check.replace(os.path.sep, "/")]
+                elif os.path.isdir(path_to_check):
+                    # Directory - find all files in directory
+                    all_files = glob.glob(
+                        os.path.join(path_to_check, "**", f"*{file_extension}"),
+                        recursive=True,
+                    )
 
-                # Filter by file names if specified
-                if hasattr(self, "file_names") and self.file_names:
-                    filtered_files = []
-                    for file_name in self.file_names:
-                        # Support both relative and absolute file names
-                        matching_files = [
-                            f
-                            for f in all_files
-                            if f.endswith(file_name) or os.path.basename(f) == file_name
-                        ]
-                        filtered_files.extend(matching_files)
-                    return filtered_files
-                else:
-                    return all_files
+                    # Filter by file names if specified
+                    if hasattr(self, "file_names") and self.file_names:
+                        filtered_files = []
+                        for file_name in self.file_names:
+                            # Support both relative and absolute file names
+                            matching_files = [
+                                f.replace(os.path.sep, "/")
+                                for f in all_files
+                                if f.endswith(file_name)
+                                or os.path.basename(f) == file_name
+                            ]
+                            filtered_files.extend(matching_files)
+                        return filtered_files
+                    else:
+                        return [f.replace(os.path.sep, "/") for f in all_files]
+                return []
+
+            # First check the original path
+            files = _check_path(self.path)
+            if files:
+                return files
+
+            # If no files found and path doesn't start with TEMPORARY_PATH,
+            # also check the equivalent path under TEMPORARY_PATH
+            if not self.path.startswith(TEMPORARY_PATH):
+                temp_path = os.path.join(TEMPORARY_PATH, self.path.lstrip("./"))
+                return _check_path(temp_path)
+
             return []
 
         # Step 1: Check if files exist locally
@@ -103,10 +123,10 @@ class Input(ABC):
             elif hasattr(self, "file_names") and self.file_names:
                 # Download only specific files
                 for file_name in self.file_names:
+                    # Use forward slashes for object store paths
+                    file_path = f"{self.path.rstrip('/')}/{file_name}"
                     await ObjectStore.download_file(
-                        source=get_object_store_prefix(
-                            f"{os.path.join(self.path, file_name)}"
-                        )
+                        source=get_object_store_prefix(file_path)
                     )
             else:
                 # Download entire directory

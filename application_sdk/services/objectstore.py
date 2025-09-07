@@ -359,7 +359,7 @@ class ObjectStore:
     async def download_file(
         cls,
         source: str,
-        destination: str = TEMPORARY_PATH,
+        destination: str = None,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Download a single file from the object store.
@@ -388,18 +388,22 @@ class ObjectStore:
             ...     destination="/tmp/downloaded_report.pdf"
             ... )
         """
+        # If destination is not provided, construct it from TEMPORARY_PATH + source
+        if destination is None:
+            destination = os.path.join(TEMPORARY_PATH, source.lstrip("/"))
 
-        if not os.path.exists(os.path.dirname(destination)):
-            os.makedirs(os.path.dirname(destination), exist_ok=True)
+        # Ensure destination directory exists
+        destination_dir = os.path.dirname(destination)
+        if not os.path.exists(destination_dir):
+            os.makedirs(destination_dir, exist_ok=True)
 
         try:
             response_data = await cls.get_content(source, store_name)
-            local_file_path = os.path.join(destination, source.lstrip("/"))
 
-            with open(local_file_path, "wb") as f:
+            with open(destination, "wb") as f:
                 f.write(response_data)
 
-            logger.info(f"Successfully downloaded file: {source} to {local_file_path}")
+            logger.info(f"Successfully downloaded file: {source} to {destination}")
         except Exception as e:
             logger.warning(
                 f"Failed to download file {source} from object store: {str(e)}"

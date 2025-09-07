@@ -1,5 +1,6 @@
 """Unit tests for the base Input class download_files method."""
 
+import os
 from typing import List
 from unittest.mock import AsyncMock, patch
 
@@ -159,7 +160,7 @@ class TestInputDownloadFiles:
         path = "/data/test.parquet"
         input_instance = MockInput(path)
 
-        with patch("os.path.isfile", side_effect=[False, True]), patch(
+        with patch("os.path.isfile", side_effect=[False, False, True]), patch(
             "os.path.isdir", return_value=False
         ), patch("glob.glob", return_value=[]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
@@ -182,7 +183,7 @@ class TestInputDownloadFiles:
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
-        ), patch("glob.glob", side_effect=[[], expected_files]), patch(
+        ), patch("glob.glob", side_effect=[[], [], expected_files]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
         ) as mock_download, patch(
@@ -204,7 +205,7 @@ class TestInputDownloadFiles:
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
-        ), patch("glob.glob", side_effect=[[], expected_files]), patch(
+        ), patch("glob.glob", side_effect=[[], [], expected_files]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
         ) as mock_download, patch(
@@ -269,8 +270,9 @@ class TestInputDownloadFiles:
         ), patch("glob.glob", return_value=expected_files) as mock_glob:
             result = await input_instance.download_files(".parquet")
 
-            # Should use recursive glob pattern
-            mock_glob.assert_called_once_with("/data/**/*.parquet", recursive=True)
+            # Should use recursive glob pattern (OS-specific path separators)
+            expected_pattern = os.path.join("/data", "**", "*.parquet")
+            mock_glob.assert_called_once_with(expected_pattern, recursive=True)
             assert result == expected_files
 
     @pytest.mark.asyncio
