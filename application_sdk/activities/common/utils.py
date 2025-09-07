@@ -107,14 +107,20 @@ def get_object_store_prefix(path: str) -> str:
     try:
         # If path is under temp directory, convert to relative object store path
         if abs_path.startswith(abs_temp_path):
-            return os.path.relpath(path, TEMPORARY_PATH)
+            relative_path = os.path.relpath(path, TEMPORARY_PATH)
+            # Normalize path separators to forward slashes for object store
+            return relative_path.replace(os.path.sep, "/")
         else:
             # Path is already a relative object store path, return as-is
-            return path.lstrip("./")  # Remove leading ./ if present
+            result = path.lstrip("./")  # Remove leading ./ if present
+            # Normalize path separators to forward slashes for object store
+            return result.replace(os.path.sep, "/")
     except ValueError:
         # os.path.relpath can raise ValueError on Windows with different drives
         # In this case, treat as user-provided path
-        return path.lstrip("./")
+        result = path.lstrip("./")
+        # Normalize path separators to forward slashes for object store
+        return result.replace(os.path.sep, "/")
 
 
 def auto_heartbeater(fn: F) -> F:
