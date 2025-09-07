@@ -41,13 +41,17 @@ class TestGetObjectStorePrefix:
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
-    def test_get_object_store_prefix_temporary_path(self, mock_abspath):
+    @patch("os.path.relpath")
+    def test_get_object_store_prefix_temporary_path(self, mock_relpath, mock_abspath):
         """Test conversion of temporary path to object store prefix."""
         # Mock absolute path resolution
         mock_abspath.side_effect = lambda p: {
             "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456": "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456",
             "/tmp/local": "/tmp/local",
         }.get(p, p)
+
+        # Mock relative path calculation
+        mock_relpath.return_value = "artifacts/apps/myapp/workflows/wf-123/run-456"
 
         path = "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456"
         result = get_object_store_prefix(path)
@@ -86,13 +90,19 @@ class TestGetObjectStorePrefix:
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
-    def test_get_object_store_prefix_relative_temporary_path(self, mock_abspath):
+    @patch("os.path.relpath")
+    def test_get_object_store_prefix_relative_temporary_path(
+        self, mock_relpath, mock_abspath
+    ):
         """Test relative path under TEMPORARY_PATH."""
         # Mock absolute path resolution
         mock_abspath.side_effect = lambda p: {
             "./local/tmp/artifacts/test": "/tmp/local/artifacts/test",
             "/tmp/local": "/tmp/local",
         }.get(p, p)
+
+        # Mock relative path calculation
+        mock_relpath.return_value = "artifacts/test"
 
         path = "./local/tmp/artifacts/test"
         result = get_object_store_prefix(path)
@@ -139,13 +149,21 @@ class TestGetObjectStorePrefix:
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
-    def test_get_object_store_prefix_nested_temporary_path(self, mock_abspath):
+    @patch("os.path.relpath")
+    def test_get_object_store_prefix_nested_temporary_path(
+        self, mock_relpath, mock_abspath
+    ):
         """Test deeply nested path under TEMPORARY_PATH."""
         # Mock absolute path resolution
         mock_abspath.side_effect = lambda p: {
             "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet": "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet",
             "/tmp/local": "/tmp/local",
         }.get(p, p)
+
+        # Mock relative path calculation
+        mock_relpath.return_value = (
+            "artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
+        )
 
         path = "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
         result = get_object_store_prefix(path)
@@ -188,13 +206,17 @@ class TestGetObjectStorePrefix:
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
-    def test_get_object_store_prefix_path_with_spaces(self, mock_abspath):
+    @patch("os.path.relpath")
+    def test_get_object_store_prefix_path_with_spaces(self, mock_relpath, mock_abspath):
         """Test path with spaces in directory names."""
         # Mock absolute path resolution
         mock_abspath.side_effect = lambda p: {
             "/tmp/local/my folder/sub folder/file.txt": "/tmp/local/my folder/sub folder/file.txt",
             "/tmp/local": "/tmp/local",
         }.get(p, p)
+
+        # Mock relative path calculation
+        mock_relpath.return_value = "my folder/sub folder/file.txt"
 
         path = "/tmp/local/my folder/sub folder/file.txt"
         result = get_object_store_prefix(path)
