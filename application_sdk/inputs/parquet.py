@@ -23,7 +23,7 @@ class ParquetInput(Input):
     def __init__(
         self,
         path: Optional[str] = None,
-        chunk_size: Optional[int] = 10000,
+        chunk_size: Optional[int] = 5000,
         input_prefix: Optional[str] = None,
         file_names: Optional[List[str]] = None,
     ):

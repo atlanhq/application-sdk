@@ -34,7 +34,7 @@ class SQLQueryInput(Input):
         self,
         query: str,
         engine: Union["Engine", str],
-        chunk_size: Optional[int] = 100000,
+        chunk_size: Optional[int] = 5000,
     ):
         """Initialize the async SQL query input handler.
 
