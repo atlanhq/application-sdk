@@ -107,7 +107,7 @@ def get_object_store_prefix(path: str) -> str:
     try:
         # If path is under temp directory, convert to relative object store path
         if abs_path.startswith(abs_temp_path):
-            relative_path = os.path.relpath(path, TEMPORARY_PATH)
+            relative_path = os.path.relpath(abs_path, abs_temp_path)
             # Normalize path separators to forward slashes for object store
             return relative_path.replace(os.path.sep, "/")
         else:
