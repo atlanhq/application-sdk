@@ -280,7 +280,10 @@ async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
     # Mock download_files to return the specific files
     async def dummy_download(self, file_extension):  # noqa: D401, ANN001
         return (
-            [os.path.join(self.path, fn) for fn in self.file_names]
+            [
+                os.path.join(self.path, fn).replace(os.path.sep, "/")
+                for fn in self.file_names
+            ]
             if hasattr(self, "file_names") and self.file_names
             else []
         )
@@ -336,7 +339,10 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
     # Mock download_files to return the specific files
     async def dummy_download(self, file_extension):  # noqa: D401, ANN001
         return (
-            [os.path.join(self.path, fn) for fn in self.file_names]
+            [
+                os.path.join(self.path, fn).replace(os.path.sep, "/")
+                for fn in self.file_names
+            ]
             if hasattr(self, "file_names") and self.file_names
             else []
         )

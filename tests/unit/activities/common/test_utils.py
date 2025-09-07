@@ -113,6 +113,7 @@ class TestGetObjectStorePrefix:
         assert result == "."  # os.path.relpath returns "." for same directory
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "C:\\tmp\\local")
+    @patch("os.path.sep", "\\")
     @patch("os.path.abspath")
     @patch("os.path.relpath")
     def test_get_object_store_prefix_windows_drive_error(
@@ -133,8 +134,8 @@ class TestGetObjectStorePrefix:
         path = "D:\\data\\files"
         result = get_object_store_prefix(path)
 
-        # Should fall back to treating as user-provided path
-        assert result == "D:\\data\\files"
+        # Should fall back to treating as user-provided path with normalized separators
+        assert result == "D:/data/files"
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
