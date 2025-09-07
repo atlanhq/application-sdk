@@ -359,15 +359,15 @@ class ObjectStore:
     async def download_file(
         cls,
         source: str,
-        destination: str = None,
+        destination: str = TEMPORARY_PATH,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
     ) -> None:
         """Download a single file from the object store.
 
         Args:
             source (str): Object store key of the file to download.
-            destination (str, optional): Local path where the file will be saved.
-                If not provided, defaults to TEMPORARY_PATH + source.
+            destination (str, optional): Local directory where the file will be saved.
+                Defaults to TEMPORARY_PATH.
             store_name (str, optional): Name of the Dapr object store binding to use.
                 Defaults to DEPLOYMENT_OBJECT_STORE_NAME.
 
@@ -382,28 +382,28 @@ class ObjectStore:
             >>> await ObjectStore.download_file(source="reports/2024/january/report.pdf")
             >>> # Downloads to: ./local/tmp/reports/2024/january/report.pdf
 
-            >>> # Download to custom location
+            >>> # Download to custom directory
             >>> await ObjectStore.download_file(
             ...     source="reports/2024/january/report.pdf",
-            ...     destination="/tmp/downloaded_report.pdf"
+            ...     destination="/tmp/"
             ... )
+            >>> # Downloads to: /tmp/reports/2024/january/report.pdf
         """
-        # If destination is not provided, construct it from TEMPORARY_PATH + source
-        if destination is None:
-            destination = os.path.join(TEMPORARY_PATH, source.lstrip("/"))
+        # Construct full destination path (similar to download_prefix)
+        local_file_path = os.path.join(destination, source.lstrip("/"))
 
         # Ensure destination directory exists
-        destination_dir = os.path.dirname(destination)
+        destination_dir = os.path.dirname(local_file_path)
         if not os.path.exists(destination_dir):
             os.makedirs(destination_dir, exist_ok=True)
 
         try:
             response_data = await cls.get_content(source, store_name)
 
-            with open(destination, "wb") as f:
+            with open(local_file_path, "wb") as f:
                 f.write(response_data)
 
-            logger.info(f"Successfully downloaded file: {source} to {destination}")
+            logger.info(f"Successfully downloaded file: {source} to {local_file_path}")
         except Exception as e:
             logger.warning(
                 f"Failed to download file {source} from object store: {str(e)}"
@@ -432,8 +432,7 @@ class ObjectStore:
 
             # Download each file
             for file_path in file_list:
-                local_file_path = os.path.join(destination, file_path)
-                await cls.download_file(file_path, local_file_path, store_name)
+                await cls.download_file(file_path, destination, store_name)
 
             logger.info(f"Successfully downloaded all files from: {source}")
         except Exception as e:
