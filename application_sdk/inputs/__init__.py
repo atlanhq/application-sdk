@@ -66,7 +66,7 @@ class Input(ABC):
                         for target in self.file_names
                     ):
                         return []
-                return [path_to_search.replace(os.path.sep, "/")]
+                return [path_to_search]
 
             elif os.path.isdir(path_to_search):
                 # Directory - find all files in directory
@@ -81,7 +81,7 @@ class Input(ABC):
                     for file_name in self.file_names:
                         # Support both relative and absolute file names
                         matching_files = [
-                            f.replace(os.path.sep, "/")
+                            f
                             for f in filter(
                                 lambda f: f.endswith(file_name)
                                 or os.path.basename(f) == file_name,
@@ -91,7 +91,7 @@ class Input(ABC):
                         filtered_files.extend(matching_files)
                     return filtered_files
                 else:
-                    return [f.replace(os.path.sep, "/") for f in all_files]
+                    return all_files
 
             return []
 
