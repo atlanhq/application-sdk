@@ -32,6 +32,7 @@ class BaseApplication:
         application_manifest: Optional[dict] = None,
         client_class: Optional[Type[BaseClient]] = None,
         handler_class: Optional[Type[BaseHandler]] = None,
+        enable_mcp: bool = False,
     ):
         """
         Initialize the application.
@@ -54,6 +55,11 @@ class BaseApplication:
 
         self.client_class = client_class or BaseClient
         self.handler_class = handler_class or BaseHandler
+        
+        # MCP configuration
+        self.enable_mcp = enable_mcp
+        self.mcp_server = None
+        self._workflow_and_activities_classes = None
 
     def bootstrap_event_registration(self):
         self.event_subscriptions = {}
@@ -116,6 +122,9 @@ class BaseApplication:
             activity_executor (ThreadPoolExecutor | None): Executor for running activities.
         """
         await self.workflow_client.load()
+
+        # Store for MCP auto-discovery
+        self._workflow_and_activities_classes = workflow_and_activities_classes
 
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
@@ -208,3 +217,55 @@ class BaseApplication:
             raise ValueError("Application server not initialized")
 
         await self.server.start()
+    
+    async def setup_mcp_server(self, mcp_name: Optional[str] = None):
+        """
+        Set up MCP server that auto-exposes activities marked with @mcp_tool.
+        
+        Args:
+            mcp_name (Optional[str]): Name for the MCP server. 
+                                    Defaults to "{app_name} MCP"
+        """
+        if not self.enable_mcp:
+            logger.debug("MCP not enabled for this application")
+            return
+            
+        if self._workflow_and_activities_classes is None:
+            logger.error("Cannot setup MCP server: workflow not set up. Call setup_workflow() first.")
+            return
+            
+        try:
+            from application_sdk.mcp.server import MCPServer
+        except ImportError:
+            logger.error("MCP dependencies not installed. Run: pip install 'mcp[cli]'")
+            return
+            
+        mcp_name = mcp_name or f"{self.application_name} MCP"
+        
+        self.mcp_server = MCPServer(
+            mcp_name=mcp_name,
+            workflow_client=self.workflow_client,
+            handler=self.handler_class(client=self.client_class()) if hasattr(self, 'handler_class') else None
+        )
+        
+        # Auto-discover and register decorated activities
+        self.mcp_server.discover_and_register_tools(self._workflow_and_activities_classes)
+        
+        logger.info(f"MCP server setup complete: {mcp_name}")
+    
+    async def start_mcp_server(self, transport: str = "stdio"):
+        """
+        Start the MCP server.
+        
+        Args:
+            transport (str): MCP transport protocol ("stdio" or "sse")
+        """
+        if not self.enable_mcp:
+            logger.debug("MCP not enabled for this application")
+            return
+            
+        if self.mcp_server is None:
+            logger.error("MCP server not set up. Call setup_mcp_server() first.")
+            return
+            
+        await self.mcp_server.start(transport=transport)
