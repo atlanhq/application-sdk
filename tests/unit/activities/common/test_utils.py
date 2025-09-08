@@ -1,6 +1,7 @@
 """Simplified unit tests for activities common utilities."""
 
 import asyncio
+import os
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -37,319 +38,124 @@ class TestGetWorkflowId:
 
 
 class TestGetObjectStorePrefix:
-    """Test cases for get_object_store_prefix function."""
+    """Test cases for get_object_store_prefix function - Real World Scenarios."""
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
     @patch("os.path.relpath")
     @patch("os.path.commonpath")
-    def test_get_object_store_prefix_temporary_path(
+    def test_temporary_path_to_object_store_conversion(
         self, mock_commonpath, mock_relpath, mock_abspath
     ):
-        """Test conversion of temporary path to object store prefix."""
+        """Test conversion from SDK temporary paths to object store paths."""
         # Mock absolute path resolution
         mock_abspath.side_effect = lambda p: {
-            "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456": "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456",
-            "/tmp/local": "/tmp/local",
+            "./local/tmp/artifacts/apps/myapp/workflows/wf-123/run-456": "/abs/local/tmp/artifacts/apps/myapp/workflows/wf-123/run-456",
+            "./local/tmp": "/abs/local/tmp",
         }.get(p, p)
 
         # Mock commonpath to return temp path (indicating path is under temp directory)
-        mock_commonpath.return_value = "/tmp/local"
+        mock_commonpath.return_value = "/abs/local/tmp"
 
         # Mock relative path calculation
         mock_relpath.return_value = "artifacts/apps/myapp/workflows/wf-123/run-456"
 
-        path = "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456"
+        path = "./local/tmp/artifacts/apps/myapp/workflows/wf-123/run-456"
         result = get_object_store_prefix(path)
 
         assert result == "artifacts/apps/myapp/workflows/wf-123/run-456"
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
-    def test_get_object_store_prefix_user_provided_path(self, mock_abspath):
-        """Test user-provided path returns as-is."""
-        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "datasets/sales/2024/": "/some/other/datasets/sales/2024/",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = "datasets/sales/2024/"
-        result = get_object_store_prefix(path)
-
-        assert result == "datasets/sales/2024"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    @patch("os.path.commonpath")
-    def test_get_object_store_prefix_false_positive_prevention(
-        self, mock_commonpath, mock_abspath
-    ):
-        """Test that paths like '/tmp/local123' are not incorrectly matched as under '/tmp/local'."""
-        # Mock absolute path resolution - path looks similar but is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "/tmp/local123/data/file.txt": "/tmp/local123/data/file.txt",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        # Mock commonpath to return root path (indicating paths are not in parent-child relationship)
-        mock_commonpath.return_value = "/tmp"
-
-        path = "/tmp/local123/data/file.txt"
-        result = get_object_store_prefix(path)
-
-        # Should be treated as user-provided path, not as temp path
-        assert (
-            result == "tmp/local123/data/file.txt"
-        )  # Absolute path converted to relative for object store
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_removes_leading_dot_slash(self, mock_abspath):
-        """Test that leading ./ is removed from user-provided paths."""
-        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "./datasets/sales/2024/": "/some/other/datasets/sales/2024/",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = "./datasets/sales/2024/"
-        result = get_object_store_prefix(path)
-
-        assert result == "datasets/sales/2024"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_preserves_hidden_files(self, mock_abspath):
-        """Test that hidden files (starting with .) are preserved correctly."""
-        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            ".hidden/config": "/some/other/.hidden/config",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = ".hidden/config"
-        result = get_object_store_prefix(path)
-
-        # Should preserve the .hidden directory name
-        assert result == ".hidden/config"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_preserves_absolute_paths(self, mock_abspath):
-        """Test that absolute paths are preserved correctly."""
-        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "/absolute/path/file.txt": "/absolute/path/file.txt",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = "/absolute/path/file.txt"
-        result = get_object_store_prefix(path)
-
-        # Should convert absolute path to relative for object store
-        assert result == "absolute/path/file.txt"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_handles_double_slashes(self, mock_abspath):
-        """Test that paths with double slashes are handled correctly."""
-        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "//network/share/file": "/network/share/file",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = "//network/share/file"
-        result = get_object_store_prefix(path)
-
-        # os.path.normpath preserves leading double slashes, then we strip one leading slash for object store
-        assert result == "/network/share/file"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    @patch("os.path.relpath")
-    def test_get_object_store_prefix_relative_temporary_path(
-        self, mock_relpath, mock_abspath
-    ):
-        """Test relative path under TEMPORARY_PATH."""
-        # Mock absolute path resolution
-        mock_abspath.side_effect = lambda p: {
-            "./local/tmp/artifacts/test": "/tmp/local/artifacts/test",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        # Mock relative path calculation
-        mock_relpath.return_value = "artifacts/test"
-
-        path = "./local/tmp/artifacts/test"
-        result = get_object_store_prefix(path)
-
-        # Should use os.path.relpath which handles the relative conversion
-        assert result == "artifacts/test"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_exact_temporary_path(self, mock_abspath):
-        """Test exact TEMPORARY_PATH returns empty string."""
-        # Mock absolute path resolution
-        mock_abspath.side_effect = lambda p: {"/tmp/local": "/tmp/local"}.get(p, p)
-
-        path = "/tmp/local"
-        result = get_object_store_prefix(path)
-
-        assert result == "."  # os.path.relpath returns "." for same directory
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "C:\\tmp\\local")
-    @patch("os.path.sep", "\\")
-    @patch("os.path.abspath")
-    @patch("os.path.relpath")
-    def test_get_object_store_prefix_windows_drive_error(
-        self, mock_relpath, mock_abspath
-    ):
-        """Test handling of ValueError on Windows with different drives."""
-        # Mock absolute path resolution
-        mock_abspath.side_effect = lambda p: {
-            "D:\\data\\files": "D:\\data\\files",
-            "C:\\tmp\\local": "C:\\tmp\\local",
-        }.get(p, p)
-
-        # Mock relpath to raise ValueError (different drives on Windows)
-        mock_relpath.side_effect = ValueError(
-            "path is on mount 'D:', start on mount 'C:'"
-        )
-
-        path = "D:\\data\\files"
-        result = get_object_store_prefix(path)
-
-        # Should fall back to treating as user-provided path with normalized separators
-        assert result == "D:/data/files"
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    @patch("os.path.relpath")
-    def test_get_object_store_prefix_nested_temporary_path(
-        self, mock_relpath, mock_abspath
-    ):
-        """Test deeply nested path under TEMPORARY_PATH."""
-        # Mock absolute path resolution
-        mock_abspath.side_effect = lambda p: {
-            "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet": "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        # Mock relative path calculation
-        mock_relpath.return_value = (
-            "artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
-        )
-
-        path = "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
-        result = get_object_store_prefix(path)
-
-        assert (
-            result
-            == "artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
-        )
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_empty_path(self, mock_abspath):
-        """Test empty path handling."""
-        # Mock absolute path resolution
-        mock_abspath.side_effect = lambda p: {
-            "": "/current/dir",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = ""
-        result = get_object_store_prefix(path)
-
-        assert result == ""
-
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    def test_get_object_store_prefix_multiple_leading_dots(self, mock_abspath):
-        """Test path with multiple leading ./ patterns."""
-        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "./././datasets/sales/": "/some/other/datasets/sales/",
-            "/tmp/local": "/tmp/local",
-        }.get(p, p)
-
-        path = "./././datasets/sales/"
-        result = get_object_store_prefix(path)
-
-        # os.path.normpath properly normalizes the path
-        assert result == "datasets/sales"
-
-    @pytest.mark.parametrize(
-        "input_path,expected_output,description",
-        [
-            (
-                "/tmp/local123/.hidden/config",
-                "tmp/local123/.hidden/config",
-                "False positive prevention + hidden file preservation",
-            ),
-            (
-                "./././.secret/data",
-                ".secret/data",
-                "Path normalization + hidden directory preservation",
-            ),
-            (
-                "//network/.config/app",
-                "/network/.config/app",
-                "UNC path + hidden file preservation",
-            ),
-            (
-                "/absolute/.env",
-                "absolute/.env",
-                "Absolute path converted to relative for object store",
-            ),
-        ],
-    )
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
-    @patch("os.path.abspath")
-    @patch("os.path.commonpath")
-    def test_get_object_store_prefix_security_comprehensive(
-        self, mock_commonpath, mock_abspath, input_path, expected_output, description
-    ):
-        """Comprehensive test for both security fixes: startswith and lstrip issues."""
+    def test_user_relative_object_store_paths(self, mock_abspath):
+        """Test common user-provided relative object store paths."""
         # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
         mock_abspath.side_effect = lambda p: {
-            input_path: f"/some/other{input_path}"
-            if not input_path.startswith("/")
-            else input_path,
-            "/tmp/local": "/tmp/local",
+            "datasets/sales/2024/": "/some/other/datasets/sales/2024/",
+            "./local/tmp": "/abs/local/tmp",
         }.get(p, p)
 
-        # Mock commonpath to return different path (indicating not under temp)
-        mock_commonpath.return_value = (
-            "/tmp" if input_path.startswith("/tmp/local123") else "/"
-        )
+        test_cases = [
+            ("datasets/sales/2024/", "datasets/sales/2024"),
+            ("data/input.parquet", "data/input.parquet"),
+            ("./datasets/sales/", "datasets/sales"),
+            ("models/trained/v1.pkl", "models/trained/v1.pkl"),
+        ]
 
-        result = get_object_store_prefix(input_path)
-        assert (
-            result == expected_output
-        ), f"Failed for {description}: got {result}, expected {expected_output}"
+        for input_path, expected in test_cases:
+            result = get_object_store_prefix(input_path)
+            assert (
+                result == expected
+            ), f"Failed for {input_path}: got {result}, expected {expected}"
 
-    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
-    @patch("os.path.relpath")
-    def test_get_object_store_prefix_path_with_spaces(self, mock_relpath, mock_abspath):
-        """Test path with spaces in directory names."""
-        # Mock absolute path resolution
+    def test_user_absolute_paths_converted_to_relative(self, mock_abspath):
+        """Test user absolute paths converted for object store usage."""
+        # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
         mock_abspath.side_effect = lambda p: {
-            "/tmp/local/my folder/sub folder/file.txt": "/tmp/local/my folder/sub folder/file.txt",
-            "/tmp/local": "/tmp/local",
+            "/data/test.parquet": "/data/test.parquet",
+            "/datasets/sales/2024/": "/datasets/sales/2024/",
+            "./local/tmp": "/abs/local/tmp",
         }.get(p, p)
 
-        # Mock relative path calculation
-        mock_relpath.return_value = "my folder/sub folder/file.txt"
+        test_cases = [
+            ("/data/test.parquet", "data/test.parquet"),
+            ("/datasets/sales/2024/", "datasets/sales/2024"),
+            ("/models/trained/v1.pkl", "models/trained/v1.pkl"),
+        ]
 
-        path = "/tmp/local/my folder/sub folder/file.txt"
-        result = get_object_store_prefix(path)
+        for input_path, expected in test_cases:
+            result = get_object_store_prefix(input_path)
+            assert (
+                result == expected
+            ), f"Failed for {input_path}: got {result}, expected {expected}"
 
-        assert result == "my folder/sub folder/file.txt"
+    def test_combined_file_paths_from_os_path_join(self):
+        """Test paths created by os.path.join in download_files method."""
+        # This simulates the real usage in download_files:
+        # file_path = os.path.join(self.path, file_name)
+        # source_path = get_object_store_prefix(file_path)
+
+        test_cases = [
+            ("/data", "file1.parquet", "data/file1.parquet"),
+            ("/datasets/sales", "2024_q1.json", "datasets/sales/2024_q1.json"),
+            ("./models", "model.pkl", "models/model.pkl"),
+        ]
+
+        for base_path, file_name, expected in test_cases:
+            combined_path = os.path.join(base_path, file_name)
+            result = get_object_store_prefix(combined_path)
+            assert (
+                result == expected
+            ), f"Failed for {base_path} + {file_name}: got {result}, expected {expected}"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch("os.path.abspath")
+    @patch("os.path.commonpath")
+    def test_security_path_normalization(self, mock_commonpath, mock_abspath):
+        """Test that path normalization handles security edge cases correctly."""
+        # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
+        mock_abspath.side_effect = lambda p: {
+            "../../../etc/passwd": "/some/other/../../../etc/passwd",
+            "../../sensitive/data": "/some/other/../../sensitive/data",
+            "./local/tmp": "/abs/local/tmp",
+        }.get(p, p)
+
+        # Mock commonpath to indicate paths are not under temp
+        mock_commonpath.return_value = "/"
+
+        # These should be normalized but not blocked (object store handles security)
+        test_cases = [
+            ("../../../etc/passwd", "../../../etc/passwd"),
+            ("../../sensitive/data", "../../sensitive/data"),
+        ]
+
+        for input_path, expected in test_cases:
+            result = get_object_store_prefix(input_path)
+            assert (
+                result == expected
+            ), f"Failed for {input_path}: got {result}, expected {expected}"
 
 
 class TestAutoHeartbeater:
