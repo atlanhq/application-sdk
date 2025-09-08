@@ -66,7 +66,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download, patch(
-        "application_sdk.activities.common.utils.get_object_store_prefix",
+        "application_sdk.inputs.get_object_store_prefix",
         return_value="local/test.parquet",
     ):
         parquet_input = ParquetInput(path=path, chunk_size=100000)

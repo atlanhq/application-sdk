@@ -151,7 +151,7 @@ class TestInputDownloadFiles:
                 "application_sdk.services.objectstore.ObjectStore.download_file",
                 new_callable=AsyncMock,
             ), patch(
-                "application_sdk.activities.common.utils.get_object_store_prefix",
+                "application_sdk.inputs.get_object_store_prefix",
                 return_value="data/test.parquet",
             ):
                 with pytest.raises(SDKIOError, match="ATLAN-IO-503-01"):
@@ -169,7 +169,7 @@ class TestInputDownloadFiles:
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
         ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
+            "application_sdk.inputs.get_object_store_prefix",
             return_value="data/test.parquet",
         ):
             result = await input_instance.download_files(".parquet")
@@ -192,7 +192,7 @@ class TestInputDownloadFiles:
             "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
         ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
+            "application_sdk.inputs.get_object_store_prefix",
             return_value="data",
         ):
             result = await input_instance.download_files(".parquet")
@@ -224,7 +224,7 @@ class TestInputDownloadFiles:
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
         ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
+            "application_sdk.inputs.get_object_store_prefix",
             side_effect=lambda p: p.lstrip("/"),
         ):
             result = await input_instance.download_files(".parquet")
@@ -248,7 +248,7 @@ class TestInputDownloadFiles:
             new_callable=AsyncMock,
             side_effect=Exception("Download failed"),
         ), patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
+            "application_sdk.inputs.get_object_store_prefix",
             return_value="data/test.parquet",
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
@@ -266,7 +266,7 @@ class TestInputDownloadFiles:
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
         ), patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
+            "application_sdk.inputs.get_object_store_prefix",
             return_value="data/test.parquet",
         ):
             # Mock _find_files to return empty even after download
@@ -348,7 +348,7 @@ class TestInputDownloadFiles:
             new_callable=AsyncMock,
             side_effect=Exception("Download failed"),
         ), patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
+            "application_sdk.inputs.get_object_store_prefix",
             return_value="data/test.parquet",
         ), patch("application_sdk.inputs.logger") as mock_logger:
             with pytest.raises(SDKIOError):
