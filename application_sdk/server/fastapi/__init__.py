@@ -97,7 +97,7 @@ class APIServer(ServerInterface):
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
 
-    frontend_assets_path: str = "static"
+    frontend_assets_path: str = "frontend/static"
 
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
@@ -445,22 +445,6 @@ class APIServer(ServerInterface):
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
         self.app.get("/")(self.frontend_home)
-
-        if os.path.exists(os.path.join(self.frontend_assets_path, "_nuxt")):
-            self.app.mount(
-                "/_nuxt",
-                StaticFiles(directory=os.path.join(self.frontend_assets_path, "_nuxt")),
-                name="frontend_assets",
-            )
-
-        if os.path.exists(os.path.join(self.frontend_assets_path, "_fonts")):
-            self.app.mount(
-                "/_fonts",
-                StaticFiles(
-                    directory=os.path.join(self.frontend_assets_path, "_fonts")
-                ),
-                name="frontend_fonts",
-            )
 
         # Mount static files
         self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
