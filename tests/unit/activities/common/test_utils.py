@@ -103,7 +103,8 @@ class TestGetObjectStorePrefix:
         }.get(p, p)
 
         # Mock commonpath to indicate paths are NOT under temp directory
-        mock_commonpath.return_value = "/"
+        # Return a path that's definitely NOT the temp path to trigger user-path logic
+        mock_commonpath.return_value = "/different/root"
 
         test_cases = [
             ("/data/test.parquet", "data/test.parquet"),
@@ -131,7 +132,8 @@ class TestGetObjectStorePrefix:
         }.get(p, p)
 
         # Mock commonpath to indicate paths are NOT under temp directory
-        mock_commonpath.return_value = "/"
+        # Return a path that's definitely NOT the temp path to trigger user-path logic
+        mock_commonpath.return_value = "/different/root"
 
         # This simulates the real usage in download_files:
         # file_path = os.path.join(self.path, file_name)
