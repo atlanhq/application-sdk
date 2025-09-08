@@ -84,7 +84,7 @@ def _normalize_object_store_path(path: str) -> str:
     Converts paths to object store format by:
     1. Normalizing the path structure
     2. Converting to POSIX-style paths (forward slashes)
-    3. Removing leading slashes (object stores use relative paths)
+    3. Removing leading and trailing slashes (clean object store keys)
 
     Args:
         path (str): The path to normalize
@@ -96,8 +96,8 @@ def _normalize_object_store_path(path: str) -> str:
         >>> _normalize_object_store_path("/data/file.parquet")
         "data/file.parquet"
 
-        >>> _normalize_object_store_path("\\\\data\\\\file.parquet")  # Windows
-        "data/file.parquet"
+        >>> _normalize_object_store_path("\\\\data\\\\directory\\\\")  # Windows
+        "data/directory"
     """
     # First normalize the path structure
     normalized = os.path.normpath(path)
@@ -110,8 +110,8 @@ def _normalize_object_store_path(path: str) -> str:
     if os.path.sep == "\\":
         normalized = PureWindowsPath(normalized).as_posix()
 
-    # Remove leading slashes to make path relative for object store
-    return normalized.lstrip("/")
+    # Remove leading and trailing slashes for clean object store keys
+    return normalized.strip("/")
 
 
 def get_object_store_prefix(path: str) -> str:
