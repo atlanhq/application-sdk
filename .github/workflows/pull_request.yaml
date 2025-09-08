@@ -94,7 +94,7 @@ jobs:
           # Get the target branch of PR
           TARGET_BRANCH="${{ github.base_ref }}"
           # Default matrix if no label provided
-          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-postgres-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
+          DEFAULT_MATRIX="{\"include\":[{\"repo_name\":\"atlan-redshift-app\",\"target_branch\":\"${TARGET_BRANCH}\"}]}"
 
           if [[ "${{ github.event_name }}" == "pull_request" ]]; then
             # Parse labels from GitHub Script output
