@@ -25,7 +25,7 @@ def get_region_name_from_hostname(hostname: str) -> str:
     match = re.search(r"-([a-z]{2}-[a-z]+-\d)\.", hostname)
     if match:
         return match.group(1)
-    return None
+    raise ValueError("Could not find valid AWS region from hostname")
 
 
 def generate_aws_rds_token_with_iam_role(

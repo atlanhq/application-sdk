@@ -241,8 +241,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if not handler:
                 raise ValueError("Preflight check handler not found")
 
+            # Call preflight_check with payload only; handler may internally use its multidb setting
             result = await handler.preflight_check(
-                {"metadata": workflow_args["metadata"]}, handler.multidb
+                {"metadata": workflow_args["metadata"]}
             )
 
             if not result or "error" in result:

@@ -186,7 +186,7 @@ class BaseSQLHandler(HandlerInterface):
         return schemas
 
     async def preflight_check(
-        self, payload: Dict[str, Any], multidb: Optional[bool]
+        self, payload: Dict[str, Any], multidb: Optional[bool] = None
     ) -> Dict[str, Any]:
         """
         Method to perform preflight checks
@@ -194,13 +194,19 @@ class BaseSQLHandler(HandlerInterface):
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
+            # Resolve multidb preference: explicit argument overrides handler attribute; default to False
+            resolved_multidb = (
+                bool(multidb)
+                if multidb is not None
+                else bool(getattr(self, "multidb", False))
+            )
             (
                 results["databaseSchemaCheck"],
                 results["tablesCheck"],
                 results["versionCheck"],
             ) = await asyncio.gather(
                 self.check_schemas_and_databases(payload),
-                self.tables_check(payload, multidb),
+                self.tables_check(payload, resolved_multidb),
                 self.check_client_version(),
             )
 
