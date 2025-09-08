@@ -85,10 +85,10 @@ class JsonInput(Input):
             json_files = await super().download_files(".json")
             logger.info(f"Reading {len(json_files)} JSON files as pandas dataframe")
 
-            dataframes = [
-                pd.read_json(json_file, lines=True) for json_file in json_files
-            ]
-            return pd.concat(dataframes, ignore_index=True)
+            return pd.concat(
+                (pd.read_json(json_file, lines=True) for json_file in json_files),
+                ignore_index=True,
+            )
 
         except Exception as e:
             logger.error(f"Error reading data from JSON: {str(e)}")
