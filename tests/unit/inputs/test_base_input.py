@@ -160,7 +160,7 @@ class TestInputDownloadFiles:
         path = "/data/test.parquet"
         input_instance = MockInput(path)
 
-        with patch("os.path.isfile", side_effect=[False, False, True]), patch(
+        with patch("os.path.isfile", side_effect=[False, True]), patch(
             "os.path.isdir", return_value=False
         ), patch("glob.glob", return_value=[]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
@@ -183,7 +183,7 @@ class TestInputDownloadFiles:
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
-        ), patch("glob.glob", side_effect=[[], [], expected_files]), patch(
+        ), patch("glob.glob", side_effect=[[], expected_files]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
         ) as mock_download, patch(
@@ -205,7 +205,7 @@ class TestInputDownloadFiles:
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
-        ), patch("glob.glob", side_effect=[[], [], expected_files]), patch(
+        ), patch("glob.glob", side_effect=[[], expected_files]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
         ) as mock_download, patch(

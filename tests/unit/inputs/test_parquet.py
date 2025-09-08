@@ -54,7 +54,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
 
-    with patch("os.path.isfile", side_effect=[False, False, True]), patch(
+    with patch("os.path.isfile", side_effect=[False, True]), patch(
         "os.path.isdir", return_value=False
     ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
@@ -102,6 +102,11 @@ def _install_dummy_pandas(monkeypatch):
     dummy_pandas = types.ModuleType("pandas")
     call_log: list[dict] = []
 
+    # Define MockIloc class once for reuse
+    class MockIloc:
+        def __getitem__(self, slice_obj):
+            return f"chunk-{slice_obj.start}-{slice_obj.stop}"
+
     def read_parquet(path):  # noqa: D401, ANN001
         call_log.append({"path": path})
 
@@ -117,13 +122,32 @@ def _install_dummy_pandas(monkeypatch):
             def iloc(self):
                 return MockIloc()
 
-        class MockIloc:
-            def __getitem__(self, slice_obj):
-                return f"chunk-{slice_obj.start}-{slice_obj.stop}"
-
         return MockDataFrame()
 
+    def concat(objs, ignore_index=None):  # noqa: D401, ANN001
+        # Return a mock DataFrame that combines all input DataFrames
+        class CombinedMockDataFrame:
+            def __init__(self):
+                # Combine data from all input DataFrames
+                total_data = []
+                for obj in objs:
+                    if hasattr(obj, "data"):
+                        total_data.extend(obj.data)
+                    else:
+                        total_data.extend(range(100))  # Default data
+                self.data = total_data
+
+            def __len__(self):
+                return len(self.data)
+
+            @property
+            def iloc(self):
+                return MockIloc()
+
+        return CombinedMockDataFrame()
+
     dummy_pandas.read_parquet = read_parquet  # type: ignore[attr-defined]
+    dummy_pandas.concat = concat  # type: ignore[attr-defined]
 
     monkeypatch.setitem(sys.modules, "pandas", dummy_pandas)
 
