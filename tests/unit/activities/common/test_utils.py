@@ -90,7 +90,10 @@ class TestGetObjectStorePrefix:
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
-    def test_user_absolute_paths_converted_to_relative(self, mock_abspath):
+    @patch("os.path.commonpath")
+    def test_user_absolute_paths_converted_to_relative(
+        self, mock_commonpath, mock_abspath
+    ):
         """Test user absolute paths converted for object store usage."""
         # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
         mock_abspath.side_effect = lambda p: {
@@ -98,6 +101,9 @@ class TestGetObjectStorePrefix:
             "/datasets/sales/2024/": "/datasets/sales/2024/",
             "./local/tmp": "/abs/local/tmp",
         }.get(p, p)
+
+        # Mock commonpath to indicate paths are NOT under temp directory
+        mock_commonpath.return_value = "/"
 
         test_cases = [
             ("/data/test.parquet", "data/test.parquet"),
@@ -111,8 +117,22 @@ class TestGetObjectStorePrefix:
                 result == expected
             ), f"Failed for {input_path}: got {result}, expected {expected}"
 
-    def test_combined_file_paths_from_os_path_join(self):
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
+    @patch("os.path.abspath")
+    @patch("os.path.commonpath")
+    def test_combined_file_paths_from_os_path_join(self, mock_commonpath, mock_abspath):
         """Test paths created by os.path.join in download_files method."""
+        # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
+        mock_abspath.side_effect = lambda p: {
+            "/data/file1.parquet": "/data/file1.parquet",
+            "/datasets/sales/2024_q1.json": "/datasets/sales/2024_q1.json",
+            "./models/model.pkl": "/abs/models/model.pkl",
+            "./local/tmp": "/abs/local/tmp",
+        }.get(p, p)
+
+        # Mock commonpath to indicate paths are NOT under temp directory
+        mock_commonpath.return_value = "/"
+
         # This simulates the real usage in download_files:
         # file_path = os.path.join(self.path, file_name)
         # source_path = get_object_store_prefix(file_path)
