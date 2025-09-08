@@ -1,6 +1,5 @@
 """Tests for file discovery utilities in common/utils.py."""
 
-import os
 import tempfile
 from pathlib import Path
 
@@ -12,21 +11,21 @@ class TestFindFilesByExtension:
 
     def test_single_file_exists(self):
         """Test finding a single file that exists."""
-        with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tmp_file:
-            try:
-                result = find_files_by_extension(tmp_file.name, ".parquet")
-                assert result == [tmp_file.name]
-            finally:
-                os.unlink(tmp_file.name)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_file_path = Path(tmp_dir) / "test.parquet"
+            tmp_file_path.touch()
+
+            result = find_files_by_extension(str(tmp_file_path), ".parquet")
+            assert result == [str(tmp_file_path)]
 
     def test_single_file_wrong_extension(self):
         """Test single file with wrong extension returns empty."""
-        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp_file:
-            try:
-                result = find_files_by_extension(tmp_file.name, ".parquet")
-                assert result == []
-            finally:
-                os.unlink(tmp_file.name)
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_file_path = Path(tmp_dir) / "test.json"
+            tmp_file_path.touch()
+
+            result = find_files_by_extension(str(tmp_file_path), ".parquet")
+            assert result == []
 
     def test_directory_with_matching_files(self):
         """Test directory containing files with matching extension."""

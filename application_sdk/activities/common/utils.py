@@ -8,6 +8,7 @@ import asyncio
 import os
 from datetime import timedelta
 from functools import wraps
+from pathlib import PureWindowsPath
 from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
@@ -82,8 +83,8 @@ def _normalize_object_store_path(path: str) -> str:
 
     Converts paths to object store format by:
     1. Normalizing the path structure
-    2. Removing leading slashes (object stores use relative paths)
-    3. Converting path separators to forward slashes
+    2. Converting to POSIX-style paths (forward slashes)
+    3. Removing leading slashes (object stores use relative paths)
 
     Args:
         path (str): The path to normalize
@@ -95,16 +96,22 @@ def _normalize_object_store_path(path: str) -> str:
         >>> _normalize_object_store_path("/data/file.parquet")
         "data/file.parquet"
 
-        >>> _normalize_object_store_path("//data\\\\file.parquet")  # Windows
+        >>> _normalize_object_store_path("\\\\data\\\\file.parquet")  # Windows
         "data/file.parquet"
     """
+    # First normalize the path structure
     normalized = os.path.normpath(path)
+
     # If the normalized path is just ".", return empty string for object store
-    result = "" if normalized == "." else normalized
-    # For object store, convert absolute paths to relative by removing all leading slashes
-    result = result.lstrip("/")
-    # Normalize path separators to forward slashes for object store
-    return result.replace(os.path.sep, "/")
+    if normalized == ".":
+        return ""
+
+    # Convert Windows-style paths to POSIX-style (forward slashes)
+    if os.path.sep == "\\":
+        normalized = PureWindowsPath(normalized).as_posix()
+
+    # Remove leading slashes to make path relative for object store
+    return normalized.lstrip("/")
 
 
 def get_object_store_prefix(path: str) -> str:
