@@ -1,6 +1,6 @@
+import os
 import shutil
 from datetime import timedelta
-from pathlib import Path
 from typing import Any, Dict, Optional, Type
 
 from temporalio import activity, workflow
@@ -92,43 +92,36 @@ async def cleanup_app_artifacts() -> Dict[str, bool]:
 
     for base_path in base_paths:
         try:
-            cleanup_path = Path(base_path)
-            cleanup_path_str = str(cleanup_path)
+            cleanup_path = str(base_path)
 
-            if cleanup_path.exists():
-                if cleanup_path.is_dir():
+            if os.path.exists(cleanup_path):
+                if os.path.isdir(cleanup_path):
                     # Remove all contents inside the base path, but keep the directory itself
-                    for item in cleanup_path.iterdir():
-                        if item.is_dir():
+                    for item in os.listdir(cleanup_path):
+                        if os.path.isdir(item):
                             shutil.rmtree(item)
                         else:
-                            item.unlink()
+                            os.remove(item)
                     activity.logger.info(
-                        f"Cleaned up all contents from: {cleanup_path_str}"
+                        f"Cleaned up all contents from: {cleanup_path}"
                     )
-                    cleanup_results[cleanup_path_str] = True
+                    cleanup_results[cleanup_path] = True
                 else:
-                    activity.logger.warning(
-                        f"Path is not a directory: {cleanup_path_str}"
-                    )
-                    cleanup_results[cleanup_path_str] = False
+                    activity.logger.warning(f"Path is not a directory: {cleanup_path}")
+                    cleanup_results[cleanup_path] = False
             else:
-                activity.logger.debug(f"Directory doesn't exist: {cleanup_path_str}")
-                cleanup_results[cleanup_path_str] = True
+                activity.logger.debug(f"Directory doesn't exist: {cleanup_path}")
+                cleanup_results[cleanup_path] = True
 
         except PermissionError as e:
-            activity.logger.error(
-                f"Permission denied cleaning up {cleanup_path_str}: {e}"
-            )
-            cleanup_results[cleanup_path_str] = False
+            activity.logger.error(f"Permission denied cleaning up {cleanup_path}: {e}")
+            cleanup_results[cleanup_path] = False
         except OSError as e:
-            activity.logger.error(f"OS error cleaning up {cleanup_path_str}: {e}")
-            cleanup_results[cleanup_path_str] = False
+            activity.logger.error(f"OS error cleaning up {cleanup_path}: {e}")
+            cleanup_results[cleanup_path] = False
         except Exception as e:
-            activity.logger.error(
-                f"Unexpected error cleaning up {cleanup_path_str}: {e}"
-            )
-            cleanup_results[cleanup_path_str] = False
+            activity.logger.error(f"Unexpected error cleaning up {cleanup_path}: {e}")
+            cleanup_results[cleanup_path] = False
 
     return cleanup_results
 
@@ -154,7 +147,7 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
             Exception: Re-raises any exceptions from workflow execution
         """
 
-        workflow_type = input.workflow_type
+        workflow_type = input.type
 
         output = None
         try:
