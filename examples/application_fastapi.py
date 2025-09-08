@@ -22,7 +22,7 @@ class SampleSQLHandler(BaseSQLHandler):
         return [{"database": "test", "schema": "test"}]
 
     async def preflight_check(
-        self, payload: Dict[str, Any], **kwargs: Any
+        self, payload: Dict[str, Any], multidb: Optional[bool] = None
     ) -> Dict[str, Any]:
         return {
             "success": True,

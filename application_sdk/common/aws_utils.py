@@ -188,18 +188,22 @@ def get_cluster_credentials(
     )
 
 
-def create_aws_client(session: boto3.Session, region: str, service: str):
+def create_aws_client(session: boto3.Session, region: str, service: str) -> Any:
     """
-    Create a Redshift client using the provided session and region.
+    Create an AWS client using the provided session and region.
 
     Args:
         session: Boto3 session instance
         region: AWS region name
+        service: AWS service name (e.g., 'redshift', 'rds', 'sts')
 
     Returns:
-        Redshift client instance
+        AWS client instance
     """
-    return session.client(service, region_name=region)
+    # Use type: ignore to suppress the overload mismatch warning
+    # The boto3 client method has many overloads for different services
+    # but we need to support dynamic service names
+    return session.client(service, region_name=region)  # type: ignore
 
 
 def create_engine_url(
