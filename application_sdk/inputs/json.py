@@ -78,18 +78,11 @@ class JsonInput(Input):
             json_files = await super().download_files(".json")
             logger.info(f"Reading {len(json_files)} JSON files as pandas dataframe")
 
-            if len(json_files) == 1:
-                # Single file - read directly
-                return pd.read_json(json_files[0], lines=True)
-            elif len(json_files) > 1:
-                # Multiple files - concatenate
-                dataframes = [
-                    pd.read_json(json_file, lines=True) for json_file in json_files
-                ]
-                return pd.concat(dataframes, ignore_index=True)
-            else:
-                # Use self.path as fallback (shouldn't happen due to download_files validation)
-                return pd.read_json(self.path, lines=True)
+            dataframes = [
+                pd.read_json(json_file, lines=True) for json_file in json_files
+            ]
+            return pd.concat(dataframes, ignore_index=True)
+
         except Exception as e:
             logger.error(f"Error reading data from JSON: {str(e)}")
             raise
