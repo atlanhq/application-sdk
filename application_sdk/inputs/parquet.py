@@ -83,7 +83,7 @@ class ParquetInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(self._extension)
+            parquet_files = await self.download_files()
             logger.info(f"Reading {len(parquet_files)} parquet files")
 
             return pd.concat(
@@ -140,7 +140,7 @@ class ParquetInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(self._extension)
+            parquet_files = await self.download_files()
             logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
             # Process each file individually to maintain memory efficiency
@@ -195,7 +195,7 @@ class ParquetInput(Input):
             import daft  # type: ignore
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(self._extension)
+            parquet_files = await self.download_files()
             logger.info(f"Reading {len(parquet_files)} parquet files with daft")
 
             # Use the discovered/downloaded files directly
@@ -251,7 +251,7 @@ class ParquetInput(Input):
             import daft  # type: ignore
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(self._extension)
+            parquet_files = await self.download_files()
             logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
 
             # Yield each discovered file as separate batch

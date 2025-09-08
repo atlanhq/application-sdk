@@ -51,7 +51,7 @@ async def test_not_download_file_that_exists() -> None:
             chunk_size=100000,  # No file_names
         )
 
-        result = await parquet_input.download_files(".parquet")
+        result = await parquet_input.download_files()
         mock_download.assert_not_called()
         assert result == [path]
 
@@ -71,7 +71,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     ):
         parquet_input = ParquetInput(path=path, chunk_size=100000)
 
-        result = await parquet_input.download_files(".parquet")
+        result = await parquet_input.download_files()
 
         # Should attempt to download the file
         mock_download.assert_called_once_with(source="local/test.parquet")
@@ -92,7 +92,7 @@ async def test_download_files_uses_base_class() -> None:
     parquet_input = ParquetInput(path=path)
 
     with patch("os.path.isfile", return_value=True):
-        result = await parquet_input.download_files(".parquet")
+        result = await parquet_input.download_files()
 
         assert result == [path]
 
@@ -171,7 +171,7 @@ async def test_get_dataframe_with_mocked_pandas(monkeypatch) -> None:
     call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return the path
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [self.path]  # Return the path as a list of files
 
     # Mock the base Input class method since ParquetInput calls super().download_files()
@@ -200,7 +200,7 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
     call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return the path
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [self.path]  # Return the path as a list of files
 
     # Mock the base Input class method since ParquetInput calls super().download_files()
@@ -233,7 +233,7 @@ async def test_get_batched_dataframe_no_chunk_size(monkeypatch) -> None:
     call_log = _install_dummy_pandas(monkeypatch)
 
     # Mock download_files to return the path
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [self.path]  # Return the path as a list of files
 
     # Mock the base Input class method since ParquetInput calls super().download_files()
@@ -286,7 +286,7 @@ async def test_get_daft_dataframe(monkeypatch) -> None:
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
 
     # Mock the base Input class method since ParquetInput calls super().download_files()
@@ -311,7 +311,7 @@ async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return the specific files
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return (
             [
                 os.path.join(self.path, fn).replace(os.path.sep, "/")
@@ -345,7 +345,7 @@ async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
 
     # Mock the base Input class method since ParquetInput calls super().download_files()
@@ -370,7 +370,7 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return the specific files
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return (
             [
                 os.path.join(self.path, fn).replace(os.path.sep, "/")
@@ -412,7 +412,7 @@ async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> Non
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
 
     # Mock the base Input class method since ParquetInput calls super().download_files()
@@ -443,7 +443,7 @@ async def test_get_batched_daft_dataframe_no_input_prefix(monkeypatch) -> None:
     call_log = _install_dummy_daft(monkeypatch)
 
     # Mock download_files to return a list of files
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
 
     # Mock the base Input class method since ParquetInput calls super().download_files()

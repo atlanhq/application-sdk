@@ -16,6 +16,7 @@ class MockInput(Input):
     def __init__(self, path: str, file_names: List[str] = None):
         self.path = path
         self.file_names = file_names
+        self._extension = ".parquet"  # Default extension for testing
 
     async def get_batched_dataframe(self):
         """Mock implementation."""
@@ -66,7 +67,7 @@ class TestInputDownloadFiles:
         input_instance = MockInputNoPath()
 
         with pytest.raises(AttributeError, match="does not support file operations"):
-            await input_instance.download_files(".parquet")
+            await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_empty_path(self):
@@ -74,7 +75,7 @@ class TestInputDownloadFiles:
         input_instance = MockInput("")
 
         with pytest.raises(AttributeError, match="does not support file operations"):
-            await input_instance.download_files(".parquet")
+            await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_local_single_file_exists(self):
@@ -83,7 +84,7 @@ class TestInputDownloadFiles:
         input_instance = MockInput(path)
 
         with patch("os.path.isfile", return_value=True):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
         assert result == [path]
 
@@ -97,7 +98,7 @@ class TestInputDownloadFiles:
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=expected_files):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
         assert result == expected_files
 
@@ -117,7 +118,7 @@ class TestInputDownloadFiles:
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=all_files):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
         assert set(result) == set(expected_files)
 
@@ -129,33 +130,28 @@ class TestInputDownloadFiles:
         input_instance = MockInput(path, file_names)
 
         with patch("os.path.isfile", return_value=True):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
         assert result == [path]
 
     @pytest.mark.asyncio
-    async def test_download_files_single_file_with_file_names_validation_error(self):
-        """Test single file with file_names filter - this is now prevented at input construction level."""
-        # This test now documents that the validation happens at the input class level
-        # The MockInput class doesn't have this validation, but real inputs (JsonInput, ParquetInput) do
+    async def test_download_files_single_file_with_file_names_no_filtering(self):
+        """Test single file with file_names - MockInput allows this but single files are not filtered."""
+        # This test documents that MockInput allows single file + file_names configuration
+        # Real inputs (JsonInput, ParquetInput) prevent this at construction level
+        # But for single files, file_names filtering is not applied (validation prevents this scenario)
 
-        # For the base Input class, we can still test the old behavior
         path = "/data/test.parquet"
-        file_names = ["other.parquet"]
+        file_names = [
+            "other.parquet"
+        ]  # This doesn't match the file, but won't be used for filtering
         input_instance = MockInput(path, file_names)
 
-        # MockInput allows this configuration, so it should work but find no matching files
+        # MockInput allows this configuration, and single file will be found locally
         with patch("os.path.isfile", return_value=True):
-            # Local file exists but doesn't match filter, so should try object store
-            with patch(
-                "application_sdk.services.objectstore.ObjectStore.download_file",
-                new_callable=AsyncMock,
-            ), patch(
-                "application_sdk.inputs.get_object_store_prefix",
-                return_value="data/test.parquet",
-            ):
-                with pytest.raises(SDKIOError, match="ATLAN-IO-503-01"):
-                    await input_instance.download_files(".parquet")
+            # Local single file exists and will be returned (no filtering applied)
+            result = await input_instance.download_files()
+            assert result == ["/data/test.parquet"]
 
     @pytest.mark.asyncio
     async def test_download_files_download_single_file_success(self):
@@ -172,7 +168,7 @@ class TestInputDownloadFiles:
             "application_sdk.inputs.get_object_store_prefix",
             return_value="data/test.parquet",
         ):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
             mock_download.assert_called_once_with(source="data/test.parquet")
             # Result should be the actual downloaded file path in temporary directory
@@ -195,7 +191,7 @@ class TestInputDownloadFiles:
             "application_sdk.inputs.get_object_store_prefix",
             return_value="data",
         ):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
             mock_download.assert_called_once_with(source="data")
             assert result == expected_files
@@ -227,7 +223,7 @@ class TestInputDownloadFiles:
             "application_sdk.inputs.get_object_store_prefix",
             side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
         ):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
             # Should download each specific file
             assert mock_download.call_count == 2
@@ -252,7 +248,7 @@ class TestInputDownloadFiles:
             return_value="data/test.parquet",
         ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
-                await input_instance.download_files(".parquet")
+                await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_download_success_but_no_files_found(self):
@@ -271,7 +267,7 @@ class TestInputDownloadFiles:
         ):
             # Mock _find_files to return empty even after download
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-01"):
-                await input_instance.download_files(".parquet")
+                await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_recursive_glob_pattern(self):
@@ -283,7 +279,7 @@ class TestInputDownloadFiles:
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=expected_files) as mock_glob:
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
             # Should use recursive glob pattern (OS-specific path separators)
             expected_pattern = os.path.join("/data", "**", "*.parquet")
@@ -300,7 +296,7 @@ class TestInputDownloadFiles:
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=expected_files):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
             assert result == expected_files
 
@@ -316,7 +312,7 @@ class TestInputDownloadFiles:
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=all_files):
-            result = await input_instance.download_files(".parquet")
+            result = await input_instance.download_files()
 
             assert result == expected_files
 
@@ -329,7 +325,7 @@ class TestInputDownloadFiles:
         with patch("os.path.isfile", return_value=True), patch(
             "application_sdk.inputs.logger"
         ) as mock_logger:
-            await input_instance.download_files(".parquet")
+            await input_instance.download_files()
 
             mock_logger.info.assert_called_with(
                 "Found 1 .parquet files locally at: /data/test.parquet"
@@ -352,7 +348,7 @@ class TestInputDownloadFiles:
             return_value="data/test.parquet",
         ), patch("application_sdk.inputs.logger") as mock_logger:
             with pytest.raises(SDKIOError):
-                await input_instance.download_files(".parquet")
+                await input_instance.download_files()
 
             mock_logger.info.assert_any_call(
                 "No local .parquet files found at /data/test.parquet, checking object store..."
