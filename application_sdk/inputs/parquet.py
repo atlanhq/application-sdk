@@ -78,17 +78,10 @@ class ParquetInput(Input):
             parquet_files = await super().download_files(".parquet")
             logger.info(f"Reading {len(parquet_files)} parquet files")
 
-            if len(parquet_files) == 1:
-                # Single file - read directly
-                return pd.read_parquet(parquet_files[0])
-            elif len(parquet_files) > 1:
-                # Multiple files - concatenate
-                return pd.concat(
-                    [pd.read_parquet(f) for f in parquet_files], ignore_index=True
-                )
-            else:
-                # Use self.path as fallback (shouldn't happen due to download_files validation)
-                return pd.read_parquet(self.path)
+            dataframes = [
+                pd.read_parquet(parquet_file) for parquet_file in parquet_files
+            ]
+            return pd.concat(dataframes, ignore_index=True)
         except Exception as e:
             logger.error(f"Error reading data from parquet file(s): {str(e)}")
             raise
@@ -143,15 +136,10 @@ class ParquetInput(Input):
             logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
             # Combine specified files
-            if len(parquet_files) == 1:
-                df = pd.read_parquet(parquet_files[0])
-            elif len(parquet_files) > 1:
-                df = pd.concat(
-                    [pd.read_parquet(f) for f in parquet_files], ignore_index=True
-                )
-            else:
-                # Use self.path as fallback (shouldn't happen due to download_files validation)
-                df = pd.read_parquet(self.path)
+            dataframes = [
+                pd.read_parquet(parquet_file) for parquet_file in parquet_files
+            ]
+            df = pd.concat(dataframes, ignore_index=True)
 
             # Yield in chunks
             if self.chunk_size:
