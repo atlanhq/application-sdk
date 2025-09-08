@@ -37,7 +37,8 @@ class ParquetInput(Input):
             raise ValueError("Path must be provided")
 
         # Validate that single file path and file_names are not both specified
-        if path.endswith(".parquet") and file_names:
+        self._extension = ".parquet"
+        if path.endswith(self._extension) and file_names:
             raise ValueError(
                 f"Cannot specify both a single file path ('{path}') and file_names filter. "
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
@@ -82,7 +83,7 @@ class ParquetInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(".parquet")
+            parquet_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(parquet_files)} parquet files")
 
             return pd.concat(
@@ -139,7 +140,7 @@ class ParquetInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(".parquet")
+            parquet_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
             # Process each file individually to maintain memory efficiency
@@ -194,7 +195,7 @@ class ParquetInput(Input):
             import daft  # type: ignore
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(".parquet")
+            parquet_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(parquet_files)} parquet files with daft")
 
             # Use the discovered/downloaded files directly
@@ -250,7 +251,7 @@ class ParquetInput(Input):
             import daft  # type: ignore
 
             # Ensure files are available (local or downloaded)
-            parquet_files = await super().download_files(".parquet")
+            parquet_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
 
             # Yield each discovered file as separate batch

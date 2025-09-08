@@ -37,7 +37,8 @@ class JsonInput(Input):
             raise ValueError("Path must be provided")
 
         # Validate that single file path and file_names are not both specified
-        if path.endswith(".json") and file_names:
+        self._extension = ".json"
+        if path.endswith(self._extension) and file_names:
             raise ValueError(
                 f"Cannot specify both a single file path ('{path}') and file_names filter. "
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."
@@ -58,7 +59,7 @@ class JsonInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(".json")
+            json_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(json_files)} JSON files in batches")
 
             for json_file in json_files:
@@ -82,7 +83,7 @@ class JsonInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(".json")
+            json_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(json_files)} JSON files as pandas dataframe")
 
             return pd.concat(
@@ -105,7 +106,7 @@ class JsonInput(Input):
             import daft
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(".json")
+            json_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(json_files)} JSON files as daft batches")
 
             # Yield each discovered file as separate batch with chunking
@@ -124,7 +125,7 @@ class JsonInput(Input):
             import daft
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(".json")
+            json_files = await super().download_files(self._extension)
             logger.info(f"Reading {len(json_files)} JSON files with daft")
 
             # Use the discovered/downloaded files directly
