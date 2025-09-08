@@ -85,10 +85,10 @@ class ParquetInput(Input):
             parquet_files = await super().download_files(".parquet")
             logger.info(f"Reading {len(parquet_files)} parquet files")
 
-            dataframes = [
-                pd.read_parquet(parquet_file) for parquet_file in parquet_files
-            ]
-            return pd.concat(dataframes, ignore_index=True)
+            return pd.concat(
+                (pd.read_parquet(parquet_file) for parquet_file in parquet_files),
+                ignore_index=True,
+            )
         except Exception as e:
             logger.error(f"Error reading data from parquet file(s): {str(e)}")
             raise
@@ -142,18 +142,17 @@ class ParquetInput(Input):
             parquet_files = await super().download_files(".parquet")
             logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
-            # Combine specified files
-            dataframes = [
-                pd.read_parquet(parquet_file) for parquet_file in parquet_files
-            ]
-            df = pd.concat(dataframes, ignore_index=True)
-
-            # Yield in chunks
+            # Process each file individually to maintain memory efficiency
             if self.chunk_size:
-                for i in range(0, len(df), self.chunk_size):
-                    yield df.iloc[i : i + self.chunk_size]
+                # Yield chunks from each file individually
+                for parquet_file in parquet_files:
+                    df = pd.read_parquet(parquet_file)
+                    for i in range(0, len(df), self.chunk_size):
+                        yield df.iloc[i : i + self.chunk_size]
             else:
-                yield df
+                # Yield each file as a separate batch
+                for parquet_file in parquet_files:
+                    yield pd.read_parquet(parquet_file)
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) in batches: {str(e)}"
