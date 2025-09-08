@@ -31,10 +31,17 @@ class ParquetInput(Input):
             file_names (Optional[List[str]]): List of file names to read. Defaults to None.
 
         Raises:
-            ValueError: When path is not provided
+            ValueError: When path is not provided or when single file path is combined with file_names
         """
         if not path:
             raise ValueError("Path must be provided")
+
+        # Validate that single file path and file_names are not both specified
+        if path.endswith(".parquet") and file_names:
+            raise ValueError(
+                f"Cannot specify both a single file path ('{path}') and file_names filter. "
+                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            )
 
         self.path = path
         self.chunk_size = chunk_size
