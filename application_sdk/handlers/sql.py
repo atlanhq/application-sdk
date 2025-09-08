@@ -314,6 +314,29 @@ class BaseSQLHandler(HandlerInterface):
         Method to check the count of tables
         """
         logger.info("Starting tables check")
+
+        def _sum_counts_from_records(records_iter) -> int:
+            total = 0
+            for row in records_iter:
+                total += row["count"]
+            return total
+
+        def _build_success(total: int) -> Dict[str, Any]:
+            return {
+                "success": True,
+                "successMessage": f"Tables check successful. Table count: {total}",
+                "failureMessage": "",
+            }
+
+        def _build_failure(exc: Exception) -> Dict[str, Any]:
+            logger.error("Error during tables check", exc_info=True)
+            return {
+                "success": False,
+                "successMessage": "",
+                "failureMessage": "Tables check failed",
+                "error": str(exc),
+            }
+
         if multidb:
             dataframe_list = await multidb_query_executor(
                 sql_client=self.sql_client,
@@ -327,24 +350,17 @@ class BaseSQLHandler(HandlerInterface):
                 write_to_file=False,
             )
             try:
-                result = 0
-                for df_generator in dataframe_list:
-                    for dataframe in df_generator:
-                        for row in dataframe.to_dict(orient="records"):  # type: ignore
-                            result += row["count"]
-                return {
-                    "success": True,
-                    "successMessage": f"Tables check successful. Table count: {result}",
-                    "failureMessage": "",
-                }
+
+                def _iter_records():
+                    for df_generator in dataframe_list:
+                        for dataframe in df_generator:
+                            for row in dataframe.to_dict(orient="records"):  # type: ignore
+                                yield row
+
+                total = _sum_counts_from_records(_iter_records())
+                return _build_success(total)
             except Exception as exc:
-                logger.error("Error during tables check", exc_info=True)
-                return {
-                    "success": False,
-                    "successMessage": "",
-                    "failureMessage": "Tables check failed",
-                    "error": str(exc),
-                }
+                return _build_failure(exc)
         else:
             query = prepare_query(
                 query=self.tables_check_sql,
@@ -358,22 +374,10 @@ class BaseSQLHandler(HandlerInterface):
             )
             sql_input = await sql_input.get_dataframe()
             try:
-                result = 0
-                for row in sql_input.to_dict(orient="records"):
-                    result += row["count"]
-                return {
-                    "success": True,
-                    "successMessage": f"Tables check successful. Table count: {result}",
-                    "failureMessage": "",
-                }
+                total = _sum_counts_from_records(sql_input.to_dict(orient="records"))
+                return _build_success(total)
             except Exception as exc:
-                logger.error("Error during tables check", exc_info=True)
-                return {
-                    "success": False,
-                    "successMessage": "",
-                    "failureMessage": "Tables check failed",
-                    "error": str(exc),
-                }
+                return _build_failure(exc)
 
     async def check_client_version(self) -> Dict[str, Any]:
         """
