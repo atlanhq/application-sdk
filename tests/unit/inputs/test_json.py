@@ -48,7 +48,7 @@ async def test_not_download_file_that_exists() -> None:
     ) as mock_download:
         json_input = JsonInput(path=path)  # No file_names
 
-        result = await json_input.download_files(".json")
+        result = await json_input.download_files()
         mock_download.assert_not_called()
         assert result == [path]  # Should return the local file
 
@@ -69,7 +69,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
     ) as mock_download:
         json_input = JsonInput(path=path, file_names=file_names)
 
-        result = await json_input.download_files(".json")
+        result = await json_input.download_files()
 
         # Each file should be attempted to be downloaded - using new signature (no destination)
         expected_calls = [
@@ -93,7 +93,7 @@ async def test_download_file_not_invoked_when_file_present() -> None:
     ) as mock_download:
         json_input = JsonInput(path=path, file_names=file_names)
 
-        result = await json_input.download_files(".json")
+        result = await json_input.download_files()
 
         mock_download.assert_not_called()
         assert result == ["/local/exists.json"]
@@ -120,7 +120,7 @@ async def test_download_file_error_propagation() -> None:
         json_input = JsonInput(path=path, file_names=file_names)
 
         with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
-            await json_input.download_files(".json")
+            await json_input.download_files()
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
     expected_chunksize = 5
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return (
             [os.path.join(self.path, fn) for fn in self.file_names]
             if hasattr(self, "file_names") and self.file_names
@@ -201,7 +201,7 @@ async def test_get_batched_dataframe_empty_file_list(monkeypatch) -> None:
 
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return []
 
     # Mock the base Input class method since JsonInput calls super().download_files()
@@ -247,7 +247,7 @@ async def test_get_daft_dataframe(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return (
             [
                 os.path.join(self.path, fn).replace(os.path.sep, "/")
@@ -281,7 +281,7 @@ async def test_get_daft_dataframe_no_files(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return []  # Return empty list when no files found
 
     # Mock the base Input class method since JsonInput calls super().download_files()
@@ -304,7 +304,7 @@ async def test_get_batched_daft_dataframe(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+    async def dummy_download(self):  # noqa: D401, ANN001
         return (
             [os.path.join(self.path, fn) for fn in self.file_names]
             if hasattr(self, "file_names") and self.file_names

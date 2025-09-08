@@ -21,7 +21,7 @@ class Input(ABC):
     Abstract base class for input data sources.
     """
 
-    async def download_files(self, file_extension: str) -> List[str]:
+    async def download_files(self) -> List[str]:
         """Download files from object store if not available locally.
 
         Flow:
@@ -30,14 +30,11 @@ class Input(ABC):
         3. Filter by self.file_names if provided
         4. Return list of file paths for logging purposes
 
-        Args:
-            file_extension (str): File extension to search for (e.g., '.parquet', '.json')
-
         Returns:
             List[str]: List of file paths (for logging/counting purposes)
 
         Raises:
-            AttributeError: When the input class doesn't support file operations
+            AttributeError: When the input class doesn't support file operations or _extension
             IOError: When no files found locally or in object store
         """
         # Check if this input class supports file operations
@@ -45,6 +42,13 @@ class Input(ABC):
             raise AttributeError(
                 f"{self.__class__.__name__} does not support file operations. "
                 f"This method is only available for file-based inputs like ParquetInput and JsonInput."
+            )
+
+        # Check if extension is defined
+        if not hasattr(self, "_extension"):
+            raise AttributeError(
+                f"{self.__class__.__name__} must define _extension attribute. "
+                f"This should be set in the constructor (e.g., self._extension = '.parquet')."
             )
 
         def _find_files(search_path: Optional[str] = None) -> List[str]:
@@ -56,15 +60,15 @@ class Input(ABC):
             path_to_search = search_path if search_path is not None else self.path
 
             if os.path.isfile(path_to_search) and path_to_search.endswith(
-                file_extension
+                self._extension
             ):
-                # Single file - check if it matches target files (if specified)
+                # Single file - return it directly (validation prevents single file + file_names)
                 return [path_to_search]
 
             elif os.path.isdir(path_to_search):
                 # Directory - find all files in directory
                 all_files = glob.glob(
-                    os.path.join(path_to_search, "**", f"*{file_extension}"),
+                    os.path.join(path_to_search, "**", f"*{self._extension}"),
                     recursive=True,
                 )
 
@@ -92,18 +96,18 @@ class Input(ABC):
         local_files = _find_files()
         if local_files:
             logger.info(
-                f"Found {len(local_files)} {file_extension} files locally at: {self.path}"
+                f"Found {len(local_files)} {self._extension} files locally at: {self.path}"
             )
             return local_files
 
         # Step 2: Try to download from object store
         logger.info(
-            f"No local {file_extension} files found at {self.path}, checking object store..."
+            f"No local {self._extension} files found at {self.path}, checking object store..."
         )
 
         try:
             # Determine what to download based on path type and filters
-            if self.path.endswith(file_extension):
+            if self.path.endswith(self._extension):
                 # Single file case (file_names validation already ensures this is valid)
                 source_path = get_object_store_prefix(self.path)
                 await ObjectStore.download_file(source=source_path)
@@ -134,18 +138,18 @@ class Input(ABC):
             # Check results
             if downloaded_files:
                 logger.info(
-                    f"Successfully downloaded {len(downloaded_files)} {file_extension} files from object store"
+                    f"Successfully downloaded {len(downloaded_files)} {self._extension} files from object store"
                 )
                 return downloaded_files
             else:
                 raise IOError(
-                    f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {file_extension} files found"
+                    f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {self._extension} files found"
                 )
 
         except Exception as e:
             logger.error(f"Failed to download from object store: {str(e)}")
             raise IOError(
-                f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: No {file_extension} files found locally at '{self.path}' and failed to download from object store. "
+                f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: No {self._extension} files found locally at '{self.path}' and failed to download from object store. "
                 f"Error: {str(e)}"
             )
 

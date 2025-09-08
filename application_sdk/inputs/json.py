@@ -59,7 +59,7 @@ class JsonInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(self._extension)
+            json_files = await self.download_files()
             logger.info(f"Reading {len(json_files)} JSON files in batches")
 
             for json_file in json_files:
@@ -83,7 +83,7 @@ class JsonInput(Input):
             import pandas as pd
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(self._extension)
+            json_files = await self.download_files()
             logger.info(f"Reading {len(json_files)} JSON files as pandas dataframe")
 
             return pd.concat(
@@ -106,7 +106,7 @@ class JsonInput(Input):
             import daft
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(self._extension)
+            json_files = await self.download_files()
             logger.info(f"Reading {len(json_files)} JSON files as daft batches")
 
             # Yield each discovered file as separate batch with chunking
@@ -125,7 +125,7 @@ class JsonInput(Input):
             import daft
 
             # Ensure files are available (local or downloaded)
-            json_files = await super().download_files(self._extension)
+            json_files = await self.download_files()
             logger.info(f"Reading {len(json_files)} JSON files with daft")
 
             # Use the discovered/downloaded files directly
