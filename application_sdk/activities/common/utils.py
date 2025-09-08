@@ -119,9 +119,8 @@ def get_object_store_prefix(path: str) -> str:
             normalized = os.path.normpath(path)
             # If the normalized path is just ".", return empty string for object store
             result = "" if normalized == "." else normalized
-            # For object store, convert absolute paths to relative by removing leading slash
-            if result.startswith("/"):
-                result = result[1:]
+            # For object store, convert absolute paths to relative by removing all leading slashes
+            result = result.lstrip("/")
             # Normalize path separators to forward slashes for object store
             return result.replace(os.path.sep, "/")
     except ValueError:
@@ -130,9 +129,8 @@ def get_object_store_prefix(path: str) -> str:
         normalized = os.path.normpath(path)
         # If the normalized path is just ".", return empty string for object store
         result = "" if normalized == "." else normalized
-        # For object store, convert absolute paths to relative by removing leading slash
-        if result.startswith("/"):
-            result = result[1:]
+        # For object store, convert absolute paths to relative by removing all leading slashes
+        result = result.lstrip("/")
         # Normalize path separators to forward slashes for object store
         return result.replace(os.path.sep, "/")
 

@@ -225,7 +225,7 @@ class TestInputDownloadFiles:
             new_callable=AsyncMock,
         ) as mock_download, patch(
             "application_sdk.inputs.get_object_store_prefix",
-            side_effect=lambda p: p.lstrip("/"),
+            side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
         ):
             result = await input_instance.download_files(".parquet")
 

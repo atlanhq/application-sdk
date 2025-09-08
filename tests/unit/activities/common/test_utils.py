@@ -91,8 +91,9 @@ class TestGetObjectStorePrefix:
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
+    @patch("os.path.normpath")
     def test_user_absolute_paths_converted_to_relative(
-        self, mock_commonpath, mock_abspath
+        self, mock_normpath, mock_commonpath, mock_abspath
     ):
         """Test user absolute paths converted for object store usage."""
         # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
@@ -106,9 +107,14 @@ class TestGetObjectStorePrefix:
         # Return a path that's definitely NOT the temp path to trigger user-path logic
         mock_commonpath.return_value = "/different/root"
 
+        # Mock normpath to normalize paths properly
+        mock_normpath.side_effect = (
+            lambda p: p.lstrip("./") if p.startswith("./") else p
+        )
+
         test_cases = [
             ("/data/test.parquet", "data/test.parquet"),
-            ("/datasets/sales/2024/", "datasets/sales/2024"),
+            ("/datasets/sales/2024/", "datasets/sales/2024/"),
             ("/models/trained/v1.pkl", "models/trained/v1.pkl"),
         ]
 
@@ -121,7 +127,10 @@ class TestGetObjectStorePrefix:
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
-    def test_combined_file_paths_from_os_path_join(self, mock_commonpath, mock_abspath):
+    @patch("os.path.normpath")
+    def test_combined_file_paths_from_os_path_join(
+        self, mock_normpath, mock_commonpath, mock_abspath
+    ):
         """Test paths created by os.path.join in download_files method."""
         # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
         mock_abspath.side_effect = lambda p: {
@@ -134,6 +143,11 @@ class TestGetObjectStorePrefix:
         # Mock commonpath to indicate paths are NOT under temp directory
         # Return a path that's definitely NOT the temp path to trigger user-path logic
         mock_commonpath.return_value = "/different/root"
+
+        # Mock normpath to normalize paths properly
+        mock_normpath.side_effect = (
+            lambda p: p.lstrip("./") if p.startswith("./") else p
+        )
 
         # This simulates the real usage in download_files:
         # file_path = os.path.join(self.path, file_name)
