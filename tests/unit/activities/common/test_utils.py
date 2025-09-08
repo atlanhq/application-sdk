@@ -137,9 +137,15 @@ class TestGetObjectStorePrefix:
         }.get(p, p)
 
         test_cases = [
-            ("datasets/sales/2024/", "datasets/sales/2024"),
+            (
+                "datasets/sales/2024/",
+                "datasets/sales/2024",
+            ),  # Remove trailing slash - simplified
             ("data/input.parquet", "data/input.parquet"),
-            ("./datasets/sales/", "datasets/sales"),
+            (
+                "./datasets/sales/",
+                "datasets/sales",
+            ),  # Remove trailing slash - simplified
             ("models/trained/v1.pkl", "models/trained/v1.pkl"),
         ]
 
@@ -175,7 +181,10 @@ class TestGetObjectStorePrefix:
 
         test_cases = [
             ("/data/test.parquet", "data/test.parquet"),
-            ("/datasets/sales/2024/", "datasets/sales/2024/"),
+            (
+                "/datasets/sales/2024/",
+                "datasets/sales/2024",
+            ),  # Remove trailing slash - simplified
             ("/models/trained/v1.pkl", "models/trained/v1.pkl"),
         ]
 
