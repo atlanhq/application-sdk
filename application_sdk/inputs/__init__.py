@@ -59,13 +59,6 @@ class Input(ABC):
                 file_extension
             ):
                 # Single file - check if it matches target files (if specified)
-                if hasattr(self, "file_names") and self.file_names:
-                    file_name = os.path.basename(path_to_search)
-                    if not any(
-                        path_to_search.endswith(target) or file_name == target
-                        for target in self.file_names
-                    ):
-                        return []
                 return [path_to_search]
 
             elif os.path.isdir(path_to_search):
