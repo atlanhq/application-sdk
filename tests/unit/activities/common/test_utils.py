@@ -147,8 +147,8 @@ class TestGetObjectStorePrefix:
         path = "/absolute/path/file.txt"
         result = get_object_store_prefix(path)
 
-        # Should preserve the absolute path structure
-        assert result == "/absolute/path/file.txt"
+        # Should convert absolute path to relative for object store
+        assert result == "absolute/path/file.txt"
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
@@ -163,8 +163,8 @@ class TestGetObjectStorePrefix:
         path = "//network/share/file"
         result = get_object_store_prefix(path)
 
-        # os.path.normpath preserves leading double slashes on Unix (UNC-style paths)
-        assert result == "//network/share/file"
+        # os.path.normpath preserves leading double slashes, then we strip one leading slash for object store
+        assert result == "/network/share/file"
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
     @patch("os.path.abspath")
