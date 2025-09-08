@@ -29,18 +29,24 @@ def test_init(config: Dict[str, Any]) -> None:
     assert json_input.file_names == config["file_names"]
 
 
+def test_init_single_file_with_file_names_raises_error() -> None:
+    """Test that JsonInput raises ValueError when single file path is combined with file_names."""
+    with pytest.raises(ValueError, match="Cannot specify both a single file path"):
+        JsonInput(path="/data/test.json", file_names=["other.json"])
+
+
 @pytest.mark.asyncio
 async def test_not_download_file_that_exists() -> None:
     """Test that no download occurs when a JSON file exists locally."""
     path = "/data/test.json"  # Path with correct extension
-    file_names = ["test.json"]
+    # Don't use file_names with single file path due to validation
 
     with patch("os.path.isfile", return_value=True), patch(
         "os.path.isdir", return_value=False
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
-        json_input = JsonInput(path=path, file_names=file_names)
+        json_input = JsonInput(path=path)  # No file_names
 
         result = await json_input.download_files(".json")
         mock_download.assert_not_called()

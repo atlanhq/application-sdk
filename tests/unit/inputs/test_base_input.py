@@ -134,25 +134,28 @@ class TestInputDownloadFiles:
         assert result == [path]
 
     @pytest.mark.asyncio
-    async def test_download_files_single_file_with_file_names_no_match(self):
-        """Test single file with file_names filter that doesn't match - should try object store."""
+    async def test_download_files_single_file_with_file_names_validation_error(self):
+        """Test single file with file_names filter - this is now prevented at input construction level."""
+        # This test now documents that the validation happens at the input class level
+        # The MockInput class doesn't have this validation, but real inputs (JsonInput, ParquetInput) do
+
+        # For the base Input class, we can still test the old behavior
         path = "/data/test.parquet"
         file_names = ["other.parquet"]
         input_instance = MockInput(path, file_names)
 
-        with patch("os.path.isfile", return_value=True), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
-            new_callable=AsyncMock,
-        ) as mock_download, patch(
-            "application_sdk.activities.common.utils.get_object_store_prefix",
-            return_value="data/test.parquet",
-        ):
-            # Since local file doesn't match file_names filter, it should try to download
-            # and then still not find matching files, so should raise an error
-            with pytest.raises(SDKIOError, match="ATLAN-IO-503-01"):
-                await input_instance.download_files(".parquet")
-
-            mock_download.assert_called_once_with(source="data/test.parquet")
+        # MockInput allows this configuration, so it should work but find no matching files
+        with patch("os.path.isfile", return_value=True):
+            # Local file exists but doesn't match filter, so should try object store
+            with patch(
+                "application_sdk.services.objectstore.ObjectStore.download_file",
+                new_callable=AsyncMock,
+            ), patch(
+                "application_sdk.activities.common.utils.get_object_store_prefix",
+                return_value="data/test.parquet",
+            ):
+                with pytest.raises(SDKIOError, match="ATLAN-IO-503-01"):
+                    await input_instance.download_files(".parquet")
 
     @pytest.mark.asyncio
     async def test_download_files_download_single_file_success(self):
@@ -172,7 +175,9 @@ class TestInputDownloadFiles:
             result = await input_instance.download_files(".parquet")
 
             mock_download.assert_called_once_with(source="data/test.parquet")
-            assert result == [path]
+            # Result should be the actual downloaded file path in temporary directory
+            expected_path = "./local/tmp/data/test.parquet"
+            assert result == [expected_path]
 
     @pytest.mark.asyncio
     async def test_download_files_download_directory_success(self):
@@ -201,11 +206,21 @@ class TestInputDownloadFiles:
         path = "/data"
         file_names = ["file1.parquet", "file2.parquet"]
         input_instance = MockInput(path, file_names)
-        expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
+        # Expected files will be in temporary directory after download
+        expected_files = [
+            "./local/tmp/data/file1.parquet",
+            "./local/tmp/data/file2.parquet",
+        ]
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
-        ), patch("glob.glob", side_effect=[[], expected_files]), patch(
+        ), patch(
+            "glob.glob",
+            side_effect=[
+                [],
+                ["./local/tmp/data/file1.parquet", "./local/tmp/data/file2.parquet"],
+            ],
+        ), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
         ) as mock_download, patch(

@@ -31,17 +31,24 @@ def test_init(config: Dict[str, Any]) -> None:
     assert parquet_input.file_names == config["file_names"]
 
 
+def test_init_single_file_with_file_names_raises_error() -> None:
+    """Test that ParquetInput raises ValueError when single file path is combined with file_names."""
+    with pytest.raises(ValueError, match="Cannot specify both a single file path"):
+        ParquetInput(path="/data/test.parquet", file_names=["other.parquet"])
+
+
 @pytest.mark.asyncio
 async def test_not_download_file_that_exists() -> None:
     """Test that no download occurs when a parquet file exists locally."""
     path = "/data/test.parquet"  # Path with correct extension
-    file_names = ["test.parquet"]
+    # Don't use file_names with single file path due to validation
 
     with patch("os.path.isfile", return_value=True), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
         parquet_input = ParquetInput(
-            path=path, chunk_size=100000, file_names=file_names
+            path=path,
+            chunk_size=100000,  # No file_names
         )
 
         result = await parquet_input.download_files(".parquet")
@@ -68,7 +75,9 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
         # Should attempt to download the file
         mock_download.assert_called_once_with(source="local/test.parquet")
-        assert result == [path]
+        # Result should be the actual downloaded file path in temporary directory
+        expected_path = "./local/tmp/local/test.parquet"
+        assert result == [expected_path]
 
 
 # ---------------------------------------------------------------------------

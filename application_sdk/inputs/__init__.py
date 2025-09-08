@@ -1,10 +1,11 @@
 import glob
 import os
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Union
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
+from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 
@@ -46,24 +47,31 @@ class Input(ABC):
                 f"This method is only available for file-based inputs like ParquetInput and JsonInput."
             )
 
-        def _find_files() -> List[str]:
-            """Find files at self.path, optionally filtering by self.file_names."""
+        def _find_files(search_path: Optional[str] = None) -> List[str]:
+            """Find files at the specified path, optionally filtering by self.file_names.
 
-            if os.path.isfile(self.path) and self.path.endswith(file_extension):
+            Args:
+                search_path: Path to search in. If None, uses self.path.
+            """
+            path_to_search = search_path if search_path is not None else self.path
+
+            if os.path.isfile(path_to_search) and path_to_search.endswith(
+                file_extension
+            ):
                 # Single file - check if it matches target files (if specified)
                 if hasattr(self, "file_names") and self.file_names:
-                    file_name = os.path.basename(self.path)
+                    file_name = os.path.basename(path_to_search)
                     if not any(
-                        self.path.endswith(target) or file_name == target
+                        path_to_search.endswith(target) or file_name == target
                         for target in self.file_names
                     ):
                         return []
-                return [self.path.replace(os.path.sep, "/")]
+                return [path_to_search.replace(os.path.sep, "/")]
 
-            elif os.path.isdir(self.path):
+            elif os.path.isdir(path_to_search):
                 # Directory - find all files in directory
                 all_files = glob.glob(
-                    os.path.join(self.path, "**", f"*{file_extension}"),
+                    os.path.join(path_to_search, "**", f"*{file_extension}"),
                     recursive=True,
                 )
 
@@ -101,27 +109,36 @@ class Input(ABC):
         )
 
         try:
-            # Download from object store using the path as relative path
+            # Determine what to download based on path type and filters
             if self.path.endswith(file_extension):
-                await ObjectStore.download_file(
-                    source=get_object_store_prefix(self.path)
-                )
+                # Single file case (file_names validation already ensures this is valid)
+                source_path = get_object_store_prefix(self.path)
+                await ObjectStore.download_file(source=source_path)
+
             elif hasattr(self, "file_names") and self.file_names:
-                # Download only specific files
+                # Directory with specific files - download each file individually
                 for file_name in self.file_names:
-                    # Use forward slashes for object store paths
-                    file_path = f"{os.path.join(self.path, file_name)}"
-                    await ObjectStore.download_file(
-                        source=get_object_store_prefix(file_path)
-                    )
+                    file_path = os.path.join(self.path, file_name)
+                    source_path = get_object_store_prefix(file_path)
+                    await ObjectStore.download_file(source=source_path)
             else:
                 # Download entire directory
-                await ObjectStore.download_prefix(
-                    source=get_object_store_prefix(self.path)
-                )
+                source_path = get_object_store_prefix(self.path)
+                await ObjectStore.download_prefix(source=source_path)
 
-            # Check for downloaded files
-            downloaded_files = _find_files()
+            # After all downloads, search for files in the downloaded location
+            base_source_path = get_object_store_prefix(self.path)
+            # Ensure the source path is relative for proper joining with TEMPORARY_PATH
+            # This prevents os.path.join from ignoring TEMPORARY_PATH if source_path is absolute
+            relative_source_path = (
+                base_source_path[1:]
+                if base_source_path.startswith("/")
+                else base_source_path
+            )
+            downloaded_path = os.path.join(TEMPORARY_PATH, relative_source_path)
+            downloaded_files = _find_files(downloaded_path)
+
+            # Check results
             if downloaded_files:
                 logger.info(
                     f"Successfully downloaded {len(downloaded_files)} {file_extension} files from object store"
@@ -129,7 +146,7 @@ class Input(ABC):
                 return downloaded_files
             else:
                 raise IOError(
-                    f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {file_extension} files found at {self.path}"
+                    f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {file_extension} files found"
                 )
 
         except Exception as e:

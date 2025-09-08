@@ -105,20 +105,34 @@ def get_object_store_prefix(path: str) -> str:
 
     # Check if path is under TEMPORARY_PATH
     try:
-        # If path is under temp directory, convert to relative object store path
-        if abs_path.startswith(abs_temp_path):
+        # Use os.path.commonpath to properly check if path is under temp directory
+        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
+        common_path = os.path.commonpath([abs_path, abs_temp_path])
+        if common_path == abs_temp_path:
+            # Path is under temp directory, convert to relative object store path
             relative_path = os.path.relpath(abs_path, abs_temp_path)
             # Normalize path separators to forward slashes for object store
             return relative_path.replace(os.path.sep, "/")
         else:
-            # Path is already a relative object store path, return as-is
-            result = path.lstrip("./")  # Remove leading ./ if present
+            # Path is already a relative object store path, normalize and return
+            # Use os.path.normpath to handle cases like ./././path properly
+            normalized = os.path.normpath(path)
+            # If the normalized path is just ".", return empty string for object store
+            result = "" if normalized == "." else normalized
+            # For object store, convert absolute paths to relative by removing leading slash
+            if result.startswith("/"):
+                result = result[1:]
             # Normalize path separators to forward slashes for object store
             return result.replace(os.path.sep, "/")
     except ValueError:
-        # os.path.relpath can raise ValueError on Windows with different drives
+        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
         # In this case, treat as user-provided path
-        result = path.lstrip("./")
+        normalized = os.path.normpath(path)
+        # If the normalized path is just ".", return empty string for object store
+        result = "" if normalized == "." else normalized
+        # For object store, convert absolute paths to relative by removing leading slash
+        if result.startswith("/"):
+            result = result[1:]
         # Normalize path separators to forward slashes for object store
         return result.replace(os.path.sep, "/")
 
