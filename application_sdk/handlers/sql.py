@@ -320,26 +320,25 @@ class BaseSQLHandler(HandlerInterface):
                 typename="table",
                 write_to_file=False,
             )
-        try:
-            result = 0
-            for df_generator in dataframe_list:
-                for dataframe in df_generator:
-                    for row in dataframe.to_dict(orient="records"):  # type: ignore
-                        result += row["count"]
-            return {
-                "success": True,
-                "successMessage": f"Tables check successful. Table count: {result}",
-                "failureMessage": "",
-            }
-        except Exception as exc:
-            logger.error("Error during tables check", exc_info=True)
-            return {
-                "success": False,
-                "successMessage": "",
-                "failureMessage": "Tables check failed",
-                "error": str(exc),
-            }
-
+            try:
+                result = 0
+                for df_generator in dataframe_list:
+                    for dataframe in df_generator:
+                        for row in dataframe.to_dict(orient="records"):  # type: ignore
+                            result += row["count"]
+                return {
+                    "success": True,
+                    "successMessage": f"Tables check successful. Table count: {result}",
+                    "failureMessage": "",
+                }
+            except Exception as exc:
+                logger.error("Error during tables check", exc_info=True)
+                return {
+                    "success": False,
+                    "successMessage": "",
+                    "failureMessage": "Tables check failed",
+                    "error": str(exc),
+                }
         else:
             query = prepare_query(
                 query=self.tables_check_sql,

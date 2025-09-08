@@ -139,7 +139,7 @@ def transform_posix_regex(regex_pattern: str) -> str:
             # Add additional . between \. and * if * follows \.
             pattern = re.sub(r"\\\.\*", r"\..*", pattern)
 
-            transformed_patterns.append(pattern)
+        transformed_patterns.append(pattern)
 
     return "|".join(transformed_patterns)
 
