@@ -59,6 +59,11 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Cleanup Path (custom path for cleanup operations, defaults to TEMPORARY_PATH/artifacts/apps)
+CLEANUP_BASE_PATH = os.getenv(
+    "ATLAN_CLEANUP_BASE_PATH", f"{TEMPORARY_PATH}artifacts/apps"
+)
+
 # State Store Constants
 #: Path template for state store files (example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json)
 STATE_STORE_PATH_TEMPLATE = (
