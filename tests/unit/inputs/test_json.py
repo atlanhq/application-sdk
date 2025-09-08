@@ -63,7 +63,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
         "os.path.isdir", return_value=True
     ), patch("glob.glob", side_effect=[[], ["/local/a.json", "/local/b.json"]]), patch(
         "application_sdk.inputs.get_object_store_prefix",
-        side_effect=lambda p: p.lstrip("/"),
+        side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
@@ -112,7 +112,7 @@ async def test_download_file_error_propagation() -> None:
         "os.path.isdir", return_value=True
     ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.inputs.get_object_store_prefix",
-        side_effect=lambda p: p.lstrip("/"),
+        side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file",
         side_effect=Exception("Download failed"),

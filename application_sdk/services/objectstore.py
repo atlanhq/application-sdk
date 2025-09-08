@@ -390,7 +390,8 @@ class ObjectStore:
             >>> # Downloads to: /tmp/reports/2024/january/report.pdf
         """
         # Construct full destination path (similar to download_prefix)
-        local_file_path = os.path.join(destination, source.lstrip("/"))
+        # Note: source should already be normalized by get_object_store_prefix()
+        local_file_path = os.path.join(destination, source)
 
         # Ensure destination directory exists
         destination_dir = os.path.dirname(local_file_path)
