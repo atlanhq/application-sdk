@@ -12,102 +12,117 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.constants import APPLICATION_NAME, CLEANUP_BASE_PATH
+from application_sdk.constants import APPLICATION_NAME, CLEANUP_BASE_PATHS
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 
 @activity.defn
-async def cleanup_app_artifacts(
-    app_name: str,
-    workflow_id: Optional[str] = None,
-    run_id: Optional[str] = None,
-    base_path: str = CLEANUP_BASE_PATH,
-) -> Dict[str, bool]:
+async def cleanup_app_artifacts() -> Dict[str, bool]:
     """Activity to cleanup application artifacts outside the workflow sandbox.
 
-    Cleans up artifacts following the pattern: local/tmp/artifacts/apps/appname/workflow_id/run_id
-    Can cleanup at different levels based on provided parameters.
+    Automatically infers all required values from constants and activity context:
+    - app_name: from APPLICATION_NAME constant
+    - workflow_id: from activity.info().workflow_id
+    - run_id: from activity.info().workflow_run_id
+    - base_paths: from CLEANUP_BASE_PATHS constant
 
-    Args:
-        app_name (str): Name of the application
-        workflow_id (Optional[str]): Workflow ID to cleanup. If None, cleans entire app directory
-        run_id (Optional[str]): Run ID to cleanup. If None, cleans entire workflow directory
-        base_path (str): Base path for artifacts (configurable via ATLAN_CLEANUP_BASE_PATH env var)
+    Cleans up artifacts from multiple base paths following the pattern:
+    base_path/appname/workflow_id/run_id
 
     Returns:
-        Dict[str, bool]: Dictionary with cleanup results
+        Dict[str, bool]: Dictionary with cleanup results for each path
 
     Example cleanup scenarios:
 
-    Scenario 1 - Cleanup specific run:
-    Input: app_name="my_app", workflow_id="wf_123", run_id="run_456"
-    Path: {CLEANUP_BASE_PATH}/my_app/wf_123/run_456/
+    Scenario 1 - Cleanup specific run from multiple paths:
+    Auto-detected: app_name="my_app", workflow_id="wf_123", run_id="run_456"
+    Paths: ["/tmp/artifacts/apps/my_app/wf_123/run_456/", "/storage/temp/apps/my_app/wf_123/run_456/"]
 
-    Scenario 2 - Cleanup entire workflow:
-    Input: app_name="my_app", workflow_id="wf_123", run_id=None
-    Path: {CLEANUP_BASE_PATH}/my_app/wf_123/
+    Scenario 2 - Cleanup entire workflow from multiple paths:
+    Auto-detected: app_name="my_app", workflow_id="wf_123", run_id="run_456"
+    Paths: ["/tmp/artifacts/apps/my_app/wf_123/run_456/", "/storage/temp/apps/my_app/wf_123/run_456/"]
 
-    Scenario 3 - Cleanup entire app:
-    Input: app_name="my_app", workflow_id=None, run_id=None
-    Path: {CLEANUP_BASE_PATH}/my_app/
-
-    Directory Structure Before Cleanup:
+    Directory Structure Before Cleanup (multiple base paths):
+    Base Path 1: /tmp/artifacts/apps/
     +----+----+----+
     | apps/ | my_app/ | wf_123/ | run_456/ | data.parquet |
     |       |         |         | run_789/ | temp.csv     |
-    |       |         | wf_124/ | run_001/ | output.json  |
     +----+----+----+
 
-    Directory Structure After Cleanup (workflow level):
+    Base Path 2: /storage/temp/apps/
     +----+----+----+
-    | apps/ | my_app/ | wf_124/ | run_001/ | output.json |
+    | apps/ | my_app/ | wf_123/ | run_456/ | backup.json |
+    |       |         |         | run_789/ | logs.txt    |
+    +----+----+----+
+
+    Directory Structure After Cleanup (run level):
+    Base Path 1: /tmp/artifacts/apps/
+    +----+----+----+
+    | apps/ | my_app/ | wf_123/ | run_789/ | temp.csv |
+    +----+----+----+
+
+    Base Path 2: /storage/temp/apps/
+    +----+----+----+
+    | apps/ | my_app/ | wf_123/ | run_789/ | logs.txt |
     +----+----+----+
 
     Transformations:
-    - Removes all files and subdirectories at target level
+    - Removes specified directories from all base paths
     - Preserves parent directory structure
-    - Logs cleanup success/failure for each operation
+    - Logs cleanup success/failure for each path
     """
     cleanup_results = {}
 
-    try:
-        # Build the cleanup path based on provided parameters
-        cleanup_path = Path(base_path) / app_name
+    # Get all values from constants and activity context
+    app_name = APPLICATION_NAME
+    workflow_id = activity.info().workflow_id
+    run_id = activity.info().workflow_run_id
+    base_paths = CLEANUP_BASE_PATHS
 
-        if workflow_id:
-            cleanup_path = cleanup_path / workflow_id
+    activity.logger.info(
+        f"Auto-detected cleanup context: app={app_name}, workflow={workflow_id}, run={run_id}"
+    )
+    activity.logger.info(f"Cleanup base paths: {base_paths}")
 
-        if run_id:
-            cleanup_path = cleanup_path / run_id
+    for base_path in base_paths:
+        try:
+            # Build the cleanup path based on auto-detected parameters
+            cleanup_path = Path(base_path) / app_name / workflow_id / run_id
 
-        cleanup_path_str = str(cleanup_path)
+            cleanup_path_str = str(cleanup_path)
 
-        if cleanup_path.exists():
-            if cleanup_path.is_dir():
-                # Remove the entire directory and its contents
-                shutil.rmtree(cleanup_path_str)
-                activity.logger.info(f"Cleaned up directory: {cleanup_path_str}")
-                cleanup_results[cleanup_path_str] = True
+            if cleanup_path.exists():
+                if cleanup_path.is_dir():
+                    # Remove the entire directory and its contents
+                    shutil.rmtree(cleanup_path_str)
+                    activity.logger.info(f"Cleaned up directory: {cleanup_path_str}")
+                    cleanup_results[cleanup_path_str] = True
+                else:
+                    activity.logger.warning(
+                        f"Path is not a directory: {cleanup_path_str}"
+                    )
+                    cleanup_results[cleanup_path_str] = False
             else:
-                activity.logger.warning(f"Path is not a directory: {cleanup_path_str}")
-                cleanup_results[cleanup_path_str] = False
-        else:
-            activity.logger.debug(
-                f"Directory already removed or doesn't exist: {cleanup_path_str}"
-            )
-            cleanup_results[cleanup_path_str] = True
+                activity.logger.debug(
+                    f"Directory already removed or doesn't exist: {cleanup_path_str}"
+                )
+                cleanup_results[cleanup_path_str] = True
 
-    except PermissionError as e:
-        activity.logger.error(f"Permission denied cleaning up {cleanup_path_str}: {e}")
-        cleanup_results[cleanup_path_str] = False
-    except OSError as e:
-        activity.logger.error(f"OS error cleaning up {cleanup_path_str}: {e}")
-        cleanup_results[cleanup_path_str] = False
-    except Exception as e:
-        activity.logger.error(f"Unexpected error cleaning up {cleanup_path_str}: {e}")
-        cleanup_results[cleanup_path_str] = False
+        except PermissionError as e:
+            activity.logger.error(
+                f"Permission denied cleaning up {cleanup_path_str}: {e}"
+            )
+            cleanup_results[cleanup_path_str] = False
+        except OSError as e:
+            activity.logger.error(f"OS error cleaning up {cleanup_path_str}: {e}")
+            cleanup_results[cleanup_path_str] = False
+        except Exception as e:
+            activity.logger.error(
+                f"Unexpected error cleaning up {cleanup_path_str}: {e}"
+            )
+            cleanup_results[cleanup_path_str] = False
 
     return cleanup_results
 
@@ -116,7 +131,8 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
     """Interceptor for workflow-level app artifacts cleanup.
 
     This interceptor cleans up the entire app directory structure when the workflow
-    completes or fails, following the pattern: {CLEANUP_BASE_PATH}/appname/workflow_id/run_id
+    completes or fails, following the pattern: base_path/appname/workflow_id/run_id
+    Supports multiple base paths for comprehensive cleanup.
     """
 
     async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
@@ -157,7 +173,6 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
 
                 await workflow.execute_activity(
                     cleanup_app_artifacts,
-                    args=[APPLICATION_NAME, workflow_id, run_id, CLEANUP_BASE_PATH],
                     schedule_to_close_timeout=timedelta(minutes=5),
                     retry_policy=RetryPolicy(
                         maximum_attempts=3,
@@ -179,13 +194,13 @@ class CleanupInterceptor(Interceptor):
     """Temporal interceptor for automatic app artifacts cleanup.
 
     This interceptor provides cleanup capabilities for application artifacts
-    following the directory pattern: {CLEANUP_BASE_PATH}/appname/workflow_id/run_id
+    across multiple base paths following the pattern: base_path/appname/workflow_id/run_id
 
     Features:
     - Automatic cleanup of app-specific artifact directories
     - Cleanup on workflow completion or failure
     - Uses APPLICATION_NAME from constants
-    - Configurable cleanup path via ATLAN_CLEANUP_BASE_PATH env var
+    - Supports multiple cleanup paths via ATLAN_CLEANUP_BASE_PATHS env var
     - Simple activity-based cleanup logic
     - Comprehensive error handling and logging
 
@@ -198,6 +213,13 @@ class CleanupInterceptor(Interceptor):
         ...     activities=[my_activity, cleanup_app_artifacts],
         ...     interceptors=[CleanupInterceptor()]
         ... )
+
+    Environment Configuration:
+        >>> # Single path (default)
+        >>> ATLAN_CLEANUP_BASE_PATHS="./local/tmp/artifacts/apps"
+
+        >>> # Multiple paths (comma-separated)
+        >>> ATLAN_CLEANUP_BASE_PATHS="./local/tmp/artifacts/apps,/storage/temp/apps,/shared/cleanup/apps"
     """
 
     def workflow_interceptor_class(
