@@ -96,13 +96,9 @@ async def cleanup_app_artifacts() -> Dict[str, bool]:
 
             if os.path.exists(cleanup_path):
                 if os.path.isdir(cleanup_path):
-                    # Remove all contents inside the base path, but keep the directory itself
-                    for item in os.listdir(cleanup_path):
-                        item_path = os.path.join(cleanup_path, item)
-                        if os.path.isdir(item_path):
-                            shutil.rmtree(item_path)
-                        else:
-                            os.remove(item_path)
+                    # Remove entire directory and recreate it empty
+                    shutil.rmtree(cleanup_path)
+                    os.makedirs(cleanup_path, exist_ok=True)
                     activity.logger.info(
                         f"Cleaned up all contents from: {cleanup_path}"
                     )
