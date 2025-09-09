@@ -1,3 +1,4 @@
+import gc
 import glob
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
@@ -23,7 +24,7 @@ class ParquetInput(Input):
     def __init__(
         self,
         path: Optional[str] = None,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: Optional[int] = 5000,
         input_prefix: Optional[str] = None,
         file_names: Optional[List[str]] = None,
     ):
@@ -144,7 +145,12 @@ class ParquetInput(Input):
                 path = self.path
             if self.input_prefix and path:
                 await self.download_files(path)
-            return daft.read_parquet(f"{path}/*.parquet")
+
+            df = pd.read_parquet(f"{path}/*.parquet", engine="fastparquet")
+            daft_df = daft.from_pandas(df)
+            del df
+            gc.collect()
+            return daft_df
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) using daft: {str(e)}"
@@ -168,11 +174,19 @@ class ParquetInput(Input):
                     path = f"{self.path}/{file_name}"
                     if self.input_prefix and path:
                         await self.download_files(path)
-                        yield daft.read_parquet(path)
+                        df = pd.read_parquet(path, engine="fastparquet")
+                        daft_df = daft.from_pandas(df)
+                        del df
+                        gc.collect()
+                        yield daft_df
             else:
                 if self.path and self.input_prefix:
                     await self.download_files(self.path)
-                    yield daft.read_parquet(f"{self.path}/*.parquet")
+                    df = pd.read_parquet(f"{self.path}/*.parquet", engine="fastparquet")
+                    daft_df = daft.from_pandas(df)
+                    del df
+                    gc.collect()
+                    yield daft_df
 
         except Exception as error:
             logger.error(

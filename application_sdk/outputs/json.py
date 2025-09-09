@@ -86,8 +86,8 @@ class JsonOutput(Output):
         output_prefix: Optional[str] = None,
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
-        buffer_size: int = 100000,
-        chunk_size: Optional[int] = None,
+        buffer_size: int = 5000,
+        chunk_size: Optional[int] = 5000,
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
@@ -122,7 +122,7 @@ class JsonOutput(Output):
         self.total_record_count = total_record_count
         self.chunk_count = chunk_count
         self.buffer_size = buffer_size
-        self.chunk_size = chunk_size or 100000
+        self.chunk_size = chunk_size or 5000
         self.buffer: List[Union["pd.DataFrame", "daft.DataFrame"]] = []  # noqa: F821
         self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0  # Track estimated buffer size in bytes
@@ -277,13 +277,6 @@ class JsonOutput(Output):
                 labels={"type": "daft"},
                 description="Number of records written to JSON files from daft DataFrame",
             )
-
-            # Push files to the object store
-            await ObjectStore.upload_prefix(
-                source=self.output_path,
-                destination=get_object_store_prefix(self.output_path),
-            )
-
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
