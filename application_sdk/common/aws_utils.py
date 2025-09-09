@@ -207,6 +207,7 @@ def create_aws_client(session: boto3.Session, region: str, service: str) -> Any:
 
 
 def create_engine_url(
+    drivername: str,
     credentials: Dict[str, Any],
     cluster_credentials: Dict[str, str],
     extra: Dict[str, Any],
@@ -222,11 +223,11 @@ def create_engine_url(
         URL: SQLAlchemy engine URL
     """
     host = credentials["host"]
-    port = credentials.get("port", 5439)
+    port = credentials.get("port")
     database = extra["database"]
 
     return URL.create(
-        drivername="redshift+psycopg2",
+        drivername=drivername,
         username=cluster_credentials["DbUser"],
         password=cluster_credentials["DbPassword"],
         host=host,
