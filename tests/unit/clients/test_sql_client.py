@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
+from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.error_codes import CommonError
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -465,12 +466,12 @@ async def test_run_query_error_property_based(
 @pytest.fixture
 def sql_client_with_db_config():
     client = BaseSQLClient()
-    client.DB_CONFIG = {
-        "template": "postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
-        "required": ["username", "password", "host", "port", "database"],
-        "defaults": {"connect_timeout": 5},
-        "parameters": ["ssl_mode"],
-    }
+    client.DB_CONFIG = DatabaseConfig(
+        template="postgresql+psycopg://{username}:{password}@{host}:{port}/{database}",
+        required=["username", "password", "host", "port", "database"],
+        defaults={"connect_timeout": 5},
+        parameters=["ssl_mode"],
+    )
     return client
 
 

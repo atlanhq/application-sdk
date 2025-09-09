@@ -284,9 +284,12 @@ async def get_database_names(
             use_posix_regex=True,
         )
         # We'll run the query to get all the database names
+        if prepared_query is None:
+            logger.error("Failed to prepare database discovery query")
+            return []
         database_sql_input = SQLQueryInput(
             engine=sql_client.engine,
-            query=prepared_query,  # type: ignore
+            query=prepared_query,
             chunk_size=None,
         )
         database_dataframe = await database_sql_input.get_dataframe()

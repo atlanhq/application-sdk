@@ -315,9 +315,10 @@ class BaseSQLHandler(HandlerInterface):
         """
         logger.info("Starting tables check")
 
-        def _sum_counts_from_records(records_iter) -> int:
+        def _sum_counts_from_records(records) -> int:
             total = 0
-            for row in records_iter:
+            # Handle both iterator and list cases
+            for row in records:
                 total += row["count"]
             return total
 
@@ -338,7 +339,7 @@ class BaseSQLHandler(HandlerInterface):
             }
 
         if multidb:
-            dataframe_list = await multidb_query_executor(
+            result_dataframe = await multidb_query_executor(
                 sql_client=self.sql_client,
                 fetch_database_sql=self.fetch_databases_sql,
                 extract_temp_table_regex_column_sql=self.extract_temp_table_regex_table_sql,
@@ -350,14 +351,13 @@ class BaseSQLHandler(HandlerInterface):
                 write_to_file=False,
             )
             try:
-
-                def _iter_records():
-                    for df_generator in dataframe_list:
-                        for dataframe in df_generator:
-                            for row in dataframe.to_dict(orient="records"):  # type: ignore
-                                yield row
-
-                total = _sum_counts_from_records(_iter_records())
+                # result_dataframe is now a single merged DataFrame, not a list
+                if result_dataframe is not None and not result_dataframe.empty:
+                    total = _sum_counts_from_records(
+                        result_dataframe.to_dict(orient="records")
+                    )
+                else:
+                    total = 0
                 return _build_success(total)
             except Exception as exc:
                 return _build_failure(exc)

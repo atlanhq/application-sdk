@@ -1,6 +1,18 @@
 # Activities
 
-This module contains the building blocks for defining the individual steps (activities) within your Temporal workflows. Activities represent distinct units of work, such as querying a database, calling an API, or transforming data.
+This module provides the necessary abstractions (activities) for executing units of work within workflows.
+
+## Notes on SQL Template Discovery
+
+Query-based transformers now auto-discover SQL YAML templates without hardcoding paths. The discovery order is:
+
+1. SDK defaults at `application_sdk/transformers/query/templates`
+2. App-level directory from `ATLAN_SQL_TEMPLATES_PATH`
+3. Nearest `sql_query_templates` folder relative to the caller module
+4. Any `sql_query_templates` found along `sys.path`
+5. Explicit `custom_templates_path` argument (highest priority)
+
+Application templates override SDK defaults when filenames collide. Use this to place your connector's `TABLE.yaml`, `COLUMN.yaml`, `DATABASE.yaml`, `SCHEMA.yaml` under your app's `sql_query_templates/` without changing code.
 
 ## Core Concepts
 

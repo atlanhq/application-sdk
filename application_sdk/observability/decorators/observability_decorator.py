@@ -4,7 +4,9 @@ import time
 import uuid
 from typing import Any, Callable, TypeVar, cast
 
-from application_sdk.observability.metrics_adaptor import MetricType
+from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
+from application_sdk.observability.traces_adaptor import get_traces
 
 T = TypeVar("T")
 
@@ -136,9 +138,9 @@ def _record_error_observability(
 
 
 def observability(
-    logger: Any,
-    metrics: Any,
-    traces: Any,
+    logger: Any = None,
+    metrics: Any = None,
+    traces: Any = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """Decorator for adding observability to functions.
 
@@ -146,16 +148,23 @@ def observability(
     It handles both synchronous and asynchronous functions.
 
     Args:
-        logger: Logger instance for operation logging
-        metrics: Metrics adapter for recording operation metrics
-        traces: Traces adapter for recording operation traces
+        logger: Logger instance for operation logging. If None, auto-initializes using get_logger()
+        metrics: Metrics adapter for recording operation metrics. If None, auto-initializes using get_metrics()
+        traces: Traces adapter for recording operation traces. If None, auto-initializes using get_traces()
 
     Returns:
         Callable: Decorated function with observability
 
     Example:
         ```python
+        # With explicit observability components
         @observability(logger, metrics, traces)
+        async def my_function():
+            # Function implementation
+            pass
+
+        # With auto-initialization (recommended)
+        @observability()
         async def my_function():
             # Function implementation
             pass
@@ -163,6 +172,11 @@ def observability(
     """
 
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
+        # Auto-initialize observability components if not provided
+        actual_logger = logger or get_logger(func.__module__)
+        actual_metrics = metrics or get_metrics()
+        actual_traces = traces or get_traces()
+
         # Get function metadata
         func_name = func.__name__
         func_doc = func.__doc__ or f"Executing {func_name}"
@@ -170,7 +184,7 @@ def observability(
         is_async = inspect.iscoroutinefunction(func)
 
         # Debug logging for function decoration
-        logger.debug(f"Decorating function {func_name} (async={is_async})")
+        actual_logger.debug(f"Decorating function {func_name} (async={is_async})")
 
         @functools.wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
@@ -181,16 +195,16 @@ def observability(
 
             try:
                 # Log start of operation
-                logger.debug(f"Starting async function {func_name}")
+                actual_logger.debug(f"Starting async function {func_name}")
 
                 # Execute the function
                 result = await func(*args, **kwargs)
 
                 # Record success observability
                 _record_success_observability(
-                    logger,
-                    metrics,
-                    traces,
+                    actual_logger,
+                    actual_metrics,
+                    actual_traces,
                     func_name,
                     func_doc,
                     func_module,
@@ -204,9 +218,9 @@ def observability(
             except Exception as e:
                 # Record error observability
                 _record_error_observability(
-                    logger,
-                    metrics,
-                    traces,
+                    actual_logger,
+                    actual_metrics,
+                    actual_traces,
                     func_name,
                     func_doc,
                     func_module,
@@ -226,16 +240,16 @@ def observability(
 
             try:
                 # Log start of operation
-                logger.debug(f"Starting sync function {func_name}")
+                actual_logger.debug(f"Starting sync function {func_name}")
 
                 # Execute the function
                 result = func(*args, **kwargs)
 
                 # Record success observability
                 _record_success_observability(
-                    logger,
-                    metrics,
-                    traces,
+                    actual_logger,
+                    actual_metrics,
+                    actual_traces,
                     func_name,
                     func_doc,
                     func_module,
@@ -249,9 +263,9 @@ def observability(
             except Exception as e:
                 # Record error observability
                 _record_error_observability(
-                    logger,
-                    metrics,
-                    traces,
+                    actual_logger,
+                    actual_metrics,
+                    actual_traces,
                     func_name,
                     func_doc,
                     func_module,

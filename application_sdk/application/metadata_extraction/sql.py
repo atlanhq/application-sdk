@@ -41,6 +41,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[QueryBasedTransformer]] = None,
         server: Optional[APIServer] = None,
+        handler_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the SQL metadata extraction application.
@@ -56,6 +57,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
         self.transformer_class = transformer_class or QueryBasedTransformer
         self.client_class = client_class or BaseSQLClient
         self.handler_class = handler_class or BaseSQLHandler
+        self.handler_kwargs: Dict[str, Any] = handler_kwargs or {}
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = server
@@ -106,6 +108,7 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
                         sql_client_class=self.client_class,
                         handler_class=self.handler_class,
                         transformer_class=self.transformer_class,
+                        handler_kwargs=self.handler_kwargs,
                     )
                 )
             )
@@ -176,7 +179,9 @@ class BaseSQLMetadataExtractionApplication(BaseApplication):
 
         # setup application server. serves the UI, and handles the various triggers
         self.server = APIServer(
-            handler=self.handler_class(sql_client=self.client_class()),
+            handler=self.handler_class(
+                sql_client=self.client_class(), **self.handler_kwargs
+            ),
             workflow_client=self.workflow_client,
         )
 

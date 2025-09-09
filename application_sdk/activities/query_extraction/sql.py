@@ -103,6 +103,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
+        handler_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the SQL query extraction activities.
 
@@ -111,6 +112,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 Defaults to BaseSQLClient.
             handler_class (Type[BaseSQLHandler], optional): Class for SQL handling operations.
                 Defaults to BaseSQLHandler.
+            transformer_class (Type[TransformerInterface], optional): Class for transformer operations.
+                Defaults to AtlasTransformer.
+            handler_kwargs (Dict[str, Any], optional): Additional keyword arguments to pass to handler initialization.
+                Defaults to None.
         """
         if sql_client_class:
             self.sql_client_class = sql_client_class
@@ -118,6 +123,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             self.handler_class = handler_class
         if transformer_class:
             self.transformer_class = transformer_class
+
+        self._handler_kwargs: Dict[str, Any] = handler_kwargs or {}
 
         super().__init__()
 
@@ -137,7 +144,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             await sql_client.load(credentials)
 
-        handler = self.handler_class(sql_client)
+        handler = self.handler_class(sql_client, **self._handler_kwargs)
 
         self._state[workflow_id] = BaseSQLQueryExtractionActivitiesState(
             sql_client=sql_client,

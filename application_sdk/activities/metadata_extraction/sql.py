@@ -91,6 +91,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
+        handler_kwargs: Optional[Dict[str, Any]] = None,
     ):
         """Initialize the SQL metadata extraction activities.
 
@@ -108,6 +109,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             self.handler_class = handler_class
         if transformer_class:
             self.transformer_class = transformer_class
+        self._handler_kwargs: Dict[str, Any] = handler_kwargs or {}
 
         super().__init__()
 
@@ -140,7 +142,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         sql_client = self.sql_client_class()
 
-        handler = self.handler_class(sql_client)
+        handler = self.handler_class(sql_client, **self._handler_kwargs)
         self._state[workflow_id].handler = handler
 
         if "credential_guid" in workflow_args:
