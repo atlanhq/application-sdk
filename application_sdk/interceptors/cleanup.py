@@ -14,7 +14,7 @@ from temporalio.worker import (
 
 from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.utils import build_output_path
-from application_sdk.constants import CLEANUP_BASE_PATHS
+from application_sdk.constants import CLEANUP_BASE_PATHS, TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -36,7 +36,7 @@ async def cleanup() -> Dict[str, bool]:
             Keys include base paths and "activities_state".
     """
     cleanup_results: Dict[str, bool] = {}
-    base_paths: List[str] = [build_output_path()]
+    base_paths: List[str] = [f"{TEMPORARY_PATH}{build_output_path()}"]
 
     # Use configured paths or default to workflow-specific artifacts directory
     if CLEANUP_BASE_PATHS:
