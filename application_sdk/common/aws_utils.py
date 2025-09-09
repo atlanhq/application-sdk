@@ -276,17 +276,19 @@ def create_boto3_client(
         AWS client instance
 
     Examples:
-        # Basic client with default credentials
-        sts_client = create_boto3_client("sts", region_name="us-east-1")
+        Basic client with default credentials::
 
-        # Client with temporary credentials
-        redshift_client = create_boto3_client(
-            "redshift",
-            region_name="us-east-1",
-            aws_access_key_id="AKIA...",
-            aws_secret_access_key="...",
-            aws_session_token="..."
-        )
+            sts_client = create_boto3_client("sts", region_name="us-east-1")
+
+        Client with temporary credentials::
+
+            redshift_client = create_boto3_client(
+                "redshift",
+                region_name="us-east-1",
+                aws_access_key_id="AKIA...",
+                aws_secret_access_key="...",
+                aws_session_token="..."
+            )
     """
     client_kwargs = {"region_name": region_name} if region_name else {}
 

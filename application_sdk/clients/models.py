@@ -30,9 +30,9 @@ class DatabaseConfig(BaseModel):
         default=None,
         description="Default connection parameters to be added to the connection string",
     )
-    parameters: Optional[Dict[str, Any]] = Field(
+    parameters: Optional[List[str]] = Field(
         default=None,
-        description="Additional connection parameters that can be dynamically added",
+        description="List of additional connection parameter names that can be dynamically added from credentials",
     )
 
     class Config:
