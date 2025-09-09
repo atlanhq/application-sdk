@@ -270,7 +270,7 @@ class ObjectStore:
                     )
                     await cls.upload_file(file_path, store_key, store_name)
 
-            logger.info(f"Completed uploading directory {source} to object store")
+            logger.info(f"Completed uploading directory ---- {source} to object store")
         except Exception as e:
             logger.error(
                 f"An unexpected error occurred while uploading directory: {str(e)}"

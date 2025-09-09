@@ -21,6 +21,7 @@ from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
+from application_sdk.outputs import WorkflowPhase
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
@@ -260,6 +261,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 )
 
             parquet_output = ParquetOutput(
+                phase=WorkflowPhase.EXTRACT,
                 output_prefix=output_prefix,
                 output_path=output_path,
                 output_suffix=output_suffix,
@@ -491,8 +493,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
         raw_input = raw_input.get_batched_daft_dataframe()
         transformed_output = JsonOutput(
-            output_path=output_path,
             output_suffix="transformed",
+            phase=WorkflowPhase.TRANSFORM,
+            output_path=output_path,
             output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),

@@ -6,6 +6,7 @@ in the application, including file outputs and object store interactions.
 
 import inspect
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -23,17 +24,27 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
-from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.activities.common.utils import get_object_store_prefix, build_output_path
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
+from application_sdk.constants import TEMPORARY_PATH
 
 logger = get_logger(__name__)
 activity.logger = logger
 
+
 if TYPE_CHECKING:
     import daft  # type: ignore
     import pandas as pd
+
+
+class WorkflowPhase(Enum):
+    """Enumeration of workflow phases for data processing."""
+    
+    EXTRACT = "Extract"
+    TRANSFORM = "Transform" 
+    PUBLISH = "Publish"
 
 
 class Output(ABC):
@@ -51,6 +62,7 @@ class Output(ABC):
 
     output_path: str
     output_prefix: str
+    phase: WorkflowPhase
     total_record_count: int
     chunk_count: int
     statistics: List[int] = []
@@ -214,7 +226,7 @@ class Output(ABC):
             Exception: If there's an error writing the statistics
         """
         try:
-            statistics = await self.write_statistics()
+            statistics = await self.write_statistics(typename)
             if not statistics:
                 raise ValueError("No statistics data available")
             statistics = ActivityStatistics.model_validate(statistics)
@@ -225,7 +237,7 @@ class Output(ABC):
             logger.error(f"Error getting statistics: {str(e)}")
             raise
 
-    async def write_statistics(self) -> Optional[Dict[str, Any]]:
+    async def write_statistics(self, typename: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """Write statistics about the output to a JSON file.
 
         This method writes statistics including total record count and chunk count
@@ -253,6 +265,68 @@ class Output(ABC):
                 source=output_file_name,
                 destination=destination_file_path,
             )
+
+            if typename:
+                statistics["typename"] = typename
+            # Update aggregated statistics at run root in object store
+            try:
+                await self._update_run_aggregate(destination_file_path, statistics)
+            except Exception as e:
+                logger.warning(f"Failed to update aggregated statistics: {str(e)}")
             return statistics
         except Exception as e:
             logger.error(f"Error writing statistics: {str(e)}")
+
+    async def _update_run_aggregate(
+        self, per_path_destination: str, statistics: Dict[str, Any]
+    ) -> None:
+        """Aggregate stats into a single file at the workflow run root.
+
+        Args:
+            per_path_destination: Object store destination path for this stats file
+                                 (used as key in the aggregate map)
+            statistics: The statistics dictionary to store
+        """
+        # Build the workflow run root path directly using utility functions (no path manipulation!)
+        # build_output_path() returns: "artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
+        # We need the local path: "./local/tmp/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
+        workflow_run_root_relative = build_output_path()
+        output_file_name = f"{TEMPORARY_PATH}{workflow_run_root_relative}/statistics.json.ignore"
+        destination_file_path = get_object_store_prefix(output_file_name)
+
+
+        # Load existing aggregate from object store if present
+        # New structure: {"Extract": [...], "Transform": [...], "Publish": [...]}
+        aggregate_by_phase: Dict[str, List[Dict[str, Any]]] = {
+            "Extract": [],
+            "Transform": [],
+            "Publish": []
+        }
+        
+        try:
+            # Download existing aggregate file if present
+            await ObjectStore.download_file(
+                source=destination_file_path,
+                destination=output_file_name,
+            )
+            # Load existing JSON structure
+            with open(output_file_name, "r") as f:
+                existing_aggregate = orjson.loads(f.read())
+                # Phase-based structure
+                aggregate_by_phase.update(existing_aggregate)
+        except Exception:
+            logger.info(
+                "No existing aggregate found or failed to read. Initializing a new aggregate structure."
+            )
+
+        # Add this entry to the appropriate phase
+        aggregate_by_phase[phase].append(statistics)
+        
+        with open(output_file_name, "w") as f:
+            f.write(orjson.dumps(aggregate_by_phase).decode("utf-8"))
+        
+        # Upload aggregate to object store
+        await ObjectStore.upload_file(
+            source=output_file_name,
+            destination=destination_file_path,
+        )
