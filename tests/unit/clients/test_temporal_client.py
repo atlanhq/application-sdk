@@ -270,8 +270,10 @@ async def test_create_worker(
     )
 
     # Verify Worker was instantiated with the expected parameters
-    # Note: activities now includes publish_event
-    expected_activities = list(activities) + [publish_event]
+    # Note: activities now includes publish_event and cleanup_app_artifacts
+    from application_sdk.interceptors.cleanup import cleanup_app_artifacts
+
+    expected_activities = list(activities) + [publish_event, cleanup_app_artifacts]
     mock_worker_class.assert_called_once_with(
         temporal_client.client,
         task_queue=temporal_client.worker_task_queue,
