@@ -573,6 +573,172 @@ def run_sync(func):
     return wrapper
 
 
+async def _setup_database_connection(sql_client, database_name: str) -> None:
+    """
+    Set up database connection for a specific database.
+
+    Args:
+        sql_client: The SQL client instance
+        database_name: Name of the database to connect to
+
+    Raises:
+        ValueError: If credentials parsing fails
+    """
+    # Parse extra field if it's a JSON string
+    if isinstance(sql_client.credentials.get("extra"), str):
+        try:
+            extra_dict = json.loads(sql_client.credentials["extra"])
+            extra_dict["database"] = database_name
+            sql_client.credentials["extra"] = extra_dict
+        except json.JSONDecodeError:
+            logger.error(
+                f"Failed to parse extra field as JSON: {sql_client.credentials.get('extra')}"
+            )
+            raise ValueError("Invalid JSON in extra field")
+    else:
+        sql_client.credentials["extra"]["database"] = database_name
+
+    await sql_client.load(sql_client.credentials)
+
+
+def _prepare_database_query(
+    sql_query: str,
+    database_name: str,
+    typename: str,
+    extract_temp_table_regex_column_sql: str,
+    extract_temp_table_regex_table_sql: str,
+    workflow_args: Dict[str, Any],
+) -> str:
+    """
+    Prepare the SQL query for a specific database.
+
+    Args:
+        sql_query: The base SQL query template
+        database_name: Name of the database
+        typename: Type of metadata being extracted
+        extract_temp_table_regex_column_sql: SQL for column temp table regex
+        extract_temp_table_regex_table_sql: SQL for table temp table regex
+        workflow_args: Workflow arguments for query preparation
+
+    Returns:
+        Prepared SQL query ready for execution
+    """
+    fetch_sql = sql_query.replace("{database_name}", database_name)
+
+    # Select appropriate temp table regex SQL based on typename
+    if typename == "column":
+        temp_table_regex_sql = extract_temp_table_regex_column_sql
+    elif typename == "table":
+        temp_table_regex_sql = extract_temp_table_regex_table_sql
+    else:
+        temp_table_regex_sql = ""
+
+    prepared_query = prepare_query(
+        query=fetch_sql,
+        workflow_args=workflow_args,
+        temp_table_regex_sql=temp_table_regex_sql,
+        use_posix_regex=True,
+    )
+
+    if prepared_query is None:
+        raise ValueError(f"Failed to prepare query for database {database_name}")
+
+    return prepared_query
+
+
+async def _process_single_database(
+    sql_client,
+    database_name: str,
+    prepared_query: str,
+    parquet_output: Optional[ParquetOutput],
+    write_to_file: bool,
+) -> Tuple[bool, Optional[Any]]:
+    """
+    Process a single database by executing the query and handling results.
+
+    Args:
+        sql_client: The SQL client instance
+        database_name: Name of the database being processed
+        prepared_query: The prepared SQL query
+        parquet_output: Parquet output handler (if writing to file)
+        write_to_file: Whether to write results to file
+
+    Returns:
+        Tuple of (success: bool, dataframe_or_none: Optional[Any])
+    """
+    try:
+        sql_input = SQLQueryInput(
+            engine=sql_client.engine,  # type: ignore
+            query=prepared_query,  # type: ignore
+        )
+        dataframe = await sql_input.get_batched_dataframe()
+
+        if write_to_file and parquet_output:
+            await parquet_output.write_batched_dataframe(dataframe)  # type: ignore
+            return True, None
+        else:
+            return True, dataframe
+
+    except OperationalError as e:
+        error_msg = str(e)
+        logger.warning(
+            f"Failed to connect to database '{database_name}': {error_msg}. Skipping to next database."
+        )
+        return False, None
+    except Exception as e:
+        logger.warning(
+            f"Unexpected error processing database '{database_name}': {str(e)}. Skipping to next database."
+        )
+        return False, None
+
+
+def _log_processing_summary(
+    successful_databases: List[str], failed_databases: List[str]
+) -> None:
+    """
+    Log summary of database processing results.
+
+    Args:
+        successful_databases: List of successfully processed databases
+        failed_databases: List of databases that failed processing
+    """
+    if successful_databases:
+        logger.info(
+            f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
+        )
+    if failed_databases:
+        logger.warning(
+            f"Failed to process {len(failed_databases)} databases: {failed_databases}"
+        )
+    if not successful_databases:
+        logger.warning("No databases were processed")
+
+
+async def _handle_final_results(
+    write_to_file: bool,
+    parquet_output: Optional[ParquetOutput],
+    dataframe_list: List[Any],
+    typename: str,
+) -> Any:
+    """
+    Handle final result processing and return appropriate statistics or data.
+
+    Args:
+        write_to_file: Whether results were written to file
+        parquet_output: Parquet output handler
+        dataframe_list: List of dataframes (if not writing to file)
+        typename: Type of metadata for statistics
+
+    Returns:
+        Statistics (if writing to file) or list of dataframes
+    """
+    if write_to_file and parquet_output:
+        statistics = await parquet_output.get_statistics(typename=typename)
+        return statistics
+    else:
+        return dataframe_list
+
+
 async def multidb_query_executor(
     sql_client,
     fetch_database_sql,
@@ -585,15 +751,42 @@ async def multidb_query_executor(
     write_to_file: bool = True,
 ):
     """
-    Create new connection for each database and
-    execute the query and write the dataframe
+    Create new connection for each database and execute the query and write the dataframe.
+
+    This function orchestrates the processing of multiple databases by:
+    1. Getting the list of databases to process
+    2. Setting up output handling
+    3. Processing each database individually
+    4. Logging results and returning appropriate data
+
+    Args:
+        sql_client: The SQL client instance
+        fetch_database_sql: SQL query to fetch database names
+        extract_temp_table_regex_column_sql: SQL for column temp table regex
+        extract_temp_table_regex_table_sql: SQL for table temp table regex
+        sql_query: The SQL query template to execute
+        workflow_args: Workflow arguments
+        output_suffix: Suffix for output files
+        typename: Type of metadata being extracted
+        write_to_file: Whether to write results to file
+
+    Returns:
+        Statistics (if writing to file) or list of dataframes
+
+    Raises:
+        ValueError: If SQL client is not initialized or output paths are missing
     """
+    # Get list of databases to process
     database_names = await get_database_names(
         sql_client, workflow_args, fetch_database_sql
     )
+
+    # Validate SQL client
     if not sql_client or not sql_client.engine:
         logger.error("SQL client or engine not initialized")
         raise ValueError("SQL client or engine not initialized")
+
+    # Set up output handling
     parquet_output = None
     if write_to_file:
         output_prefix = workflow_args.get("output_prefix")
@@ -608,78 +801,58 @@ async def multidb_query_executor(
             output_path=output_path,
             output_suffix=output_suffix,
         )
+
+    # Process each database
     successful_databases = []
     failed_databases = []
     dataframe_list = []
+
     for database_name in database_names or []:
         try:
-            # create the engine with the new database name
-            # Parse extra field if it's a JSON string
-            if isinstance(sql_client.credentials.get("extra"), str):
-                try:
-                    extra_dict = json.loads(sql_client.credentials["extra"])
-                    extra_dict["database"] = database_name
-                    sql_client.credentials["extra"] = extra_dict
-                except json.JSONDecodeError:
-                    logger.error(
-                        f"Failed to parse extra field as JSON: {sql_client.credentials.get('extra')}"
-                    )
-                    raise ValueError("Invalid JSON in extra field")
-            else:
-                sql_client.credentials["extra"]["database"] = database_name
-            await sql_client.load(sql_client.credentials)
-            fetch_sql = sql_query.replace("{database_name}", database_name)  # type: ignore
-            if typename == "column":
-                temp_table_regex_sql = extract_temp_table_regex_column_sql
-            elif typename == "table":
-                temp_table_regex_sql = extract_temp_table_regex_table_sql
-            else:
-                temp_table_regex_sql = ""
-            prepared_query = prepare_query(
-                query=fetch_sql,
+            # Set up database connection
+            await _setup_database_connection(sql_client, database_name)
+
+            # Prepare query for this database
+            prepared_query = _prepare_database_query(
+                sql_query=sql_query,  # type: ignore
+                database_name=database_name,
+                typename=typename,
+                extract_temp_table_regex_column_sql=extract_temp_table_regex_column_sql,
+                extract_temp_table_regex_table_sql=extract_temp_table_regex_table_sql,
                 workflow_args=workflow_args,
-                temp_table_regex_sql=temp_table_regex_sql,
-                use_posix_regex=True,
             )
-            sql_input = SQLQueryInput(
-                engine=sql_client.engine,  # type: ignore
-                query=prepared_query,  # type: ignore
+
+            # Process the database
+            success, dataframe = await _process_single_database(
+                sql_client=sql_client,
+                database_name=database_name,
+                prepared_query=prepared_query,
+                parquet_output=parquet_output,
+                write_to_file=write_to_file,
             )
-            dataframe = await sql_input.get_batched_dataframe()
-            if write_to_file:
-                await parquet_output.write_batched_dataframe(dataframe)  # type: ignore
+
+            if success:
+                successful_databases.append(database_name)
+                logger.info(f"Successfully processed database: {database_name}")
+                if not write_to_file and dataframe is not None:
+                    dataframe_list.append(dataframe)
             else:
-                dataframe_list.append(dataframe)
-            successful_databases.append(database_name)
-            logger.info(f"Successfully processed database: {database_name}")
-        except OperationalError as e:
-            # Log the error but continue with the next database
-            error_msg = str(e)
-            logger.warning(
-                f"Failed to connect to database '{database_name}': {error_msg}. Skipping to next database."
-            )
-            failed_databases.append(database_name)
-            continue
+                failed_databases.append(database_name)
+
         except Exception as e:
-            # Log other errors but continue with the next database
             logger.warning(
-                f"Unexpected error processing database '{database_name}': {str(e)}. Skipping to next database."
+                f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
             )
             failed_databases.append(database_name)
             continue
-    # Log summary of results
-    if successful_databases:
-        logger.info(
-            f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
-        )
-    if failed_databases:
-        logger.warning(
-            f"Failed to process {len(failed_databases)} databases: {failed_databases}"
-        )
-    if not successful_databases:
-        logger.warning("No databases were processed")
-    if write_to_file and parquet_output:
-        statistics = await parquet_output.get_statistics(typename=typename)
-        return statistics
-    else:
-        return dataframe_list
+
+    # Log processing summary
+    _log_processing_summary(successful_databases, failed_databases)
+
+    # Handle final results
+    return await _handle_final_results(
+        write_to_file=write_to_file,
+        parquet_output=parquet_output,
+        dataframe_list=dataframe_list,
+        typename=typename,
+    )
