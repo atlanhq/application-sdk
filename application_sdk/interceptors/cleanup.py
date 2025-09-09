@@ -13,7 +13,6 @@ from temporalio.worker import (
     WorkflowInterceptorClassInput,
 )
 
-from application_sdk.activities import ActivitiesInterface
 from application_sdk.activities.common.utils import build_output_path
 from application_sdk.constants import CLEANUP_BASE_PATHS, TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
@@ -28,13 +27,9 @@ class CleanupResult(BaseModel):
 
     Attributes:
         path_results (Dict[str, bool]): Cleanup results for each path (True=success, False=failure)
-        activities_state (bool): Result of activities state cleanup
-        total_paths_cleaned (int): Number of paths successfully cleaned
-        total_paths_failed (int): Number of paths that failed to clean
     """
 
     path_results: Dict[str, bool]
-    activities_state: bool
 
 
 @activity.defn
@@ -79,19 +74,8 @@ async def cleanup() -> CleanupResult:
             logger.error(f"Unexpected error cleaning up {base_path}: {e}")
             path_results[base_path] = False
 
-    activities_state_result = True
-    try:
-        activities_state = ActivitiesInterface()
-        await activities_state._clean_state()
-        logger.info("Activities state cleaned up successfully")
-
-    except Exception as e:
-        logger.error(f"Unexpected error cleaning up activities state: {e}")
-        activities_state_result = False
-
     return CleanupResult(
         path_results=path_results,
-        activities_state=activities_state_result,
     )
 
 
