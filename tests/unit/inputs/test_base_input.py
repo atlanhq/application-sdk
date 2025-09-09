@@ -170,7 +170,9 @@ class TestInputDownloadFiles:
         ):
             result = await input_instance.download_files()
 
-            mock_download.assert_called_once_with(source="data/test.parquet")
+            mock_download.assert_called_once_with(
+                source="data/test.parquet", destination="./local/tmp/data/test.parquet"
+            )
             # Result should be the actual downloaded file path in temporary directory
             expected_path = "./local/tmp/data/test.parquet"
             assert result == [expected_path]
@@ -193,7 +195,9 @@ class TestInputDownloadFiles:
         ):
             result = await input_instance.download_files()
 
-            mock_download.assert_called_once_with(source="data")
+            mock_download.assert_called_once_with(
+                source="data", destination="./local/tmp/data"
+            )
             assert result == expected_files
 
     @pytest.mark.asyncio
@@ -233,8 +237,14 @@ class TestInputDownloadFiles:
 
             # Should download each specific file
             assert mock_download.call_count == 2
-            mock_download.assert_any_call(source="data/file1.parquet")
-            mock_download.assert_any_call(source="data/file2.parquet")
+            mock_download.assert_any_call(
+                source="data/file1.parquet",
+                destination="./local/tmp/data/file1.parquet",
+            )
+            mock_download.assert_any_call(
+                source="data/file2.parquet",
+                destination="./local/tmp/data/file2.parquet",
+            )
             assert result == expected_files
 
     @pytest.mark.asyncio

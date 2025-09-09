@@ -74,7 +74,9 @@ async def test_download_file_invoked_for_missing_files() -> None:
         result = await parquet_input.download_files()
 
         # Should attempt to download the file
-        mock_download.assert_called_once_with(source="local/test.parquet")
+        mock_download.assert_called_once_with(
+            source="local/test.parquet", destination="./local/tmp/local/test.parquet"
+        )
         # Result should be the actual downloaded file path in temporary directory
         expected_path = "./local/tmp/local/test.parquet"
         assert result == [expected_path]

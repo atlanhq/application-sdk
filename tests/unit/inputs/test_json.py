@@ -77,10 +77,10 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
         result = await json_input.download_files()
 
-        # Each file should be attempted to be downloaded - using new signature (no destination)
+        # Each file should be attempted to be downloaded - using correct signature (with destination)
         expected_calls = [
-            call(source="local/a.json"),
-            call(source="local/b.json"),
+            call(source="local/a.json", destination="./local/tmp/local/a.json"),
+            call(source="local/b.json", destination="./local/tmp/local/b.json"),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
         assert result == ["./local/tmp/local/a.json", "./local/tmp/local/b.json"]

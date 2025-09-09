@@ -73,7 +73,10 @@ class Input(ABC):
             if self.path.endswith(self._extension):
                 # Single file case (file_names validation already ensures this is valid)
                 source_path = get_object_store_prefix(self.path)
-                await ObjectStore.download_file(source=source_path)
+                await ObjectStore.download_file(
+                    source=source_path,
+                    destination=os.path.join(TEMPORARY_PATH, source_path),
+                )
                 downloaded_source_paths.append(source_path)
 
             elif hasattr(self, "file_names") and self.file_names:
@@ -81,12 +84,18 @@ class Input(ABC):
                 for file_name in self.file_names:
                     file_path = os.path.join(self.path, file_name)
                     source_path = get_object_store_prefix(file_path)
-                    await ObjectStore.download_file(source=source_path)
+                    await ObjectStore.download_file(
+                        source=source_path,
+                        destination=os.path.join(TEMPORARY_PATH, source_path),
+                    )
                     downloaded_source_paths.append(source_path)
             else:
                 # Download entire directory
                 source_path = get_object_store_prefix(self.path)
-                await ObjectStore.download_prefix(source=source_path)
+                await ObjectStore.download_prefix(
+                    source=source_path,
+                    destination=os.path.join(TEMPORARY_PATH, source_path),
+                )
                 downloaded_source_paths.append(source_path)
 
             # After all downloads, search for files using the exact paths we downloaded
