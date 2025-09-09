@@ -441,6 +441,13 @@ class AsyncBaseSQLClient(BaseSQLClient):
                 self.engine = None
             raise ValueError(str(e))
 
+    async def close(self) -> None:
+        """Close the async database connection and dispose of the engine."""
+        if self.engine:
+            await self.engine.dispose()
+            self.engine = None
+        self.connection = None
+
     async def run_query(self, query: str, batch_size: int = 100000):
         """Execute a SQL query asynchronously and return results in batches using lazy connections.
 
