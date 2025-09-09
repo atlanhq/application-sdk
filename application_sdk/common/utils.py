@@ -834,7 +834,6 @@ async def multidb_query_executor(
     logger.warning(
         f"Failed to process {len(failed_databases)} databases: {failed_databases}"
     )
-
     # Handle final results
     return await _handle_final_results(
         write_to_file=write_to_file,
