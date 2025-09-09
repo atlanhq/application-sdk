@@ -3,6 +3,7 @@ import shutil
 from datetime import timedelta
 from typing import Any, Dict, List, Optional, Type
 
+from pydantic import BaseModel
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 from temporalio.worker import (
@@ -22,8 +23,22 @@ activity.logger = logger
 workflow.logger = logger
 
 
+class CleanupResult(BaseModel):
+    """Result model for cleanup operations.
+
+    Attributes:
+        path_results (Dict[str, bool]): Cleanup results for each path (True=success, False=failure)
+        activities_state (bool): Result of activities state cleanup
+        total_paths_cleaned (int): Number of paths successfully cleaned
+        total_paths_failed (int): Number of paths that failed to clean
+    """
+
+    path_results: Dict[str, bool]
+    activities_state: bool
+
+
 @activity.defn
-async def cleanup() -> Dict[str, bool]:
+async def cleanup() -> CleanupResult:
     """Clean up temporary artifacts and activity state for the current workflow.
 
     Performs two types of cleanup:
@@ -33,10 +48,9 @@ async def cleanup() -> Dict[str, bool]:
     Uses CLEANUP_BASE_PATHS constant or defaults to workflow-specific artifacts directory.
 
     Returns:
-        Dict[str, bool]: Cleanup results for each operation (True=success, False=failure).
-            Keys include base paths and "activities_state".
+        CleanupResult: Structured cleanup results with path results and summary statistics.
     """
-    cleanup_results: Dict[str, bool] = {}
+    path_results: Dict[str, bool] = {}
     base_paths: List[str] = [os.path.join(TEMPORARY_PATH, build_output_path())]
 
     # Use configured paths or default to workflow-specific artifacts directory
@@ -53,29 +67,32 @@ async def cleanup() -> Dict[str, bool]:
                     # Remove entire directory and recreate it empty
                     shutil.rmtree(base_path)
                     logger.info(f"Cleaned up all contents from: {base_path}")
-                    cleanup_results[base_path] = True
+                    path_results[base_path] = True
                 else:
                     logger.warning(f"Path is not a directory: {base_path}")
-                    cleanup_results[base_path] = False
+                    path_results[base_path] = False
             else:
                 logger.debug(f"Directory doesn't exist: {base_path}")
-                cleanup_results[base_path] = True
+                path_results[base_path] = True
 
         except Exception as e:
             logger.error(f"Unexpected error cleaning up {base_path}: {e}")
-            cleanup_results[base_path] = False
+            path_results[base_path] = False
 
+    activities_state_result = True
     try:
         activities_state = ActivitiesInterface()
         await activities_state._clean_state()
         logger.info("Activities state cleaned up successfully")
-        cleanup_results["activities_state"] = True
 
     except Exception as e:
         logger.error(f"Unexpected error cleaning up activities state: {e}")
-        cleanup_results["activities_state"] = False
+        activities_state_result = False
 
-    return cleanup_results
+    return CleanupResult(
+        path_results=path_results,
+        activities_state=activities_state_result,
+    )
 
 
 class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
