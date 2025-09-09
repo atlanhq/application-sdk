@@ -36,7 +36,7 @@ async def cleanup() -> Dict[str, bool]:
             Keys include base paths and "activities_state".
     """
     cleanup_results: Dict[str, bool] = {}
-    base_paths: List[str] = [f"{TEMPORARY_PATH}{build_output_path()}"]
+    base_paths: List[str] = [os.path.join(TEMPORARY_PATH, build_output_path())]
 
     # Use configured paths or default to workflow-specific artifacts directory
     if CLEANUP_BASE_PATHS:
