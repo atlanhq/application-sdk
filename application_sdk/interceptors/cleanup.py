@@ -41,9 +41,7 @@ async def cleanup() -> Dict[str, bool]:
     # Use configured paths or default to workflow-specific artifacts directory
     if CLEANUP_BASE_PATHS:
         base_paths = CLEANUP_BASE_PATHS
-        activity.logger.info(
-            f"No CLEANUP_BASE_PATHS configured, using default workflow path: {base_paths}"
-        )
+        activity.logger.info(f"Using CLEANUP_BASE_PATHS: {base_paths} for cleanup")
 
     activity.logger.info(f"Cleaning up all contents from base paths: {base_paths}")
 
@@ -62,12 +60,6 @@ async def cleanup() -> Dict[str, bool]:
                 activity.logger.debug(f"Directory doesn't exist: {base_path}")
                 cleanup_results[base_path] = True
 
-        except PermissionError as e:
-            activity.logger.error(f"Permission denied cleaning up {base_path}: {e}")
-            cleanup_results[base_path] = False
-        except OSError as e:
-            activity.logger.error(f"OS error cleaning up {base_path}: {e}")
-            cleanup_results[base_path] = False
         except Exception as e:
             activity.logger.error(f"Unexpected error cleaning up {base_path}: {e}")
             cleanup_results[base_path] = False

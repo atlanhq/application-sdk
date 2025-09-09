@@ -213,7 +213,9 @@ class ObjectStore:
                     prefix=prefix, store_name=store_name
                 )
             except Exception as e:
-                logger.info(f"Error listing files under prefix {prefix}: {str(e)}")
+                # If we can't list files for any reason, we can't delete them either
+                # Raise FileNotFoundError to give developers clear feedback
+                logger.info(f"Cannot list files under prefix {prefix}: {str(e)}")
                 raise FileNotFoundError(f"No files found under prefix: {prefix}")
 
             if not files_to_delete:
