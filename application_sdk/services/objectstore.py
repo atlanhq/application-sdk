@@ -208,7 +208,13 @@ class ObjectStore:
         """
         try:
             # First, list all files under the prefix
-            files_to_delete = await cls.list_files(prefix=prefix, store_name=store_name)
+            try:
+                files_to_delete = await cls.list_files(
+                    prefix=prefix, store_name=store_name
+                )
+            except Exception as e:
+                logger.info(f"Error listing files under prefix {prefix}: {str(e)}")
+                raise FileNotFoundError(f"No files found under prefix: {prefix}")
 
             if not files_to_delete:
                 logger.info(f"No files found under prefix: {prefix}")

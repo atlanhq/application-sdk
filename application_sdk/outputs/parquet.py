@@ -299,9 +299,14 @@ class ParquetOutput(Output):
             #  Upload the entire directory (contains multiple parquet files created by Daft)
             if write_mode == WriteMode.OVERWRITE:
                 # Delete the directory from object store
-                await ObjectStore.delete_prefix(
-                    prefix=get_object_store_prefix(self.output_path)
-                )
+                try:
+                    await ObjectStore.delete_prefix(
+                        prefix=get_object_store_prefix(self.output_path)
+                    )
+                except FileNotFoundError as e:
+                    logger.info(
+                        f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
+                    )
 
             await ObjectStore.upload_prefix(
                 source=self.output_path,
