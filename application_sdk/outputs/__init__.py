@@ -287,6 +287,7 @@ class Output(ABC):
                                  (used as key in the aggregate map)
             statistics: The statistics dictionary to store
         """
+        logger.info(f"Starting _update_run_aggregate for phase: {self.phase} (value: {self.phase.value})")
         # Build the workflow run root path directly using utility functions (no path manipulation!)
         # build_output_path() returns: "artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
         # We need the local path: "./local/tmp/artifacts/apps/{app}/workflows/{workflow_id}/{run_id}"
@@ -314,16 +315,19 @@ class Output(ABC):
                 existing_aggregate = orjson.loads(f.read())
                 # Phase-based structure
                 aggregate_by_phase.update(existing_aggregate)
+                logger.info(f"Successfully loaded existing aggregates")
         except Exception:
             logger.info(
                 "No existing aggregate found or failed to read. Initializing a new aggregate structure."
             )
 
         # Add this entry to the appropriate phase
-        aggregate_by_phase[phase].append(statistics)
+        logger.info(f"Adding statistics to phase '{self.phase.value}'")
+        aggregate_by_phase[self.phase.value].append(statistics)
         
         with open(output_file_name, "w") as f:
             f.write(orjson.dumps(aggregate_by_phase).decode("utf-8"))
+            logger.info(f"Successfully updated aggregate with entries for phase '{self.phase.value}'")
         
         # Upload aggregate to object store
         await ObjectStore.upload_file(
