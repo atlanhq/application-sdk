@@ -119,9 +119,8 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     schedule_to_close_timeout=timedelta(minutes=5),
                     retry_policy=RetryPolicy(
                         maximum_attempts=3,
-                        initial_interval=timedelta(seconds=1),
-                        maximum_interval=timedelta(seconds=10),
                     ),
+                    summary="This activity is used to cleanup the local artifacts and the activity state after the workflow is completed.",
                 )
 
                 workflow.logger.info("Cleanup completed successfully")
