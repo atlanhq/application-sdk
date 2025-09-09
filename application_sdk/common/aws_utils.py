@@ -126,10 +126,10 @@ def generate_aws_rds_token_with_iam_user(
 
 def get_cluster_identifier(aws_client) -> Optional[str]:
     """
-    Retrieve the cluster identifier from AWS Redshift clusters.
+    Retrieve the cluster identifier from AWS clusters.
 
     Args:
-        aws_client: Boto3 Redshift client instance
+        aws_client: Boto3 client instance
 
     Returns:
         str: The cluster identifier
@@ -178,7 +178,7 @@ def get_cluster_credentials(
     Retrieve cluster credentials using IAM authentication.
 
     Args:
-        aws_client: Boto3 Redshift client instance
+        aws_client: Boto3 client instance
         credentials: Dictionary containing connection credentials
 
     Returns:
@@ -312,8 +312,8 @@ def create_boto3_client(
 def setup_aws_role_based_authentication(
     credentials: Dict[str, Any],
     extra: Dict[str, Any],
-    drivername: str = "redshift+psycopg2",
-    session_name: str = "atlan_redshift_v0.1.1rc37",
+    drivername:str,
+    session_name: str,
     duration_seconds: int = 3600,
 ) -> tuple[Any, Any]:
     """
