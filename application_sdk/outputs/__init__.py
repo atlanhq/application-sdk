@@ -26,6 +26,7 @@ from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.observability.metrics_adaptor import MetricType
 from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
@@ -224,6 +225,56 @@ class Output(ABC):
         except Exception as e:
             logger.error(f"Error getting statistics: {str(e)}")
             raise
+
+    async def _upload_file(self, file_name: str):
+        """Upload a file to the object store."""
+        await ObjectStore.upload_file(
+            source=file_name,
+            destination=get_object_store_prefix(file_name),
+        )
+
+        self.current_buffer_size = 0
+        self.current_buffer_size_bytes = 0
+
+    async def _flush_buffer(
+        self, chunk: Union["pd.DataFrame", "daft.DataFrame"], chunk_part: int
+    ):
+        """Flush the current buffer to a JSON file.
+
+        This method combines all DataFrames in the buffer, writes them to a JSON file,
+        and uploads the file to the object store.
+
+        Note:
+            If the buffer is empty or has no records, the method returns without writing.
+        """
+        try:
+            if not is_empty_dataframe(chunk):
+                self.total_record_count += len(chunk)
+                output_file_name = (
+                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                )
+                await self.write_chunk(chunk, output_file_name)
+
+                # Record chunk metrics
+                self.metrics.record_metric(
+                    name="chunks_written",
+                    value=1,
+                    metric_type=MetricType.COUNTER,
+                    labels={"type": "output"},
+                    description="Number of chunks written to files",
+                )
+
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "output", "error": str(e)},
+                description="Number of errors while writing to files",
+            )
+            logger.error(f"Error flushing buffer to files: {str(e)}")
+            raise e
 
     async def write_statistics(self) -> Optional[Dict[str, Any]]:
         """Write statistics about the output to a JSON file.

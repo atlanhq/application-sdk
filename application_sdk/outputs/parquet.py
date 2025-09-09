@@ -313,65 +313,20 @@ class ParquetOutput(Output):
         """
         return self.output_path
 
-    async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
-        """Flush the current buffer to a Parquet file.
+    async def write_chunk(self, chunk: "pd.DataFrame", file_name: str):
+        """Write a chunk to a Parquet file.
 
-        This method combines all DataFrames in the buffer, writes them to a Parquet file,
-        and uploads the file to the object store.
-
-        Note:
-            If the buffer is empty or has no records, the method returns without writing.
+        This method writes a chunk to a Parquet file and uploads the file to the object store.
         """
-        try:
-            # Write DataFrame to Parquet file
-            if not chunk.empty:
-                self.total_record_count += len(chunk)
-                output_file_name = (
-                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                )
-                if not os.path.exists(output_file_name):
-                    chunk.to_parquet(
-                        output_file_name,
-                        index=False,
-                        compression="snappy",
-                        engine="fastparquet",
-                    )
-                else:
-                    chunk.to_parquet(
-                        output_file_name,
-                        index=False,
-                        compression="snappy",
-                        engine="fastparquet",
-                        append=True,
-                    )
-
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="parquet_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "pandas"},
-                    description="Number of chunks written to Parquet files",
-                )
-
-        except Exception as e:
-            # Record metrics for failed write
-            self.metrics.record_metric(
-                name="parquet_write_errors",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "error": str(e)},
-                description="Number of errors while writing to Parquet files",
+        if not os.path.exists(file_name):
+            chunk.to_parquet(
+                file_name, index=False, compression="snappy", engine="fastparquet"
             )
-            logger.error(f"Error flushing buffer to parquet: {str(e)}")
-            raise e
-
-    async def _upload_file(self, file_name: str):
-        """Upload a file to the object store."""
-        await ObjectStore.upload_file(
-            source=file_name,
-            destination=get_object_store_prefix(file_name),
-        )
-
-        self.current_buffer_size = 0
-        self.current_buffer_size_bytes = 0
+        else:
+            chunk.to_parquet(
+                file_name,
+                index=False,
+                compression="snappy",
+                engine="fastparquet",
+                append=True,
+            )
