@@ -143,6 +143,8 @@ class ObjectStore:
             logger.debug(f"Successfully retrieved file content: {key}")
             return response_data
 
+        except FileNotFoundError:
+            raise
         except Exception as e:
             logger.error(f"Error getting file content for {key}: {str(e)}")
             raise e
@@ -369,8 +371,6 @@ class ObjectStore:
             ...     destination="/tmp/downloaded_report.pdf"
             ... )
         """
-        # Ensure directory exists
-
         if not os.path.exists(os.path.dirname(destination)):
             os.makedirs(os.path.dirname(destination), exist_ok=True)
 
@@ -381,6 +381,9 @@ class ObjectStore:
                 f.write(response_data)
 
             logger.info(f"Successfully downloaded file: {source}")
+        except FileNotFoundError:
+            logger.debug(f"File not found in object store: {source}")
+            raise
         except Exception as e:
             logger.warning(
                 f"Failed to download file {source} from object store: {str(e)}"
@@ -451,8 +454,16 @@ class ObjectStore:
                 )
                 return response.data
         except Exception as e:
-            logger.error(f"Error in Dapr binding operation '{operation}': {str(e)}")
-            raise
+            if "file not found" in str(e).lower() or "not found" in str(e).lower():
+                logger.debug(
+                    f"File not found in Dapr binding operation '{operation}' - this is normal for new workflows"
+                )
+                raise FileNotFoundError(
+                    f"File not found: {metadata.get('key', 'unknown')}"
+                )
+            else:
+                logger.error(f"Error in Dapr binding operation '{operation}': {str(e)}")
+                raise
 
     @classmethod
     def _cleanup_local_path(cls, path: str) -> None:

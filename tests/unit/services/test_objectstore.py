@@ -188,6 +188,44 @@ class TestObjectStore:
         with pytest.raises(Exception, match="Failed to list files"):
             await ObjectStore.delete_prefix(prefix="prefix/")
 
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.logger")
+    async def test_get_content_file_not_found_logs_debug(
+        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test that file not found errors are logged at DEBUG level."""
+        mock_client = MagicMock()
+        mock_client.invoke_binding.side_effect = Exception("file not found")
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        with pytest.raises(Exception):
+            await ObjectStore.get_content("nonexistent/file.txt")
+
+        # Verify debug log was called instead of error log
+        mock_logger.debug.assert_called_once_with(
+            "File not found in object store: nonexistent/file.txt"
+        )
+        mock_logger.error.assert_not_called()
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    @patch("application_sdk.services.objectstore.logger")
+    async def test_get_content_other_error_logs_error(
+        self, mock_logger: MagicMock, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test that non-file-not-found errors are still logged at ERROR level."""
+        mock_client = MagicMock()
+        mock_client.invoke_binding.side_effect = Exception("Connection timeout")
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        with pytest.raises(Exception):
+            await ObjectStore.get_content("test/file.txt")
+
+        # Verify error log was called for non-file-not-found errors
+        mock_logger.error.assert_called_once_with(
+            "Error getting file content for test/file.txt: Connection timeout"
+        )
+        mock_logger.debug.assert_not_called()
+
     # @patch("application_sdk.services.objectstore.ObjectStore.list_files", new_callable=AsyncMock)
     # @patch("application_sdk.services.objectstore.ObjectStore._download_file", new_callable=AsyncMock)
     # async def test_download_directory_success(
