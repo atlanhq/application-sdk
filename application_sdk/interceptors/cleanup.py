@@ -19,6 +19,7 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 activity.logger = logger
+workflow.logger = logger
 
 
 @activity.defn
@@ -41,9 +42,9 @@ async def cleanup() -> Dict[str, bool]:
     # Use configured paths or default to workflow-specific artifacts directory
     if CLEANUP_BASE_PATHS:
         base_paths = CLEANUP_BASE_PATHS
-        activity.logger.info(f"Using CLEANUP_BASE_PATHS: {base_paths} for cleanup")
+        logger.info(f"Using CLEANUP_BASE_PATHS: {base_paths} for cleanup")
 
-    activity.logger.info(f"Cleaning up all contents from base paths: {base_paths}")
+    logger.info(f"Cleaning up all contents from base paths: {base_paths}")
 
     for base_path in base_paths:
         try:
@@ -51,27 +52,27 @@ async def cleanup() -> Dict[str, bool]:
                 if os.path.isdir(base_path):
                     # Remove entire directory and recreate it empty
                     shutil.rmtree(base_path)
-                    activity.logger.info(f"Cleaned up all contents from: {base_path}")
+                    logger.info(f"Cleaned up all contents from: {base_path}")
                     cleanup_results[base_path] = True
                 else:
-                    activity.logger.warning(f"Path is not a directory: {base_path}")
+                    logger.warning(f"Path is not a directory: {base_path}")
                     cleanup_results[base_path] = False
             else:
-                activity.logger.debug(f"Directory doesn't exist: {base_path}")
+                logger.debug(f"Directory doesn't exist: {base_path}")
                 cleanup_results[base_path] = True
 
         except Exception as e:
-            activity.logger.error(f"Unexpected error cleaning up {base_path}: {e}")
+            logger.error(f"Unexpected error cleaning up {base_path}: {e}")
             cleanup_results[base_path] = False
 
     try:
         activities_state = ActivitiesInterface()
         await activities_state._clean_state()
-        activity.logger.info("Activities state cleaned up successfully")
+        logger.info("Activities state cleaned up successfully")
         cleanup_results["activities_state"] = True
 
     except Exception as e:
-        activity.logger.error(f"Unexpected error cleaning up activities state: {e}")
+        logger.error(f"Unexpected error cleaning up activities state: {e}")
         cleanup_results["activities_state"] = False
 
     return cleanup_results
@@ -115,10 +116,10 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     summary="This activity is used to cleanup the local artifacts and the activity state after the workflow is completed.",
                 )
 
-                workflow.logger.info("Cleanup completed successfully")
+                logger.info("Cleanup completed successfully")
 
             except Exception as e:
-                workflow.logger.warning(f"Failed to cleanup artifacts: {e}")
+                logger.warning(f"Failed to cleanup artifacts: {e}")
                 # Don't re-raise - cleanup failures shouldn't fail the workflow
 
         return output
