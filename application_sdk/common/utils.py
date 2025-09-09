@@ -692,28 +692,6 @@ async def _process_single_database(
         return False, None
 
 
-def _log_processing_summary(
-    successful_databases: List[str], failed_databases: List[str]
-) -> None:
-    """
-    Log summary of database processing results.
-
-    Args:
-        successful_databases: List of successfully processed databases
-        failed_databases: List of databases that failed processing
-    """
-    if successful_databases:
-        logger.info(
-            f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
-        )
-    if failed_databases:
-        logger.warning(
-            f"Failed to process {len(failed_databases)} databases: {failed_databases}"
-        )
-    if not successful_databases:
-        logger.warning("No databases were processed")
-
-
 async def _handle_final_results(
     write_to_file: bool,
     parquet_output: Optional[ParquetOutput],
@@ -847,7 +825,12 @@ async def multidb_query_executor(
             continue
 
     # Log processing summary
-    _log_processing_summary(successful_databases, failed_databases)
+    logger.info(
+        f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
+    )
+    logger.warning(
+        f"Failed to process {len(failed_databases)} databases: {failed_databases}"
+    )
 
     # Handle final results
     return await _handle_final_results(
