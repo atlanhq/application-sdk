@@ -310,31 +310,6 @@ class APIServer(ServerInterface):
                     status=EventWorkflowResponse.Status.DROP,
                 )
 
-        # Create a closure for the get_configmap function that captures workflow_class
-        async def get_configmap_handler(config_map_id: str) -> ConfigMapResponse:
-            try:
-                # Call the getConfigmap method on the workflow class
-                config_map_data = await workflow_class.get_configmap(config_map_id)
-
-                return ConfigMapResponse(
-                    success=True,
-                    message="Configuration map fetched successfully",
-                    data=config_map_data,
-                )
-            except NotImplementedError:
-                return ConfigMapResponse(
-                    success=False,
-                    message="getConfigmap method not implemented in workflow",
-                    data={},
-                )
-            except Exception as e:
-                logger.error(f"Error fetching configuration map: {e}")
-                return ConfigMapResponse(
-                    success=False,
-                    message=f"Failed to fetch configuration map: {str(e)}",
-                    data={},
-                )
-
         for trigger in triggers:
             # Set the workflow class on the trigger
             trigger.workflow_class = workflow_class
@@ -361,16 +336,6 @@ class APIServer(ServerInterface):
                 )
 
                 self.app.include_router(self.events_router, prefix="/events/v1")
-
-        # Register the configmap route for this workflow
-        self.workflow_router.add_api_route(
-            "/configmap/{config_map_id}",
-            get_configmap_handler,
-            methods=["GET"],
-            response_model=ConfigMapResponse,
-        )
-
-        self.app.include_router(self.workflow_router, prefix="/workflows/v1")
 
     def register_routes(self):
         """
@@ -426,6 +391,13 @@ class APIServer(ServerInterface):
             "/stop/{workflow_id}/{run_id:path}",
             self.stop_workflow,
             methods=["POST"],
+        )
+
+        self.workflow_router.add_api_route(
+            "/configmap/{config_map_id}",
+            self.get_configmap,
+            methods=["GET"],
+            response_model=ConfigMapResponse,
         )
 
         self.dapr_router.add_api_route(
@@ -641,6 +613,35 @@ class APIServer(ServerInterface):
                 description="Total number of preflight checks",
             )
             raise e
+
+    async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
+        """Get a configuration map by its ID.
+
+        Args:
+            config_map_id (str): The ID of the configuration map to retrieve.
+
+        Returns:
+            ConfigMapResponse: Response containing the configuration map.
+        """
+        try:
+            if not self.handler:
+                raise Exception("Handler not initialized")
+
+            # Call the getConfigmap method on the workflow class
+            config_map_data = await self.handler.get_configmap(config_map_id)
+
+            return ConfigMapResponse(
+                success=True,
+                message="Configuration map fetched successfully",
+                data=config_map_data,
+            )
+        except Exception as e:
+            logger.error(f"Error fetching configuration map: {e}")
+            return ConfigMapResponse(
+                success=False,
+                message=f"Failed to fetch configuration map: {str(e)}",
+                data={},
+            )
 
     async def get_workflow_config(
         self, config_id: str, type: str = "workflows"
