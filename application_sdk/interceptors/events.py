@@ -23,6 +23,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.eventstore import EventStore
 
 logger = get_logger(__name__)
+activity.logger = logger
+workflow.logger = logger
 
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
@@ -41,9 +43,9 @@ async def publish_event(event_data: dict) -> None:
     try:
         event = Event(**event_data)
         await EventStore.publish_event(event)
-        activity.logger.info(f"Published event: {event_data.get('event_name','')}")
+        logger.info(f"Published event: {event_data.get('event_name','')}")
     except Exception as e:
-        activity.logger.error(f"Failed to publish event: {e}")
+        logger.error(f"Failed to publish event: {e}")
         raise
 
 
@@ -123,7 +125,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                 retry_policy=RetryPolicy(maximum_attempts=3),
             )
         except Exception as e:
-            workflow.logger.warning(f"Failed to publish workflow start event: {e}")
+            logger.warning(f"Failed to publish workflow start event: {e}")
             # Don't fail the workflow if event publishing fails
 
         output = None
@@ -152,9 +154,7 @@ class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     retry_policy=RetryPolicy(maximum_attempts=3),
                 )
             except Exception as publish_error:
-                workflow.logger.warning(
-                    f"Failed to publish workflow end event: {publish_error}"
-                )
+                logger.warning(f"Failed to publish workflow end event: {publish_error}")
 
         return output
 
