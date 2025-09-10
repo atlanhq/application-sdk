@@ -216,31 +216,34 @@ def create_aws_client(
         Exception: If client creation fails
 
     Examples:
-        # Using temporary credentials
-        client = create_aws_client(
-            service="redshift",
-            region="us-east-1",
-            temp_credentials={
-                "AccessKeyId": "AKIA...",
-                "SecretAccessKey": "...",
-                "SessionToken": "..."
-            }
-        )
+        Using temporary credentials::
 
-        # Using a session
-        session = boto3.Session(profile_name="my-profile")
-        client = create_aws_client(
-            service="rds",
-            region="us-west-2",
-            session=session
-        )
+            client = create_aws_client(
+                service="redshift",
+                region="us-east-1",
+                temp_credentials={
+                    "AccessKeyId": "AKIA...",
+                    "SecretAccessKey": "...",
+                    "SessionToken": "..."
+                }
+            )
 
-        # Using default credentials
-        client = create_aws_client(
-            service="sts",
-            region="us-east-1",
-            use_default_credentials=True
-        )
+        Using a session::
+
+            session = boto3.Session(profile_name="my-profile")
+            client = create_aws_client(
+                service="rds",
+                region="us-west-2",
+                session=session
+            )
+
+        Using default credentials::
+
+            client = create_aws_client(
+                service="sts",
+                region="us-east-1",
+                use_default_credentials=True
+            )
     """
     # Validate credential options
     credential_sources = sum(
