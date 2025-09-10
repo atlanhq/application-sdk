@@ -14,7 +14,6 @@ from typing import (
     cast,
 )
 
-from sqlalchemy.exc import OperationalError
 from temporalio import activity
 
 from application_sdk.activities import ActivitiesInterface, ActivitiesState
@@ -360,31 +359,18 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                         )
 
                     # 4c) Execute and handle (inline of _process_single_database)
-                    try:
-                        sql_input = SQLQueryInput(
-                            engine=effective_sql_client.engine, query=prepared_query
-                        )
-                        dataframe = await sql_input.get_batched_dataframe()
+                    sql_input = SQLQueryInput(
+                        engine=effective_sql_client.engine, query=prepared_query
+                    )
+                    dataframe = await sql_input.get_batched_dataframe()
 
-                        if write_to_file and parquet_output:
-                            await parquet_output.write_batched_dataframe(dataframe)  # type: ignore[arg-type]
-                        else:
-                            dataframe_list.append(dataframe)
+                    if write_to_file and parquet_output:
+                        await parquet_output.write_batched_dataframe(dataframe)  # type: ignore[arg-type]
+                    else:
+                        dataframe_list.append(dataframe)
 
-                        successful_databases.append(database_name)
-                        logger.info(f"Successfully processed database: {database_name}")
-                    except OperationalError as e:  # type: ignore[no-redef]
-                        logger.warning(
-                            f"Failed to connect to database '{database_name}': {str(e)}. Skipping to next database."
-                        )
-                        failed_databases.append(database_name)
-                        continue
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning(
-                            f"Unexpected error processing database '{database_name}': {str(e)}. Skipping to next database."
-                        )
-                        failed_databases.append(database_name)
-                        continue
+                    successful_databases.append(database_name)
+                    logger.info(f"Successfully processed database: {database_name}")
                 except Exception as e:  # noqa: BLE001
                     logger.warning(
                         f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
