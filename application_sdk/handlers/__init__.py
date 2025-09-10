@@ -41,7 +41,6 @@ class HandlerInterface(ABC):
     @staticmethod
     async def get_configmap(config_map_id: str) -> Dict[str, Any]:
         """
-        Abstract method to get configuration map by ID
-        To be implemented by the subclass
+        Static method to get the configmap
         """
         return {}
