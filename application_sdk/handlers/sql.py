@@ -341,6 +341,7 @@ class BaseSQLHandler(HandlerInterface):
                 write_to_file=False,
             )
             try:
+
                 def _iter_records():
                     for df_generator in dataframe_list:
                         for dataframe in df_generator:
