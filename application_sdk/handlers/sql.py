@@ -185,28 +185,20 @@ class BaseSQLHandler(HandlerInterface):
                 )
         return schemas
 
-    async def preflight_check(
-        self, payload: Dict[str, Any], multidb: Optional[bool] = None
-    ) -> Dict[str, Any]:
+    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Method to perform preflight checks
         """
         logger.info("Starting preflight check")
         results: Dict[str, Any] = {}
         try:
-            # Resolve multidb preference: explicit argument overrides handler attribute; default to False
-            resolved_multidb = (
-                bool(multidb)
-                if multidb is not None
-                else bool(getattr(self, "multidb", False))
-            )
             (
                 results["databaseSchemaCheck"],
                 results["tablesCheck"],
                 results["versionCheck"],
             ) = await asyncio.gather(
                 self.check_schemas_and_databases(payload),
-                self.tables_check(payload, resolved_multidb),
+                self.tables_check(payload),
                 self.check_client_version(),
             )
 
@@ -307,9 +299,7 @@ class BaseSQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    async def tables_check(
-        self, payload: Dict[str, Any], multidb: bool = False
-    ) -> Dict[str, Any]:
+    async def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
@@ -337,7 +327,7 @@ class BaseSQLHandler(HandlerInterface):
                 "error": str(exc),
             }
 
-        if multidb:
+        if self.multidb:
             dataframe_list = await multidb_query_executor(
                 sql_client=self.sql_client,
                 fetch_database_sql=self.fetch_databases_sql,
