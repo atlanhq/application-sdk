@@ -727,6 +727,7 @@ async def multidb_query_executor(
     output_suffix: str,
     typename: str,
     write_to_file: bool = True,
+    concatenate: bool = False,
 ):
     """
     Create new connection for each database and execute the query and write the dataframe.
@@ -749,7 +750,9 @@ async def multidb_query_executor(
         write_to_file: Whether to write results to file
 
     Returns:
-        Statistics (if writing to file) or list of dataframes
+        Statistics (if writing to file) or list of dataframes (default) or a
+        single concatenated pandas DataFrame when `write_to_file` is False and
+        `concatenate` is True.
 
     Raises:
         ValueError: If SQL client is not initialized or output paths are missing
@@ -832,7 +835,37 @@ async def multidb_query_executor(
         f"Failed to process {len(failed_databases)} databases: {failed_databases}"
     )
 
-    # Handle final results
+    # If requested, concatenate all per-database dataframes into one
+    if not write_to_file and concatenate:
+        try:
+            valid_dataframes = []
+            for df_generator in dataframe_list:
+                if df_generator is None:
+                    continue
+                for dataframe in df_generator:
+                    if dataframe is not None:
+                        # Skip empty dataframes to avoid unnecessary concat overhead
+                        if hasattr(dataframe, "empty") and getattr(dataframe, "empty"):
+                            continue
+                        valid_dataframes.append(dataframe)
+
+            if not valid_dataframes:
+                logger.warning(
+                    "No valid dataframes collected across databases for concatenation"
+                )
+                return None
+
+            # Import locally to avoid global dependency when not concatenating
+            import pandas as pd  # type: ignore
+
+            return pd.concat(valid_dataframes, ignore_index=True)  # type: ignore
+        except Exception as e:
+            logger.error(
+                f"Error concatenating multi-DB dataframes: {str(e)}", exc_info=True
+            )
+            raise
+
+    # Handle final results (default behaviour)
     return await _handle_final_results(
         write_to_file=write_to_file,
         parquet_output=parquet_output,

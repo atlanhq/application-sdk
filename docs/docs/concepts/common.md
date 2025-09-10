@@ -448,6 +448,13 @@ Contains miscellaneous helper functions used throughout the SDK.
 ### Key Functions
 
 *   **`prepare_query(query, workflow_args, temp_table_regex_sql)`**: Modifies a base SQL query string by formatting it with include/exclude filters, temporary table exclusion logic, and flags for excluding empty tables or views. Filters are sourced from `workflow_args["metadata"]`.
+*   **`multidb_query_executor(...)`**: Executes a query across multiple databases based on include/exclude filters and either writes results to Parquet or returns dataframes.
+    - **Args (key)**: `write_to_file: bool = True`, `concatenate: bool = False`
+    - **Behavior**:
+        - When `write_to_file=True`, writes per-database results and returns statistics
+        - When `write_to_file=False` and `concatenate=False` (default), returns a list of generators of per-database DataFrames (backward compatible)
+        - When `write_to_file=False` and `concatenate=True`, returns a single concatenated pandas DataFrame
+    - **Notes**: Prefer `concatenate=True` for simplified callers when memory permits. Keep default behavior for streaming/low-memory use cases.
 *   **`prepare_filters(include_filter_str, exclude_filter_str)`**: Parses JSON string filters (include/exclude) and converts them into normalized regex patterns suitable for SQL `WHERE` clauses (e.g., `db1.schema1|db1.schema2`).
 *   **`normalize_filters(filter_dict, is_include)`**: Takes a dictionary defining filters (e.g., `{"db1": ["schema1", "schema2"], "db2": "*"}`) and converts it into a list of normalized regex strings.
 *   **`get_workflow_config(config_id)`**: Retrieves workflow configuration data using the `StateStore` service.

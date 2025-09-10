@@ -328,26 +328,24 @@ class BaseSQLHandler(HandlerInterface):
             }
 
         if self.multidb:
-            dataframe_list = await multidb_query_executor(
-                sql_client=self.sql_client,
-                fetch_database_sql=self.fetch_databases_sql,
-                extract_temp_table_regex_column_sql=self.extract_temp_table_regex_table_sql,
-                extract_temp_table_regex_table_sql=self.extract_temp_table_regex_table_sql,
-                sql_query=self.tables_check_sql,
-                workflow_args=payload,
-                output_suffix="raw/table",
-                typename="table",
-                write_to_file=False,
-            )
             try:
+                concatenated_df = await multidb_query_executor(
+                    sql_client=self.sql_client,
+                    fetch_database_sql=self.fetch_databases_sql,
+                    extract_temp_table_regex_column_sql=self.extract_temp_table_regex_table_sql,
+                    extract_temp_table_regex_table_sql=self.extract_temp_table_regex_table_sql,
+                    sql_query=self.tables_check_sql,
+                    workflow_args=payload,
+                    output_suffix="raw/table",
+                    typename="table",
+                    write_to_file=False,
+                    concatenate=True,
+                )
 
-                def _iter_records():
-                    for df_generator in dataframe_list:
-                        for dataframe in df_generator:
-                            for row in dataframe.to_dict(orient="records"):  # type: ignore
-                                yield row
+                if concatenated_df is None:
+                    return _build_success(0)
 
-                total = _sum_counts_from_records(_iter_records())
+                total = int(concatenated_df["count"].sum())  # type: ignore
                 return _build_success(total)
             except Exception as exc:
                 return _build_failure(exc)

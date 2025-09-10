@@ -5,6 +5,9 @@ import boto3
 from sqlalchemy.engine.url import URL
 
 from application_sdk.constants import AWS_SESSION_NAME
+from application_sdk.observability.logger_adaptor import get_logger
+
+logger = get_logger(__name__)
 
 
 def get_region_name_from_hostname(hostname: str) -> str:
@@ -234,3 +237,42 @@ def create_engine_url(
         port=port,
         database=database,
     )
+
+
+def get_all_aws_regions() -> list[str]:
+    """
+    Get all available AWS regions dynamically using EC2 describe_regions API.
+    Returns:
+        list[str]: List of all AWS region names
+    Raises:
+        Exception: If unable to retrieve regions from AWS
+    """
+    try:
+        # Use us-east-1 as the default region for the EC2 client since it's always available
+        ec2_client = boto3.client("ec2", region_name="us-east-1")
+        response = ec2_client.describe_regions()
+        regions = [region["RegionName"] for region in response["Regions"]]
+        return sorted(regions)  # Sort for consistent ordering
+    except Exception as e:
+        # Fallback to a comprehensive hardcoded list if API call fails
+        logger.warning(
+            f"Failed to retrieve AWS regions dynamically: {e}. Using fallback list."
+        )
+        return [
+            "ap-northeast-1",
+            "ap-south-1",
+            "ap-southeast-1",
+            "ap-southeast-2",
+            "aws-global",
+            "ca-central-1",
+            "eu-central-1",
+            "eu-north-1",
+            "eu-west-1",
+            "eu-west-2",
+            "eu-west-3",
+            "sa-east-1",
+            "us-east-1",
+            "us-east-2",
+            "us-west-1",
+            "us-west-2",
+        ]
