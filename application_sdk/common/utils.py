@@ -667,7 +667,7 @@ async def _process_single_database(
         write_to_file: Whether to write results to file
 
     Returns:
-        Tuple[bool, Optional[Any]]: A tuple containing success status and dataframe (if not writing to file)
+        Tuple[bool, Optional[Any]]: A tuple containing success status and dataframe or None
     """
     try:
         sql_input = SQLQueryInput(

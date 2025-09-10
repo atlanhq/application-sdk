@@ -23,7 +23,6 @@ from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
-from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.transformers import TransformerInterface
 from application_sdk.transformers.query import QueryBasedTransformer
 
@@ -515,35 +514,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     )
                 await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
-
-    @activity.defn
-    @auto_heartbeater
-    async def save_workflow_state(
-        self, workflow_id: str, workflow_args: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Activity to save workflow state to the state store.
-
-        This activity is used to save workflow arguments to the state store
-        from within a workflow context, avoiding the restriction on using
-        file operations directly in workflows.
-
-        Args:
-            workflow_id: The ID of the workflow.
-            workflow_args: The workflow arguments to save.
-
-        Returns:
-            Dict[str, Any]: The updated state.
-
-        Raises:
-            Exception: If there's an error saving the state.
-        """
-        try:
-            return await StateStore.save_state_object(
-                id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
-            )
-        except Exception as e:
-            logger.error(f"Failed to save workflow state for {workflow_id}: {str(e)}")
-            raise
 
     @activity.defn
     @auto_heartbeater
