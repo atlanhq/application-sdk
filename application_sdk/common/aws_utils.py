@@ -67,12 +67,10 @@ def generate_aws_rds_token_with_iam_role(
         )
 
         credentials = assumed_role["Credentials"]
-        aws_client = client(
-            "rds",
-            aws_access_key_id=credentials["AccessKeyId"],
-            aws_secret_access_key=credentials["SecretAccessKey"],
-            aws_session_token=credentials["SessionToken"],
-            region_name=region or get_region_name_from_hostname(host),
+        aws_client = create_aws_client(
+            service="rds",
+            region=region or get_region_name_from_hostname(host),
+            temp_credentials=credentials,
         )
         token: str = aws_client.generate_db_auth_token(
             DBHostname=host, Port=port, DBUsername=user
@@ -191,22 +189,126 @@ def get_cluster_credentials(
     )
 
 
-def create_aws_client(session: boto3.Session, region: str, service: str) -> Any:
+def create_aws_client(
+    service: str,
+    region: str,
+    session: Optional[boto3.Session] = None,
+    temp_credentials: Optional[Dict[str, str]] = None,
+    use_default_credentials: bool = False,
+) -> Any:
     """
-    Create an AWS client using the provided session and region.
+    Create an AWS client with flexible credential options.
 
     Args:
-        session: Boto3 session instance
+        service: AWS service name (e.g., 'redshift', 'redshift-serverless', 'sts', 'rds')
         region: AWS region name
-        service: AWS service name (e.g., 'redshift', 'rds', 'sts')
+        session: Optional boto3 session instance. If provided, uses session credentials
+        temp_credentials: Optional dictionary containing temporary credentials from assume_role.
+                         Must contain 'AccessKeyId', 'SecretAccessKey', and 'SessionToken'
+        use_default_credentials: If True, uses default AWS credentials (environment, IAM role, etc.)
+                                This is the fallback if no other credentials are provided
 
     Returns:
         AWS client instance
+
+    Raises:
+        ValueError: If invalid credential combination is provided
+        Exception: If client creation fails
+
+    Examples:
+        # Using temporary credentials
+        client = create_aws_client(
+            service="redshift",
+            region="us-east-1",
+            temp_credentials={
+                "AccessKeyId": "AKIA...",
+                "SecretAccessKey": "...",
+                "SessionToken": "..."
+            }
+        )
+
+        # Using a session
+        session = boto3.Session(profile_name="my-profile")
+        client = create_aws_client(
+            service="rds",
+            region="us-west-2",
+            session=session
+        )
+
+        # Using default credentials
+        client = create_aws_client(
+            service="sts",
+            region="us-east-1",
+            use_default_credentials=True
+        )
     """
-    # Use type: ignore to suppress the overload mismatch warning
-    # The boto3 client method has many overloads for different services
-    # but we need to support dynamic service names
-    return session.client(service, region_name=region)  # type: ignore
+    # Validate credential options
+    credential_sources = sum(
+        [session is not None, temp_credentials is not None, use_default_credentials]
+    )
+
+    if credential_sources == 0:
+        raise ValueError("At least one credential source must be provided")
+    if credential_sources > 1:
+        raise ValueError("Only one credential source should be provided at a time")
+
+    try:
+        # Priority 1: Use provided session
+        if session is not None:
+            logger.debug(
+                f"Creating {service} client using provided session in region {region}"
+            )
+            return session.client(service, region_name=region)  # type: ignore
+
+        # Priority 2: Use temporary credentials
+        if temp_credentials is not None:
+            logger.debug(
+                f"Creating {service} client using temporary credentials in region {region}"
+            )
+            return boto3.client(  # type: ignore
+                service,
+                aws_access_key_id=temp_credentials["AccessKeyId"],
+                aws_secret_access_key=temp_credentials["SecretAccessKey"],
+                aws_session_token=temp_credentials["SessionToken"],
+                region_name=region,
+            )
+
+        # Priority 3: Use default credentials
+        if use_default_credentials:
+            logger.debug(
+                f"Creating {service} client using default credentials in region {region}"
+            )
+            return boto3.client(service, region_name=region)  # type: ignore
+
+    except Exception as e:
+        logger.error(f"Failed to create {service} client in region {region}: {e}")
+        raise Exception(f"Failed to create {service} client: {str(e)}")
+
+
+def create_aws_client_with_temp_credentials(
+    service: str,
+    temp_credentials: Dict[str, str],
+    region: str,
+) -> Any:
+    """
+    Create an AWS client using temporary credentials from assumed role.
+
+    This is a convenience wrapper around create_aws_client for backward compatibility.
+
+    Args:
+        service: AWS service name (e.g., 'redshift', 'redshift-serverless', 'sts')
+        temp_credentials: Dictionary containing temporary credentials from assume_role
+        region: AWS region name
+
+    Returns:
+        AWS client instance
+
+    Raises:
+        Exception: If client creation fails
+    """
+    return create_aws_client(
+        service=service, region=region, temp_credentials=temp_credentials
+    )
 
 
 def create_engine_url(
