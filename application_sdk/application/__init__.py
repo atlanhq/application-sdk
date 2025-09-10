@@ -55,7 +55,7 @@ class BaseApplication:
 
         self.client_class = client_class or BaseClient
         self.handler_class = handler_class or BaseHandler
-        
+
         # MCP configuration
         self.enable_mcp = enable_mcp
         self.mcp_server = None
@@ -199,7 +199,7 @@ class BaseApplication:
                 self.server.app.mount("", mcp_asgi_app)  # Mount at root
                 logger.info("Mounted MCP at root")
                 print("\nMCP Debug Info:")
-                print("   • MCP endpoint: http://localhost:8000/mcp") 
+                print("   • MCP endpoint: http://localhost:8000/mcp")
                 print("   • Transport: streamable_http")
                 print("   • Debug with MCP Inspector using the above URL")
             except Exception as e:
@@ -227,28 +227,36 @@ class BaseApplication:
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
-    
+
     async def _create_mcp_asgi_app(self):
         """Create MCP server and return ASGI app with proper lifespan."""
         if self._workflow_and_activities_classes is None:
-            logger.error("Cannot setup MCP: workflow not configured. Call setup_workflow() first.")
+            logger.error(
+                "Cannot setup MCP: workflow not configured. Call setup_workflow() first."
+            )
             return None
-            
+
         try:
             from application_sdk.servers.mcp.server import MCPServer
         except ImportError:
             logger.error("FastMCP not installed. Run: pip install fastmcp>=2.0.0")
             return None
-            
+
         # Create and configure MCP server
         mcp_name = f"{self.application_name} MCP"
-        self.mcp_server = MCPServer(mcp_name=mcp_name, workflow_client=self.workflow_client)
-        
+        self.mcp_server = MCPServer(
+            mcp_name=mcp_name, workflow_client=self.workflow_client
+        )
+
         # Auto-discover and register decorated activities
-        self.mcp_server.discover_and_register_tools(self._workflow_and_activities_classes)
-        
-        logger.info(f"Created MCP server with {len(self.mcp_server.registered_tools)} tools")
-        
+        self.mcp_server.discover_and_register_tools(
+            self._workflow_and_activities_classes
+        )
+
+        logger.info(
+            f"Created MCP server with {len(self.mcp_server.registered_tools)} tools"
+        )
+
         # Return the ASGI app (with lifespan built-in)
         return self.mcp_server.get_asgi_app()
 
@@ -263,5 +271,3 @@ class BaseApplication:
             raise ValueError("Application server not initialized")
 
         await self.server.start()
-    
-
