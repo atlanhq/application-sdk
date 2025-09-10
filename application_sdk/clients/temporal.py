@@ -26,6 +26,7 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
+from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
 from application_sdk.interceptors.events import EventInterceptor, publish_event
 from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
@@ -359,7 +360,7 @@ class TemporalWorkflowClient(WorkflowClient):
             )
 
         # Start with provided activities and add system activities
-        final_activities = list(activities) + [publish_event]
+        final_activities = list(activities) + [publish_event, cleanup]
 
         # Add lock management activities if needed
         if not IS_LOCKING_DISABLED:
@@ -395,6 +396,7 @@ class TemporalWorkflowClient(WorkflowClient):
             activity_executor=activity_executor,
             interceptors=[
                 EventInterceptor(),
+                CleanupInterceptor(),
                 RedisLockInterceptor(activities_dict),
             ],
         )
