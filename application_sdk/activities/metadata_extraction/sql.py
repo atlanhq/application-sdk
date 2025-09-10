@@ -1,5 +1,17 @@
 import os
-from typing import Any, Dict, Optional, Tuple, Type, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    AsyncIterator,
+    Dict,
+    Generator,
+    Iterator,
+    Optional,
+    Tuple,
+    Type,
+    cast,
+)
 
 from temporalio import activity
 
@@ -13,7 +25,11 @@ from application_sdk.activities.common.utils import (
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.common.utils import prepare_query, read_sql_files
+from application_sdk.common.utils import (
+    multidb_query_executor,
+    prepare_query,
+    read_sql_files,
+)
 from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERIES_PATH
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
@@ -30,6 +46,9 @@ logger = get_logger(__name__)
 activity.logger = logger
 
 queries = read_sql_files(queries_prefix=SQL_QUERIES_PATH)
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class BaseSQLMetadataExtractionActivitiesState(ActivitiesState):
@@ -90,6 +109,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client_class: Optional[Type[BaseSQLClient]] = None,
         handler_class: Optional[Type[BaseSQLHandler]] = None,
         transformer_class: Optional[Type[TransformerInterface]] = None,
+        multidb: bool = False,
     ):
         """Initialize the SQL metadata extraction activities.
 
@@ -100,6 +120,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 Defaults to BaseSQLHandler.
             transformer_class (Type[TransformerInterface], optional): Class for metadata transformation.
                 Defaults to QueryBasedTransformer.
+            multidb (bool): When True, executes queries across multiple databases using
+                `multidb_query_executor`. Defaults to False.
         """
         if sql_client_class:
             self.sql_client_class = sql_client_class
@@ -107,6 +129,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             self.handler_class = handler_class
         if transformer_class:
             self.transformer_class = transformer_class
+
+        # Control whether to execute per-db using multidb executor
+        self.multidb = multidb
 
         super().__init__()
 
@@ -213,6 +238,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args: Dict[str, Any],
         output_suffix: str,
         typename: str,
+        write_to_file: bool = True,
+        concatenate: bool = False,
+        return_dataframe: bool = False,
+        sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[ActivityStatistics]:
         """
         Executes a SQL query using the provided engine and saves the results to Parquet.
@@ -239,6 +268,64 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         Raises:
             ValueError: If `sql_engine` is not provided.
         """
+        # If multidb mode is enabled, delegate to multidb_query_executor
+        if getattr(self, "multidb", False):
+            effective_sql_client = sql_client
+            if effective_sql_client is None:
+                # Only access activity state when a client wasn't provided
+                state = cast(
+                    BaseSQLMetadataExtractionActivitiesState,
+                    await self._get_state(workflow_args),
+                )
+                effective_sql_client = state.sql_client
+
+            if not effective_sql_client:
+                logger.error("SQL client not initialized for multidb execution")
+                raise ValueError("SQL client not initialized")
+
+            result = await multidb_query_executor(
+                sql_client=effective_sql_client,
+                fetch_database_sql=self.fetch_database_sql,
+                extract_temp_table_regex_column_sql=self.extract_temp_table_regex_column_sql,
+                extract_temp_table_regex_table_sql=self.extract_temp_table_regex_table_sql,
+                sql_query=sql_query,
+                workflow_args=workflow_args,
+                output_suffix=output_suffix,
+                typename=typename,
+                write_to_file=write_to_file,
+                concatenate=concatenate,
+            )
+            # When writing to file within multidb executor, return stats directly
+            if write_to_file:
+                return cast(Optional[ActivityStatistics], result)
+
+            # If not writing to file and concatenated DataFrame is returned, write it here
+            if concatenate and result is not None:
+                if return_dataframe:
+                    return result  # type: ignore[return-value]
+                output_prefix = workflow_args.get("output_prefix")
+                output_path = workflow_args.get("output_path")
+                if not output_prefix or not output_path:
+                    logger.error("Output prefix or path not provided in workflow_args.")
+                    raise ValueError(
+                        "Output prefix and path must be specified in workflow_args."
+                    )
+
+                parquet_output = ParquetOutput(
+                    output_prefix=output_prefix,
+                    output_path=output_path,
+                    output_suffix=output_suffix,
+                )
+                # result should be a pandas DataFrame when concatenate=True
+                await parquet_output.write_dataframe(result)  # type: ignore[arg-type]
+                return await parquet_output.get_statistics(typename=typename)
+
+            # If not writing to file and not concatenating, nothing to return here
+            logger.warning(
+                "multidb execution returned no output to write (write_to_file=False, concatenate=False)"
+            )
+            return None
+
         if not sql_engine:
             logger.error("SQL engine is not set.")
             raise ValueError("SQL engine must be provided.")
@@ -248,7 +335,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         try:
             sql_input = SQLQueryInput(engine=sql_engine, query=sql_query)
-            dataframe = await sql_input.get_batched_dataframe()
+            batched_iter = await sql_input.get_batched_dataframe()
 
             output_prefix = workflow_args.get("output_prefix")
             output_path = workflow_args.get("output_path")
@@ -264,7 +351,31 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 output_path=output_path,
                 output_suffix=output_suffix,
             )
-            await parquet_output.write_batched_dataframe(dataframe)
+            # Wrap iterator into a proper (async)generator for type safety
+            if hasattr(batched_iter, "__anext__"):
+
+                async def _to_async_gen(
+                    it: AsyncIterator["pd.DataFrame"],
+                ) -> AsyncGenerator["pd.DataFrame", None]:
+                    async for item in it:
+                        yield item
+
+                wrapped: AsyncGenerator["pd.DataFrame", None] = _to_async_gen(  # type: ignore
+                    batched_iter  # type: ignore
+                )
+                await parquet_output.write_batched_dataframe(wrapped)
+            else:
+
+                def _to_gen(
+                    it: Iterator["pd.DataFrame"],
+                ) -> Generator["pd.DataFrame", None, None]:
+                    for item in it:
+                        yield item
+
+                wrapped_sync: Generator["pd.DataFrame", None, None] = _to_gen(  # type: ignore
+                    batched_iter  # type: ignore
+                )
+                await parquet_output.write_batched_dataframe(wrapped_sync)
             logger.info(
                 f"Successfully wrote query results to {parquet_output.get_full_path()}"
             )
