@@ -182,10 +182,13 @@ class TestObjectStore:
         new_callable=AsyncMock,
     )
     async def test_delete_prefix_list_failure(self, mock_list_files: AsyncMock) -> None:
-        """Test delete prefix failure when listing files fails."""
+        """Test delete prefix when listing files fails - should raise FileNotFoundError."""
         mock_list_files.side_effect = Exception("Failed to list files")
 
-        with pytest.raises(Exception, match="Failed to list files"):
+        # Should raise FileNotFoundError to give developers clear feedback
+        with pytest.raises(
+            FileNotFoundError, match="No files found under prefix: prefix/"
+        ):
             await ObjectStore.delete_prefix(prefix="prefix/")
 
     @patch("application_sdk.services.objectstore.DaprClient")
