@@ -312,7 +312,7 @@ def create_boto3_client(
 def setup_aws_role_based_authentication(
     credentials: Dict[str, Any],
     extra: Dict[str, Any],
-    drivername:str,
+    drivername: str,
     session_name: str,
     duration_seconds: int = 3600,
 ) -> tuple[Any, Any]:
