@@ -34,7 +34,7 @@ class SQLQueryInput(Input):
         self,
         query: str,
         engine: Union["Engine", str],
-        chunk_size: Optional[int] = 5000,
+        chunk_size: Optional[int] = 100000,
     ):
         """Initialize the async SQL query input handler.
 
@@ -42,7 +42,7 @@ class SQLQueryInput(Input):
             engine (Union[Engine, str]): SQLAlchemy engine or connection string.
             query (str): The SQL query to execute.
             chunk_size (Optional[int], optional): Number of rows per batch.
-                Defaults to 5000.
+                Defaults to 100000.
         """
         self.query = query
         self.engine = engine

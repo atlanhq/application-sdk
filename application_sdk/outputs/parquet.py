@@ -1,4 +1,3 @@
-import gc
 import os
 from enum import Enum
 from typing import TYPE_CHECKING, List, Optional, Union
@@ -101,6 +100,9 @@ class ParquetOutput(Output):
         self.statistics = []
         self.metrics = get_metrics()
 
+        if self.chunk_start:
+            self.chunk_count = self.chunk_start + self.chunk_count
+
         # Create output directory
         self.output_path = os.path.join(self.output_path, self.output_suffix)
         if self.typename:
@@ -134,78 +136,6 @@ class ParquetOutput(Output):
             return f"{str(chunk_count)}.parquet"
         else:
             return f"chunk-{str(chunk_start)}-part{str(chunk_count)}.parquet"
-
-    async def write_dataframe(self, dataframe: "pd.DataFrame"):
-        """Write a pandas DataFrame to Parquet files and upload to object store.
-
-        Args:
-            dataframe (pd.DataFrame): The DataFrame to write.
-        """
-        try:
-            chunk_part = 0
-            if len(dataframe) == 0:
-                return
-
-            for i in range(0, len(dataframe), self.buffer_size):
-                chunk = dataframe[i : i + self.buffer_size]
-                chunk_size_bytes = self.estimate_dataframe_file_size(chunk, "parquet")
-
-                if (
-                    self.current_buffer_size_bytes + chunk_size_bytes
-                    > self.max_file_size_bytes
-                ):
-                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                    await self._upload_file(output_file_name)
-                    chunk_part += 1
-
-                self.current_buffer_size += len(chunk)
-                self.current_buffer_size_bytes += chunk_size_bytes
-                await self._flush_buffer(chunk, chunk_part)
-
-                del chunk
-                gc.collect()
-
-            if self.current_buffer_size > 0:
-                output_file_name = (
-                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                )
-                await self._upload_file(output_file_name)
-
-            # Record metrics for successful write
-            self.metrics.record_metric(
-                name="parquet_write_records",
-                value=len(dataframe),
-                metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
-                description="Number of records written to Parquet files from pandas DataFrame",
-            )
-
-            # Record chunk metrics
-            self.metrics.record_metric(
-                name="parquet_chunks_written",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
-                description="Number of chunks written to Parquet files",
-            )
-
-            self.chunk_count += 1
-            self.statistics.append(chunk_part)
-        except Exception as e:
-            # Record metrics for failed write
-            self.metrics.record_metric(
-                name="parquet_write_errors",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={
-                    "type": "pandas",
-                    "mode": WriteMode.APPEND.value,
-                    "error": str(e),
-                },
-                description="Number of errors while writing to Parquet files",
-            )
-            logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
-            raise
 
     async def write_daft_dataframe(
         self,
@@ -318,15 +248,12 @@ class ParquetOutput(Output):
 
         This method writes a chunk to a Parquet file and uploads the file to the object store.
         """
-        if not os.path.exists(file_name):
-            chunk.to_parquet(
-                file_name, index=False, compression="snappy", engine="fastparquet"
-            )
-        else:
-            chunk.to_parquet(
-                file_name,
-                index=False,
-                compression="snappy",
-                engine="fastparquet",
-                append=True,
-            )
+        append = False if not os.path.exists(file_name) else True
+        chunk.to_parquet(
+            file_name,
+            index=False,
+            compression="snappy",
+            engine="fastparquet",
+            append=append,
+            object_encoding="infer",
+        )

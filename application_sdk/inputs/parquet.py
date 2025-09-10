@@ -24,7 +24,7 @@ class ParquetInput(Input):
     def __init__(
         self,
         path: Optional[str] = None,
-        chunk_size: Optional[int] = 5000,
+        chunk_size: Optional[int] = 100000,
         input_prefix: Optional[str] = None,
         file_names: Optional[List[str]] = None,
     ):
@@ -168,6 +168,7 @@ class ParquetInput(Input):
         """
         try:
             import daft  # type: ignore
+            import pandas as pd
 
             if self.file_names:
                 for file_name in self.file_names:

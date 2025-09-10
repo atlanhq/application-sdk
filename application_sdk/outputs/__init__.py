@@ -4,8 +4,11 @@ This module provides base classes and utilities for handling various types of da
 in the application, including file outputs and object store interactions.
 """
 
+import gc
 import inspect
+import os
 from abc import ABC, abstractmethod
+from enum import Enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -13,7 +16,6 @@ from typing import (
     Dict,
     Generator,
     List,
-    Literal,
     Optional,
     Union,
     cast,
@@ -37,6 +39,14 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
+class WriteMode(Enum):
+    """Enumeration of write modes for output operations."""
+
+    APPEND = "append"
+    OVERWRITE = "overwrite"
+    OVERWRITE_PARTITIONS = "overwrite-partitions"
+
+
 class Output(ABC):
     """Abstract base class for output handlers.
 
@@ -54,11 +64,13 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
-    statistics: List[int] = []
+    buffer_size: int
+    max_file_size_bytes: int
+    current_buffer_size: int
+    current_buffer_size_bytes: int
+    statistics: List[int]
 
-    def estimate_dataframe_file_size(
-        self, dataframe: "pd.DataFrame", file_type: Literal["json", "parquet"]
-    ) -> int:
+    def estimate_dataframe_file_size(self, dataframe: "pd.DataFrame") -> int:
         """Estimate File size of a DataFrame by sampling a few records."""
         if len(dataframe) == 0:
             return 0
@@ -66,6 +78,7 @@ class Output(ABC):
         # Sample up to 10 records to estimate average size
         sample_size = min(10, len(dataframe))
         sample = dataframe.head(sample_size)
+        file_type = type(self).__name__.lower().replace("output", "")
         if file_type == "json":
             sample_file = sample.to_json(orient="records", lines=True)
         else:
@@ -148,14 +161,81 @@ class Output(ABC):
         except Exception as e:
             logger.error(f"Error writing batched dataframe: {str(e)}")
 
-    @abstractmethod
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
-        """Write a pandas DataFrame to the output destination.
+        """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (pd.DataFrame): The DataFrame to write.
         """
-        pass
+        try:
+            chunk_part = 0
+            if len(dataframe) == 0:
+                return
+
+            for i in range(0, len(dataframe), self.buffer_size):
+                chunk = dataframe[i : i + self.buffer_size]
+                chunk_size_bytes = self.estimate_dataframe_file_size(chunk)
+
+                if (
+                    self.current_buffer_size_bytes + chunk_size_bytes
+                    > self.max_file_size_bytes
+                ):
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                    if os.path.exists(output_file_name):
+                        await self._upload_file(output_file_name)
+                        chunk_part += 1
+
+                self.current_buffer_size += len(chunk)
+                self.current_buffer_size_bytes += chunk_size_bytes
+                await self._flush_buffer(chunk, chunk_part)
+
+                del chunk
+                gc.collect()
+
+            if self.current_buffer_size_bytes > 0:
+                # Finally upload the final file to the object store
+                output_file_name = (
+                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                )
+                if os.path.exists(output_file_name):
+                    await self._upload_file(output_file_name)
+                    chunk_part += 1
+
+            # Record metrics for successful write
+            self.metrics.record_metric(
+                name="write_records",
+                value=len(dataframe),
+                metric_type=MetricType.COUNTER,
+                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
+                description="Number of records written to files from pandas DataFrame",
+            )
+
+            # Record chunk metrics
+            self.metrics.record_metric(
+                name="chunks_written",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
+                description="Number of chunks written to files",
+            )
+
+            self.chunk_count += 1
+            self.statistics.append(chunk_part)
+        except Exception as e:
+            # Record metrics for failed write
+            self.metrics.record_metric(
+                name="write_errors",
+                value=1,
+                metric_type=MetricType.COUNTER,
+                labels={
+                    "type": "pandas",
+                    "mode": WriteMode.APPEND.value,
+                    "error": str(e),
+                },
+                description="Number of errors while writing to files",
+            )
+            logger.error(f"Error writing pandas dataframe to files: {str(e)}")
+            raise
 
     async def write_batched_daft_dataframe(
         self,
@@ -233,12 +313,9 @@ class Output(ABC):
             destination=get_object_store_prefix(file_name),
         )
 
-        self.current_buffer_size = 0
         self.current_buffer_size_bytes = 0
 
-    async def _flush_buffer(
-        self, chunk: Union["pd.DataFrame", "daft.DataFrame"], chunk_part: int
-    ):
+    async def _flush_buffer(self, chunk: "pd.DataFrame", chunk_part: int):
         """Flush the current buffer to a JSON file.
 
         This method combines all DataFrames in the buffer, writes them to a JSON file,
@@ -254,6 +331,8 @@ class Output(ABC):
                     f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
                 )
                 await self.write_chunk(chunk, output_file_name)
+
+                self.current_buffer_size = 0
 
                 # Record chunk metrics
                 self.metrics.record_metric(

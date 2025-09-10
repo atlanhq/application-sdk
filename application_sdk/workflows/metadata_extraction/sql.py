@@ -174,7 +174,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             # Each batch contains exactly one chunk
             batches.append(
                 [
-                    f"{typename}/chunk-{i}-part{file+1}.parquet"
+                    f"{typename}/chunk-{i}-part{file}.parquet"
                     for file in range(partition)
                 ]
             )
