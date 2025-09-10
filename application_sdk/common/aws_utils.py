@@ -482,7 +482,8 @@ def setup_aws_role_based_authentication(
 def setup_iam_connection(
     credentials: Dict[str, Any],
     extra: Dict[str, Any],
-    drivername: str = "redshift+psycopg2",
+    drivername: str,
+    service_name: str,
 ) -> tuple[Any, Any]:
     """
     Set up database connection using IAM authentication.
@@ -509,7 +510,7 @@ def setup_iam_connection(
         raise ValueError(f"Could not extract region from host: {host}")
 
     # Create Redshift client
-    aws_client = create_aws_client(session, region, "redshift")
+    aws_client = create_aws_client(session, region, service_name)
 
     # Get cluster credentials
     cluster_credentials = get_cluster_credentials(aws_client, credentials, extra)
