@@ -554,7 +554,6 @@ class APIServer(ServerInterface):
                 raise Exception("Handler not initialized")
 
             await self.handler.load(body.credentials)
-            # Call preflight_check with request payload only; handler may internally use its multidb setting
             preflight_check = await self.handler.preflight_check(body.model_dump())
 
             # Record successful preflight check
