@@ -208,7 +208,15 @@ class ObjectStore:
         """
         try:
             # First, list all files under the prefix
-            files_to_delete = await cls.list_files(prefix=prefix, store_name=store_name)
+            try:
+                files_to_delete = await cls.list_files(
+                    prefix=prefix, store_name=store_name
+                )
+            except Exception as e:
+                # If we can't list files for any reason, we can't delete them either
+                # Raise FileNotFoundError to give developers clear feedback
+                logger.info(f"Cannot list files under prefix {prefix}: {str(e)}")
+                raise FileNotFoundError(f"No files found under prefix: {prefix}")
 
             if not files_to_delete:
                 logger.info(f"No files found under prefix: {prefix}")
@@ -236,6 +244,7 @@ class ObjectStore:
         source: str,
         destination: str,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
+        retain_local_copy: bool = False,
     ) -> None:
         """Upload a single file to the object store.
 
@@ -277,7 +286,8 @@ class ObjectStore:
             raise e
 
         # Clean up local file after successful upload
-        cls._cleanup_local_path(source)
+        if not retain_local_copy:
+            cls._cleanup_local_path(source)
 
     @classmethod
     async def upload_prefix(
@@ -286,6 +296,7 @@ class ObjectStore:
         destination: str,
         store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
         recursive: bool = True,
+        retain_local_copy: bool = False,
     ) -> None:
         """Upload all files from a directory to the object store.
 
@@ -333,7 +344,9 @@ class ObjectStore:
                     store_key = os.path.join(destination, relative_path).replace(
                         os.sep, "/"
                     )
-                    await cls.upload_file(file_path, store_key, store_name)
+                    await cls.upload_file(
+                        file_path, store_key, store_name, retain_local_copy
+                    )
 
             logger.info(f"Completed uploading directory {source} to object store")
         except Exception as e:
