@@ -4,6 +4,7 @@ import pytest
 
 from application_sdk.common.aws_utils import (
     create_aws_client,
+    create_aws_client_with_temp_credentials,
     create_aws_session,
     create_engine_url,
     generate_aws_rds_token_with_iam_role,
@@ -304,6 +305,33 @@ class TestAWSUtils:
         assert result == mock_client
         mock_session.client.assert_called_once_with("redshift", region_name="us-east-1")
 
+    def test_create_aws_client_with_temp_credentials(self):
+        """Test creating AWS client with temporary credentials."""
+        temp_credentials = {
+            "AccessKeyId": "temp_key",
+            "SecretAccessKey": "temp_secret",
+            "SessionToken": "temp_token",
+        }
+
+        with patch("boto3.client") as mock_client:
+            mock_client_instance = MagicMock()
+            mock_client.return_value = mock_client_instance
+
+            result = create_aws_client(
+                service="sts",
+                region="us-west-2",
+                temp_credentials=temp_credentials,
+            )
+
+            assert result == mock_client_instance
+            mock_client.assert_called_once_with(
+                "sts",
+                aws_access_key_id="temp_key",
+                aws_secret_access_key="temp_secret",
+                aws_session_token="temp_token",
+                region_name="us-west-2",
+            )
+
     def test_create_aws_client_with_default_credentials(self):
         """Test creating AWS client with default credentials."""
         with patch("boto3.client") as mock_client:
@@ -352,6 +380,34 @@ class TestAWSUtils:
                 create_aws_client(
                     service="s3", region="us-east-1", use_default_credentials=True
                 )
+
+    # Tests for create_aws_client_with_temp_credentials
+    def test_create_aws_client_with_temp_credentials_wrapper(self):
+        """Test the convenience wrapper for creating AWS client with temp credentials."""
+        temp_credentials = {
+            "AccessKeyId": "temp_key",
+            "SecretAccessKey": "temp_secret",
+            "SessionToken": "temp_token",
+        }
+
+        with patch(
+            "application_sdk.common.aws_utils.create_aws_client"
+        ) as mock_create_client:
+            mock_client = MagicMock()
+            mock_create_client.return_value = mock_client
+
+            result = create_aws_client_with_temp_credentials(
+                service="redshift",
+                temp_credentials=temp_credentials,
+                region="us-east-1",
+            )
+
+            assert result == mock_client
+            mock_create_client.assert_called_once_with(
+                service="redshift",
+                region="us-east-1",
+                temp_credentials=temp_credentials,
+            )
 
     # Tests for create_engine_url
     def test_create_engine_url_success(self):

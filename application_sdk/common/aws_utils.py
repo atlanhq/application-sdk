@@ -288,6 +288,32 @@ def create_aws_client(
         raise Exception(f"Failed to create {service} client: {str(e)}")
 
 
+def create_aws_client_with_temp_credentials(
+    service: str,
+    temp_credentials: Dict[str, str],
+    region: str,
+) -> Any:
+    """
+    Create an AWS client using temporary credentials from assumed role.
+
+    This is a convenience wrapper around create_aws_client for backward compatibility.
+
+    Args:
+        service: AWS service name (e.g., 'redshift', 'redshift-serverless', 'sts')
+        temp_credentials: Dictionary containing temporary credentials from assume_role
+        region: AWS region name
+
+    Returns:
+        AWS client instance
+
+    Raises:
+        Exception: If client creation fails
+    """
+    return create_aws_client(
+        service=service, region=region, temp_credentials=temp_credentials
+    )
+
+
 def create_engine_url(
     drivername: str,
     credentials: Dict[str, Any],

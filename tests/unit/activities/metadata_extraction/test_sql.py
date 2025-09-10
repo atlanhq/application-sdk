@@ -836,7 +836,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
     @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
     @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
-    async def test_query_executor_multidb_auto_concatenate_success(
+    async def test_query_executor_multidb_concatenate_success(
         self,
         mock_parse_credentials_extra,
         mock_prepare_query,
@@ -850,7 +850,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_activities,
         sample_workflow_args,
     ):
-        """Test query_executor with multidb mode and automatic concatenation when write_to_file=False."""
+        """Test query_executor with multidb mode and concatenate=True."""
         # Enable multidb mode
         mock_activities.multidb = True
         await mock_activities._set_state(sample_workflow_args)
@@ -889,6 +889,7 @@ class TestBaseSQLMetadataExtractionActivities:
             output_suffix,
             typename,
             write_to_file=False,
+            concatenate=True,
         )
 
         assert result is not None
@@ -901,7 +902,7 @@ class TestBaseSQLMetadataExtractionActivities:
     @patch("application_sdk.activities.metadata_extraction.sql.get_database_names")
     @patch("application_sdk.activities.metadata_extraction.sql.prepare_query")
     @patch("application_sdk.activities.metadata_extraction.sql.parse_credentials_extra")
-    async def test_query_executor_multidb_auto_concatenate_return_dataframe(
+    async def test_query_executor_multidb_concatenate_return_dataframe(
         self,
         mock_parse_credentials_extra,
         mock_prepare_query,
@@ -912,7 +913,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_activities,
         sample_workflow_args,
     ):
-        """Test query_executor with multidb mode, automatic concatenation when write_to_file=False, and return_dataframe=True."""
+        """Test query_executor with multidb mode, concatenate=True, and return_dataframe=True."""
         # Enable multidb mode
         mock_activities.multidb = True
         await mock_activities._set_state(sample_workflow_args)
@@ -950,6 +951,7 @@ class TestBaseSQLMetadataExtractionActivities:
             output_suffix,
             typename,
             write_to_file=False,
+            concatenate=True,
             return_dataframe=True,
         )
 

@@ -244,6 +244,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         output_suffix: str,
         typename: str,
         write_to_file: bool = True,
+        concatenate: bool = False,
         return_dataframe: bool = False,
         sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[ActivityStatistics]: ...
@@ -257,6 +258,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         output_suffix: str,
         typename: str,
         write_to_file: bool = True,
+        concatenate: bool = False,
         return_dataframe: bool = True,
         sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]: ...
@@ -269,6 +271,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         output_suffix: str,
         typename: str,
         write_to_file: bool = True,
+        concatenate: bool = False,
         return_dataframe: bool = False,
         sql_client: Optional[BaseSQLClient] = None,
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
@@ -289,10 +292,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                            - "output_path": Base directory for the output.
             output_suffix: Suffix to append to the output file name.
             typename: Type name used for generating output statistics.
-            write_to_file: Whether to write results to a Parquet file. If False, results
-                          are concatenated and returned as DataFrame or written to a new file.
-            return_dataframe: Whether to return the DataFrame directly instead of statistics.
-            sql_client: Optional SQL client for multi-database execution.
 
         Returns:
             Optional[Union[ActivityStatistics, pd.DataFrame]]: Statistics about the generated Parquet file,
@@ -312,19 +311,15 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         )
 
         # If multidb mode is enabled, run per-database flow
-        if self.multidb:
-            state = cast(
-                BaseSQLMetadataExtractionActivitiesState,
-                await self._get_state(workflow_args),
-            )
-
+        if getattr(self, "multidb", False):
             return await self._execute_multidb_flow(
-                state.sql_client,
+                sql_client,
                 sql_query,
                 workflow_args,
                 output_suffix,
                 typename,
                 write_to_file,
+                concatenate,
                 return_dataframe,
                 parquet_output,
             )
@@ -472,6 +467,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     async def _finalize_multidb_results(
         self,
         write_to_file: bool,
+        concatenate: bool,
         return_dataframe: bool,
         parquet_output: Optional[ParquetOutput],
         dataframe_list: List[Any],
@@ -483,7 +479,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         if write_to_file and parquet_output:
             return await parquet_output.get_statistics(typename=typename)
 
-        if not write_to_file:
+        if not write_to_file and concatenate:
             try:
                 import pandas as pd  # type: ignore
 
@@ -526,7 +522,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 raise
 
         logger.warning(
-            "multidb execution returned no output to write (write_to_file=False)"
+            "multidb execution returned no output to write (write_to_file=False, concatenate=False)"
         )
         return None
 
@@ -538,22 +534,36 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         output_suffix: str,
         typename: str,
         write_to_file: bool,
+        concatenate: bool,
         return_dataframe: bool,
         parquet_output: Optional[ParquetOutput],
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """Execute multi-database flow with proper error handling and result finalization."""
-        # Validate client
-        if not sql_client or not sql_client.engine:
-            logger.error("SQL client engine not initialized")
-            raise ValueError("SQL client engine not initialized")
+        # Get effective SQL client
+        effective_sql_client = sql_client
+        if effective_sql_client is None:
+            state = cast(
+                BaseSQLMetadataExtractionActivitiesState,
+                await self._get_state(workflow_args),
+            )
+            effective_sql_client = state.sql_client
+
+        if not effective_sql_client:
+            logger.error("SQL client not initialized for multidb execution")
+            raise ValueError("SQL client not initialized")
 
         # Resolve databases to iterate
         database_names = await get_database_names(
-            sql_client, workflow_args, self.fetch_database_sql
+            effective_sql_client, workflow_args, self.fetch_database_sql
         )
         if not database_names:
             logger.warning("No databases found to process")
             return None
+
+        # Validate client
+        if not effective_sql_client.engine:
+            logger.error("SQL client engine not initialized")
+            raise ValueError("SQL client engine not initialized")
 
         successful_databases = []
         failed_databases = []
@@ -562,7 +572,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         # Iterate databases and execute
         for database_name in database_names or []:
             success, batched_iter = await self._process_single_database(
-                sql_client,
+                effective_sql_client,
                 database_name,
                 sql_query,
                 workflow_args,
@@ -590,6 +600,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         # Finalize results
         return await self._finalize_multidb_results(
             write_to_file,
+            concatenate,
             return_dataframe,
             parquet_output,
             dataframe_list,

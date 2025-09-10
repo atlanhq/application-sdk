@@ -342,6 +342,7 @@ class BaseSQLHandler(HandlerInterface):
                     output_suffix="raw/table",
                     typename="table",
                     write_to_file=False,
+                    concatenate=True,
                     return_dataframe=True,
                     sql_client=self.sql_client,
                 )
