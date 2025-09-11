@@ -228,8 +228,8 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_batched_dataframe_no_chunk_size(monkeypatch) -> None:
-    """Verify that get_batched_dataframe returns entire dataframe when no chunk_size is provided."""
+async def test_get_batched_dataframe_with_chunk_size(monkeypatch) -> None:
+    """Verify that get_batched_dataframe chunks data properly with specified chunk_size."""
 
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
@@ -243,13 +243,13 @@ async def test_get_batched_dataframe_no_chunk_size(monkeypatch) -> None:
 
     monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
 
-    parquet_input = ParquetInput(path=path, chunk_size=None)
+    parquet_input = ParquetInput(path=path, chunk_size=100)
 
     chunks = [chunk async for chunk in parquet_input.get_batched_dataframe()]
 
-    # Should yield the entire dataframe as one chunk
+    # With 100 rows and chunk_size=100, we should get 1 chunk
     assert len(chunks) == 1
-    assert hasattr(chunks[0], "data")
+    assert chunks[0] == "chunk-0-100"
 
     # Confirm read_parquet was invoked with correct path
     assert call_log == [{"path": path}]

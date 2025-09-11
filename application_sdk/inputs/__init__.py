@@ -66,7 +66,7 @@ class Input(ABC):
                 )
                 downloaded_paths.append(destination_path)
 
-            elif hasattr(self, "file_names") and self.file_names:
+            elif self.file_names:
                 # Directory with specific files - download each file individually
                 for file_name in self.file_names:
                     file_path = os.path.join(self.path, file_name)

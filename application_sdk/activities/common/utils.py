@@ -8,7 +8,6 @@ import asyncio
 import os
 from datetime import timedelta
 from functools import wraps
-from pathlib import PureWindowsPath
 from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
 
 from temporalio import activity
@@ -78,42 +77,6 @@ def build_output_path() -> str:
     )
 
 
-def _normalize_object_store_path(path: str) -> str:
-    """Normalize a path for object store usage.
-
-    Converts paths to object store format by:
-    1. Normalizing the path structure
-    2. Converting to POSIX-style paths (forward slashes)
-    3. Removing leading and trailing slashes (clean object store keys)
-
-    Args:
-        path (str): The path to normalize
-
-    Returns:
-        str: Normalized path suitable for object store operations
-
-    Example:
-        >>> _normalize_object_store_path("/data/file.parquet")
-        "data/file.parquet"
-
-        >>> _normalize_object_store_path("\\\\data\\\\directory\\\\")  # Windows
-        "data/directory"
-    """
-    # First normalize the path structure
-    normalized = os.path.normpath(path)
-
-    # If the normalized path is just ".", return empty string for object store
-    if normalized == ".":
-        return ""
-
-    # Convert Windows-style paths to POSIX-style (forward slashes)
-    if os.path.sep == "\\":
-        normalized = PureWindowsPath(normalized).as_posix()
-
-    # Remove leading and trailing slashes for clean object store keys
-    return normalized.strip("/")
-
-
 def get_object_store_prefix(path: str) -> str:
     """Get the object store prefix for the path.
 
@@ -134,7 +97,7 @@ def get_object_store_prefix(path: str) -> str:
 
         >>> # User-provided path case
         >>> get_object_store_prefix("datasets/sales/2024/")
-        "datasets/sales/2024/"
+        "datasets/sales/2024"
     """
     # Normalize paths for comparison
     abs_path = os.path.abspath(path)
@@ -151,12 +114,12 @@ def get_object_store_prefix(path: str) -> str:
             # Normalize path separators to forward slashes for object store
             return relative_path.replace(os.path.sep, "/")
         else:
-            # Path is already a relative object store path, normalize and return
-            return _normalize_object_store_path(path)
+            # Path is already a relative object store path, return as-is
+            return path.strip("/")
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
         # In this case, treat as user-provided path
-        return _normalize_object_store_path(path)
+        return path.strip("/")
 
 
 def auto_heartbeater(fn: F) -> F:
