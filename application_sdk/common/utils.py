@@ -557,7 +557,7 @@ def find_files_by_extension(
     extension: str,
     file_names: Optional[List[str]] = None,
 ) -> List[str]:
-    """Find files at the specified path, optionally filtering by file names.
+    """Find local files at the specified local path, optionally filtering by file names.
 
     Args:
         path (str): Local path to search in (file or directory)
