@@ -337,10 +337,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe.shape = (20, 1)
         # Patch get_dataframe to return a list with one mock dataframe
         mock_get_dataframe.return_value = [mock_dataframe]
-        mock_download_files.return_value = [
-            "/test/path/raw/file1.parquet",
-            "/test/path/raw/file2.parquet",
-        ]
+        mock_download_files.return_value = ["/test/path/raw/file1.parquet"]
         mock_read_parquet.return_value = mock_dataframe
         mock_transform_metadata.return_value = {"transformed": "data"}
         mock_write_daft_dataframe.return_value = None
