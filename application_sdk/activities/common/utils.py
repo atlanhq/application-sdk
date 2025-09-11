@@ -119,7 +119,7 @@ def get_object_store_prefix(path: str) -> str:
             return path.strip("/")
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
-        # In this case, treat as user-provided path
+        # In this case, treat as user-provided path, return as-is
         return path.strip("/")
 
 
