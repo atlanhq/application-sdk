@@ -552,49 +552,6 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     return file_name_list
 
 
-def find_local_files_by_extension(
-    path: str,
-    extension: str,
-    file_names: Optional[List[str]] = None,
-) -> List[str]:
-    """Find local files at the specified local path, optionally filtering by file names.
-
-    Args:
-        path (str): Local path to search in (file or directory)
-        extension (str): File extension to filter by (e.g., '.parquet', '.json')
-        file_names (Optional[List[str]]): List of file names (basenames) to filter by, paths are not supported
-
-    Returns:
-        List[str]: List of matching file paths
-
-    Example:
-        >>> find_local_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
-        ['file1.parquet', 'file2.parquet']
-
-        >>> find_local_files_by_extension("/data/single.json", ".json")
-        ['single.json']
-    """
-    if os.path.isfile(path) and path.endswith(extension):
-        # Single file - return it directly
-        return [path]
-
-    elif os.path.isdir(path):
-        # Directory - find all files in directory
-        all_files = glob.glob(
-            os.path.join(path, "**", f"*{extension}"),
-            recursive=True,
-        )
-
-        # Filter by file names if specified
-        if file_names:
-            file_names_set = set(file_names)  # Convert to set for O(1) lookup
-            return [f for f in all_files if os.path.basename(f) in file_names_set]
-        else:
-            return all_files
-
-    return []
-
-
 def run_sync(func):
     """Run a function in a thread pool executor.
 
