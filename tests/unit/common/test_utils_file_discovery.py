@@ -3,11 +3,11 @@
 import tempfile
 from pathlib import Path
 
-from application_sdk.common.utils import find_files_by_extension
+from application_sdk.common.utils import find_local_files_by_extension
 
 
 class TestFindFilesByExtension:
-    """Test suite for find_files_by_extension utility function."""
+    """Test suite for find_local_files_by_extension utility function."""
 
     def test_single_file_exists(self):
         """Test finding a single file that exists."""
@@ -15,7 +15,7 @@ class TestFindFilesByExtension:
             tmp_file_path = Path(tmp_dir) / "test.parquet"
             tmp_file_path.touch()
 
-            result = find_files_by_extension(str(tmp_file_path), ".parquet")
+            result = find_local_files_by_extension(str(tmp_file_path), ".parquet")
             assert result == [str(tmp_file_path)]
 
     def test_single_file_wrong_extension(self):
@@ -24,7 +24,7 @@ class TestFindFilesByExtension:
             tmp_file_path = Path(tmp_dir) / "test.json"
             tmp_file_path.touch()
 
-            result = find_files_by_extension(str(tmp_file_path), ".parquet")
+            result = find_local_files_by_extension(str(tmp_file_path), ".parquet")
             assert result == []
 
     def test_directory_with_matching_files(self):
@@ -39,7 +39,7 @@ class TestFindFilesByExtension:
             file2.touch()
             file3.touch()
 
-            result = find_files_by_extension(tmp_dir, ".parquet")
+            result = find_local_files_by_extension(tmp_dir, ".parquet")
 
             # Should find both parquet files
             assert len(result) == 2
@@ -57,7 +57,7 @@ class TestFindFilesByExtension:
             file1.touch()
             file2.touch()
 
-            result = find_files_by_extension(
+            result = find_local_files_by_extension(
                 tmp_dir, ".parquet", file_names=["wanted.parquet"]
             )
 
@@ -79,7 +79,7 @@ class TestFindFilesByExtension:
             file1.touch()
             file2.touch()
 
-            result = find_files_by_extension(
+            result = find_local_files_by_extension(
                 tmp_dir, ".parquet", file_names=["target.parquet"]
             )
 
@@ -89,13 +89,13 @@ class TestFindFilesByExtension:
 
     def test_nonexistent_path(self):
         """Test nonexistent path returns empty list."""
-        result = find_files_by_extension("/nonexistent/path", ".parquet")
+        result = find_local_files_by_extension("/nonexistent/path", ".parquet")
         assert result == []
 
     def test_empty_directory(self):
         """Test empty directory returns empty list."""
         with tempfile.TemporaryDirectory() as tmp_dir:
-            result = find_files_by_extension(tmp_dir, ".parquet")
+            result = find_local_files_by_extension(tmp_dir, ".parquet")
             assert result == []
 
     def test_recursive_search(self):
@@ -116,7 +116,7 @@ class TestFindFilesByExtension:
             file2.touch()
             file3.touch()
 
-            result = find_files_by_extension(tmp_dir, ".parquet")
+            result = find_local_files_by_extension(tmp_dir, ".parquet")
 
             # Should find all files recursively
             assert len(result) == 3
@@ -136,7 +136,7 @@ class TestFindFilesByExtension:
             file2.touch()
             file3.touch()
 
-            result = find_files_by_extension(
+            result = find_local_files_by_extension(
                 tmp_dir, ".parquet", file_names=["file1.parquet", "file3.parquet"]
             )
 

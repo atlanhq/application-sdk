@@ -187,7 +187,7 @@ class TestInputDownloadFiles:
         """Test successful download of directory from object store."""
         path = "/data"
         input_instance = MockInput(path)
-        expected_destination = "./local/tmp/data"
+        expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
@@ -198,12 +198,25 @@ class TestInputDownloadFiles:
             "application_sdk.inputs.get_object_store_prefix",
             return_value="data",
         ):
-            result = await input_instance.download_files()
+            # Mock the file finding function to return empty for local check, then files after download
+            with patch(
+                "application_sdk.inputs.find_local_files_by_extension"
+            ) as mock_find_files:
+                # Use a function that returns different values based on the path
+                def mock_find_files_func(path, extension, file_names=None):
+                    if path == "/data":
+                        return []  # Local check returns empty
+                    else:
+                        return expected_files  # After download returns files
 
-            mock_download.assert_called_once_with(
-                source="data", destination="./local/tmp/data"
-            )
-            assert result == [expected_destination]
+                mock_find_files.side_effect = mock_find_files_func
+
+                result = await input_instance.download_files()
+
+                mock_download.assert_called_once_with(
+                    source="data", destination="./local/tmp/data"
+                )
+                assert result == expected_files
 
     @pytest.mark.asyncio
     async def test_download_files_download_specific_files_success(self):
@@ -272,11 +285,10 @@ class TestInputDownloadFiles:
                 await input_instance.download_files()
 
     @pytest.mark.asyncio
-    async def test_download_files_download_success_returns_destination(self):
-        """Test download succeeds and returns destination path."""
+    async def test_download_files_download_success_but_no_files_found(self):
+        """Test download succeeds but no files found after download."""
         path = "/data"  # Use directory path
         input_instance = MockInput(path)
-        expected_destination = "./local/tmp/data"
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
@@ -286,10 +298,16 @@ class TestInputDownloadFiles:
         ), patch(
             "application_sdk.inputs.get_object_store_prefix",
             return_value="data",
+        ), patch(
+            "application_sdk.inputs.find_local_files_by_extension",
+            side_effect=[
+                [],
+                [],
+            ],  # Both calls (local check and after download) return []
         ):
-            # Should return destination path when download succeeds
-            result = await input_instance.download_files()
-            assert result == [expected_destination]
+            # Should raise error when no files found after download
+            with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
+                await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_recursive_glob_pattern(self):

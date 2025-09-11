@@ -552,7 +552,7 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     return file_name_list
 
 
-def find_files_by_extension(
+def find_local_files_by_extension(
     path: str,
     extension: str,
     file_names: Optional[List[str]] = None,
@@ -568,10 +568,10 @@ def find_files_by_extension(
         List[str]: List of matching file paths
 
     Example:
-        >>> find_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
+        >>> find_local_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
         ['file1.parquet', 'file2.parquet']
 
-        >>> find_files_by_extension("/data/single.json", ".json")
+        >>> find_local_files_by_extension("/data/single.json", ".json")
         ['single.json']
     """
     if os.path.isfile(path) and path.endswith(extension):

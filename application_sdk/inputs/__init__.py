@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Union
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
-from application_sdk.common.utils import find_files_by_extension
+from application_sdk.common.utils import find_local_files_by_extension
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
@@ -38,7 +38,7 @@ class Input(ABC):
             IOError: When no files found locally or in object store
         """
         # Step 1: Check if files exist locally
-        local_files = find_files_by_extension(
+        local_files = find_local_files_by_extension(
             self.path, self._extension, self.file_names
         )
         if local_files:
@@ -85,7 +85,11 @@ class Input(ABC):
                     source=source_path,
                     destination=destination_path,
                 )
-                downloaded_paths.append(destination_path)
+                # Find the actual files in the downloaded directory
+                found_files = find_local_files_by_extension(
+                    destination_path, self._extension, getattr(self, "file_names", None)
+                )
+                downloaded_paths.extend(found_files)
 
             # Check results
             if downloaded_paths:

@@ -30,6 +30,7 @@ class JsonInput(Input):
             path (str): Path to JSON file or directory containing JSON files.
                 It accepts both types of paths:
                 local path or object store path
+                Wildcards are not supported.
             file_names (Optional[List[str]]): List of specific file names to read. Defaults to None.
             chunk_size (int): Number of rows per batch. Defaults to 100000.
 
