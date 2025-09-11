@@ -16,28 +16,28 @@ class ParquetInput(Input):
     Supports reading both single files and directories containing multiple parquet files.
     """
 
+    _extension = ".parquet"
+
     def __init__(
         self,
         path: str,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: int = 100000,
         file_names: Optional[List[str]] = None,
     ):
         """Initialize the Parquet input class.
 
         Args:
             path (str): Path to parquet file or directory containing parquet files.
-                Will first check locally, then in object store if not found locally.
-            chunk_size (Optional[int]): Number of rows per batch. Defaults to 100000.
+                It accepts both types of paths:
+                local path or object store path
+            chunk_size (int): Number of rows per batch. Defaults to 100000.
             file_names (Optional[List[str]]): List of file names to read. Defaults to None.
 
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
         """
-        if not path:
-            raise ValueError("Path must be provided")
 
         # Validate that single file path and file_names are not both specified
-        self._extension = ".parquet"
         if path.endswith(self._extension) and file_names:
             raise ValueError(
                 f"Cannot specify both a single file path ('{path}') and file_names filter. "
@@ -144,16 +144,10 @@ class ParquetInput(Input):
             logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
             # Process each file individually to maintain memory efficiency
-            if self.chunk_size:
-                # Yield chunks from each file individually
-                for parquet_file in parquet_files:
-                    df = pd.read_parquet(parquet_file)
-                    for i in range(0, len(df), self.chunk_size):
-                        yield df.iloc[i : i + self.chunk_size]
-            else:
-                # Yield each file as a separate batch
-                for parquet_file in parquet_files:
-                    yield pd.read_parquet(parquet_file)
+            for parquet_file in parquet_files:
+                df = pd.read_parquet(parquet_file)
+                for i in range(0, len(df), self.chunk_size):
+                    yield df.iloc[i : i + self.chunk_size]
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) in batches: {str(e)}"
