@@ -142,10 +142,12 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
     @patch("application_sdk.outputs.json.JsonOutput.write_dataframe")
     async def test_query_executor_success(
         self,
         mock_write_dataframe,
+        mock_get_batched_dataframe,
         mock_get_dataframe,
         mock_get_statistics,
         mock_exists,
@@ -157,6 +159,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe = Mock()
         mock_dataframe.__len__ = Mock(return_value=10)
         mock_get_dataframe.return_value = mock_dataframe
+        mock_get_batched_dataframe.return_value = (df for df in [mock_dataframe])
         mock_write_dataframe.return_value = None
         mock_get_statistics.return_value = ActivityStatistics(total_record_count=10)
         sql_engine = Mock()
@@ -177,8 +180,10 @@ class TestBaseSQLMetadataExtractionActivities:
         new_callable=AsyncMock,
     )
     @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_dataframe")
+    @patch("application_sdk.inputs.sql_query.SQLQueryInput.get_batched_dataframe")
     async def test_query_executor_empty_dataframe(
         self,
+        mock_get_batched_dataframe,
         mock_get_dataframe,
         mock_get_statistics,
         mock_exists,
@@ -190,6 +195,7 @@ class TestBaseSQLMetadataExtractionActivities:
         mock_dataframe = Mock()
         mock_dataframe.__len__ = Mock(return_value=0)
         mock_get_dataframe.return_value = mock_dataframe
+        mock_get_batched_dataframe.return_value = (df for df in [mock_dataframe])
         mock_get_statistics.return_value = ActivityStatistics(total_record_count=0)
         sql_engine = Mock()
         sql_query = "SELECT * FROM empty_table"

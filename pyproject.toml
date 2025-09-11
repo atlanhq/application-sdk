@@ -46,8 +46,7 @@ workflows = [
     "orjson>=3.10.18",
 ]
 pandas = [
-    "pandas>=2.2.3",
-    "fastparquet==2024.11.0"
+    "pandas>=2.2.3"
 ]
 daft = [
     "daft>=0.4.12",

@@ -10,6 +10,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from typing_extensions import Tuple
 
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
@@ -121,7 +122,6 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         batches, chunk_starts = self.get_transform_batches(
             activity_statistics.chunk_count,
             activity_statistics.typename,
-            activity_statistics.partitions,
         )
 
         for i in range(len(batches)):
@@ -151,8 +151,8 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             chunk_count += metadata_model.chunk_count
 
     def get_transform_batches(
-        self, chunk_count: int, typename: str, partitions: List[int]
-    ):
+        self, chunk_count: int, typename: str
+    ) -> Tuple[List[List[str]], List[int]]:  # noqa: F821
         """Get batches for parallel transformation processing.
 
         Args:
@@ -160,26 +160,19 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             typename (str): Type name for the chunks.
 
         Returns:
-            Tuple[List[List[str]], List[int]]: A tuple containing:
+            List[str]: A list of file paths.
                 - List of batches, where each batch is a list of file paths
                 - List of starting chunk numbers for each batch
         """
         batches: List[List[str]] = []
-        chunk_start_numbers: List[int] = []
+        chunk_starts: List[int] = []
+        default_chunk_start = 0
 
-        for i, partition in enumerate(partitions):
-            # Track starting chunk number (which is just i)
-            chunk_start_numbers.append(i)
+        for i in range(chunk_count):
+            batches.append([f"{typename}/chunk-{i}-part{default_chunk_start}.parquet"])
+            chunk_starts.append(i)
 
-            # Each batch contains exactly one chunk
-            batches.append(
-                [
-                    f"{typename}/chunk-{i}-part{file}.parquet"
-                    for file in range(partition)
-                ]
-            )
-
-        return batches, chunk_start_numbers
+        return batches, chunk_starts
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:

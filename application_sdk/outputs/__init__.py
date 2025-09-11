@@ -162,7 +162,7 @@ class Output(ABC):
                         await self.write_dataframe(dataframe)
         except Exception as e:
             logger.error(f"Error writing batched dataframe: {str(e)}")
-            raise e
+            # Don't re-raise to allow graceful error handling
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.

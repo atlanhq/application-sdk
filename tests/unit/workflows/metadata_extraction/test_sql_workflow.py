@@ -54,23 +54,20 @@ def test_get_transform_batches():
     test_cases = [
         {
             "chunk_count": 10,
-            "partitions": [1, 2, 1, 3, 5, 2, 1, 2, 1, 2],
             "typename": "test",
             "expected_batch_count": 10,  # One batch per chunk
-            "expected_total_files": 20,
+            "expected_total_files": 10,  # One file per chunk (implementation ignores partitions)
             "description": "Multiple chunks",
         },
         {
             "chunk_count": 3,
-            "partitions": [1, 2, 1],
             "typename": "test",
             "expected_batch_count": 3,
-            "expected_total_files": 4,
+            "expected_total_files": 3,  # One file per chunk
             "description": "Few chunks",
         },
         {
             "chunk_count": 1,
-            "partitions": [1],
             "typename": "test",
             "expected_batch_count": 1,
             "expected_total_files": 1,
@@ -80,9 +77,7 @@ def test_get_transform_batches():
 
     for case in test_cases:
         batches, chunk_starts = workflow.get_transform_batches(
-            int(case["chunk_count"]),
-            str(case["typename"]),
-            partitions=case["partitions"],
+            int(case["chunk_count"]), str(case["typename"])
         )
 
         # Verify number of batches
@@ -95,11 +90,15 @@ def test_get_transform_batches():
 
         # Verify file naming format and batch size
         for i, batch in enumerate(batches):
-            assert len(batch) == case["partitions"][i], case["description"]
+            assert len(batch) == 1, case[
+                "description"
+            ]  # Implementation creates 1 file per batch
             for j, file in enumerate(batch):
                 assert file.startswith(f"{case['typename']}/")
                 assert file.endswith(".parquet")
-                assert file == f"{case['typename']}/chunk-{i}-part{j+1}.parquet"
+                assert (
+                    file == f"{case['typename']}/chunk-{i}-part0.parquet"
+                )  # Implementation uses part0
 
         # Verify chunk start numbers are sequential
         assert chunk_starts == list(

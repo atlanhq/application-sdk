@@ -1,4 +1,3 @@
-import gc
 import glob
 import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
@@ -41,6 +40,7 @@ class ParquetInput(Input):
         """
         self.path = path
         self.chunk_size = chunk_size
+        self.buffer_size = 5000
         self.input_prefix = input_prefix
         self.file_names = file_names
 
@@ -146,11 +146,7 @@ class ParquetInput(Input):
             if self.input_prefix and path:
                 await self.download_files(path)
 
-            df = pd.read_parquet(f"{path}/*.parquet", engine="fastparquet")
-            daft_df = daft.from_pandas(df)
-            del df
-            gc.collect()
-            return daft_df
+            return daft.read_parquet(f"{path}/*.parquet")
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) using daft: {str(e)}"
@@ -168,26 +164,20 @@ class ParquetInput(Input):
         """
         try:
             import daft  # type: ignore
-            import pandas as pd
 
             if self.file_names:
                 for file_name in self.file_names:
                     path = f"{self.path}/{file_name}"
                     if self.input_prefix and path:
                         await self.download_files(path)
-                        df = pd.read_parquet(path, engine="fastparquet")
-                        daft_df = daft.from_pandas(df)
-                        del df
-                        gc.collect()
-                        yield daft_df
+                        # yield daft.read_parquet(path, _chunk_size=self.buffer_size)
+                        yield daft.read_parquet(path, _chunk_size=self.buffer_size)
             else:
                 if self.path and self.input_prefix:
                     await self.download_files(self.path)
-                    df = pd.read_parquet(f"{self.path}/*.parquet", engine="fastparquet")
-                    daft_df = daft.from_pandas(df)
-                    del df
-                    gc.collect()
-                    yield daft_df
+                    yield daft.read_parquet(
+                        f"{self.path}/*.parquet", _chunk_size=self.buffer_size
+                    )
 
         except Exception as error:
             logger.error(
