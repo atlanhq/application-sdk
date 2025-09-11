@@ -92,6 +92,7 @@ class JsonOutput(Output):
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
         chunk_part: int = 0,
+        retain_local_copy: bool = False,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
@@ -112,6 +113,8 @@ class JsonOutput(Output):
                 Defaults to 0.
             path_gen (Callable, optional): Function to generate file paths.
                 Defaults to path_gen function.
+            retain_local_copy (bool, optional): Whether to retain the local copy of the files.
+                Defaults to False.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
@@ -134,6 +137,7 @@ class JsonOutput(Output):
         self.statistics = []
         self.chunk_part = chunk_part
         self.metrics = get_metrics()
+        self.retain_local_copy = retain_local_copy
 
         if not self.output_path:
             raise ValueError("output_path is required")

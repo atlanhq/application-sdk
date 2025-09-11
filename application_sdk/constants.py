@@ -59,6 +59,14 @@ WORKFLOW_OUTPUT_PATH_TEMPLATE = (
 # Temporary Path (used to store intermediate files)
 TEMPORARY_PATH = os.getenv("ATLAN_TEMPORARY_PATH", "./local/tmp/")
 
+# Cleanup Paths (custom paths for cleanup operations, supports multiple paths separated by comma)
+# If empty, cleanup activities will default to workflow-specific paths at runtime
+CLEANUP_BASE_PATHS = [
+    path.strip()
+    for path in os.getenv("ATLAN_CLEANUP_BASE_PATHS", "").split(",")
+    if path.strip()
+]
+
 # State Store Constants
 #: Path template for state store files (example: objectstore://bucket/persistent-artifacts/apps/{application_name}/{state_type}/{id}/config.json)
 STATE_STORE_PATH_TEMPLATE = (
