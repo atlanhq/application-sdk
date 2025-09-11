@@ -1,3 +1,4 @@
+import os
 import time
 from typing import Any, Callable, List, Optional, Type
 
@@ -32,6 +33,7 @@ from application_sdk.server import ServerInterface
 from application_sdk.server.fastapi.middleware.logmiddleware import LogMiddleware
 from application_sdk.server.fastapi.middleware.metrics import MetricsMiddleware
 from application_sdk.server.fastapi.models import (
+    ConfigMapResponse,
     EventWorkflowRequest,
     EventWorkflowResponse,
     EventWorkflowTrigger,
@@ -95,6 +97,8 @@ class APIServer(ServerInterface):
     docs_directory_path: str = "docs"
     docs_export_path: str = "dist"
 
+    frontend_assets_path: str = "frontend/static"
+
     workflows: List[WorkflowInterface] = []
     event_triggers: List[EventWorkflowTrigger] = []
 
@@ -107,6 +111,7 @@ class APIServer(ServerInterface):
         workflow_client: Optional[WorkflowClient] = None,
         frontend_templates_path: str = "frontend/templates",
         ui_enabled: bool = True,
+        has_configmap: bool = False,
     ):
         """Initialize the FastAPI application.
 
@@ -121,6 +126,7 @@ class APIServer(ServerInterface):
         self.templates = Jinja2Templates(directory=frontend_templates_path)
         self.duckdb_ui = DuckDBUI()
         self.ui_enabled = ui_enabled
+        self.has_configmap = has_configmap
 
         # Create the FastAPI app using the renamed import
         if isinstance(lifespan, Callable):
@@ -177,6 +183,20 @@ class APIServer(ServerInterface):
         except Exception as e:
             logger.warning(str(e))
 
+    def frontend_home(self, request: Request) -> HTMLResponse:
+        frontend_html_path = os.path.join(
+            self.frontend_assets_path,
+            "index.html",
+        )
+
+        if not os.path.exists(frontend_html_path) or not self.has_configmap:
+            return self.fallback_home(request)
+
+        with open(frontend_html_path, "r", encoding="utf-8") as file:
+            contents = file.read()
+
+        return HTMLResponse(content=contents)
+
     def register_routers(self):
         """Register all routers with the FastAPI application.
 
@@ -195,7 +215,7 @@ class APIServer(ServerInterface):
         self.app.include_router(self.dapr_router, prefix="/dapr")
         self.app.include_router(self.events_router, prefix="/events/v1")
 
-    async def home(self, request: Request) -> HTMLResponse:
+    def fallback_home(self, request: Request) -> HTMLResponse:
         return self.templates.TemplateResponse(
             "index.html",
             {
@@ -328,7 +348,6 @@ class APIServer(ServerInterface):
             methods=["GET"],
             response_class=RedirectResponse,
         )
-
         self.workflow_router.add_api_route(
             "/auth",
             self.test_auth,
@@ -374,6 +393,13 @@ class APIServer(ServerInterface):
             methods=["POST"],
         )
 
+        self.workflow_router.add_api_route(
+            "/configmap/{config_map_id}",
+            self.get_configmap,
+            methods=["GET"],
+            response_model=ConfigMapResponse,
+        )
+
         self.dapr_router.add_api_route(
             "/subscribe",
             self.get_dapr_subscriptions,
@@ -390,7 +416,8 @@ class APIServer(ServerInterface):
 
     def register_ui_routes(self):
         """Register the UI routes for the FastAPI application."""
-        self.app.get("/")(self.home)
+        self.app.get("/")(self.frontend_home)
+
         # Mount static files
         self.app.mount("/", StaticFiles(directory="frontend/static"), name="static")
 
@@ -586,6 +613,35 @@ class APIServer(ServerInterface):
                 description="Total number of preflight checks",
             )
             raise e
+
+    async def get_configmap(self, config_map_id: str) -> ConfigMapResponse:
+        """Get a configuration map by its ID.
+
+        Args:
+            config_map_id (str): The ID of the configuration map to retrieve.
+
+        Returns:
+            ConfigMapResponse: Response containing the configuration map.
+        """
+        try:
+            if not self.handler:
+                raise Exception("Handler not initialized")
+
+            # Call the getConfigmap method on the workflow class
+            config_map_data = await self.handler.get_configmap(config_map_id)
+
+            return ConfigMapResponse(
+                success=True,
+                message="Configuration map fetched successfully",
+                data=config_map_data,
+            )
+        except Exception as e:
+            logger.error(f"Error fetching configuration map: {e}")
+            return ConfigMapResponse(
+                success=False,
+                message=f"Failed to fetch configuration map: {str(e)}",
+                data={},
+            )
 
     async def get_workflow_config(
         self, config_id: str, type: str = "workflows"
