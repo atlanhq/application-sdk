@@ -45,6 +45,9 @@ workflows = [
     "temporalio>=1.7.1",
     "orjson>=3.10.18",
 ]
+mcp = [
+    "fastmcp>=2.0.0",
+]
 pandas = [
     "pandas>=2.2.3"
 ]

@@ -32,6 +32,7 @@ class BaseApplication:
         application_manifest: Optional[dict] = None,
         client_class: Optional[Type[BaseClient]] = None,
         handler_class: Optional[Type[BaseHandler]] = None,
+        enable_mcp: bool = False,
     ):
         """
         Initialize the application.
@@ -54,6 +55,11 @@ class BaseApplication:
 
         self.client_class = client_class or BaseClient
         self.handler_class = handler_class or BaseHandler
+
+        # MCP configuration
+        self.enable_mcp = enable_mcp
+        self.mcp_server = None
+        self._workflow_and_activities_classes = None
 
     def bootstrap_event_registration(self):
         self.event_subscriptions = {}
@@ -117,6 +123,9 @@ class BaseApplication:
         """
         await self.workflow_client.load()
 
+        # Store for MCP auto-discovery
+        self._workflow_and_activities_classes = workflow_and_activities_classes
+
         workflow_classes = [
             workflow_class for workflow_class, _ in workflow_and_activities_classes
         ]
@@ -167,19 +176,42 @@ class BaseApplication:
         has_configmap: bool = False,
     ):
         """
-        Optionally set up a server for the application. (No-op by default)
+        Set up FastAPI server and automatically mount MCP if enabled.
         """
         if self.workflow_client is None:
             await self.workflow_client.load()
 
-        # Overrides the application server. serves the UI, and handles the various triggers
+        # Create MCP ASGI app first if enabled (to get lifespan)
+        mcp_asgi_app = None
+        if self.enable_mcp:
+            mcp_asgi_app = await self._create_mcp_asgi_app()
+
+        # Setup FastAPI server with MCP lifespan
         self.server = APIServer(
+            lifespan=mcp_asgi_app.lifespan if mcp_asgi_app else None,
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
             handler=self.handler_class(client=self.client_class()),
             has_configmap=has_configmap,
         )
 
+        # Mount MCP at root (clean approach)
+        if self.enable_mcp and mcp_asgi_app:
+            try:
+                self.server.app.mount("", mcp_asgi_app)  # Mount at root
+                logger.info("Mounted MCP at root")
+                print("\nMCP Debug Info:")
+                print("   • MCP endpoint: http://localhost:8000/mcp")
+                print("   • Transport: streamable_http")
+                print("   • Debug with MCP Inspector using the above URL")
+            except Exception as e:
+                logger.error(f"Failed to mount MCP at root: {e}")
+                # Fallback: mount at subpath
+                self.server.app.mount("/tools", mcp_asgi_app)
+                logger.info("Fallback: Mounted MCP at /tools")
+                print("   • MCP endpoint: http://localhost:8000/tools/mcp")
+
+        # Register event-based workflows if any
         if self.event_subscriptions:
             for event_trigger in self.event_subscriptions.values():
                 if event_trigger.workflow_class is None:
@@ -192,12 +224,43 @@ class BaseApplication:
                     triggers=[event_trigger],
                 )
 
-        # register the workflow on the application server
-        # the workflow is by default triggered by an HTTP POST request to the /start endpoint
+        # Register the main workflow (HTTP POST /start endpoint)
         self.server.register_workflow(
             workflow_class=workflow_class,
             triggers=[HttpWorkflowTrigger()],
         )
+
+    async def _create_mcp_asgi_app(self):
+        """Create MCP server and return ASGI app with proper lifespan."""
+        if self._workflow_and_activities_classes is None:
+            logger.error(
+                "Cannot setup MCP: workflow not configured. Call setup_workflow() first."
+            )
+            return None
+
+        try:
+            from application_sdk.servers.mcp.server import MCPServer
+        except ImportError:
+            logger.error("FastMCP not installed. Run: pip install fastmcp>=2.0.0")
+            return None
+
+        # Create and configure MCP server
+        mcp_name = f"{self.application_name} MCP"
+        self.mcp_server = MCPServer(
+            mcp_name=mcp_name, workflow_client=self.workflow_client
+        )
+
+        # Auto-discover and register decorated activities
+        self.mcp_server.discover_and_register_tools(
+            self._workflow_and_activities_classes
+        )
+
+        logger.info(
+            f"Created MCP server with {len(self.mcp_server.registered_tools)} tools"
+        )
+
+        # Return the ASGI app (with lifespan built-in)
+        return self.mcp_server.get_asgi_app()
 
     async def start_server(self):
         """
