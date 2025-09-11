@@ -77,6 +77,36 @@ def build_output_path() -> str:
     )
 
 
+def _normalize_object_store_path(path: str) -> str:
+    """Normalize a path for object store usage.
+
+    Converts paths to object store format by:
+    1. Normalizing the path structure
+    2. Removing leading slashes (object stores use relative paths)
+    3. Converting path separators to forward slashes
+
+    Args:
+        path (str): The path to normalize
+
+    Returns:
+        str: Normalized path suitable for object store operations
+
+    Example:
+        >>> _normalize_object_store_path("/data/file.parquet")
+        "data/file.parquet"
+
+        >>> _normalize_object_store_path("//data\\\\file.parquet")  # Windows
+        "data/file.parquet"
+    """
+    normalized = os.path.normpath(path)
+    # If the normalized path is just ".", return empty string for object store
+    result = "" if normalized == "." else normalized
+    # For object store, convert absolute paths to relative by removing all leading slashes
+    result = result.lstrip("/")
+    # Normalize path separators to forward slashes for object store
+    return result.replace(os.path.sep, "/")
+
+
 def get_object_store_prefix(path: str) -> str:
     """Get the object store prefix for the path.
 
@@ -115,24 +145,11 @@ def get_object_store_prefix(path: str) -> str:
             return relative_path.replace(os.path.sep, "/")
         else:
             # Path is already a relative object store path, normalize and return
-            # Use os.path.normpath to handle cases like ./././path properly
-            normalized = os.path.normpath(path)
-            # If the normalized path is just ".", return empty string for object store
-            result = "" if normalized == "." else normalized
-            # For object store, convert absolute paths to relative by removing all leading slashes
-            result = result.lstrip("/")
-            # Normalize path separators to forward slashes for object store
-            return result.replace(os.path.sep, "/")
+            return _normalize_object_store_path(path)
     except ValueError:
         # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
         # In this case, treat as user-provided path
-        normalized = os.path.normpath(path)
-        # If the normalized path is just ".", return empty string for object store
-        result = "" if normalized == "." else normalized
-        # For object store, convert absolute paths to relative by removing all leading slashes
-        result = result.lstrip("/")
-        # Normalize path separators to forward slashes for object store
-        return result.replace(os.path.sep, "/")
+        return _normalize_object_store_path(path)
 
 
 def auto_heartbeater(fn: F) -> F:

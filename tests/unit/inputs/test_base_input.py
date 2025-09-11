@@ -208,14 +208,20 @@ class TestInputDownloadFiles:
             "./local/tmp/data/file2.parquet",
         ]
 
-        with patch("os.path.isfile", return_value=False), patch(
+        def mock_isfile(path):
+            # Return False for initial local check, True for downloaded files
+            if path in [
+                "./local/tmp/data/file1.parquet",
+                "./local/tmp/data/file2.parquet",
+            ]:
+                return True
+            return False
+
+        with patch("os.path.isfile", side_effect=mock_isfile), patch(
             "os.path.isdir", return_value=True
         ), patch(
             "glob.glob",
-            side_effect=[
-                [],
-                ["./local/tmp/data/file1.parquet", "./local/tmp/data/file2.parquet"],
-            ],
+            side_effect=[[]],  # Only for initial local check
         ), patch(
             "application_sdk.services.objectstore.ObjectStore.download_file",
             new_callable=AsyncMock,
