@@ -25,6 +25,7 @@ from application_sdk.activities.query_extraction.sql import SQLQueryExtractionAc
 from application_sdk.application.metadata_extraction.sql import (
     BaseSQLMetadataExtractionApplication,
 )
+from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql import BaseSQLClient
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.observability.logger_adaptor import get_logger
@@ -105,11 +106,11 @@ class SampleSQLMinerActivities(SQLQueryExtractionActivities):
 
 
 class SQLClient(BaseSQLClient):
-    DB_CONFIG = {
-        "template": "snowflake://{username}:{password}@{account_id}",
-        "required": ["username", "password", "account_id"],
-        "parameters": ["warehouse", "role"],
-    }
+    DB_CONFIG = DatabaseConfig(
+        template="snowflake://{username}:{password}@{account_id}",
+        required=["username", "password", "account_id"],
+        parameters=["warehouse", "role"],
+    )
 
 
 class SampleSnowflakeHandler(BaseSQLHandler):
