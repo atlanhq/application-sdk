@@ -59,9 +59,15 @@ async def test_download_file_invoked_for_missing_files() -> None:
     path = "/local"
     file_names = ["a.json", "b.json"]
 
-    with patch("os.path.isfile", return_value=False), patch(
+    def mock_isfile(path):
+        # Return False for initial local check, True for downloaded files
+        if path in ["./local/tmp/local/a.json", "./local/tmp/local/b.json"]:
+            return True
+        return False
+
+    with patch("os.path.isfile", side_effect=mock_isfile), patch(
         "os.path.isdir", return_value=True
-    ), patch("glob.glob", side_effect=[[], ["/local/a.json", "/local/b.json"]]), patch(
+    ), patch("glob.glob", side_effect=[[]]), patch(  # Only for initial local check
         "application_sdk.inputs.get_object_store_prefix",
         side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
     ), patch(
@@ -77,7 +83,7 @@ async def test_download_file_invoked_for_missing_files() -> None:
             call(source="local/b.json"),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
-        assert result == ["/local/a.json", "/local/b.json"]
+        assert result == ["./local/tmp/local/a.json", "./local/tmp/local/b.json"]
 
 
 @pytest.mark.asyncio

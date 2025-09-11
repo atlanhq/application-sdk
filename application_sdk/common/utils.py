@@ -552,6 +552,57 @@ async def get_file_names(output_path: str, typename: str) -> List[str]:
     return file_name_list
 
 
+def find_files_by_extension(
+    path: str,
+    extension: str,
+    file_names: Optional[List[str]] = None,
+) -> List[str]:
+    """Find files at the specified path, optionally filtering by file names.
+
+    Args:
+        path (str): Path to search in (file or directory)
+        extension (str): File extension to filter by (e.g., '.parquet', '.json')
+        file_names (Optional[List[str]]): List of file names to filter by
+
+    Returns:
+        List[str]: List of matching file paths
+
+    Example:
+        >>> find_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
+        ['/data/file1.parquet', '/data/file2.parquet']
+
+        >>> find_files_by_extension("/data/single.json", ".json")
+        ['/data/single.json']
+    """
+    if os.path.isfile(path) and path.endswith(extension):
+        # Single file - return it directly
+        return [path]
+
+    elif os.path.isdir(path):
+        # Directory - find all files in directory
+        all_files = glob.glob(
+            os.path.join(path, "**", f"*{extension}"),
+            recursive=True,
+        )
+
+        # Filter by file names if specified
+        if file_names:
+            filtered_files = []
+            for file_name in file_names:
+                # Support both relative and absolute file names
+                matching_files = [
+                    f
+                    for f in all_files
+                    if os.path.basename(f) == file_name or f == file_name
+                ]
+                filtered_files.extend(matching_files)
+            return filtered_files
+        else:
+            return all_files
+
+    return []
+
+
 def run_sync(func):
     """Run a function in a thread pool executor.
 

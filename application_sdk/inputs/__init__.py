@@ -1,10 +1,10 @@
-import glob
 import os
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Union
 
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
+from application_sdk.common.utils import find_files_by_extension
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
@@ -51,49 +51,10 @@ class Input(ABC):
                 f"This should be set in the constructor (e.g., self._extension = '.parquet')."
             )
 
-        def _find_files(search_path: Optional[str] = None) -> List[str]:
-            """Find files at the specified path, optionally filtering by self.file_names.
-
-            Args:
-                search_path: Path to search in. If None, uses self.path.
-            """
-            path_to_search = search_path if search_path is not None else self.path
-
-            if os.path.isfile(path_to_search) and path_to_search.endswith(
-                self._extension
-            ):
-                # Single file - return it directly (validation prevents single file + file_names)
-                return [path_to_search]
-
-            elif os.path.isdir(path_to_search):
-                # Directory - find all files in directory
-                all_files = glob.glob(
-                    os.path.join(path_to_search, "**", f"*{self._extension}"),
-                    recursive=True,
-                )
-
-                # Filter by file names if specified
-                if hasattr(self, "file_names") and self.file_names:
-                    filtered_files = []
-                    for file_name in self.file_names:
-                        # Support both relative and absolute file names
-                        matching_files = [
-                            f
-                            for f in filter(
-                                lambda f: f.endswith(file_name)
-                                or os.path.basename(f) == file_name,
-                                all_files,
-                            )
-                        ]
-                        filtered_files.extend(matching_files)
-                    return filtered_files
-                else:
-                    return all_files
-
-            return []
-
         # Step 1: Check if files exist locally
-        local_files = _find_files()
+        local_files = find_files_by_extension(
+            self.path, self._extension, getattr(self, "file_names", None)
+        )
         if local_files:
             logger.info(
                 f"Found {len(local_files)} {self._extension} files locally at: {self.path}"
@@ -107,10 +68,13 @@ class Input(ABC):
 
         try:
             # Determine what to download based on path type and filters
+            downloaded_source_paths = []
+
             if self.path.endswith(self._extension):
                 # Single file case (file_names validation already ensures this is valid)
                 source_path = get_object_store_prefix(self.path)
                 await ObjectStore.download_file(source=source_path)
+                downloaded_source_paths.append(source_path)
 
             elif hasattr(self, "file_names") and self.file_names:
                 # Directory with specific files - download each file individually
@@ -118,22 +82,26 @@ class Input(ABC):
                     file_path = os.path.join(self.path, file_name)
                     source_path = get_object_store_prefix(file_path)
                     await ObjectStore.download_file(source=source_path)
+                    downloaded_source_paths.append(source_path)
             else:
                 # Download entire directory
                 source_path = get_object_store_prefix(self.path)
                 await ObjectStore.download_prefix(source=source_path)
+                downloaded_source_paths.append(source_path)
 
-            # After all downloads, search for files in the downloaded location
-            base_source_path = get_object_store_prefix(self.path)
-            # Ensure the source path is relative for proper joining with TEMPORARY_PATH
-            # This prevents os.path.join from ignoring TEMPORARY_PATH if source_path is absolute
-            relative_source_path = (
-                base_source_path[1:]
-                if base_source_path.startswith("/")
-                else base_source_path
-            )
-            downloaded_path = os.path.join(TEMPORARY_PATH, relative_source_path)
-            downloaded_files = _find_files(downloaded_path)
+            # After all downloads, search for files using the exact paths we downloaded
+            downloaded_files = []
+            for source_path in downloaded_source_paths:
+                downloaded_path = os.path.join(TEMPORARY_PATH, source_path)
+                if os.path.isfile(downloaded_path):
+                    # Single file
+                    downloaded_files.append(downloaded_path)
+                elif os.path.isdir(downloaded_path):
+                    # Directory - find all files with extension
+                    found_files = find_files_by_extension(
+                        downloaded_path, self._extension
+                    )
+                    downloaded_files.extend(found_files)
 
             # Check results
             if downloaded_files:
