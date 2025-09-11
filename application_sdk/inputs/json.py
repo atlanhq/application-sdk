@@ -16,28 +16,28 @@ class JsonInput(Input):
     Supports reading both single files and directories containing multiple JSON files.
     """
 
+    _extension = ".json"
+
     def __init__(
         self,
         path: str,
         file_names: Optional[List[str]] = None,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: int = 100000,
     ):
         """Initialize the JsonInput class.
 
         Args:
             path (str): Path to JSON file or directory containing JSON files.
-                Will first check locally, then in object store if not found locally.
+                It accepts both types of paths:
+                local path or object store path
             file_names (Optional[List[str]]): List of specific file names to read. Defaults to None.
-            chunk_size (Optional[int]): Number of rows per batch. Defaults to 100000.
+            chunk_size (int): Number of rows per batch. Defaults to 100000.
 
         Raises:
             ValueError: When path is not provided or when single file path is combined with file_names
         """
-        if not path:
-            raise ValueError("Path must be provided")
 
         # Validate that single file path and file_names are not both specified
-        self._extension = ".json"
         if path.endswith(self._extension) and file_names:
             raise ValueError(
                 f"Cannot specify both a single file path ('{path}') and file_names filter. "
@@ -45,7 +45,7 @@ class JsonInput(Input):
             )
 
         self.path = path
-        self.chunk_size = chunk_size if chunk_size is not None else 100000
+        self.chunk_size = chunk_size
         self.file_names = file_names
 
     async def get_batched_dataframe(

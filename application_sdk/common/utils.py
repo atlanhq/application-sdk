@@ -560,19 +560,19 @@ def find_files_by_extension(
     """Find files at the specified path, optionally filtering by file names.
 
     Args:
-        path (str): Path to search in (file or directory)
+        path (str): Local path to search in (file or directory)
         extension (str): File extension to filter by (e.g., '.parquet', '.json')
-        file_names (Optional[List[str]]): List of file names to filter by
+        file_names (Optional[List[str]]): List of file names (basenames) to filter by
 
     Returns:
         List[str]: List of matching file paths
 
     Example:
         >>> find_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
-        ['/data/file1.parquet', '/data/file2.parquet']
+        ['file1.parquet', 'file2.parquet']
 
         >>> find_files_by_extension("/data/single.json", ".json")
-        ['/data/single.json']
+        ['single.json']
     """
     if os.path.isfile(path) and path.endswith(extension):
         # Single file - return it directly
@@ -587,16 +587,8 @@ def find_files_by_extension(
 
         # Filter by file names if specified
         if file_names:
-            filtered_files = []
-            for file_name in file_names:
-                # Support both relative and absolute file names
-                matching_files = [
-                    f
-                    for f in all_files
-                    if os.path.basename(f) == file_name or f == file_name
-                ]
-                filtered_files.extend(matching_files)
-            return filtered_files
+            file_names_set = set(file_names)  # Convert to set for O(1) lookup
+            return [f for f in all_files if os.path.basename(f) in file_names_set]
         else:
             return all_files
 

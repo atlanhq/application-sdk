@@ -31,29 +31,15 @@ class Input(ABC):
         4. Return list of file paths for logging purposes
 
         Returns:
-            List[str]: List of file paths (for logging/counting purposes)
+            List[str]: List of file paths
 
         Raises:
             AttributeError: When the input class doesn't support file operations or _extension
             IOError: When no files found locally or in object store
         """
-        # Check if this input class supports file operations
-        if not hasattr(self, "path") or not self.path:
-            raise AttributeError(
-                f"{self.__class__.__name__} does not support file operations. "
-                f"This method is only available for file-based inputs like ParquetInput and JsonInput."
-            )
-
-        # Check if extension is defined
-        if not hasattr(self, "_extension"):
-            raise AttributeError(
-                f"{self.__class__.__name__} must define _extension attribute. "
-                f"This should be set in the constructor (e.g., self._extension = '.parquet')."
-            )
-
         # Step 1: Check if files exist locally
         local_files = find_files_by_extension(
-            self.path, self._extension, getattr(self, "file_names", None)
+            self.path, self._extension, self.file_names
         )
         if local_files:
             logger.info(
@@ -68,56 +54,45 @@ class Input(ABC):
 
         try:
             # Determine what to download based on path type and filters
-            downloaded_source_paths = []
+            downloaded_paths = []
 
             if self.path.endswith(self._extension):
                 # Single file case (file_names validation already ensures this is valid)
                 source_path = get_object_store_prefix(self.path)
+                destination_path = os.path.join(TEMPORARY_PATH, source_path)
                 await ObjectStore.download_file(
                     source=source_path,
-                    destination=os.path.join(TEMPORARY_PATH, source_path),
+                    destination=destination_path,
                 )
-                downloaded_source_paths.append(source_path)
+                downloaded_paths.append(destination_path)
 
             elif hasattr(self, "file_names") and self.file_names:
                 # Directory with specific files - download each file individually
                 for file_name in self.file_names:
                     file_path = os.path.join(self.path, file_name)
                     source_path = get_object_store_prefix(file_path)
+                    destination_path = os.path.join(TEMPORARY_PATH, source_path)
                     await ObjectStore.download_file(
                         source=source_path,
-                        destination=os.path.join(TEMPORARY_PATH, source_path),
+                        destination=destination_path,
                     )
-                    downloaded_source_paths.append(source_path)
+                    downloaded_paths.append(destination_path)
             else:
                 # Download entire directory
                 source_path = get_object_store_prefix(self.path)
+                destination_path = os.path.join(TEMPORARY_PATH, source_path)
                 await ObjectStore.download_prefix(
                     source=source_path,
-                    destination=os.path.join(TEMPORARY_PATH, source_path),
+                    destination=destination_path,
                 )
-                downloaded_source_paths.append(source_path)
-
-            # After all downloads, search for files using the exact paths we downloaded
-            downloaded_files = []
-            for source_path in downloaded_source_paths:
-                downloaded_path = os.path.join(TEMPORARY_PATH, source_path)
-                if os.path.isfile(downloaded_path):
-                    # Single file
-                    downloaded_files.append(downloaded_path)
-                elif os.path.isdir(downloaded_path):
-                    # Directory - find all files with extension
-                    found_files = find_files_by_extension(
-                        downloaded_path, self._extension
-                    )
-                    downloaded_files.extend(found_files)
+                downloaded_paths.append(destination_path)
 
             # Check results
-            if downloaded_files:
+            if downloaded_paths:
                 logger.info(
-                    f"Successfully downloaded {len(downloaded_files)} {self._extension} files from object store"
+                    f"Successfully downloaded {len(downloaded_paths)} {self._extension} files from object store"
                 )
-                return downloaded_files
+                return downloaded_paths
             else:
                 raise IOError(
                     f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {self._extension} files found"
