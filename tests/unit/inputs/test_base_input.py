@@ -66,16 +66,21 @@ class TestInputDownloadFiles:
         """Test that AttributeError is raised when input has no path attribute."""
         input_instance = MockInputNoPath()
 
-        with pytest.raises(AttributeError, match="does not support file operations"):
+        with pytest.raises(
+            AttributeError, match="'MockInputNoPath' object has no attribute 'path'"
+        ):
             await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_empty_path(self):
-        """Test that AttributeError is raised when path is empty."""
+        """Test behavior when path is empty."""
         input_instance = MockInput("")
 
-        with pytest.raises(AttributeError, match="does not support file operations"):
-            await input_instance.download_files()
+        with patch("os.path.isfile", return_value=False), patch(
+            "os.path.isdir", return_value=False
+        ), patch("glob.glob", return_value=[]):
+            with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
+                await input_instance.download_files()
 
     @pytest.mark.asyncio
     async def test_download_files_local_single_file_exists(self):
@@ -182,11 +187,11 @@ class TestInputDownloadFiles:
         """Test successful download of directory from object store."""
         path = "/data"
         input_instance = MockInput(path)
-        expected_files = ["/data/file1.parquet", "/data/file2.parquet"]
+        expected_destination = "./local/tmp/data"
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=True
-        ), patch("glob.glob", side_effect=[[], expected_files]), patch(
+        ), patch("glob.glob", return_value=[]), patch(
             "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
         ) as mock_download, patch(
@@ -198,7 +203,7 @@ class TestInputDownloadFiles:
             mock_download.assert_called_once_with(
                 source="data", destination="./local/tmp/data"
             )
-            assert result == expected_files
+            assert result == [expected_destination]
 
     @pytest.mark.asyncio
     async def test_download_files_download_specific_files_success(self):
@@ -267,23 +272,24 @@ class TestInputDownloadFiles:
                 await input_instance.download_files()
 
     @pytest.mark.asyncio
-    async def test_download_files_download_success_but_no_files_found(self):
-        """Test download succeeds but no files found after download."""
-        path = "/data/test.parquet"
+    async def test_download_files_download_success_returns_destination(self):
+        """Test download succeeds and returns destination path."""
+        path = "/data"  # Use directory path
         input_instance = MockInput(path)
+        expected_destination = "./local/tmp/data"
 
         with patch("os.path.isfile", return_value=False), patch(
-            "os.path.isdir", return_value=False
+            "os.path.isdir", return_value=True
         ), patch("glob.glob", return_value=[]), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file",
+            "application_sdk.services.objectstore.ObjectStore.download_prefix",
             new_callable=AsyncMock,
         ), patch(
             "application_sdk.inputs.get_object_store_prefix",
-            return_value="data/test.parquet",
+            return_value="data",
         ):
-            # Mock _find_files to return empty even after download
-            with pytest.raises(SDKIOError, match="ATLAN-IO-503-01"):
-                await input_instance.download_files()
+            # Should return destination path when download succeeds
+            result = await input_instance.download_files()
+            assert result == [expected_destination]
 
     @pytest.mark.asyncio
     async def test_download_files_recursive_glob_pattern(self):

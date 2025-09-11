@@ -562,7 +562,7 @@ def find_files_by_extension(
     Args:
         path (str): Local path to search in (file or directory)
         extension (str): File extension to filter by (e.g., '.parquet', '.json')
-        file_names (Optional[List[str]]): List of file names (basenames) to filter by
+        file_names (Optional[List[str]]): List of file names (basenames) to filter by, paths are not supported
 
     Returns:
         List[str]: List of matching file paths

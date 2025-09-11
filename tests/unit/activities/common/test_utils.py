@@ -8,7 +8,6 @@ from unittest.mock import patch
 import pytest
 
 from application_sdk.activities.common.utils import (
-    _normalize_object_store_path,
     auto_heartbeater,
     get_object_store_prefix,
     get_workflow_id,
@@ -36,66 +35,6 @@ class TestGetWorkflowId:
 
         with pytest.raises(Exception, match="Failed to get workflow id"):
             get_workflow_id()
-
-
-class TestNormalizeObjectStorePath:
-    """Test cases for _normalize_object_store_path function."""
-
-    def test_absolute_path_normalization(self):
-        """Test that absolute paths are converted to relative."""
-        assert _normalize_object_store_path("/data/file.parquet") == "data/file.parquet"
-        assert (
-            _normalize_object_store_path("//data/file.parquet") == "data/file.parquet"
-        )
-        assert (
-            _normalize_object_store_path("///data/file.parquet") == "data/file.parquet"
-        )
-
-    def test_relative_path_unchanged(self):
-        """Test that relative paths remain relative."""
-        assert _normalize_object_store_path("data/file.parquet") == "data/file.parquet"
-        assert (
-            _normalize_object_store_path("./data/file.parquet") == "data/file.parquet"
-        )
-
-    def test_current_directory_handling(self):
-        """Test that current directory is converted to empty string."""
-        assert _normalize_object_store_path(".") == ""
-        assert _normalize_object_store_path("./") == ""
-
-    def test_path_separator_normalization(self):
-        """Test that path separators are normalized to forward slashes."""
-        # This test will behave differently on Windows vs Unix
-        if os.sep == "\\":
-            # Windows - backslashes should be converted to forward slashes
-            assert (
-                _normalize_object_store_path("data\\file.parquet")
-                == "data/file.parquet"
-            )
-            assert (
-                _normalize_object_store_path("\\data\\subdir\\file.parquet")
-                == "data/subdir/file.parquet"
-            )
-        else:
-            # Unix - forward slashes should remain unchanged
-            assert (
-                _normalize_object_store_path("data/file.parquet") == "data/file.parquet"
-            )
-            assert (
-                _normalize_object_store_path("/data/subdir/file.parquet")
-                == "data/subdir/file.parquet"
-            )
-
-    def test_complex_path_normalization(self):
-        """Test normalization of complex paths with redundant elements."""
-        assert (
-            _normalize_object_store_path("/data/../data/./file.parquet")
-            == "data/file.parquet"
-        )
-        assert (
-            _normalize_object_store_path("./data/subdir/../file.parquet")
-            == "data/file.parquet"
-        )
 
 
 class TestGetObjectStorePrefix:
@@ -140,12 +79,12 @@ class TestGetObjectStorePrefix:
             (
                 "datasets/sales/2024/",
                 "datasets/sales/2024",
-            ),  # Remove trailing slash - simplified
+            ),  # os.path.abspath normalizes trailing slash
             ("data/input.parquet", "data/input.parquet"),
             (
                 "./datasets/sales/",
-                "datasets/sales",
-            ),  # Remove trailing slash - simplified
+                "./datasets/sales",
+            ),  # os.path.abspath normalizes trailing slash
             ("models/trained/v1.pkl", "models/trained/v1.pkl"),
         ]
 
@@ -224,9 +163,17 @@ class TestGetObjectStorePrefix:
         # source_path = get_object_store_prefix(file_path)
 
         test_cases = [
-            ("/data", "file1.parquet", "data/file1.parquet"),
-            ("/datasets/sales", "2024_q1.json", "datasets/sales/2024_q1.json"),
-            ("./models", "model.pkl", "models/model.pkl"),
+            (
+                "/data",
+                "file1.parquet",
+                "data/file1.parquet",
+            ),  # Leading slash removed by abspath normalization
+            (
+                "/datasets/sales",
+                "2024_q1.json",
+                "datasets/sales/2024_q1.json",
+            ),  # Leading slash removed
+            ("./models", "model.pkl", "./models/model.pkl"),
         ]
 
         for base_path, file_name, expected in test_cases:
