@@ -169,7 +169,8 @@ class Output(ABC):
             dataframe (pd.DataFrame): The DataFrame to write.
         """
         try:
-            chunk_part = 0
+            if not self.chunk_start:
+                self.chunk_part = 0
             if len(dataframe) == 0:
                 return
 
@@ -182,26 +183,24 @@ class Output(ABC):
                     self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
                 ):
-                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
-                        chunk_part += 1
+                        self.chunk_part += 1
 
                 self.current_buffer_size += len(chunk)
                 self.current_buffer_size_bytes += chunk_size_bytes
-                await self._flush_buffer(chunk, chunk_part)
+                await self._flush_buffer(chunk, self.chunk_part)
 
                 del chunk
                 gc.collect()
 
             if self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store
-                output_file_name = (
-                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                )
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
                 if os.path.exists(output_file_name):
                     await self._upload_file(output_file_name)
-                    chunk_part += 1
+                    self.chunk_part += 1
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -221,8 +220,11 @@ class Output(ABC):
                 description="Number of chunks written to files",
             )
 
-            self.chunk_count += 1
-            self.statistics.append(chunk_part)
+            # If chunk_start is set we don't want to increment the chunk_count
+            # Since it should only increment the chunk_part in this case
+            if not self.chunk_start:
+                self.chunk_count += 1
+            self.statistics.append(self.chunk_part)
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(

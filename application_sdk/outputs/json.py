@@ -91,6 +91,7 @@ class JsonOutput(Output):
         path_gen: Callable[[int | None, int], str] = path_gen,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
+        chunk_part: int = 0,
         **kwargs: Dict[str, Any],
     ):
         """Initialize the JSON output handler.
@@ -131,6 +132,7 @@ class JsonOutput(Output):
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.statistics = []
+        self.chunk_part = chunk_part
         self.metrics = get_metrics()
 
         if not self.output_path:
@@ -178,7 +180,8 @@ class JsonOutput(Output):
             Daft does not have built-in JSON writing support, so we are using orjson.
         """
         try:
-            chunk_part = 0
+            if self.chunk_start is None:
+                self.chunk_part = 0
 
             buffer = []
             for row in dataframe.iter_rows():
@@ -199,27 +202,30 @@ class JsonOutput(Output):
 
                 # If the buffer size is reached append to the file and clear the buffer
                 if self.current_buffer_size >= self.buffer_size:
-                    await self.flush_daft_buffer(buffer, chunk_part)
+                    await self.flush_daft_buffer(buffer, self.chunk_part)
 
                 if self.current_buffer_size_bytes > self.max_file_size_bytes:
-                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
-                        self.chunk_count += 1
+                        self.chunk_part += 1
 
             # Write any remaining rows in the buffer
             if self.current_buffer_size > 0:
-                await self.flush_daft_buffer(buffer, self.chunk_count)
+                await self.flush_daft_buffer(buffer, self.chunk_part)
 
             # Finally upload the final file
             if self.current_buffer_size_bytes > 0:
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
                 if os.path.exists(output_file_name):
                     await self._upload_file(output_file_name)
-                    self.chunk_count += 1
+                    self.chunk_part += 1
 
-            # self.chunk_count += 1
-            # self.statistics.append(self.chunk_count)
+            # If chunk_start is set we don't want to increment the chunk_count
+            # Since it should only increment the chunk_part in this case
+            if self.chunk_start is None:
+                self.chunk_count += 1
+            self.statistics.append(self.chunk_part)
 
             # Record metrics for successful write
             self.metrics.record_metric(
