@@ -8,10 +8,7 @@ from hypothesis import HealthCheck, given, settings
 
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.test_utils.hypothesis.strategies.inputs.parquet_input import (
-    file_names_strategy,
-    input_prefix_strategy,
     parquet_input_config_strategy,
-    safe_path_strategy,
 )
 
 # Configure Hypothesis settings at the module level
@@ -26,382 +23,69 @@ def test_init(config: Dict[str, Any]) -> None:
     parquet_input = ParquetInput(
         path=config["path"],
         chunk_size=config["chunk_size"],
-        input_prefix=config["input_prefix"],
         file_names=config["file_names"],
     )
 
     assert parquet_input.path == config["path"]
     assert parquet_input.chunk_size == config["chunk_size"]
-    assert parquet_input.input_prefix == config["input_prefix"]
     assert parquet_input.file_names == config["file_names"]
 
 
 @pytest.mark.asyncio
-@given(
-    path=safe_path_strategy,
-    prefix=input_prefix_strategy,
-    file_names=file_names_strategy,
-)
-async def test_not_download_file_that_exists(
-    path: str, prefix: str, file_names: list[str]
-) -> None:
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob"
-    ) as mock_glob, patch(
+async def test_not_download_file_that_exists() -> None:
+    """Test that no download occurs when a parquet file exists locally."""
+    path = "/data/test.parquet"  # Path with correct extension
+    file_names = ["test.parquet"]
+
+    with patch("os.path.isfile", return_value=True), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
-        # Mock existing parquet files
-        mock_glob.return_value = ["existing.parquet"]
-
         parquet_input = ParquetInput(
-            path=path, chunk_size=100000, input_prefix=prefix, file_names=file_names
+            path=path, chunk_size=100000, file_names=file_names
         )
 
-        await parquet_input.download_files(path)
+        result = await parquet_input.download_files(".parquet")
         mock_download.assert_not_called()
+        assert result == [path]
 
 
 @pytest.mark.asyncio
 async def test_download_file_invoked_for_missing_files() -> None:
-    """Ensure that a download is triggered when no parquet files exist and input_prefix is provided."""
+    """Ensure that a download is triggered when no parquet files exist locally."""
     path = "/local/test.parquet"
-    prefix = "remote"
 
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch(
+    with patch("os.path.isfile", side_effect=[False, True]), patch(
+        "os.path.isdir", return_value=False
+    ), patch("glob.glob", return_value=[]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download:
-        parquet_input = ParquetInput(
-            path=path, chunk_size=100000, input_prefix=prefix, file_names=None
-        )
+    ) as mock_download, patch(
+        "application_sdk.activities.common.utils.get_object_store_prefix",
+        return_value="local/test.parquet",
+    ):
+        parquet_input = ParquetInput(path=path, chunk_size=100000)
 
-        await parquet_input.download_files(path)
+        result = await parquet_input.download_files(".parquet")
 
         # Should attempt to download the file
-        mock_download.assert_called_once()
-        # Verify call was made with keyword arguments
-        args, kwargs = mock_download.call_args
-        assert kwargs["destination"] == path
-
-
-@pytest.mark.asyncio
-async def test_download_file_not_invoked_when_file_present() -> None:
-    """Ensure no download occurs when parquet files already exist."""
-    path = "/local"
-
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob"
-    ) as mock_glob, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ) as mock_download:
-        # Mock existing parquet files
-        mock_glob.return_value = ["/local/exists.parquet"]
-
-        parquet_input = ParquetInput(
-            path=path, chunk_size=100000, input_prefix="remote", file_names=None
-        )
-
-        await parquet_input.download_files(path)
-
-        mock_download.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_download_file_error_when_no_files_and_no_prefix() -> None:
-    """Ensure error is raised when no parquet files exist and no input prefix is provided."""
-    path = "/local"
-
-    with patch("os.path.isdir", return_value=True), patch("glob.glob", return_value=[]):
-        parquet_input = ParquetInput(
-            path=path, chunk_size=100000, input_prefix=None, file_names=None
-        )
-
-        with pytest.raises(ValueError, match="No parquet files found"):
-            await parquet_input.download_files(path)
+        mock_download.assert_called_once_with(source="local/test.parquet")
+        assert result == [path]
 
 
 # ---------------------------------------------------------------------------
-# Comprehensive Download Files Tests
+# Base Class Download Files Tests
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_download_files_directory_path_calls_correct_method() -> None:
-    """Test that directory paths call download_files_from_object_store."""
-    path = "/local/directory"
-    input_prefix = "remote/prefix"
+async def test_download_files_uses_base_class() -> None:
+    """Test that ParquetInput uses the base class download_files method."""
+    path = "/data/test.parquet"
+    parquet_input = ParquetInput(path=path)
 
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ) as mock_download_files, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download_file:
-        parquet_input = ParquetInput(input_prefix=input_prefix)
+    with patch("os.path.isfile", return_value=True):
+        result = await parquet_input.download_files(".parquet")
 
-        await parquet_input.download_files(path)
-
-        # Should call download_files_from_object_store for directories
-        mock_download_files.assert_called_once()
-        args, kwargs = mock_download_files.call_args
-        assert kwargs["destination"] == path
-        mock_download_file.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_download_files_file_path_calls_correct_method() -> None:
-    """Test that file paths call download_file_from_object_store."""
-    path = "/local/file.parquet"
-    input_prefix = "remote/prefix"
-
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ) as mock_download_files, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download_file:
-        parquet_input = ParquetInput(input_prefix=input_prefix)
-
-        await parquet_input.download_files(path)
-
-        # Should call download_file_from_object_store for files
-        mock_download_file.assert_called_once()
-        args, kwargs = mock_download_file.call_args
-        assert kwargs["destination"] == path
-        mock_download_files.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_download_files_directory_with_existing_parquet_files() -> None:
-    """Test that no download occurs when parquet files exist in directory."""
-    path = "/local/directory"
-    existing_files = [
-        "/local/directory/file1.parquet",
-        "/local/directory/file2.parquet",
-    ]
-
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob"
-    ) as mock_glob, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ) as mock_download_files:
-        mock_glob.return_value = existing_files
-
-        parquet_input = ParquetInput(input_prefix="remote")
-        result = await parquet_input.download_files(path)
-
-        # Should check for files in directory
-        mock_glob.assert_called_once_with(os.path.join("/local/directory", "*.parquet"))
-        # Should not download since files exist
-        mock_download_files.assert_not_called()
-        assert result is None
-
-
-@pytest.mark.asyncio
-async def test_download_files_file_with_existing_parquet_file() -> None:
-    """Test that no download occurs when specific parquet file exists."""
-    path = "/local/specific.parquet"
-
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob"
-    ) as mock_glob, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download_file:
-        mock_glob.return_value = [path]  # File exists
-
-        parquet_input = ParquetInput(input_prefix="remote")
-        result = await parquet_input.download_files(path)
-
-        # Should check for specific file
-        mock_glob.assert_called_once_with(path)
-        # Should not download since file exists
-        mock_download_file.assert_not_called()
-        assert result is None
-
-
-@pytest.mark.asyncio
-async def test_download_files_with_logging() -> None:
-    """Test that appropriate logging occurs during download."""
-    path = "/local/file.parquet"
-    input_prefix = "remote/prefix"
-
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"), patch(
-        "application_sdk.inputs.parquet.logger"
-    ) as mock_logger:
-        parquet_input = ParquetInput(input_prefix=input_prefix)
-
-        await parquet_input.download_files(path)
-
-        # Should log the download operation
-        mock_logger.info.assert_called_once_with(
-            f"Reading file from object store: {path} from {input_prefix}"
-        )
-
-
-@pytest.mark.asyncio
-async def test_download_files_error_propagation_from_object_store() -> None:
-    """Test that errors from ObjectStore methods are properly propagated."""
-    from application_sdk.common.error_codes import IOError as SDKIOError
-
-    path = "/local/file.parquet"
-    input_prefix = "remote/prefix"
-
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file",
-        side_effect=SDKIOError("Download failed"),
-    ):
-        parquet_input = ParquetInput(input_prefix=input_prefix)
-
-        with pytest.raises(SDKIOError, match="Download failed"):
-            await parquet_input.download_files(path)
-
-
-@pytest.mark.asyncio
-async def test_download_files_directory_error_propagation() -> None:
-    """Test that errors from directory downloads are properly propagated."""
-    from application_sdk.common.error_codes import IOError as SDKIOError
-
-    path = "/local/directory"
-    input_prefix = "remote/prefix"
-
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix",
-        side_effect=SDKIOError("Directory download failed"),
-    ):
-        parquet_input = ParquetInput(input_prefix=input_prefix)
-
-        with pytest.raises(SDKIOError, match="Directory download failed"):
-            await parquet_input.download_files(path)
-
-
-@pytest.mark.asyncio
-async def test_download_files_glob_patterns() -> None:
-    """Test that correct glob patterns are used for different path types."""
-
-    # Test directory glob pattern
-    directory_path = "/data/parquet_files"
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob"
-    ) as mock_glob, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ):
-        mock_glob.return_value = []
-
-        parquet_input = ParquetInput(input_prefix="remote")
-        await parquet_input.download_files(directory_path)
-
-        # Should use *.parquet pattern for directories
-        mock_glob.assert_called_once_with(
-            os.path.join("/data/parquet_files", "*.parquet")
-        )
-
-    # Test file glob pattern
-    file_path = "/data/specific_file.parquet"
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob"
-    ) as mock_glob, patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ):
-        mock_glob.return_value = []
-
-        parquet_input = ParquetInput(input_prefix="remote")
-        await parquet_input.download_files(file_path)
-
-        # Should use direct path for files
-        mock_glob.assert_called_once_with(file_path)
-
-
-@pytest.mark.asyncio
-async def test_download_files_with_various_file_extensions() -> None:
-    """Test download behavior with different file patterns."""
-
-    test_cases = [
-        ("/data/file.parquet", False),  # Single parquet file
-        ("/data/file.txt", False),  # Non-parquet file
-        ("/data/", True),  # Directory
-        ("/data/subdir/file.parquet", False),  # Nested file
-    ]
-
-    for path, is_dir in test_cases:
-        with patch("os.path.isdir", return_value=is_dir), patch(
-            "glob.glob", return_value=[]
-        ), patch(
-            "application_sdk.services.objectstore.ObjectStore.download_prefix"
-        ) as mock_download_files, patch(
-            "application_sdk.services.objectstore.ObjectStore.download_file"
-        ) as mock_download_file:
-            parquet_input = ParquetInput(input_prefix="remote")
-            await parquet_input.download_files(path)
-
-            if is_dir:
-                mock_download_files.assert_called_once()
-                args, kwargs = mock_download_files.call_args
-                assert kwargs["destination"] == path
-                mock_download_file.assert_not_called()
-            else:
-                mock_download_file.assert_called_once()
-                args, kwargs = mock_download_file.call_args
-                assert kwargs["destination"] == path
-                mock_download_files.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_download_files_return_value() -> None:
-    """Test that download_files returns None as expected."""
-    path = "/local/file.parquet"
-
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"):
-        parquet_input = ParquetInput(input_prefix="remote")
-        result = await parquet_input.download_files(path)
-
-        # Method should return None
-        assert result is None
-
-
-@pytest.mark.asyncio
-async def test_download_files_mixed_scenarios() -> None:
-    """Test download_files with various combinations of conditions."""
-
-    # Test 1: Directory with no files, has prefix - should download
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ) as mock_download:
-        parquet_input = ParquetInput(input_prefix="remote")
-        await parquet_input.download_files("/empty/dir")
-        mock_download.assert_called_once()
-
-    # Test 2: File with no matches, has prefix - should download
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_file"
-    ) as mock_download:
-        parquet_input = ParquetInput(input_prefix="remote")
-        await parquet_input.download_files("/missing/file.parquet")
-        mock_download.assert_called_once()
-
-    # Test 3: Directory with existing files - should not download
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob", return_value=["/dir/existing.parquet"]
-    ), patch(
-        "application_sdk.services.objectstore.ObjectStore.download_prefix"
-    ) as mock_download:
-        parquet_input = ParquetInput(input_prefix="remote")
-        await parquet_input.download_files("/dir")
-        mock_download.assert_not_called()
+        assert result == [path]
 
 
 # ---------------------------------------------------------------------------
@@ -453,6 +137,15 @@ async def test_get_dataframe_with_mocked_pandas(monkeypatch) -> None:
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
 
+    # Mock download_files to return the path
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [self.path]  # Return the path as a list of files
+
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
+
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+
     parquet_input = ParquetInput(path=path, chunk_size=100000)
 
     result = await parquet_input.get_dataframe()
@@ -472,6 +165,15 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
     path = "/data/test.parquet"
     expected_chunksize = 30
     call_log = _install_dummy_pandas(monkeypatch)
+
+    # Mock download_files to return the path
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [self.path]  # Return the path as a list of files
+
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
+
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
 
     parquet_input = ParquetInput(path=path, chunk_size=expected_chunksize)
 
@@ -497,6 +199,15 @@ async def test_get_batched_dataframe_no_chunk_size(monkeypatch) -> None:
     path = "/data/test.parquet"
     call_log = _install_dummy_pandas(monkeypatch)
 
+    # Mock download_files to return the path
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [self.path]  # Return the path as a list of files
+
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
+
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+
     parquet_input = ParquetInput(path=path, chunk_size=None)
 
     chunks = [chunk async for chunk in parquet_input.get_batched_dataframe()]
@@ -509,27 +220,7 @@ async def test_get_batched_dataframe_no_chunk_size(monkeypatch) -> None:
     assert call_log == [{"path": path}]
 
 
-@pytest.mark.asyncio
-async def test_get_dataframe_with_input_prefix(monkeypatch) -> None:
-    """Verify that get_dataframe downloads files when input_prefix is provided."""
-
-    path = "/data/test.parquet"
-    input_prefix = "remote"
-    call_log = _install_dummy_pandas(monkeypatch)
-
-    # Mock the OS and ObjectStore calls that download_files uses internally
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"):
-        parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
-
-        result = await parquet_input.get_dataframe()
-
-        # Should return the mock DataFrame
-        assert hasattr(result, "data")
-
-        # Confirm read_parquet was invoked with None (since download_files returns None and gets assigned to path)
-        assert call_log == [{"path": None}]
+# Test removed - input_prefix parameter no longer exists
 
 
 # ---------------------------------------------------------------------------
@@ -561,13 +252,23 @@ async def test_get_daft_dataframe(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
+    # Mock download_files to return a list of files
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
+
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
+
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+
     path = "/tmp/data"
     parquet_input = ParquetInput(path=path)
 
     result = await parquet_input.get_daft_dataframe()
 
-    assert result == f"daft_df:{path}/*.parquet"
-    assert call_log == [{"path": f"{path}/*.parquet"}]
+    expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
+    assert result == f"daft_df:{expected_files}"
+    assert call_log == [{"path": expected_files}]
 
 
 @pytest.mark.asyncio
@@ -576,6 +277,19 @@ async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
+    # Mock download_files to return the specific files
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return (
+            [os.path.join(self.path, fn) for fn in self.file_names]
+            if hasattr(self, "file_names") and self.file_names
+            else []
+        )
+
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
+
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+
     path = "/tmp"
     file_names = ["dir/file1.parquet", "dir/file2.parquet"]
 
@@ -583,9 +297,9 @@ async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
 
     result = await parquet_input.get_daft_dataframe()
 
-    expected_path = f"{path}/dir/*.parquet"
-    assert result == f"daft_df:{expected_path}"
-    assert call_log == [{"path": expected_path}]
+    expected_files = ["/tmp/dir/file1.parquet", "/tmp/dir/file2.parquet"]
+    assert result == f"daft_df:{expected_files}"
+    assert call_log == [{"path": expected_files}]
 
 
 @pytest.mark.asyncio
@@ -594,19 +308,23 @@ async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock the OS and ObjectStore calls that download_files uses internally
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob", return_value=[]
-    ), patch("application_sdk.services.objectstore.ObjectStore.download_prefix"):
-        path = "/tmp/data"
-        input_prefix = "remote"
+    # Mock download_files to return a list of files
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
 
-        parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
 
-        result = await parquet_input.get_daft_dataframe()
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
 
-        assert result == f"daft_df:{path}/*.parquet"
-        assert call_log == [{"path": f"{path}/*.parquet"}]
+    path = "/tmp/data"
+    parquet_input = ParquetInput(path=path)
+
+    result = await parquet_input.get_daft_dataframe()
+
+    expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
+    assert result == f"daft_df:{expected_files}"
+    assert call_log == [{"path": expected_files}]
 
 
 @pytest.mark.asyncio
@@ -615,32 +333,37 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock the OS and ObjectStore calls that download_files uses internally
-    with patch("os.path.isdir", return_value=False), patch(
-        "glob.glob", return_value=[]
-    ), patch("application_sdk.services.objectstore.ObjectStore.download_file"):
-        path = "/data"
-        file_names = [
-            "one.parquet",
-            "two.parquet",
-        ]  # Note: .json extension gets replaced
-        input_prefix = "remote"
-
-        parquet_input = ParquetInput(
-            path=path, file_names=file_names, input_prefix=input_prefix
+    # Mock download_files to return the specific files
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return (
+            [os.path.join(self.path, fn) for fn in self.file_names]
+            if hasattr(self, "file_names") and self.file_names
+            else []
         )
 
-        frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
 
-        expected_frames = ["daft_df:/data/one.parquet", "daft_df:/data/two.parquet"]
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
 
-        assert frames == expected_frames
+    path = "/data"
+    file_names = [
+        "one.parquet",
+        "two.parquet",
+    ]
+    parquet_input = ParquetInput(path=path, file_names=file_names)
 
-        # Ensure a call was logged per file
-        assert call_log == [
-            {"path": "/data/one.parquet"},
-            {"path": "/data/two.parquet"},
-        ]
+    frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+
+    expected_frames = ["daft_df:/data/one.parquet", "daft_df:/data/two.parquet"]
+
+    assert frames == expected_frames
+
+    # Ensure a call was logged per file
+    assert call_log == [
+        {"path": "/data/one.parquet"},
+        {"path": "/data/two.parquet"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -649,23 +372,29 @@ async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> Non
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    # Mock the OS and ObjectStore calls that download_files uses internally
-    with patch("os.path.isdir", return_value=True), patch(
-        "glob.glob", return_value=[]
-    ), patch("application_sdk.services.objectstore.ObjectStore.download_prefix"):
-        path = "/data"
-        input_prefix = "remote"
+    # Mock download_files to return a list of files
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
 
-        parquet_input = ParquetInput(path=path, input_prefix=input_prefix)
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
 
-        frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
 
-        expected_frames = ["daft_df:/data/*.parquet"]
+    path = "/data"
+    parquet_input = ParquetInput(path=path)
 
-        assert frames == expected_frames
+    frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-        # Should have one call with wildcard pattern
-        assert call_log == [{"path": "/data/*.parquet"}]
+    expected_frames = ["daft_df:/data/file1.parquet", "daft_df:/data/file2.parquet"]
+
+    assert frames == expected_frames
+
+    # Should have one call per file
+    assert call_log == [
+        {"path": "/data/file1.parquet"},
+        {"path": "/data/file2.parquet"},
+    ]
 
 
 @pytest.mark.asyncio
@@ -674,15 +403,26 @@ async def test_get_batched_daft_dataframe_no_input_prefix(monkeypatch) -> None:
 
     call_log = _install_dummy_daft(monkeypatch)
 
+    # Mock download_files to return a list of files
+    async def dummy_download(self, file_extension):  # noqa: D401, ANN001
+        return [f"{self.path}/file1.parquet", f"{self.path}/file2.parquet"]
+
+    # Mock the base Input class method since ParquetInput calls super().download_files()
+    from application_sdk.inputs import Input
+
+    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+
     path = "/data"
 
     parquet_input = ParquetInput(path=path)
 
     frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-    # When there's no input_prefix, the method doesn't yield anything
-    expected_frames = []
+    expected_frames = ["daft_df:/data/file1.parquet", "daft_df:/data/file2.parquet"]
 
     assert frames == expected_frames
-    # No calls to daft.read_parquet should be made when there's no input_prefix
-    assert call_log == []
+    # Should have one call per file
+    assert call_log == [
+        {"path": "/data/file1.parquet"},
+        {"path": "/data/file2.parquet"},
+    ]
