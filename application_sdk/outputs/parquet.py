@@ -248,12 +248,33 @@ class ParquetOutput(Output):
 
         This method writes a chunk to a Parquet file and uploads the file to the object store.
         """
-        append = False if not os.path.exists(file_name) else True
-        chunk.to_parquet(
-            file_name,
-            index=False,
-            compression="snappy",
-            engine="fastparquet",
-            append=append,
-            object_encoding="infer",
-        )
+        try:
+            import pandas as pd
+
+            # append = False if not os.path.exists(file_name) else True
+            # chunk.to_parquet(
+            #     file_name,
+            #     index=False,
+            #     compression="snappy",
+            #     engine="fastparquet",
+            #     append=append,
+            #     object_encoding="infer",
+            # )
+            if not os.path.exists(file_name):
+                chunk.to_parquet(
+                    file_name,
+                    index=False,
+                    compression="snappy",
+                )
+            else:
+                old_df = pd.read_parquet(file_name)
+                # issues with memory
+                combined_df = pd.concat([old_df, chunk])
+                combined_df.to_parquet(
+                    file_name,
+                    index=False,
+                    compression="snappy",
+                )
+        except Exception as e:
+            logger.error(f"Error writing chunk to parquet file: {str(e)}")
+            raise

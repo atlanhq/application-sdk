@@ -160,6 +160,7 @@ class Output(ABC):
                         await self.write_dataframe(dataframe)
         except Exception as e:
             logger.error(f"Error writing batched dataframe: {str(e)}")
+            raise e
 
     async def write_dataframe(self, dataframe: "pd.DataFrame"):
         """Write a pandas DataFrame to Parquet files and upload to object store.
@@ -172,9 +173,10 @@ class Output(ABC):
             if len(dataframe) == 0:
                 return
 
+            chunk_size_bytes = self.estimate_dataframe_file_size(dataframe)
+
             for i in range(0, len(dataframe), self.buffer_size):
                 chunk = dataframe[i : i + self.buffer_size]
-                chunk_size_bytes = self.estimate_dataframe_file_size(chunk)
 
                 if (
                     self.current_buffer_size_bytes + chunk_size_bytes

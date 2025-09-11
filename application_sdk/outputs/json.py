@@ -141,8 +141,8 @@ class JsonOutput(Output):
             self.output_path = os.path.join(self.output_path, typename)
         os.makedirs(self.output_path, exist_ok=True)
 
-        if self.chunk_start:
-            self.chunk_count = self.chunk_start + self.chunk_count
+        # if self.chunk_start:
+        #     self.chunk_count = self.chunk_start + self.chunk_count
 
         # For Query Extraction
         if self.start_marker and self.end_marker:
@@ -202,26 +202,24 @@ class JsonOutput(Output):
                     await self.flush_daft_buffer(buffer, chunk_part)
 
                 if self.current_buffer_size_bytes > self.max_file_size_bytes:
-                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
-                        chunk_part += 1
+                        self.chunk_count += 1
 
             # Write any remaining rows in the buffer
             if self.current_buffer_size > 0:
-                await self.flush_daft_buffer(buffer, chunk_part)
+                await self.flush_daft_buffer(buffer, self.chunk_count)
 
             # Finally upload the final file
             if self.current_buffer_size_bytes > 0:
-                output_file_name = (
-                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                )
+                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
                 if os.path.exists(output_file_name):
                     await self._upload_file(output_file_name)
-                    chunk_part += 1
+                    self.chunk_count += 1
 
-            self.chunk_count += 1
-            self.statistics.append(chunk_part)
+            # self.chunk_count += 1
+            # self.statistics.append(self.chunk_count)
 
             # Record metrics for successful write
             self.metrics.record_metric(
@@ -249,7 +247,7 @@ class JsonOutput(Output):
         and uploads the file to the object store.
         """
         output_file_name = (
-            f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
+            f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
         )
         with open(output_file_name, "ab+") as f:
             f.writelines(buffer)
