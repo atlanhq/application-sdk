@@ -8,6 +8,7 @@ import pytest
 
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
+    get_object_store_prefix,
     get_workflow_id,
     send_periodic_heartbeat,
 )
@@ -33,6 +34,171 @@ class TestGetWorkflowId:
 
         with pytest.raises(Exception, match="Failed to get workflow id"):
             get_workflow_id()
+
+
+class TestGetObjectStorePrefix:
+    """Test cases for get_object_store_prefix function."""
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_temporary_path(self, mock_abspath):
+        """Test conversion of temporary path to object store prefix."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {
+            "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456": "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456"
+        result = get_object_store_prefix(path)
+
+        assert result == "artifacts/apps/myapp/workflows/wf-123/run-456"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_user_provided_path(self, mock_abspath):
+        """Test user-provided path returns as-is."""
+        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
+        mock_abspath.side_effect = lambda p: {
+            "datasets/sales/2024/": "/some/other/datasets/sales/2024/",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "datasets/sales/2024/"
+        result = get_object_store_prefix(path)
+
+        assert result == "datasets/sales/2024/"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_removes_leading_dot_slash(self, mock_abspath):
+        """Test that leading ./ is removed from user-provided paths."""
+        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
+        mock_abspath.side_effect = lambda p: {
+            "./datasets/sales/2024/": "/some/other/datasets/sales/2024/",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "./datasets/sales/2024/"
+        result = get_object_store_prefix(path)
+
+        assert result == "datasets/sales/2024/"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_relative_temporary_path(self, mock_abspath):
+        """Test relative path under TEMPORARY_PATH."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {
+            "./local/tmp/artifacts/test": "/tmp/local/artifacts/test",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "./local/tmp/artifacts/test"
+        result = get_object_store_prefix(path)
+
+        # Should use os.path.relpath which handles the relative conversion
+        assert result == "artifacts/test"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_exact_temporary_path(self, mock_abspath):
+        """Test exact TEMPORARY_PATH returns empty string."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {"/tmp/local": "/tmp/local"}.get(p, p)
+
+        path = "/tmp/local"
+        result = get_object_store_prefix(path)
+
+        assert result == "."  # os.path.relpath returns "." for same directory
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "C:\\tmp\\local")
+    @patch("os.path.abspath")
+    @patch("os.path.relpath")
+    def test_get_object_store_prefix_windows_drive_error(
+        self, mock_relpath, mock_abspath
+    ):
+        """Test handling of ValueError on Windows with different drives."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {
+            "D:\\data\\files": "D:\\data\\files",
+            "C:\\tmp\\local": "C:\\tmp\\local",
+        }.get(p, p)
+
+        # Mock relpath to raise ValueError (different drives on Windows)
+        mock_relpath.side_effect = ValueError(
+            "path is on mount 'D:', start on mount 'C:'"
+        )
+
+        path = "D:\\data\\files"
+        result = get_object_store_prefix(path)
+
+        # Should fall back to treating as user-provided path
+        assert result == "D:\\data\\files"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_nested_temporary_path(self, mock_abspath):
+        """Test deeply nested path under TEMPORARY_PATH."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {
+            "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet": "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "/tmp/local/artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
+        result = get_object_store_prefix(path)
+
+        assert (
+            result
+            == "artifacts/apps/myapp/workflows/wf-123/run-456/data/output.parquet"
+        )
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_empty_path(self, mock_abspath):
+        """Test empty path handling."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {
+            "": "/current/dir",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = ""
+        result = get_object_store_prefix(path)
+
+        assert result == ""
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_multiple_leading_dots(self, mock_abspath):
+        """Test path with multiple leading ./ patterns."""
+        # Mock absolute path resolution - path is NOT under TEMPORARY_PATH
+        mock_abspath.side_effect = lambda p: {
+            "./././datasets/sales/": "/some/other/datasets/sales/",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "./././datasets/sales/"
+        result = get_object_store_prefix(path)
+
+        # lstrip("./") removes all leading . and / characters
+        assert result == "datasets/sales/"
+
+    @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "/tmp/local")
+    @patch("os.path.abspath")
+    def test_get_object_store_prefix_path_with_spaces(self, mock_abspath):
+        """Test path with spaces in directory names."""
+        # Mock absolute path resolution
+        mock_abspath.side_effect = lambda p: {
+            "/tmp/local/my folder/sub folder/file.txt": "/tmp/local/my folder/sub folder/file.txt",
+            "/tmp/local": "/tmp/local",
+        }.get(p, p)
+
+        path = "/tmp/local/my folder/sub folder/file.txt"
+        result = get_object_store_prefix(path)
+
+        assert result == "my folder/sub folder/file.txt"
 
 
 class TestAutoHeartbeater:
