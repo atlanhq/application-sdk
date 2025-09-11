@@ -257,7 +257,7 @@ class JsonOutput(Output):
         and uploads the file to the object store.
         """
         output_file_name = (
-            f"{self.output_path}/{self.path_gen(self.chunk_start, self.chunk_count)}"
+            f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
         )
         with open(output_file_name, "ab+") as f:
             f.writelines(buffer)

@@ -79,12 +79,14 @@ class Output(ABC):
         sample_size = min(10, len(dataframe))
         sample = dataframe.head(sample_size)
         file_type = type(self).__name__.lower().replace("output", "")
+        compression_factor = 1
         if file_type == "json":
             sample_file = sample.to_json(orient="records", lines=True)
         else:
             sample_file = sample.to_parquet(index=False, compression="snappy")
+            compression_factor = 0.01
         if sample_file is not None:
-            avg_record_size = len(sample_file) / sample_size
+            avg_record_size = len(sample_file) / sample_size * compression_factor
             return int(avg_record_size * len(dataframe))
 
         return 0
@@ -169,7 +171,7 @@ class Output(ABC):
             dataframe (pd.DataFrame): The DataFrame to write.
         """
         try:
-            if not self.chunk_start:
+            if self.chunk_start is None:
                 self.chunk_part = 0
             if len(dataframe) == 0:
                 return
@@ -222,7 +224,7 @@ class Output(ABC):
 
             # If chunk_start is set we don't want to increment the chunk_count
             # Since it should only increment the chunk_part in this case
-            if not self.chunk_start:
+            if self.chunk_start is None:
                 self.chunk_count += 1
             self.statistics.append(self.chunk_part)
         except Exception as e:
