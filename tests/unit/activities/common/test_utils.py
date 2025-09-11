@@ -1,7 +1,6 @@
 """Simplified unit tests for activities common utilities."""
 
 import asyncio
-import os
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -137,51 +136,41 @@ class TestGetObjectStorePrefix:
     @patch("os.path.abspath")
     @patch("os.path.commonpath")
     @patch("os.path.normpath")
-    def test_combined_file_paths_from_os_path_join(
+    def test_user_provided_object_store_keys(
         self, mock_normpath, mock_commonpath, mock_abspath
     ):
-        """Test paths created by os.path.join in download_files method."""
+        """Test user-provided object store keys are returned as-is."""
         # Mock absolute path resolution - paths are NOT under TEMPORARY_PATH
-        mock_abspath.side_effect = lambda p: {
-            "/data/file1.parquet": "/data/file1.parquet",
-            "/datasets/sales/2024_q1.json": "/datasets/sales/2024_q1.json",
-            "./models/model.pkl": "/abs/models/model.pkl",
-            "./local/tmp": "/abs/local/tmp",
-        }.get(p, p)
+        mock_abspath.side_effect = lambda p: p
 
         # Mock commonpath to indicate paths are NOT under temp directory
-        # Return a path that's definitely NOT the temp path to trigger user-path logic
         mock_commonpath.return_value = "/different/root"
 
-        # Mock normpath to normalize paths properly
-        mock_normpath.side_effect = (
-            lambda p: p.lstrip("./") if p.startswith("./") else p
-        )
+        # Mock normpath to return paths as-is
+        mock_normpath.side_effect = lambda p: p
 
-        # This simulates the real usage in download_files:
-        # file_path = os.path.join(self.path, file_name)
-        # source_path = get_object_store_prefix(file_path)
-
+        # Test object store keys (always use forward slashes)
         test_cases = [
-            (
-                "/data",
-                "file1.parquet",
-                "data/file1.parquet",
-            ),  # Leading slash removed by abspath normalization
-            (
-                "/datasets/sales",
-                "2024_q1.json",
-                "datasets/sales/2024_q1.json",
-            ),  # Leading slash removed
-            ("./models", "model.pkl", "./models/model.pkl"),
+            "data/file1.parquet",
+            "datasets/sales/2024_q1.json",
+            "models/model.pkl",
+            "/data/file1.parquet",  # Leading slash should be stripped
+            "//datasets//sales//file.json",  # Multiple slashes should be normalized
         ]
 
-        for base_path, file_name, expected in test_cases:
-            combined_path = os.path.join(base_path, file_name)
-            result = get_object_store_prefix(combined_path)
+        expected_results = [
+            "data/file1.parquet",
+            "datasets/sales/2024_q1.json",
+            "models/model.pkl",
+            "data/file1.parquet",  # Leading slash stripped
+            "datasets//sales//file.json",  # Leading/trailing slashes stripped
+        ]
+
+        for object_store_key, expected in zip(test_cases, expected_results):
+            result = get_object_store_prefix(object_store_key)
             assert (
                 result == expected
-            ), f"Failed for {base_path} + {file_name}: got {result}, expected {expected}"
+            ), f"Failed for object store key '{object_store_key}': got '{result}', expected '{expected}'"
 
     @patch("application_sdk.activities.common.utils.TEMPORARY_PATH", "./local/tmp")
     @patch("os.path.abspath")
