@@ -147,8 +147,8 @@ class JsonOutput(Output):
             self.output_path = os.path.join(self.output_path, typename)
         os.makedirs(self.output_path, exist_ok=True)
 
-        # if self.chunk_start:
-        #     self.chunk_count = self.chunk_start + self.chunk_count
+        if self.chunk_start:
+            self.chunk_count = self.chunk_start + self.chunk_count
 
         # For Query Extraction
         if self.start_marker and self.end_marker:
