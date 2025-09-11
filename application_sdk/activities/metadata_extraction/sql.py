@@ -305,6 +305,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             logger.warning("Query is empty, skipping execution.")
             return None
 
+        if not sql_engine:
+            logger.error("SQL engine is not set.")
+            raise ValueError("SQL engine must be provided.")
+
         # Setup parquet output using helper method
         parquet_output = self._setup_parquet_output(
             workflow_args, output_suffix, write_to_file
@@ -325,17 +329,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             )
 
         # Single-db execution path
-        if not sql_engine:
-            logger.error("SQL engine is not set.")
-            raise ValueError("SQL engine must be provided.")
-
         # Prepare query for single-db execution
         prepared_query = self._prepare_database_query(
             sql_query, None, workflow_args, typename
         )
 
         # Execute using helper method
-        success, batched_iter = await self._execute_single_db(
+        success, _ = await self._execute_single_db(
             sql_engine, prepared_query, parquet_output, write_to_file
         )
 
@@ -424,45 +424,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         sql_client.credentials["extra"] = extra
         await sql_client.load(sql_client.credentials)
 
-    async def _process_single_database(
-        self,
-        sql_client: BaseSQLClient,
-        database_name: str,
-        sql_query: str,
-        workflow_args: Dict[str, Any],
-        typename: str,
-        parquet_output: Optional[ParquetOutput],
-        write_to_file: bool,
-    ) -> Tuple[
-        bool, Optional[Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]]
-    ]:
-        """Process a single database and return success status and dataframe iterator."""
-        try:
-            # Setup connection for this database
-            await self._setup_database_connection(sql_client, database_name)
-
-            # Prepare query for this database
-            prepared_query = self._prepare_database_query(
-                sql_query, database_name, workflow_args, typename, use_posix_regex=True
-            )
-
-            # Execute using helper method
-            success, batched_iter = await self._execute_single_db(
-                sql_client.engine, prepared_query, parquet_output, write_to_file
-            )
-
-            if success:
-                logger.info(f"Successfully processed database: {database_name}")
-            else:
-                logger.warning(f"Failed to execute query for database: {database_name}")
-
-            return success, batched_iter
-
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
-            )
-            return False, None
+    # NOTE: Consolidated: per-database processing is now inlined in the multi-DB loop
 
     async def _finalize_multidb_results(
         self,
@@ -470,7 +432,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         concatenate: bool,
         return_dataframe: bool,
         parquet_output: Optional[ParquetOutput],
-        dataframe_list: List[Any],
+        dataframe_list: List[
+            Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
+        ],
         workflow_args: Dict[str, Any],
         output_suffix: str,
         typename: str,
@@ -483,7 +447,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             try:
                 import pandas as pd  # type: ignore
 
-                valid_dataframes = []
+                valid_dataframes: List[pd.DataFrame] = []
                 for df_generator in dataframe_list:
                     if df_generator is None:
                         continue
@@ -565,21 +529,48 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             logger.error("SQL client engine not initialized")
             raise ValueError("SQL client engine not initialized")
 
-        successful_databases = []
-        failed_databases = []
-        dataframe_list = []
+        successful_databases: List[str] = []
+        failed_databases: List[str] = []
+        dataframe_list: List[
+            Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
+        ] = []
 
-        # Iterate databases and execute
+        # Iterate databases and execute (consolidated single-db processing)
         for database_name in database_names or []:
-            success, batched_iter = await self._process_single_database(
-                effective_sql_client,
-                database_name,
-                sql_query,
-                workflow_args,
-                typename,
-                parquet_output,
-                write_to_file,
-            )
+            try:
+                # Setup connection for this database
+                await self._setup_database_connection(
+                    effective_sql_client, database_name
+                )
+
+                # Prepare query for this database
+                prepared_query = self._prepare_database_query(
+                    sql_query,
+                    database_name,
+                    workflow_args,
+                    typename,
+                    use_posix_regex=True,
+                )
+
+                # Execute using helper method
+                success, batched_iter = await self._execute_single_db(
+                    effective_sql_client.engine,
+                    prepared_query,
+                    parquet_output,
+                    write_to_file,
+                )
+
+                if success:
+                    logger.info(f"Successfully processed database: {database_name}")
+                else:
+                    logger.warning(
+                        f"Failed to execute query for database: {database_name}"
+                    )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
+                )
+                success, batched_iter = False, None
 
             if success:
                 successful_databases.append(database_name)

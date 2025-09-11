@@ -336,7 +336,7 @@ class BaseSQLHandler(HandlerInterface):
                 activities = BaseSQLMetadataExtractionActivities()
                 activities.multidb = True
                 concatenated_df = await activities.query_executor(
-                    sql_engine=None,
+                    sql_engine=self.sql_client.engine if self.sql_client else None,
                     sql_query=self.tables_check_sql,
                     workflow_args=payload,
                     output_suffix="raw/table",

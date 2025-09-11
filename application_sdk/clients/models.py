@@ -22,7 +22,8 @@ class DatabaseConfig(BaseModel):
         description="SQLAlchemy connection string template with placeholders for connection parameters",
     )
     required: List[str] = Field(
-        ..., description="List of required connection parameters that must be provided"
+        default=[],
+        description="List of required connection parameters that must be provided",
     )
     defaults: Optional[Dict[str, Any]] = Field(
         default=None,
