@@ -30,6 +30,7 @@ class ParquetInput(Input):
             path (str): Path to parquet file or directory containing parquet files.
                 It accepts both types of paths:
                 local path or object store path
+                Wildcards are not supported.
             chunk_size (int): Number of rows per batch. Defaults to 100000.
             file_names (Optional[List[str]]): List of file names to read. Defaults to None.
 
