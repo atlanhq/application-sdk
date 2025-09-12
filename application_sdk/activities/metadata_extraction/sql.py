@@ -860,7 +860,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                await transformed_output.write_daft_dataframe(transform_metadata)
+                    await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
 
     @activity.defn

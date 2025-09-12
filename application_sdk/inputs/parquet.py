@@ -170,7 +170,6 @@ class ParquetInput(Input):
                     path = f"{self.path}/{file_name}"
                     if self.input_prefix and path:
                         await self.download_files(path)
-                        # yield daft.read_parquet(path, _chunk_size=self.buffer_size)
                         yield daft.read_parquet(path, _chunk_size=self.buffer_size)
             else:
                 if self.path and self.input_prefix:
