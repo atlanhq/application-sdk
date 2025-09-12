@@ -544,7 +544,7 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
     dummy_daft = types.ModuleType("daft")
     call_log: list[dict] = []
 
-    def read_parquet(path):  # noqa: D401, ANN001
+    def read_parquet(path, _chunk_size=None):  # noqa: D401, ANN001
         call_log.append({"path": path})
         return f"daft_df:{path}"
 

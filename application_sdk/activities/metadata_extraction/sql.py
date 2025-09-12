@@ -2,10 +2,8 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     AsyncIterator,
     Dict,
-    Generator,
     Iterator,
     List,
     Optional,
@@ -345,7 +343,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         if parquet_output:
             logger.info(
-                f"Successfully wrote query results to {parquet_output.get_full_path()}"
+                f"Successfully wrote query results to {parquet_output.output_path}"
             )
             return await parquet_output.get_statistics(typename=typename)
 
@@ -371,6 +369,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_prefix=output_prefix,
             output_path=output_path,
             output_suffix=output_suffix,
+            use_consolidation=True,
         )
 
     def _get_temp_table_regex_sql(self, typename: str) -> str:
@@ -615,37 +614,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         try:
             sql_input = SQLQueryInput(engine=sql_engine, query=prepared_query)
-            batched_iter = await sql_input.get_batched_dataframe()
+            batched_iterator = await sql_input.get_batched_dataframe()
 
             if write_to_file and parquet_output:
-                # Wrap iterator into a proper (async)generator for type safety
-                if hasattr(batched_iter, "__anext__"):
-
-                    async def _to_async_gen(
-                        it: AsyncIterator["pd.DataFrame"],
-                    ) -> AsyncGenerator["pd.DataFrame", None]:
-                        async for item in it:
-                            yield item
-
-                    wrapped: AsyncGenerator["pd.DataFrame", None] = _to_async_gen(  # type: ignore
-                        batched_iter  # type: ignore
-                    )
-                    await parquet_output.write_batched_dataframe(wrapped)
-                else:
-
-                    def _to_gen(
-                        it: Iterator["pd.DataFrame"],
-                    ) -> Generator["pd.DataFrame", None, None]:
-                        for item in it:
-                            yield item
-
-                    wrapped_sync: Generator["pd.DataFrame", None, None] = _to_gen(  # type: ignore
-                        batched_iter  # type: ignore
-                    )
-                    await parquet_output.write_batched_dataframe(wrapped_sync)
+                await parquet_output.write_batched_dataframe(batched_iterator)  # type: ignore
                 return True, None
 
-            return True, batched_iter
+            return True, batched_iterator
         except Exception as e:
             logger.error(
                 f"Error during query execution or output writing: {e}", exc_info=True
@@ -864,7 +839,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             file_names=workflow_args.get("file_names"),
             chunk_size=None,
         )
-        raw_input = raw_input.get_batched_daft_dataframe()
+        raw_input = await raw_input.get_batched_daft_dataframe()
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
@@ -880,12 +855,25 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 "connection", {}
             ).get("connection_qualified_name", None)
 
-            async for dataframe in raw_input:
+            total = raw_input.count_rows()
+            buffer_size = 5000
+            offset = 0
+            for i in range(0, total, buffer_size):
+                dataframe = raw_input.offset(offset).limit(buffer_size)
+                offset += buffer_size
+
                 if not is_empty_dataframe(dataframe):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                await transformed_output.write_daft_dataframe(transform_metadata)
+                    await transformed_output.write_daft_dataframe(transform_metadata)
+
+            # async for dataframe in raw_input:
+            #     if not is_empty_dataframe(dataframe):
+            #         transform_metadata = state.transformer.transform_metadata(
+            #             dataframe=dataframe, **workflow_args
+            #         )
+            #         await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
 
     @activity.defn

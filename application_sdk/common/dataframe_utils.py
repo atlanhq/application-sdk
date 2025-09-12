@@ -35,6 +35,7 @@ def is_empty_dataframe(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> bo
     try:
         import daft
 
+        # FIXME: don't use count_rows()
         if isinstance(dataframe, daft.DataFrame):
             return dataframe.count_rows() == 0
     except Exception:
