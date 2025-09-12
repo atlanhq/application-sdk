@@ -7,14 +7,13 @@ database operations, supporting batch processing and server-side cursors.
 
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from urllib.parse import quote_plus
 
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 from temporalio import activity
 
 from application_sdk.clients import ClientInterface
-from application_sdk.clients.models import DatabaseConfig
 from application_sdk.common.aws_utils import (
     generate_aws_rds_token_with_iam_role,
     generate_aws_rds_token_with_iam_user,
@@ -49,7 +48,7 @@ class BaseSQLClient(ClientInterface):
     credentials: Dict[str, Any] = {}
     resolved_credentials: Dict[str, Any] = {}
     use_server_side_cursor: bool = USE_SERVER_SIDE_CURSOR
-    DB_CONFIG: Optional[DatabaseConfig] = None
+    DB_CONFIG: Dict[str, Any] = {}
 
     def __init__(
         self,
@@ -263,9 +262,7 @@ class BaseSQLClient(ClientInterface):
         Returns:
             str: The updated URL with the dialect.
         """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-        installed_dialect = self.DB_CONFIG.template.split("://")[0]
+        installed_dialect = self.DB_CONFIG["template"].split("://")[0]
         url_dialect = sqlalchemy_url.split("://")[0]
         if installed_dialect != url_dialect:
             sqlalchemy_url = sqlalchemy_url.replace(url_dialect, installed_dialect)
@@ -284,9 +281,6 @@ class BaseSQLClient(ClientInterface):
         Raises:
             ValueError: If required connection parameters are missing.
         """
-        if not self.DB_CONFIG:
-            raise ValueError("DB_CONFIG is not configured for this SQL client.")
-
         extra = parse_credentials_extra(self.credentials)
 
         # TODO: Uncomment this when the native deployment is ready
@@ -299,7 +293,7 @@ class BaseSQLClient(ClientInterface):
 
         # Prepare parameters
         param_values = {}
-        for param in self.DB_CONFIG.required:
+        for param in self.DB_CONFIG["required"]:
             if param == "password":
                 param_values[param] = auth_token
             else:
@@ -309,19 +303,21 @@ class BaseSQLClient(ClientInterface):
                 param_values[param] = value
 
         # Fill in base template
-        conn_str = self.DB_CONFIG.template.format(**param_values)
+        conn_str = self.DB_CONFIG["template"].format(**param_values)
 
         # Append defaults if not already in the template
-        if self.DB_CONFIG.defaults:
-            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG.defaults)
+        if self.DB_CONFIG.get("defaults"):
+            conn_str = self.add_connection_params(conn_str, self.DB_CONFIG["defaults"])
 
-        if self.DB_CONFIG.parameters:
-            parameter_keys = self.DB_CONFIG.parameters
-            parameter_values = {
+        if self.DB_CONFIG.get("parameters"):
+            parameter_keys = self.DB_CONFIG["parameters"]
+            self.DB_CONFIG["parameters"] = {
                 key: self.credentials.get(key) or extra.get(key)
                 for key in parameter_keys
             }
-            conn_str = self.add_connection_params(conn_str, parameter_values)
+            conn_str = self.add_connection_params(
+                conn_str, self.DB_CONFIG["parameters"]
+            )
 
         return conn_str
 

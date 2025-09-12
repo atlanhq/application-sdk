@@ -56,13 +56,9 @@ class BaseSQLHandler(HandlerInterface):
     schema_alias_key: str = SQLConstants.SCHEMA_ALIAS_KEY.value
     database_result_key: str = SQLConstants.DATABASE_RESULT_KEY.value
     schema_result_key: str = SQLConstants.SCHEMA_RESULT_KEY.value
-    multidb: bool = False
 
-    def __init__(
-        self, sql_client: BaseSQLClient | None = None, multidb: Optional[bool] = False
-    ):
+    def __init__(self, sql_client: BaseSQLClient | None = None):
         self.sql_client = sql_client
-        self.multidb = multidb
 
     async def load(self, credentials: Dict[str, Any]) -> None:
         """
@@ -298,26 +294,35 @@ class BaseSQLHandler(HandlerInterface):
                         return False, f"{db}.{sch} schema"
         return True, ""
 
-    async def tables_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def tables_check(
+        self,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """
         Method to check the count of tables
         """
         logger.info("Starting tables check")
-
-        def _sum_counts_from_records(records_iter) -> int:
-            total = 0
-            for row in records_iter:
-                total += row["count"]
-            return total
-
-        def _build_success(total: int) -> Dict[str, Any]:
+        query = prepare_query(
+            query=self.tables_check_sql,
+            workflow_args=payload,
+            temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
+        )
+        if not query:
+            raise ValueError("tables_check_sql is not defined")
+        sql_input = SQLQueryInput(
+            engine=self.sql_client.engine, query=query, chunk_size=None
+        )
+        sql_input = await sql_input.get_dataframe()
+        try:
+            result = 0
+            for row in sql_input.to_dict(orient="records"):
+                result += row["count"]
             return {
                 "success": True,
-                "successMessage": f"Tables check successful. Table count: {total}",
+                "successMessage": f"Tables check successful. Table count: {result}",
                 "failureMessage": "",
             }
-
-        def _build_failure(exc: Exception) -> Dict[str, Any]:
+        except Exception as exc:
             logger.error("Error during tables check", exc_info=True)
             return {
                 "success": False,
@@ -325,52 +330,6 @@ class BaseSQLHandler(HandlerInterface):
                 "failureMessage": "Tables check failed",
                 "error": str(exc),
             }
-
-        if self.multidb:
-            try:
-                from application_sdk.activities.metadata_extraction.sql import (
-                    BaseSQLMetadataExtractionActivities,
-                )
-
-                # Use the base query executor in multidb mode to get concatenated df
-                activities = BaseSQLMetadataExtractionActivities()
-                activities.multidb = True
-                concatenated_df = await activities.query_executor(
-                    sql_engine=self.sql_client.engine if self.sql_client else None,
-                    sql_query=self.tables_check_sql,
-                    workflow_args=payload,
-                    output_suffix="raw/table",
-                    typename="table",
-                    write_to_file=False,
-                    concatenate=True,
-                    return_dataframe=True,
-                    sql_client=self.sql_client,
-                )
-
-                if concatenated_df is None:
-                    return _build_success(0)
-
-                total = int(concatenated_df["count"].sum())  # type: ignore[index]
-                return _build_success(total)
-            except Exception as exc:
-                return _build_failure(exc)
-        else:
-            query = prepare_query(
-                query=self.tables_check_sql,
-                workflow_args=payload,
-                temp_table_regex_sql=self.extract_temp_table_regex_table_sql,
-            )
-            if not query:
-                raise ValueError("tables_check_sql is not defined")
-            sql_input = SQLQueryInput(
-                engine=self.sql_client.engine, query=query, chunk_size=None
-            )
-            sql_input = await sql_input.get_dataframe()
-            try:
-                total = _sum_counts_from_records(sql_input.to_dict(orient="records"))
-                return _build_success(total)
-            except Exception as exc:
-                return _build_failure(exc)
 
     async def check_client_version(self) -> Dict[str, Any]:
         """

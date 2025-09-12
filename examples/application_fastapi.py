@@ -21,7 +21,9 @@ class SampleSQLHandler(BaseSQLHandler):
     ) -> List[Dict[str, str]]:
         return [{"database": "test", "schema": "test"}]
 
-    async def preflight_check(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def preflight_check(
+        self, payload: Dict[str, Any], **kwargs: Any
+    ) -> Dict[str, Any]:
         return {
             "success": True,
             "data": {
