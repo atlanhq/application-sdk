@@ -16,7 +16,7 @@ class JsonInput(Input):
     Supports reading both single files and directories containing multiple JSON files.
     """
 
-    _extension = ".json"
+    _EXTENSION = ".json"
 
     def __init__(
         self,
@@ -39,7 +39,7 @@ class JsonInput(Input):
         """
 
         # Validate that single file path and file_names are not both specified
-        if path.endswith(self._extension) and file_names:
+        if path.endswith(self._EXTENSION) and file_names:
             raise ValueError(
                 f"Cannot specify both a single file path ('{path}') and file_names filter. "
                 f"Either provide a directory path with file_names, or specify the exact file path without file_names."

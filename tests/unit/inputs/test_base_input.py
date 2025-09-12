@@ -16,7 +16,7 @@ class MockInput(Input):
     def __init__(self, path: str, file_names: List[str] = None):
         self.path = path
         self.file_names = file_names
-        self._extension = ".parquet"  # Default extension for testing
+        self._EXTENSION = ".parquet"  # Default extension for testing
 
     async def get_batched_dataframe(self):
         """Mock implementation."""

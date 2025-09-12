@@ -41,24 +41,24 @@ class Input(ABC):
         """
         # Step 1: Check if files exist locally
         local_files = find_local_files_by_extension(
-            self.path, self._extension, self.file_names
+            self.path, self._EXTENSION, self.file_names
         )
         if local_files:
             logger.info(
-                f"Found {len(local_files)} {self._extension} files locally at: {self.path}"
+                f"Found {len(local_files)} {self._EXTENSION} files locally at: {self.path}"
             )
             return local_files
 
         # Step 2: Try to download from object store
         logger.info(
-            f"No local {self._extension} files found at {self.path}, checking object store..."
+            f"No local {self._EXTENSION} files found at {self.path}, checking object store..."
         )
 
         try:
             # Determine what to download based on path type and filters
             downloaded_paths = []
 
-            if self.path.endswith(self._extension):
+            if self.path.endswith(self._EXTENSION):
                 # Single file case (file_names validation already ensures this is valid)
                 source_path = get_object_store_prefix(self.path)
                 destination_path = os.path.join(TEMPORARY_PATH, source_path)
@@ -89,25 +89,25 @@ class Input(ABC):
                 )
                 # Find the actual files in the downloaded directory
                 found_files = find_local_files_by_extension(
-                    destination_path, self._extension, getattr(self, "file_names", None)
+                    destination_path, self._EXTENSION, getattr(self, "file_names", None)
                 )
                 downloaded_paths.extend(found_files)
 
             # Check results
             if downloaded_paths:
                 logger.info(
-                    f"Successfully downloaded {len(downloaded_paths)} {self._extension} files from object store"
+                    f"Successfully downloaded {len(downloaded_paths)} {self._EXTENSION} files from object store"
                 )
                 return downloaded_paths
             else:
                 raise IOError(
-                    f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {self._extension} files found"
+                    f"{IOError.OBJECT_STORE_READ_ERROR}: Downloaded from object store but no {self._EXTENSION} files found"
                 )
 
         except Exception as e:
             logger.error(f"Failed to download from object store: {str(e)}")
             raise IOError(
-                f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: No {self._extension} files found locally at '{self.path}' and failed to download from object store. "
+                f"{IOError.OBJECT_STORE_DOWNLOAD_ERROR}: No {self._EXTENSION} files found locally at '{self.path}' and failed to download from object store. "
                 f"Error: {str(e)}"
             )
 
