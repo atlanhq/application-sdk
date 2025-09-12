@@ -69,7 +69,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             activities.fetch_tables,
             activities.fetch_columns,
             activities.fetch_procedures,
-            # activities.transform_data,
+            activities.transform_data,
             activities.upload_to_atlan,  # this will only be executed if ENABLE_ATLAN_UPLOAD is True
         ]
         return base_activities
@@ -119,36 +119,36 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         if activity_statistics.typename is None:
             raise ValueError("Invalid typename")
 
-        # batches, chunk_starts = self.get_transform_batches(
-        #     activity_statistics.chunk_count,
-        #     activity_statistics.typename,
-        # )
+        batches, chunk_starts = self.get_transform_batches(
+            activity_statistics.chunk_count,
+            activity_statistics.typename,
+        )
 
-        # for i in range(len(batches)):
-        #     transform_activities.append(
-        #         workflow.execute_activity_method(
-        #             self.activities_cls.transform_data,
-        #             {
-        #                 "typename": activity_statistics.typename,
-        #                 "file_names": batches[i],
-        #                 "chunk_start": chunk_starts[i],
-        #                 **workflow_args,
-        #             },
-        #             retry_policy=retry_policy,
-        #             start_to_close_timeout=self.default_start_to_close_timeout,
-        #             heartbeat_timeout=self.default_heartbeat_timeout,
-        #         )
-        #     )
+        for i in range(len(batches)):
+            transform_activities.append(
+                workflow.execute_activity_method(
+                    self.activities_cls.transform_data,
+                    {
+                        "typename": activity_statistics.typename,
+                        "file_names": batches[i],
+                        "chunk_start": chunk_starts[i],
+                        **workflow_args,
+                    },
+                    retry_policy=retry_policy,
+                    start_to_close_timeout=self.default_start_to_close_timeout,
+                    heartbeat_timeout=self.default_heartbeat_timeout,
+                )
+            )
 
-        # record_counts = await asyncio.gather(*transform_activities)
+        record_counts = await asyncio.gather(*transform_activities)
 
-        # # Calculate the parameters necessary for writing metadata
-        # total_record_count = 0
-        # chunk_count = 0
-        # for record_count in record_counts:
-        #     metadata_model = ActivityStatistics.model_validate(record_count)
-        #     total_record_count += metadata_model.total_record_count
-        #     chunk_count += metadata_model.chunk_count
+        # Calculate the parameters necessary for writing metadata
+        total_record_count = 0
+        chunk_count = 0
+        for record_count in record_counts:
+            metadata_model = ActivityStatistics.model_validate(record_count)
+            total_record_count += metadata_model.total_record_count
+            chunk_count += metadata_model.chunk_count
 
     def get_transform_batches(
         self, chunk_count: int, typename: str

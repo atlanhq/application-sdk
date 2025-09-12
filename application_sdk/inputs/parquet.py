@@ -154,7 +154,7 @@ class ParquetInput(Input):
             # Re-raise to match IcebergInput behavior
             raise
 
-    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
+    async def get_batched_daft_dataframe(self) -> "daft.DataFrame":  # AsyncIterator["daft.DataFrame"]:  # type: ignore
         """
         Get batched daft dataframe from parquet file(s)
 
@@ -166,15 +166,17 @@ class ParquetInput(Input):
             import daft  # type: ignore
 
             if self.file_names:
+                all_files = []
                 for file_name in self.file_names:
                     path = f"{self.path}/{file_name}"
-                    if self.input_prefix and path:
-                        await self.download_files(path)
-                        yield daft.read_parquet(path, _chunk_size=self.buffer_size)
+                    await self.download_files(path)
+                    all_files.append(path)
+                    
+                return daft.read_parquet(all_files)
             else:
                 if self.path and self.input_prefix:
                     await self.download_files(self.path)
-                    yield daft.read_parquet(
+                    return daft.read_parquet(
                         f"{self.path}/*.parquet", _chunk_size=self.buffer_size
                     )
 
