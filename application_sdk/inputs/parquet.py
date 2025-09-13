@@ -93,6 +93,10 @@ class ParquetInput(Input):
             path = self.path
             if self.input_prefix and self.path:
                 path = await self.download_files(self.path)
+
+            if not path:
+                raise ValueError("No path specified for parquet input")
+
             # Use pandas native read_parquet which can handle both single files and directories
             return pd.read_parquet(path)
         except Exception as e:
@@ -116,6 +120,10 @@ class ParquetInput(Input):
             path = self.path
             if self.input_prefix and self.path:
                 path = await self.download_files(self.path)
+
+            if not path:
+                raise ValueError("No path specified for parquet input")
+
             df = pd.read_parquet(path)
             if self.chunk_size:
                 for i in range(0, len(df), self.chunk_size):
@@ -154,34 +162,67 @@ class ParquetInput(Input):
             # Re-raise to match IcebergInput behavior
             raise
 
-    async def get_batched_daft_dataframe(self) -> "daft.DataFrame":  # AsyncIterator["daft.DataFrame"]:  # type: ignore
+    async def get_batched_daft_dataframe(
+        self,
+    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:
         """
-        Get batched daft dataframe from parquet file(s)
+        Get batched daft dataframe with lazy loading for memory efficiency.
 
-        Returns:
-            AsyncIterator[daft.DataFrame]: An async iterator of daft DataFrames, each containing
-            a batch of data from the parquet file(s).
+        This method uses lazy loading to process chunks without loading the entire
+        dataframe into memory first, making it suitable for large datasets.
+
+        Yields:
+            daft.DataFrame: Individual chunks of the dataframe, each containing
+            up to buffer_size rows.
         """
         try:
             import daft  # type: ignore
 
-            if self.file_names:
-                all_files = []
-                for file_name in self.file_names:
-                    path = f"{self.path}/{file_name}"
-                    await self.download_files(path)
-                    all_files.append(path)
-                    
-                return daft.read_parquet(all_files)
-            else:
-                if self.path and self.input_prefix:
-                    await self.download_files(self.path)
-                    return daft.read_parquet(
-                        f"{self.path}/*.parquet", _chunk_size=self.buffer_size
-                    )
+            # Prepare the file path(s) for reading
+            file_paths = await self._prepare_file_paths()
+
+            # Create a lazy dataframe without loading data into memory
+            lazy_df = daft.read_parquet(file_paths)
+
+            # Get total count efficiently
+            total_rows = lazy_df.count_rows()
+
+            # Yield chunks without loading everything into memory
+            for offset in range(0, total_rows, self.buffer_size):
+                chunk = lazy_df.offset(offset).limit(self.buffer_size)
+                yield chunk
 
         except Exception as error:
             logger.error(
                 f"Error reading data from parquet file(s) in batches using daft: {error}"
             )
             raise
+
+    async def _prepare_file_paths(self) -> Union[str, List[str]]:
+        """
+        Helper method to prepare file paths for reading.
+
+        Handles both single files and multiple files, with optional object store downloads.
+
+        Returns:
+            Union[str, List[str]]: File path(s) ready for daft.read_parquet()
+
+        Raises:
+            ValueError: If no valid file paths can be prepared
+        """
+        if self.file_names:
+            all_files: List[str] = []
+            for file_name in self.file_names:
+                path = f"{self.path}/{file_name}"
+                if self.input_prefix:
+                    await self.download_files(path)
+                all_files.append(path)
+            return all_files
+        else:
+            if not self.path:
+                raise ValueError("No path specified for parquet input")
+
+            if self.input_prefix:
+                await self.download_files(self.path)
+
+            return f"{self.path}/*.parquet"

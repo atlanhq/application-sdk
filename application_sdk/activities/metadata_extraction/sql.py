@@ -839,7 +839,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             file_names=workflow_args.get("file_names"),
             chunk_size=None,
         )
-        raw_input = await raw_input.get_batched_daft_dataframe()
+        raw_input = raw_input.get_batched_daft_dataframe()
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
@@ -855,25 +855,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 "connection", {}
             ).get("connection_qualified_name", None)
 
-            total = raw_input.count_rows()
-            buffer_size = 5000
-            offset = 0
-            for i in range(0, total, buffer_size):
-                dataframe = raw_input.offset(offset).limit(buffer_size)
-                offset += buffer_size
-
+            async for dataframe in raw_input:
                 if not is_empty_dataframe(dataframe):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
                     await transformed_output.write_daft_dataframe(transform_metadata)
-
-            # async for dataframe in raw_input:
-            #     if not is_empty_dataframe(dataframe):
-            #         transform_metadata = state.transformer.transform_metadata(
-            #             dataframe=dataframe, **workflow_args
-            #         )
-            #         await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
 
     @activity.defn
