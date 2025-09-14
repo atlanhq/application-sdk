@@ -8,6 +8,11 @@ The module follows a clean separation of concerns:
 - Base Writer class handles common infrastructure (paths, statistics, uploads)
 - Format-specific writers handle serialization and format-specific optimizations
 - Utilities handle shared functionality across formats
+
+Available Writers:
+- Writer: Abstract base class for all writers
+- JsonWriter: JSON Lines format writer (from .json)
+- ParquetWriter: Parquet format writer (from .parquet)
 """
 
 import os
@@ -77,6 +82,7 @@ class Writer(ABC):
         output_prefix: str,
         output_suffix: str = "",
         chunk_size: int = 100000,
+        buffer_size: int = 5000,
         **config: Any,
     ):
         """Initialize the writer with essential configuration.
@@ -86,6 +92,7 @@ class Writer(ABC):
             output_prefix: Object store path where files will be uploaded
             output_suffix: Optional subdirectory under output_path for organization
             chunk_size: Maximum number of records per file before splitting
+            buffer_size: Number of records to buffer before flushing to disk
             **config: Additional configuration options:
                 - start_marker: Special marker for query extraction file naming
                 - end_marker: Special marker for query extraction file naming
@@ -104,6 +111,7 @@ class Writer(ABC):
         self.output_prefix = output_prefix
         self.output_suffix = output_suffix
         self.chunk_size = chunk_size
+        self.buffer_size = buffer_size
 
         # Optional configuration from kwargs
         self.start_marker = config.get("start_marker")
@@ -117,11 +125,9 @@ class Writer(ABC):
         self.chunks_info: List[Dict[str, Any]] = []
         self.created_at = datetime.now(timezone.utc)
 
-        # Buffering state (Phase 2)
+        # Buffering state
         self.buffer: List[Any] = []  # Accumulate data here
         self.current_buffer_size = 0  # Number of records in buffer
-        self.current_buffer_size_bytes = 0  # Estimated bytes in buffer
-        self.current_file_size_bytes = 0  # Size of current chunk file
         self.current_chunk_index = 0  # Current chunk file index
         self.current_part_index = 0  # Current part index within chunk
 
@@ -175,29 +181,42 @@ class Writer(ABC):
         Returns:
             True if buffer should be flushed, False otherwise
         """
-        # Flush if buffer record count exceeds limit
-        if self.current_buffer_size >= self.chunk_size:
-            return True
-
-        # Flush if buffer size in bytes exceeds limit
-        if self.current_buffer_size_bytes >= self.max_file_size_bytes:
+        # Flush if buffer record count exceeds buffer_size limit
+        if self.current_buffer_size >= self.buffer_size:
             return True
 
         return False
 
-    def _should_create_new_file(self, estimated_new_size: int) -> bool:
-        """Check if a new chunk file should be created.
+    def _should_create_new_chunk(self) -> bool:
+        """Check if a new chunk should be created based on total record count.
+
+        Returns:
+            True if new chunk should be created, False otherwise
+        """
+        # Create new chunk if total records in current chunk exceed chunk_size limit
+        # Only check when we have at least chunk_size records and it's a multiple of chunk_size
+        if (
+            self.total_record_count > 0
+            and self.total_record_count % self.chunk_size == 0
+        ):
+            return True
+
+        return False
+
+    def _should_create_new_file(self, file_path: str) -> bool:
+        """Check if a new chunk file should be created based on current file size.
 
         Args:
-            estimated_new_size: Estimated size of data to be added
+            file_path: Path to current file to check size
 
         Returns:
             True if new file should be created, False otherwise
         """
-        # Create new file if current file + new data would exceed size limit
+        # Create new file if current file exceeds size limit
         if (
-            self.current_file_size_bytes + estimated_new_size
-        ) > self.max_file_size_bytes:
+            os.path.exists(file_path)
+            and os.path.getsize(file_path) > self.max_file_size_bytes
+        ):
             return True
 
         return False
@@ -216,8 +235,6 @@ class Writer(ABC):
             # Stay in same chunk, increment part index
             self.current_part_index += 1
 
-        self.current_file_size_bytes = 0
-
     async def _flush_buffer_to_current_file(self) -> None:
         """Flush current buffer to the current chunk file.
 
@@ -235,17 +252,16 @@ class Writer(ABC):
         # Let subclass handle the actual writing
         await self._write_buffer_to_file(self.buffer, file_path)
 
-        # Update file size tracking
-        if os.path.exists(file_path):
-            self.current_file_size_bytes = os.path.getsize(file_path)
-
         # Clear buffer
         self.buffer.clear()
         self.current_buffer_size = 0
-        self.current_buffer_size_bytes = 0
+
+        # Check if we need to create a new file part due to size
+        if self._should_create_new_file(file_path):
+            self._create_new_file(new_chunk=False)
 
         # Record buffer flush metrics
-        self._record_success_metrics("buffer_flush", len(self.buffer))
+        self._record_success_metrics("buffer_flush", self.current_buffer_size)
 
     @abstractmethod
     async def _write_buffer_to_file(self, buffer: List[Any], file_path: str) -> None:
@@ -260,34 +276,49 @@ class Writer(ABC):
     async def _finalize_current_file(self) -> None:
         """Finalize the current chunk file and update statistics.
 
-        This method should be called when switching to a new file or closing.
+        This method should be called when switching to a new chunk (not for parts).
         """
-        if self.current_file_size_bytes > 0:
-            file_path = self._get_full_file_path(
-                self.current_chunk_index, self.current_part_index
-            )
-            if os.path.exists(file_path):
-                filename = os.path.basename(file_path)
+        # Get all part files for the current chunk
+        chunk_files = []
+        part_index = 0
+        total_chunk_records = 0
+        total_chunk_size = 0
 
-                # Count records in this file (approximate from total - previous files)
-                records_in_previous_files = sum(
-                    chunk.get("record_count", 0) for chunk in self.chunks_info
-                )
-                records_in_current_file = (
-                    self.total_record_count - records_in_previous_files
-                )
+        while True:
+            file_path = self._get_full_file_path(self.current_chunk_index, part_index)
+            if not os.path.exists(file_path):
+                break
 
-                # Add chunk info
-                chunk_info = {
+            filename = os.path.basename(file_path)
+            file_size = os.path.getsize(file_path)
+
+            # Count records in this part file by reading lines
+            with open(file_path, "r") as f:
+                record_count = sum(1 for _ in f)
+
+            chunk_files.append(
+                {
                     "file_name": filename,
-                    "record_count": records_in_current_file,
-                    "file_size_bytes": self.current_file_size_bytes,
+                    "record_count": record_count,
+                    "file_size_bytes": file_size,
                 }
-                self.chunks_info.append(chunk_info)
+            )
 
-                # Move to next chunk
-                self.chunk_count += 1
-                self._create_new_file(new_chunk=True)
+            total_chunk_records += record_count
+            total_chunk_size += file_size
+            part_index += 1
+
+        # Add all parts of this chunk to chunks_info
+        if chunk_files:
+            # For single part, add directly
+            if len(chunk_files) == 1:
+                self.chunks_info.append(chunk_files[0])
+            else:
+                # For multiple parts, add each part
+                self.chunks_info.extend(chunk_files)
+
+            # Increment chunk count
+            self.chunk_count += 1
 
     @abstractmethod
     async def write(
@@ -300,7 +331,6 @@ class Writer(ABC):
             Generator["daft.DataFrame", None, None],
             AsyncGenerator["daft.DataFrame", None],
         ],
-        buffered: bool = True,
         **format_options: Any,
     ) -> None:
         """Write data to local files.
@@ -310,7 +340,6 @@ class Writer(ABC):
 
         Args:
             data: DataFrame or generator of DataFrames to write
-            buffered: Whether to use buffered writing for large datasets
             **format_options: Format-specific options (varies by writer type)
 
         Raises:
@@ -498,3 +527,10 @@ class Writer(ABC):
             labels={"format": format_name},
             description="Number of completed write operations",
         )
+
+
+# Import format-specific writers to make them available
+from application_sdk.io.json import JsonWriter  # noqa: E402
+from application_sdk.io.parquet import ParquetWriter, WriteMode  # noqa: E402
+
+__all__ = ["Writer", "JsonWriter", "ParquetWriter", "WriteMode"]
