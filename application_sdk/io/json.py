@@ -45,7 +45,9 @@ class JsonWriter(Writer):
     Example:
         >>> writer = JsonWriter(
         ...     output_path="/tmp/data",
-        ...     output_prefix="s3://bucket/results",
+        ...     output_suffix="results",
+        ...     typename="user_data",
+        ...     chunk_start=0,
         ...     chunk_size=50000,
         ...     buffer_size=1000,
         ...     preserve_fields=["id", "name"],
@@ -60,36 +62,50 @@ class JsonWriter(Writer):
     def __init__(
         self,
         output_path: str,
-        output_prefix: str,
         output_suffix: str = "",
         chunk_size: int = 100000,
         buffer_size: int = 5000,
         preserve_fields: Optional[List[str]] = None,
         null_to_empty_dict_fields: Optional[List[str]] = None,
+        typename: Optional[str] = None,
+        chunk_start: Optional[int] = None,
         **config: Any,
     ):
         """Initialize JsonWriter with JSON-specific configuration.
 
         Args:
             output_path: Local directory where files will be written temporarily
-            output_prefix: Object store path where files will be uploaded
             output_suffix: Optional subdirectory under output_path for organization
             chunk_size: Maximum number of records per file before splitting (default: 100000)
             buffer_size: Number of records to buffer before flushing (default: 5000)
             preserve_fields: List of fields to preserve as-is during processing
             null_to_empty_dict_fields: List of fields to convert null values to empty dicts
+            typename: Optional type identifier for the data being written
+            chunk_start: Optional starting index for chunk numbering
             **config: Additional configuration options including:
                 - max_file_size_bytes: Maximum file size before creating new part
                 - retain_local_copy: Whether to keep local files after upload
         """
+        # Pass typename and chunk_start through config to base class
+        config.update(
+            {
+                "typename": typename,
+                "chunk_start": chunk_start,
+            }
+        )
+
         super().__init__(
             output_path=output_path,
-            output_prefix=output_prefix,
             output_suffix=output_suffix,
             chunk_size=chunk_size,
             buffer_size=buffer_size,
             **config,
         )
+
+        # Store JsonOutput-compatible parameters for reference
+        # (Base class already handles these through config)
+        self.typename = typename
+        self.chunk_start = chunk_start
 
         # Set JSON-specific default field processing (like JsonOutput)
         self._default_preserve_fields = [

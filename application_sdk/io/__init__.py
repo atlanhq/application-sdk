@@ -56,7 +56,6 @@ class Writer(ABC):
 
     Attributes:
         output_path (str): Local directory where files are written temporarily
-        output_prefix (str): Object store path where files will be uploaded
         output_suffix (str): Subdirectory under output_path for organization
         chunk_size (int): Maximum number of records per file
         total_record_count (int): Total records written across all files
@@ -66,7 +65,6 @@ class Writer(ABC):
     Example:
         >>> writer = JsonWriter(
         ...     output_path="/tmp/data",
-        ...     output_prefix="s3://bucket/results"
         ... )
         >>> await writer.write(dataframe)
         >>> stats = await writer.close()
@@ -79,7 +77,6 @@ class Writer(ABC):
     def __init__(
         self,
         output_path: str,
-        output_prefix: str,
         output_suffix: str = "",
         chunk_size: int = 100000,
         buffer_size: int = 5000,
@@ -89,7 +86,6 @@ class Writer(ABC):
 
         Args:
             output_path: Local directory where files will be written temporarily
-            output_prefix: Object store path where files will be uploaded
             output_suffix: Optional subdirectory under output_path for organization
             chunk_size: Maximum number of records per file before splitting
             buffer_size: Number of records to buffer before flushing to disk
@@ -103,12 +99,9 @@ class Writer(ABC):
         """
         if not output_path:
             raise ValueError("output_path is required")
-        if not output_prefix:
-            raise ValueError("output_prefix is required")
 
         # Core configuration
         self.output_path = output_path
-        self.output_prefix = output_prefix
         self.output_suffix = output_suffix
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
@@ -117,18 +110,24 @@ class Writer(ABC):
         self.start_marker = config.get("start_marker")
         self.end_marker = config.get("end_marker")
         self.retain_local_copy = config.get("retain_local_copy", False)
+        self.typename = config.get("typename")
+        self.chunk_start = config.get("chunk_start")
 
         # Internal state
         self.total_record_count = 0
         self.chunk_count = 0
         self.max_file_size_bytes = int(DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.9)
+
+        # Handle chunk_start like JsonOutput does
+        if self.chunk_start:
+            self.chunk_count = self.chunk_start + self.chunk_count
         self.chunks_info: List[Dict[str, Any]] = []
         self.created_at = datetime.now(timezone.utc)
 
         # Buffering state
         self.buffer: List[Any] = []  # Accumulate data here
         self.current_buffer_size = 0  # Number of records in buffer
-        self.current_chunk_index = 0  # Current chunk file index
+        self.current_chunk_index = self.chunk_start or 0  # Current chunk file index
         self.current_part_index = 0  # Current part index within chunk
 
         # Initialize metrics
@@ -140,6 +139,11 @@ class Writer(ABC):
     def _setup_output_directory(self) -> None:
         """Create the output directory structure."""
         full_output_path = os.path.join(self.output_path, self.output_suffix)
+
+        # Add typename to path if provided (like JsonOutput does)
+        if self.typename:
+            full_output_path = os.path.join(full_output_path, self.typename)
+
         os.makedirs(full_output_path, exist_ok=True)
         self.full_output_path = full_output_path
 
@@ -448,12 +452,13 @@ class Writer(ABC):
     async def _upload_all_files(self) -> None:
         """Upload all files in the output directory to object store."""
         try:
+            destination = get_object_store_prefix(self.full_output_path)
             await ObjectStore.upload_prefix(
                 source=self.full_output_path,
-                destination=get_object_store_prefix(self.full_output_path),
+                destination=destination,
                 retain_local_copy=self.retain_local_copy,
             )
-            logger.info(f"Successfully uploaded files to {self.output_prefix}")
+            logger.info(f"Successfully uploaded files to {destination}")
 
         except Exception as e:
             logger.error(f"Failed to upload files: {e}")

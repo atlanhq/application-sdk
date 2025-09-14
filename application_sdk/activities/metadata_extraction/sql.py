@@ -37,7 +37,6 @@ from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.sql_query import SQLQueryInput
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.json import JsonOutput
 from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
@@ -636,7 +635,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw database data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -671,7 +670,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw schema data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -706,7 +705,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw table data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -743,7 +742,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -780,7 +779,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: JsonOutput instance for writing raw data.
+            raw_output: JsonWriter instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -816,7 +815,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             raw_input (Any): Input data to transform.
-            transformed_output (JsonOutput): Output handler for transformed data.
+            transformed_output (JsonWriter): Output handler for transformed data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -840,10 +839,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_size=None,
         )
         raw_input = raw_input.get_batched_daft_dataframe()
-        transformed_output = JsonOutput(
+        from application_sdk.io.json import JsonWriter
+
+        transformed_output = JsonWriter(
             output_path=output_path,
             output_suffix="transformed",
-            output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )
@@ -860,8 +860,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                    await transformed_output.write_daft_dataframe(transform_metadata)
-        return await transformed_output.get_statistics()
+                    await transformed_output.write(transform_metadata)
+
+        return await transformed_output.close()
 
     @activity.defn
     @auto_heartbeater
