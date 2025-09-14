@@ -20,15 +20,15 @@ This directory contains structured documentation divided into conceptual overvie
 
 - [`concepts/`](concepts/)  
   Explains the building blocks of the SDK such as workflows, activities, handlers, inputs/outputs, services, and more.  
-  ➡ See: [`concepts/README.md`](concepts/README.md)
+  ➡ See: [`concepts/Readme.md`](concepts/Readme.md)
 
 ---
 
 ### 📘 Developer Guides
 
-- [`guide/`](guide/)  
+- [`guides/`](guides/)  
   Practical how-to guides for getting started, understanding architecture, using test frameworks, and integrating with partners.  
-  ➡ See: [`guide/README.md`](guide/README.md)
+  ➡ See: [`guides/Readme.md`](guides/Readme.md)
 
 ---
 
@@ -36,7 +36,7 @@ This directory contains structured documentation divided into conceptual overvie
 
 - [`setup/`](setup/)  
   Platform-specific setup guides for Linux, macOS, and Windows — includes troubleshooting common issues.  
-  ➡ See: [`setup/README.md`](setup/README.md)
+  ➡ See: [`setup/Readme.md`](setup/Readme.md)
 
 ---
 
