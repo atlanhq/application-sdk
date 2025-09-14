@@ -19,13 +19,13 @@ Whether you're just getting started or integrating with partners, these guides h
 ### 🧠 Architecture & Best Practices
 
 - [`architecture.md`](architecture.md)  
-  Overview of the internal architecture of the SDK — understand how the pieces fit together.
+  Overview of the internal architecture of the SDK - understand how the pieces fit together.
 
 - [`best-practices.md`](best-practices.md)  
   Recommended patterns, conventions, and tips to follow when building with the SDK.
 
 - [`test-framework.md`](test-framework.md)  
-  Guide to the built-in test framework — how to write and run tests for SDK-based applications.
+  Guide to the built-in test framework - how to write and run tests for SDK-based applications.
 
 ---
 
@@ -42,9 +42,9 @@ Whether you're just getting started or integrating with partners, these guides h
 ### 🔐 Credential & Integration Guides
 
 - [`secretstores.md`](secretstores.md)  
-  Guide for managing credentials and secrets using secret stores — supports secure configuration across environments.
+  Guide for managing credentials and secrets using secret stores - supports secure configuration across environments.
 
 - [`partners.md`](partners.md)  
-  Partner collaboration guide — how to integrate with Atlan as a third-party using the SDK.
+  Partner collaboration guide - how to integrate with Atlan as a third-party using the SDK.
 
 

@@ -31,7 +31,7 @@ Below is a quick guide to each document in this folder:
   Defines orchestration logic using Temporal **Workflows**.
 
 - [`activities.md`](activities.md)  
-  Building blocks for defining **Activities**—the individual units of work inside a workflow.
+  Building blocks for defining **Activities**-the individual units of work inside a workflow.
 
 - [`handlers.md`](handlers.md)  
   System-specific components that connect SDK workflows to external systems (e.g., databases, APIs).

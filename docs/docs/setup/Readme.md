@@ -22,5 +22,5 @@ Choose your operating system below and follow the guide to set up the SDK enviro
 ### 🛠️ Troubleshooting
 
 - [`troubleshooting.md`](troubleshooting.md)  
-  Common setup issues and their solutions — includes environment errors, dependency mismatches, and platform-specific quirks.
+  Common setup issues and their solutions; includes environment errors, dependency mismatches, and platform-specific quirks.
 
