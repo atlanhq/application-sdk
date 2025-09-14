@@ -346,7 +346,6 @@ class ParquetOutput(Output):
         """Accumulate DataFrame into temp folders, writing in buffer_size chunks."""
 
         # Process dataframe in buffer_size chunks
-        # FIXME: isn't think dataframe already sized 5000?
         for i in range(0, len(dataframe), self.buffer_size):
             chunk = dataframe[i : i + self.buffer_size]
 
