@@ -836,10 +836,17 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_size=None,
         )
         raw_input = raw_input.get_batched_daft_dataframe()
-        from application_sdk.io.json import JsonWriter
+        from application_sdk.outputs.json import JsonOutput
 
-        transformed_output = JsonWriter(
-            output_path=os.path.join(output_path, f"transformed/{typename}"),
+        # transformed_output = JsonWriter(
+        #     output_path=os.path.join(output_path, f"transformed/{typename}"),
+        #     chunk_start=workflow_args.get("chunk_start"),
+        # )
+        transformed_output = JsonOutput(
+            output_path=output_path,
+            output_suffix="transformed",
+            output_prefix=output_prefix,
+            typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )
         if state.transformer:
@@ -855,9 +862,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                    await transformed_output.write(transform_metadata)
+                    # await transformed_output.write(transform_metadata)
+                    await transformed_output.write_daft_dataframe(transform_metadata)
 
-        return await transformed_output.close()
+        # return await transformed_output.close()
+        return await transformed_output.get_statistics(typename=typename)
 
     @activity.defn
     @auto_heartbeater

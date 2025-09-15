@@ -192,6 +192,7 @@ class ParquetInput(Input):
                 chunk = lazy_df.offset(offset).limit(self.buffer_size)
                 yield chunk
 
+            del lazy_df
         except Exception as error:
             logger.error(
                 f"Error reading data from parquet file(s) in batches using daft: {error}"
