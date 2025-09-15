@@ -2,8 +2,10 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     AsyncIterator,
     Dict,
+    Generator,
     Iterator,
     List,
     Optional,
@@ -36,8 +38,9 @@ from application_sdk.constants import APP_TENANT_ID, APPLICATION_NAME, SQL_QUERI
 from application_sdk.handlers.sql import BaseSQLHandler
 from application_sdk.inputs.parquet import ParquetInput
 from application_sdk.inputs.sql_query import SQLQueryInput
-from application_sdk.io.parquet import ParquetWriter
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.outputs.json import JsonOutput
+from application_sdk.outputs.parquet import ParquetOutput
 from application_sdk.services.atlan_storage import AtlanStorage
 from application_sdk.services.secretstore import SecretStore
 from application_sdk.transformers import TransformerInterface
@@ -308,7 +311,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         # Setup parquet output using helper method
         parquet_output = self._setup_parquet_output(
-            workflow_args, output_suffix, write_to_file, typename
+            workflow_args, output_suffix, write_to_file
         )
 
         # If multidb mode is enabled, run per-database flow
@@ -342,9 +345,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         if parquet_output:
             logger.info(
-                f"Successfully wrote query results to {parquet_output.full_output_path}"
+                f"Successfully wrote query results to {parquet_output.get_full_path()}"
             )
-            return await parquet_output.close()
+            return await parquet_output.get_statistics(typename=typename)
 
         logger.warning("No parquet output configured for single-db execution")
         return None
@@ -354,8 +357,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         workflow_args: Dict[str, Any],
         output_suffix: str,
         write_to_file: bool,
-        typename: str,
-    ) -> Optional[ParquetWriter]:
+    ) -> Optional[ParquetOutput]:
         if not write_to_file:
             return None
         output_prefix = workflow_args.get("output_prefix")
@@ -365,9 +367,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             raise ValueError(
                 "Output prefix and path must be specified in workflow_args."
             )
-        return ParquetWriter(
-            output_path=os.path.join(output_path, output_suffix),
-            typename=typename,
+        return ParquetOutput(
+            output_prefix=output_prefix,
+            output_path=output_path,
+            output_suffix=output_suffix,
         )
 
     def _get_temp_table_regex_sql(self, typename: str) -> str:
@@ -428,7 +431,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool,
         concatenate: bool,
         return_dataframe: bool,
-        parquet_output: Optional[ParquetWriter],
+        parquet_output: Optional[ParquetOutput],
         dataframe_list: List[
             Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
         ],
@@ -438,7 +441,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """Finalize results for multi-database execution."""
         if write_to_file and parquet_output:
-            return await parquet_output.close()
+            return await parquet_output.get_statistics(typename=typename)
 
         if not write_to_file and concatenate:
             try:
@@ -468,11 +471,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
                 # Create new parquet output for concatenated data
                 concatenated_parquet_output = self._setup_parquet_output(
-                    workflow_args, output_suffix, True, typename
+                    workflow_args, output_suffix, True
                 )
                 if concatenated_parquet_output:
-                    await concatenated_parquet_output.write(concatenated)  # type: ignore[arg-type]
-                    return await concatenated_parquet_output.close()
+                    await concatenated_parquet_output.write_dataframe(concatenated)  # type: ignore[arg-type]
+                    return await concatenated_parquet_output.get_statistics(
+                        typename=typename
+                    )
             except Exception as e:  # noqa: BLE001
                 logger.error(
                     f"Error concatenating multi-DB dataframes: {str(e)}",
@@ -495,7 +500,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         write_to_file: bool,
         concatenate: bool,
         return_dataframe: bool,
-        parquet_output: Optional[ParquetWriter],
+        parquet_output: Optional[ParquetOutput],
     ) -> Optional[Union[ActivityStatistics, "pd.DataFrame"]]:
         """Execute multi-database flow with proper error handling and result finalization."""
         # Get effective SQL client
@@ -599,7 +604,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         self,
         sql_engine: Any,
         prepared_query: Optional[str],
-        parquet_output: Optional[ParquetWriter],
+        parquet_output: Optional[ParquetOutput],
         write_to_file: bool,
     ) -> Tuple[
         bool, Optional[Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]]
@@ -610,13 +615,37 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         try:
             sql_input = SQLQueryInput(engine=sql_engine, query=prepared_query)
-            batched_iterator = await sql_input.get_batched_dataframe()
+            batched_iter = await sql_input.get_batched_dataframe()
 
             if write_to_file and parquet_output:
-                await parquet_output.write(batched_iterator)  # type: ignore
+                # Wrap iterator into a proper (async)generator for type safety
+                if hasattr(batched_iter, "__anext__"):
+
+                    async def _to_async_gen(
+                        it: AsyncIterator["pd.DataFrame"],
+                    ) -> AsyncGenerator["pd.DataFrame", None]:
+                        async for item in it:
+                            yield item
+
+                    wrapped: AsyncGenerator["pd.DataFrame", None] = _to_async_gen(  # type: ignore
+                        batched_iter  # type: ignore
+                    )
+                    await parquet_output.write_batched_dataframe(wrapped)
+                else:
+
+                    def _to_gen(
+                        it: Iterator["pd.DataFrame"],
+                    ) -> Generator["pd.DataFrame", None, None]:
+                        for item in it:
+                            yield item
+
+                    wrapped_sync: Generator["pd.DataFrame", None, None] = _to_gen(  # type: ignore
+                        batched_iter  # type: ignore
+                    )
+                    await parquet_output.write_batched_dataframe(wrapped_sync)
                 return True, None
 
-            return True, batched_iterator
+            return True, batched_iter
         except Exception as e:
             logger.error(
                 f"Error during query execution or output writing: {e}", exc_info=True
@@ -632,7 +661,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw database data.
-            raw_output: ParquetWriter instance for writing raw data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -667,7 +696,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw schema data.
-            raw_output: ParquetWriter instance for writing raw data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -702,7 +731,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw table data.
-            raw_output: ParquetWriter instance for writing raw data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -739,7 +768,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: ParquetWriter instance for writing raw data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -776,7 +805,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             batch_input: DataFrame containing the raw column data.
-            raw_output: ParquetWriter instance for writing raw data.
+            raw_output: JsonOutput instance for writing raw data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -812,7 +841,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         Args:
             raw_input (Any): Input data to transform.
-            transformed_output (JsonWriter): Output handler for transformed data.
+            transformed_output (JsonOutput): Output handler for transformed data.
             **kwargs: Additional keyword arguments.
 
         Returns:
@@ -836,12 +865,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             chunk_size=None,
         )
         raw_input = raw_input.get_batched_daft_dataframe()
-        from application_sdk.outputs.json import JsonOutput
-
-        # transformed_output = JsonWriter(
-        #     output_path=os.path.join(output_path, f"transformed/{typename}"),
-        #     chunk_start=workflow_args.get("chunk_start"),
-        # )
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
@@ -862,11 +885,8 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                     transform_metadata = state.transformer.transform_metadata(
                         dataframe=dataframe, **workflow_args
                     )
-                    # await transformed_output.write(transform_metadata)
-                    await transformed_output.write_daft_dataframe(transform_metadata)
-
-        # return await transformed_output.close()
-        return await transformed_output.get_statistics(typename=typename)
+                await transformed_output.write_daft_dataframe(transform_metadata)
+        return await transformed_output.get_statistics()
 
     @activity.defn
     @auto_heartbeater
