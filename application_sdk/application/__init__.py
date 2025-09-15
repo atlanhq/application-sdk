@@ -164,6 +164,7 @@ class BaseApplication:
         self,
         workflow_class,
         ui_enabled: bool = True,
+        has_configmap: bool = False,
     ):
         """
         Optionally set up a server for the application. (No-op by default)
@@ -176,6 +177,7 @@ class BaseApplication:
             workflow_client=self.workflow_client,
             ui_enabled=ui_enabled,
             handler=self.handler_class(client=self.client_class()),
+            has_configmap=has_configmap,
         )
 
         if self.event_subscriptions:
