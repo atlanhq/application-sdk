@@ -371,6 +371,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_prefix=output_prefix,
             output_path=output_path,
             output_suffix=output_suffix,
+            use_consolidation=True,
         )
 
     def _get_temp_table_regex_sql(self, typename: str) -> str:
@@ -869,6 +870,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
+            chunk_size=int(os.getenv("EXP_CHUNK_SIZE", 100000)),
         )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(

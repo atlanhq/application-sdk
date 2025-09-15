@@ -336,10 +336,11 @@ class ParquetOutput(Output):
         temp_base_path = os.path.join(self.output_path, "temp_accumulation")
         return os.path.join(temp_base_path, f"folder-{folder_index}")
 
-    def _get_consolidated_file_path(self, folder_index: int) -> str:
+    def _get_consolidated_file_path(self, folder_index: int, chunk_count: int) -> str:
         """Generate final consolidated file path using existing path_gen logic."""
         return os.path.join(
-            self.output_path, self.path_gen(chunk_count=0, chunk_start=folder_index)
+            self.output_path,
+            self.path_gen(chunk_count=chunk_count, chunk_start=folder_index),
         )
 
     async def _accumulate_dataframe(self, dataframe: "pd.DataFrame"):
@@ -409,24 +410,25 @@ class ParquetOutput(Output):
             # Read all parquet files in temp folder
             pattern = os.path.join(self.current_temp_folder_path, "*.parquet")
             daft_df = daft.read_parquet(pattern)
-
-            # Generate consolidated file path
-            consolidated_file_path = self._get_consolidated_file_path(
-                self.temp_folder_index
-            )
+            partitions = 0
 
             # Write consolidated file using Daft with size management
             with daft.execution_config_ctx(
                 parquet_target_filesize=self.max_file_size_bytes
             ):
                 # Write to a temp location first
-                temp_consolidated_dir = f"{consolidated_file_path}_temp"
+                temp_consolidated_dir = f"{self.current_temp_folder_path}_temp"
                 result = daft_df.write_parquet(root_dir=temp_consolidated_dir)
 
                 # Get the generated file path and rename to final location
                 result_dict = result.to_pydict()
-                generated_file = result_dict["path"][0]
-                os.rename(generated_file, consolidated_file_path)
+                partitions = len(result_dict["path"])
+                for i, file_path in enumerate(result_dict["path"]):
+                    if file_path.endswith(".parquet"):
+                        consolidated_file_path = self._get_consolidated_file_path(
+                            chunk_count=i, folder_index=self.temp_folder_index
+                        )
+                        os.rename(file_path, consolidated_file_path)
 
                 # Clean up temp consolidated dir
                 shutil.rmtree(temp_consolidated_dir, ignore_errors=True)
@@ -440,7 +442,7 @@ class ParquetOutput(Output):
             # Update statistics
             self.chunk_count += 1
             self.total_record_count += self.current_folder_records
-            self.statistics.append(self.current_folder_records)
+            self.statistics.append(partitions)
 
             # Record metrics
             self.metrics.record_metric(

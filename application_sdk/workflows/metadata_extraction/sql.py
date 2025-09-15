@@ -108,7 +108,11 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
 
-        if activity_statistics is None or activity_statistics.chunk_count == 0:
+        if (
+            activity_statistics is None
+            or activity_statistics.chunk_count == 0
+            or not activity_statistics.partitions
+        ):
             # to handle the case where the fetch_fn returns None or no chunks
             return
 
@@ -118,6 +122,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         batches, chunk_starts = self.get_transform_batches(
             activity_statistics.chunk_count,
             activity_statistics.typename,
+            activity_statistics.partitions,
         )
 
         for i in range(len(batches)):
@@ -147,28 +152,35 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             chunk_count += metadata_model.chunk_count
 
     def get_transform_batches(
-        self, chunk_count: int, typename: str
+        self, chunk_count: int, typename: str, partitions: List[int]
     ) -> Tuple[List[List[str]], List[int]]:  # noqa: F821
         """Get batches for parallel transformation processing.
 
         Args:
             chunk_count (int): Total number of chunks to process.
             typename (str): Type name for the chunks.
-
+            partitions (List[int]): List of partitions for each chunk.
         Returns:
-            List[str]: A list of file paths.
+            Tuple[List[List[str]], List[int]]: A list of file paths.
                 - List of batches, where each batch is a list of file paths
                 - List of starting chunk numbers for each batch
         """
         batches: List[List[str]] = []
-        chunk_starts: List[int] = []
-        default_chunk_start = 0
+        chunk_start_numbers: List[int] = []
 
-        for i in range(chunk_count):
-            batches.append([f"{typename}/chunk-{i}-part{default_chunk_start}.parquet"])
-            chunk_starts.append(i)
+        for i, partition in enumerate(partitions):
+            # Track starting chunk number (which is just i)
+            chunk_start_numbers.append(i)
 
-        return batches, chunk_starts
+            # Each batch contains exactly one chunk
+            batches.append(
+                [
+                    f"{typename}/chunk-{i}-part{file}.parquet"
+                    for file in range(partition)
+                ]
+            )
+
+        return batches, chunk_start_numbers
 
     @workflow.run
     async def run(self, workflow_config: Dict[str, Any]) -> None:
