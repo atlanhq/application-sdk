@@ -209,7 +209,10 @@ class JsonOutput(Output):
                 if self.current_buffer_size >= self.buffer_size:
                     await self.flush_daft_buffer(buffer, self.chunk_part)
 
-                if self.current_buffer_size_bytes > self.max_file_size_bytes:
+                if self.current_buffer_size_bytes > self.max_file_size_bytes or (
+                    self.total_record_count > 0
+                    and self.total_record_count % self.chunk_size == 0
+                ):
                     output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
