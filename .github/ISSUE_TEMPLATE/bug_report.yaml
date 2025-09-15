@@ -1,13 +1,13 @@
-name: "🐛 Bug Report"
+name: "Bug Report"
 description: File a bug report for the Application SDK.
-title: "🐛 [BUG] - <title>"
+title: "<title>"
 labels: ["bug"]
 
 body:
   - type: textarea
     id: description
     attributes:
-      label: "🐞 Description"
+      label: "Description"
       description: Clear and concise description of the issue.
       placeholder: What went wrong?
     validations:
@@ -16,7 +16,7 @@ body:
   - type: input
     id: reprod-url
     attributes:
-      label: "🔗 Reproduction Repo/Script (if any)"
+      label: "Reproduction Repo/Script (if any)"
       description: Link to a minimal repo or script that reproduces the issue.
       placeholder: https://github.com/your/repo
     validations:
@@ -25,7 +25,7 @@ body:
   - type: textarea
     id: reprod
     attributes:
-      label: "📋 Reproduction Steps"
+      label: "Reproduction Steps"
       description: Steps to reproduce the bug.
       value: |
         1. Import SDK
@@ -38,7 +38,7 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: "🪵 Logs / Tracebacks"
+      label: "Logs / Tracebacks"
       description: Paste any relevant logs or error messages here (no need for backticks).
       render: bash
     validations:
@@ -47,7 +47,7 @@ body:
   - type: textarea
     id: expected
     attributes:
-      label: "✅ Expected vs 🧨 Actual"
+      label: "Expected vs Actual"
       description: What was the expected behavior and what actually happened?
     validations:
       required: true
@@ -55,7 +55,7 @@ body:
   - type: dropdown
     id: environment
     attributes:
-      label: "💻 Environment"
+      label: "Environment"
       description: What environment are you running this in?
       options:
         - MacOS
@@ -68,7 +68,7 @@ body:
   - type: input
     id: sdk-version
     attributes:
-      label: "📦 SDK Version"
+      label: "SDK Version"
       description: What version of the SDK are you using?
       placeholder: e.g. 0.1.0
     validations:

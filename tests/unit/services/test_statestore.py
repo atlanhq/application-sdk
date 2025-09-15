@@ -6,8 +6,8 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 
 from application_sdk.constants import STATE_STORE_NAME
-from application_sdk.outputs.secretstore import SecretStoreOutput
-from application_sdk.outputs.statestore import StateStoreOutput
+from application_sdk.services.secretstore import SecretStore
+from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.test_utils.hypothesis.strategies.outputs.statestore import (
     configuration_strategy,
     credentials_strategy,
@@ -23,8 +23,14 @@ settings.load_profile("statestore_tests")
 
 @pytest.fixture
 def mock_dapr_output_client() -> Generator[MagicMock, None, None]:
-    with patch("application_sdk.outputs.statestore.DaprClient") as mock_client:
-        mock_instance = mock_client.return_value
+    with patch(
+        "application_sdk.services.statestore.DaprClient"
+    ) as mock_statestore_client, patch(
+        "application_sdk.services.secretstore.DaprClient"
+    ) as mock_secretstore_client:
+        mock_instance = MagicMock()
+        mock_statestore_client.return_value = mock_instance
+        mock_secretstore_client.return_value = mock_instance
         mock_instance.__enter__.return_value = mock_instance
         mock_instance.__exit__.return_value = None
         yield mock_instance
@@ -42,7 +48,7 @@ def test_store_configuration_success(
     mock_dapr_output_client: MagicMock, config: Dict[str, Any], uuid: str
 ) -> None:
     mock_dapr_output_client.reset_mock()  # Reset mock between examples
-    result = StateStoreOutput.store_configuration(uuid, config)
+    result = StateStore.save_state_object(uuid, config, StateType.CONFIGURATION)
 
     assert result == uuid
     mock_dapr_output_client.save_state.assert_called_once_with(
@@ -59,7 +65,7 @@ async def test_store_credentials_success(
 ) -> None:
     mock_dapr_output_client.reset_mock()  # Reset mock between examples
     with patch("uuid.uuid4", return_value="test-uuid"):
-        result = await SecretStoreOutput.save_secret(config)
+        result = await SecretStore.save_secret(config)
 
     assert result == "test-uuid"
     mock_dapr_output_client.save_state.assert_called_once_with(
@@ -78,4 +84,4 @@ async def test_store_credentials_failure(
     mock_dapr_output_client.save_state.side_effect = Exception("Dapr error")
 
     with pytest.raises(Exception):
-        await SecretStoreOutput.save_secret(config)
+        await SecretStore.save_secret(config)

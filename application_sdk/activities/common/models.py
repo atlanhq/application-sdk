@@ -4,7 +4,7 @@ This module contains Pydantic models used to represent various data structures
 needed by activities, such as statistics and configuration.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel
 
@@ -34,4 +34,5 @@ class ActivityStatistics(BaseModel):
 
     total_record_count: int = 0
     chunk_count: int = 0
+    partitions: Optional[List[int]] = []
     typename: Optional[str] = None

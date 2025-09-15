@@ -5,13 +5,19 @@ including workflow ID retrieval, automatic heartbeating, and periodic heartbeat 
 """
 
 import asyncio
+import glob
+import os
 from datetime import timedelta
 from functools import wraps
-from typing import Any, Awaitable, Callable, Optional, TypeVar, cast
+from typing import Any, Awaitable, Callable, List, Optional, TypeVar, cast
 
 from temporalio import activity
 
-from application_sdk.constants import APPLICATION_NAME, WORKFLOW_OUTPUT_PATH_TEMPLATE
+from application_sdk.constants import (
+    APPLICATION_NAME,
+    TEMPORARY_PATH,
+    WORKFLOW_OUTPUT_PATH_TEMPLATE,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -70,6 +76,51 @@ def build_output_path() -> str:
         workflow_id=get_workflow_id(),
         run_id=get_workflow_run_id(),
     )
+
+
+def get_object_store_prefix(path: str) -> str:
+    """Get the object store prefix for the path.
+
+    This function handles two types of paths:
+    1. Paths under TEMPORARY_PATH - converts them to relative object store paths
+    2. User-provided paths - returns them as-is (already relative object store paths)
+
+    Args:
+        path: The path to convert to object store prefix.
+
+    Returns:
+        The object store prefix for the path.
+
+    Examples:
+        >>> # Temporary path case
+        >>> get_object_store_prefix("./local/tmp/artifacts/apps/appName/workflows/wf-123/run-456")
+        "artifacts/apps/appName/workflows/wf-123/run-456"
+
+        >>> # User-provided path case
+        >>> get_object_store_prefix("datasets/sales/2024/")
+        "datasets/sales/2024"
+    """
+    # Normalize paths for comparison
+    abs_path = os.path.abspath(path)
+    abs_temp_path = os.path.abspath(TEMPORARY_PATH)
+
+    # Check if path is under TEMPORARY_PATH
+    try:
+        # Use os.path.commonpath to properly check if path is under temp directory
+        # This prevents false positives like '/tmp/local123' matching '/tmp/local'
+        common_path = os.path.commonpath([abs_path, abs_temp_path])
+        if common_path == abs_temp_path:
+            # Path is under temp directory, convert to relative object store path
+            relative_path = os.path.relpath(abs_path, abs_temp_path)
+            # Normalize path separators to forward slashes for object store
+            return relative_path.replace(os.path.sep, "/")
+        else:
+            # Path is already a relative object store path, return as-is
+            return path.strip("/")
+    except ValueError:
+        # os.path.commonpath or os.path.relpath can raise ValueError on Windows with different drives
+        # In this case, treat as user-provided path, return as-is
+        return path.strip("/")
 
 
 def auto_heartbeater(fn: F) -> F:
@@ -179,3 +230,46 @@ async def send_periodic_heartbeat(delay: float, *details: Any) -> None:
     while True:
         await asyncio.sleep(delay)
         activity.heartbeat(*details)
+
+
+def find_local_files_by_extension(
+    path: str,
+    extension: str,
+    file_names: Optional[List[str]] = None,
+) -> List[str]:
+    """Find local files at the specified local path, optionally filtering by file names.
+
+    Args:
+        path (str): Local path to search in (file or directory)
+        extension (str): File extension to filter by (e.g., '.parquet', '.json')
+        file_names (Optional[List[str]]): List of file names (basenames) to filter by, paths are not supported
+
+    Returns:
+        List[str]: List of matching file paths
+
+    Example:
+        >>> find_local_files_by_extension("/data", ".parquet", ["file1.parquet", "file2.parquet"])
+        ['file1.parquet', 'file2.parquet']
+
+        >>> find_local_files_by_extension("/data/single.json", ".json")
+        ['single.json']
+    """
+    if os.path.isfile(path) and path.endswith(extension):
+        # Single file - return it directly
+        return [path]
+
+    elif os.path.isdir(path):
+        # Directory - find all files in directory
+        all_files = glob.glob(
+            os.path.join(path, "**", f"*{extension}"),
+            recursive=True,
+        )
+
+        # Filter by file names if specified
+        if file_names:
+            file_names_set = set(file_names)  # Convert to set for O(1) lookup
+            return [f for f in all_files if os.path.basename(f) in file_names_set]
+        else:
+            return all_files
+
+    return []

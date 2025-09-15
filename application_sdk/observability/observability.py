@@ -16,6 +16,7 @@ from dapr.clients import DaprClient
 from pydantic import BaseModel
 
 from application_sdk.constants import (
+    DAPR_BINDING_OPERATION_CREATE,
     DEPLOYMENT_OBJECT_STORE_NAME,
     ENABLE_OBSERVABILITY_DAPR_SINK,
     LOG_FILE_NAME,
@@ -449,7 +450,7 @@ class AtlanObservability(Generic[T], ABC):
                     with DaprClient() as client:
                         client.invoke_binding(
                             binding_name=DEPLOYMENT_OBJECT_STORE_NAME,
-                            operation="create",
+                            operation=DAPR_BINDING_OPERATION_CREATE,
                             data=file_content,
                             binding_metadata=metadata,
                         )

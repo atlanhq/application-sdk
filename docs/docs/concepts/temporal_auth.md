@@ -16,7 +16,7 @@ The `AtlanAuthClient` class is the core component that handles all authenticatio
 - **Credential Discovery**: Automatic discovery from secret stores with environment variable fallback
 - **Security**: Implements best practices for credential rotation and secure token handling
 
-### SecretStoreInput
+### SecretStore Service
 
 Provides automatic Dapr component discovery and secret retrieval:
 
@@ -454,30 +454,16 @@ class TemporalWorkflowClient(WorkflowClient):
         """Create Temporal worker with authenticated client."""
 ```
 
-### SecretStoreInput
+### SecretStore Service
 
 ```python
-class SecretStoreInput:
-    """Secret store integration with automatic component discovery."""
+from application_sdk.services.secretstore import SecretStore
 
-    @classmethod
-    async def get_secret(
-        cls,
-        component_name: str,
-        secret_key: str
-    ) -> Dict[str, Any]:
-        """Fetch secret using Dapr component."""
+# Get secrets from secret store
+secrets = SecretStore.get_secret(secret_key="database-creds")
 
-    @classmethod
-    def discover_secret_component(
-        cls,
-        use_cache: bool = True
-    ) -> Optional[str]:
-        """Discover available secret store component."""
-
-    @classmethod
-    def clear_discovery_cache(cls) -> None:
-        """Clear component discovery cache."""
+# Get resolved credentials
+credentials = await SecretStore.get_credentials(credential_guid="cred-123")
 ```
 
 ## Migration Guide

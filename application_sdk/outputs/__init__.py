@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Generator,
     List,
+    Literal,
     Optional,
     Union,
     cast,
@@ -22,15 +23,16 @@ import orjson
 from temporalio import activity
 
 from application_sdk.activities.common.models import ActivityStatistics
+from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.objectstore import ObjectStoreOutput
+from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 activity.logger = logger
 
 if TYPE_CHECKING:
-    import daft
+    import daft  # type: ignore
     import pandas as pd
 
 
@@ -51,6 +53,27 @@ class Output(ABC):
     output_prefix: str
     total_record_count: int
     chunk_count: int
+    statistics: List[int] = []
+
+    def estimate_dataframe_file_size(
+        self, dataframe: "pd.DataFrame", file_type: Literal["json", "parquet"]
+    ) -> int:
+        """Estimate File size of a DataFrame by sampling a few records."""
+        if len(dataframe) == 0:
+            return 0
+
+        # Sample up to 10 records to estimate average size
+        sample_size = min(10, len(dataframe))
+        sample = dataframe.head(sample_size)
+        if file_type == "json":
+            sample_file = sample.to_json(orient="records", lines=True)
+        else:
+            sample_file = sample.to_parquet(index=False, compression="snappy")
+        if sample_file is not None:
+            avg_record_size = len(sample_file) / sample_size
+            return int(avg_record_size * len(dataframe))
+
+        return 0
 
     def process_null_fields(
         self,
@@ -216,6 +239,7 @@ class Output(ABC):
             statistics = {
                 "total_record_count": self.total_record_count,
                 "chunk_count": self.chunk_count,
+                "partitions": self.statistics,
             }
 
             # Write the statistics to a json file
@@ -223,9 +247,11 @@ class Output(ABC):
             with open(output_file_name, "w") as f:
                 f.write(orjson.dumps(statistics).decode("utf-8"))
 
+            destination_file_path = get_object_store_prefix(output_file_name)
             # Push the file to the object store
-            await ObjectStoreOutput.push_file_to_object_store(
-                self.output_prefix, output_file_name
+            await ObjectStore.upload_file(
+                source=output_file_name,
+                destination=destination_file_path,
             )
             return statistics
         except Exception as e:

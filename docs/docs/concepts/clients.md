@@ -10,6 +10,7 @@ This module provides the necessary abstractions (clients) for interacting with v
 
 2.  **Specialized Clients:** The SDK provides concrete client implementations for specific services:
     *   **SQL Databases (`sql.py`):** For connecting to and querying SQL databases.
+    *   **Non-SQL Systems (`base.py`):** For connecting to non-SQL data sources like REST APIs, or other services.
     *   **Temporal (`temporal.py`, `workflow.py`):** For connecting to the Temporal service and managing workflow executions.
 
 ## SQL Client (`sql.py`)
@@ -30,12 +31,12 @@ Provides classes for interacting with SQL databases using SQLAlchemy.
 Both SQL client classes are typically **subclassed** for specific database types (e.g., PostgreSQL, Snowflake) rather than used directly.
 
 1.  **Connection Configuration (`DB_CONFIG` - Class Attribute):**
-    *   This dictionary **must** be defined in your `BaseSQLClient` subclass to specify how to connect.
-    *   **`template` (str):** The SQLAlchemy connection string template. Uses standard Python f-string formatting with placeholders for keys defined in `required` (e.g., `{username}`, `{host}`).
-    *   **`required` (list[str]):** List of keys that *must* be present in the `credentials` dictionary passed to `load()`. The client fetches values for these keys from `credentials` to format the `template`. The value for the `{password}` placeholder is handled specially by `get_auth_token()` based on `authType`.
-    *   **`parameters` (list[str], optional):** List of optional keys. If present in `credentials`, their values are fetched and appended as URL query parameters to the connection string (e.g., `?warehouse=my_wh&role=my_role`).
-    *   **`defaults` (dict, optional):** Default key-value pairs to append as URL query parameters if they are *not* found in `credentials`.
-    *   **Note on Credentials:** The `credentials` dictionary passed to `load()` can also contain an `extra` field (often a JSON string) which is parsed. Values for `required` and `parameters` keys are looked up first directly in `credentials`, then within the parsed `extra` dictionary. `authType` (e.g., "basic", "iam_user", "iam_role") is also read from `credentials` to determine how to handle the `password`.
+    *   Define `DB_CONFIG` using the Pydantic model `DatabaseConfig` (`application_sdk.clients.models.DatabaseConfig`).
+    *   **`template` (str):** SQLAlchemy connection string template using placeholders (e.g., `{username}`, `{host}`).
+    *   **`required` (list[str]):** Keys that must be present in `credentials`/`credentials.extra`. `{password}` is resolved via `get_auth_token()` depending on `authType`.
+    *   **`parameters` (list[str], optional):** Optional keys appended as URL query parameters when present in `credentials`/`extra`.
+    *   **`defaults` (dict[str, Any], optional):** Default URL parameters always appended unless already in the template.
+    *   **Credentials Note:** The `credentials` dictionary can include an `extra` field (JSON or dict). Lookups for `required` and `parameters` first check `credentials`, then `extra`.
 
 2.  **Loading (`load` method):**
     *   Called with a `credentials` dictionary.
@@ -51,20 +52,16 @@ Both SQL client classes are typically **subclassed** for specific database types
 
 ```python
 # In your subclass definition (e.g., my_connector/clients.py)
-from typing import Dict, Any
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.clients.models import DatabaseConfig
 
 class SnowflakeClient(BaseSQLClient):
-    DB_CONFIG: Dict[str, Any] = {
-        # Template uses required keys
-        "template": "snowflake://{username}:{password}@{account_id}",
-        # Values for these are fetched from credentials or credentials['extra']
-        "required": ["username", "password", "account_id"],
-        # If 'warehouse' or 'role' exist in credentials/extra, they are added as ?warehouse=...&role=...
-        "parameters": ["warehouse", "role"],
-        # If 'client_session_keep_alive' is NOT in credentials/extra, add ?client_session_keep_alive=true
-        "defaults": { "client_session_keep_alive": "true" }
-    }
+    DB_CONFIG = DatabaseConfig(
+        template="snowflake://{username}:{password}@{account_id}",
+        required=["username", "password", "account_id"],
+        parameters=["warehouse", "role"],
+        defaults={"client_session_keep_alive": "true"},
+    )
 ```
 
 ### Interaction with `SQLQueryInput` and Activities
@@ -85,6 +82,102 @@ While `BaseSQLClient` establishes the connection and holds the SQLAlchemy engine
 
 **Simplified Flow:**
 `Activity` -> gets `SQLClient` from state -> creates `SQLQueryInput(engine=sql_client.engine, query=...)` -> calls `sql_query_input.get_daft_dataframe()` -> receives DataFrame -> processes DataFrame.
+
+## Base Client (`base.py`)
+
+Provides a base implementation for clients that need to connect to non-SQL data sources with methods for HTTP GET and POST requests.
+
+### Key Classes
+
+*   **`BaseClient(ClientInterface)`**:
+    *   **Purpose:** Handles HTTP-based connections and request execution for non-SQL data sources. Provides a foundation for building clients that interact with REST APIs, NoSQL databases, or other HTTP-based services.
+    *   **HTTP Support:** Built-in support for HTTP GET and POST requests with configurable headers, authentication, and retry logic.
+    *   **Extensibility:** Designed to be subclassed for specific non-SQL data sources.
+
+### Configuration and Usage
+
+The `BaseClient` class is typically **subclassed** for specific non-SQL data sources (e.g., REST APIs) rather than used directly.
+
+1.  **HTTP Configuration:**
+    *   **`http_headers` (HeaderTypes):** HTTP headers for all requests made by this client. Supports dict, Headers object, or list of tuples. GET and POST requests through the `execute_http_get_request` and `execute_http_post_request` methods will use this header and allow for override through the `headers` parameter.
+    *   **`http_retry_transport` (httpx.AsyncBaseTransport):** HTTP transport for requests. Uses httpx default transport by default, but can be overridden for custom retry behavior from libraries like `httpx-retries`.
+
+2.  **Loading (`load` method):**
+    *   Called with credentials and other configuration parameters.
+    *   Should be implemented by subclasses to set up authentication headers and any required client state.
+    *   Can optionally override `http_retry_transport` for advanced retry logic.
+
+3.  **HTTP Request Methods:**
+    *   **`execute_http_get_request()`:** Performs HTTP GET requests with configurable headers, parameters, and authentication.
+    *   **`execute_http_post_request()`:** Performs HTTP POST requests with support for various data formats (JSON, form data, files, etc.).
+
+### Example `BaseClient` Subclass
+
+```python
+# In your subclass definition (e.g., my_connector/clients.py)
+from typing import Dict, Any
+from application_sdk.clients.base import BaseClient
+
+class MyApiClient(BaseClient):
+    async def load(self, **kwargs: Any) -> None:
+        """Initialize the client with credentials and set up HTTP headers."""
+        credentials = kwargs.get("credentials", {})
+
+        # Set up authentication headers
+        self.http_headers = {
+            "Authorization": f"Bearer {credentials.get('api_token')}",
+            "User-Agent": "MyApp/1.0",
+            "Content-Type": "application/json"
+        }
+
+        # Optionally set up custom retry transport for advanced retry logic
+        # from httpx_retries import Retry, RetryTransport
+        # retry = Retry(total=5, backoff_factor=10, status_forcelist=[429, 500, 502, 503, 504])
+        # self.http_retry_transport = RetryTransport(retry=retry)
+
+    async def fetch_data(self, endpoint: str, params: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Custom method to fetch data from the API."""
+        response = await self.execute_http_get_request(
+            url=f"https://api.example.com/{endpoint}",
+            params=params
+        )
+        if response and response.status_code == 200:
+            return response.json()
+        return {}
+
+    async def create_resource(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Custom method to create a resource via POST."""
+        response = await self.execute_http_post_request(
+            url=f"https://api.example.com/{endpoint}",
+            json_data=data
+        )
+        if response and response.status_code == 201:
+            return response.json()
+        return {}
+```
+
+### Advanced Retry Configuration
+
+For applications requiring advanced retry logic (e.g., status code-based retries, rate limiting, custom backoff strategies), you can use the `httpx-retries` library:
+
+```python
+class MyApiClient(BaseClient):
+    async def load(self, **kwargs: Any) -> None:
+        # Set up headers
+        self.http_headers = {"Authorization": f"Bearer {kwargs.get('token')}"}
+
+        # Install httpx-retries: pip install httpx-retries
+        from httpx_retries import Retry, RetryTransport
+
+        # Configure retry for status codes and network errors
+        retry = Retry(
+            total=5,
+            backoff_factor=10,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        self.http_retry_transport = RetryTransport(retry=retry)
+        # The RetryTransport can be overridden with a custom transport from libraries like `httpx-retries` through methods like `_retry_operation_async`. Check the library for more details.
+```
 
 ## Temporal / Workflow Client (`temporal.py`, `workflow.py`, `utils.py`)
 
@@ -157,4 +250,8 @@ if __name__ == "__main__":
 
 ## Summary
 
-The `clients` module abstracts interactions with external services. `SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine, which is then typically used by `SQLQueryInput` within activities to fetch data as DataFrames. `TemporalWorkflowClient` (obtained via `get_workflow_client`) manages interactions with the Temporal service for workflow lifecycle management.
+The `clients` module abstracts interactions with external services.
+
+`SQLClient` subclasses (configured via `DB_CONFIG`) provide the database engine, which is then typically used by `SQLQueryInput` within activities to fetch data as DataFrames. `TemporalWorkflowClient` (obtained via `get_workflow_client`) manages interactions with the Temporal service for workflow lifecycle management.
+
+`BaseClient` provides a foundation for non-SQL data sources with HTTP request support through the `execute_http_get_request` and `execute_http_post_request` methods. The class also allows for custom retry logic to be configured through the `http_retry_transport` attribute which can be set to a `httpx.AsyncBaseTransport` instance, either through the `httpx` default transport or a custom transport from libraries like `httpx-retries`.

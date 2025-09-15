@@ -1,6 +1,121 @@
 # Changelog
 
 
+## v0.1.1rc42 (September 15, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc41...v0.1.1rc42
+
+### Features
+
+- enhance file handling in Input classes (#697) (by @Mustafa in [a792fa6](https://github.com/atlanhq/application-sdk/commit/a792fa6))
+
+## v0.1.1rc41 (September 11, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc40...v0.1.1rc41
+
+### Features
+
+- add support for multidb extraction, enhance aws client via redshift refactor (#706) (by @Abhishek Agrawal in [4441285](https://github.com/atlanhq/application-sdk/commit/4441285))
+- add support for frontend configmap handler and static file serving (#631) (by @Angad Sethi in [13e164a](https://github.com/atlanhq/application-sdk/commit/13e164a))
+
+
+
+## v0.1.1rc40 (September 09, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc39...v0.1.1rc40
+
+### Features
+
+- add retain_local_copy option to upload methods in ObjectStore (#691) (by @Mustafa in [38285f0](https://github.com/atlanhq/application-sdk/commit/38285f0))
+- enhance bugbot rules (#681) (by @AdvitXAtlan in [546d23f](https://github.com/atlanhq/application-sdk/commit/546d23f))
+
+### Bug Fixes
+
+- make sql client use context managers (#699) (by @Nishchith Shetty in [211f31b](https://github.com/atlanhq/application-sdk/commit/211f31b))
+
+## v0.1.1rc39 (September 04, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc38...v0.1.1rc39
+
+### Features
+
+- implement delete file and prefix operations in ObjectStore (#694) (by @Mustafa in [6f71615](https://github.com/atlanhq/application-sdk/commit/6f71615))
+- add Daft configuration constants and update Parquet output handling (by @Mustafa in [68c2593](https://github.com/atlanhq/application-sdk/commit/68c2593))
+
+
+
+## v0.1.1rc38 (September 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc37...v0.1.1rc38
+
+## v0.1.1rc37 (September 03, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc36...v0.1.1rc37
+
+### Features
+
+- add file size-based chunking to JsonOutput (#650) (by @Nishchith Shetty in [7e7685b](https://github.com/atlanhq/application-sdk/commit/7e7685b))
+
+
+
+## v0.1.1rc36 (September 01, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc35...v0.1.1rc36
+
+### Features
+
+- Update to pyatlan 8.0.2 to get fix for AsyncWorkflowSearchResponse async iterator (#680) (by @Ernest Hill in [a33bc4c](https://github.com/atlanhq/application-sdk/commit/a33bc4c))
+- implement Redis client with sync/async support and distributed locking (#621) (by @Mustafa in [e384ceb](https://github.com/atlanhq/application-sdk/commit/e384ceb))
+- implement abstract methods in BaseHandler (by @Mustafa in [c7c1937](https://github.com/atlanhq/application-sdk/commit/c7c1937))
+
+## v0.1.1rc35 (August 28, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc34...v0.1.1rc35
+
+### Features
+
+- improve services abstraction (#658) (by @Nishchith Shetty in [f5a4c4e](https://github.com/atlanhq/application-sdk/commit/f5a4c4e))
+
+
+
+## v0.1.1rc34 (August 27, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc33...v0.1.1rc34
+
+### Features
+
+- Generic Client and Handlers for non-SQL connectors with http request methods (allows custom retry transport) (#660) (by @Prateek Rai in [b077a90](https://github.com/atlanhq/application-sdk/commit/b077a90))
+
+## v0.1.1rc33 (August 26, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc32...v0.1.1rc33
+
+
+
+## v0.1.1rc32 (August 20, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc31...v0.1.1rc32
+
+### Bug Fixes
+
+- update app host (#664) (by @Onkar Ravgan in [24d23cb](https://github.com/atlanhq/application-sdk/commit/24d23cb))
+- file references in cursor rules (#662) (by @Nishchith Shetty in [2395ce3](https://github.com/atlanhq/application-sdk/commit/2395ce3))
+- Parquet file output path with None file names (#659) (by @Onkar Ravgan in [8841660](https://github.com/atlanhq/application-sdk/commit/8841660))
+
+## v0.1.1rc31 (August 14, 2025)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc30...v0.1.1rc31
+
+### Features
+
+- support for app registration via events (#635) (by @Nishant Munjal in [330b585](https://github.com/atlanhq/application-sdk/commit/330b585))
+
+### Bug Fixes
+
+- error logs related to deployment secrets (#651) (by @Nishchith Shetty in [09f6e5c](https://github.com/atlanhq/application-sdk/commit/09f6e5c))
+
+
+
 ## v0.1.1rc30 (August 13, 2025)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v0.1.1rc29...v0.1.1rc30

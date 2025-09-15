@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Type
 
 from pydantic import BaseModel, Field, RootModel
 
-from application_sdk.outputs.eventstore import Event, EventFilter
+from application_sdk.events.models import Event, EventFilter
 from application_sdk.workflows import WorkflowInterface
 
 
@@ -34,7 +34,7 @@ class FetchMetadataRequest(RootModel[Dict[str, Any]]):
 
 class FetchMetadataResponse(BaseModel):
     success: bool
-    data: List[Dict[str, str]]
+    data: Any
 
 
 class PreflightCheckRequest(BaseModel):
@@ -189,6 +189,33 @@ class WorkflowConfigResponse(BaseModel):
                         "include-filter": '{"^dbengine$":["^public$","^airflow$"]}',
                         "exclude-filter": "{}",
                         "temp-table-regex": "",
+                    },
+                },
+            }
+        }
+
+
+class ConfigMapResponse(BaseModel):
+    success: bool = Field(
+        ..., description="Indicates whether the operation was successful"
+    )
+    message: str = Field(
+        ..., description="Message describing the result of the operation"
+    )
+    data: Dict[str, Any] = Field(..., description="Configuration map object")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "success": True,
+                "message": "Configuration map fetched successfully",
+                "data": {
+                    "config_map_id": "pikachu-config-001",
+                    "name": "Pikachu Configuration",
+                    "settings": {
+                        "electric_type": True,
+                        "level": 25,
+                        "moves": ["Thunderbolt", "Quick Attack"],
                     },
                 },
             }

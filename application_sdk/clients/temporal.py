@@ -6,15 +6,7 @@ from typing import Any, Dict, Optional, Sequence, Type
 from temporalio import activity, workflow
 from temporalio.client import Client, WorkflowExecutionStatus, WorkflowFailureError
 from temporalio.types import CallableType, ClassType
-from temporalio.worker import (
-    ActivityInboundInterceptor,
-    ExecuteActivityInput,
-    ExecuteWorkflowInput,
-    Interceptor,
-    Worker,
-    WorkflowInboundInterceptor,
-    WorkflowInterceptorClassInput,
-)
+from temporalio.worker import Worker
 from temporalio.worker.workflow_sandbox import (
     SandboxedWorkflowRunner,
     SandboxRestrictions,
@@ -26,6 +18,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
     DEPLOYMENT_NAME_KEY,
+    IS_LOCKING_DISABLED,
     MAX_CONCURRENT_ACTIVITIES,
     WORKFLOW_HOST,
     WORKFLOW_MAX_TIMEOUT_HOURS,
@@ -33,19 +26,12 @@ from application_sdk.constants import (
     WORKFLOW_PORT,
     WORKFLOW_TLS_ENABLED_KEY,
 )
-from application_sdk.inputs.secretstore import SecretStoreInput
-from application_sdk.inputs.statestore import StateType
+from application_sdk.interceptors.cleanup import CleanupInterceptor, cleanup
+from application_sdk.interceptors.events import EventInterceptor, publish_event
+from application_sdk.interceptors.lock import RedisLockInterceptor
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.outputs.eventstore import (
-    ApplicationEventNames,
-    Event,
-    EventMetadata,
-    EventStore,
-    EventTypes,
-    WorkflowStates,
-)
-from application_sdk.outputs.secretstore import SecretStoreOutput
-from application_sdk.outputs.statestore import StateStoreOutput
+from application_sdk.services.secretstore import SecretStore
+from application_sdk.services.statestore import StateStore, StateType
 from application_sdk.workflows import WorkflowInterface
 
 logger = get_logger(__name__)
@@ -53,144 +39,6 @@ logger = get_logger(__name__)
 TEMPORAL_NOT_FOUND_FAILURE = (
     "type.googleapis.com/temporal.api.errordetails.v1.NotFoundFailure"
 )
-
-
-class EventActivityInboundInterceptor(ActivityInboundInterceptor):
-    """Interceptor for tracking activity execution events.
-
-    This interceptor captures the start and end of activity executions,
-    creating events that can be used for monitoring and tracking.
-    """
-
-    async def execute_activity(self, input: ExecuteActivityInput) -> Any:
-        """Execute an activity with event tracking.
-
-        Args:
-            input (ExecuteActivityInput): The activity execution input.
-
-        Returns:
-            Any: The result of the activity execution.
-        """
-        event = Event(
-            event_type=EventTypes.APPLICATION_EVENT.value,
-            event_name=ApplicationEventNames.ACTIVITY_START.value,
-            data={},
-        )
-        EventStore.publish_event(event)
-
-        output = None
-        try:
-            output = await super().execute_activity(input)
-        except Exception as e:
-            end_event = Event(
-                event_type=EventTypes.APPLICATION_EVENT.value,
-                event_name=ApplicationEventNames.ACTIVITY_END.value,
-                data={},
-            )
-            EventStore.publish_event(end_event)
-            raise e
-
-        end_event = Event(
-            event_type=EventTypes.APPLICATION_EVENT.value,
-            event_name=ApplicationEventNames.ACTIVITY_END.value,
-            data={},
-        )
-        EventStore.publish_event(end_event)
-        return output
-
-
-class EventWorkflowInboundInterceptor(WorkflowInboundInterceptor):
-    """Interceptor for tracking workflow execution events.
-
-    This interceptor captures the start and end of workflow executions,
-    creating events that can be used for monitoring and tracking.
-    """
-
-    async def execute_workflow(self, input: ExecuteWorkflowInput) -> Any:
-        """Execute a workflow with event tracking.
-
-        Args:
-            input (ExecuteWorkflowInput): The workflow execution input.
-
-        Returns:
-            Any: The result of the workflow execution.
-        """
-        with workflow.unsafe.sandbox_unrestricted():
-            EventStore.publish_event(
-                Event(
-                    metadata=EventMetadata(workflow_state=WorkflowStates.RUNNING.value),
-                    event_type=EventTypes.APPLICATION_EVENT.value,
-                    event_name=ApplicationEventNames.WORKFLOW_START.value,
-                    data={},
-                )
-            )
-
-        output = None
-        try:
-            output = await super().execute_workflow(input)
-        except Exception as e:
-            with workflow.unsafe.sandbox_unrestricted():
-                EventStore.publish_event(
-                    Event(
-                        metadata=EventMetadata(
-                            workflow_state=WorkflowStates.FAILED.value
-                        ),
-                        event_type=EventTypes.APPLICATION_EVENT.value,
-                        event_name=ApplicationEventNames.WORKFLOW_END.value,
-                        data={},
-                    ),
-                )
-            raise e
-
-        with workflow.unsafe.sandbox_unrestricted():
-            EventStore.publish_event(
-                Event(
-                    metadata=EventMetadata(
-                        workflow_state=WorkflowStates.COMPLETED.value
-                    ),
-                    event_type=EventTypes.APPLICATION_EVENT.value,
-                    event_name=ApplicationEventNames.WORKFLOW_END.value,
-                    data={
-                        "workflow_id": workflow.info().workflow_id,
-                        "workflow_run_id": workflow.info().run_id,
-                    },
-                ),
-            )
-        return output
-
-
-class EventInterceptor(Interceptor):
-    """Temporal interceptor for event tracking.
-
-    This interceptor provides event tracking capabilities for both
-    workflow and activity executions.
-    """
-
-    def intercept_activity(
-        self, next: ActivityInboundInterceptor
-    ) -> ActivityInboundInterceptor:
-        """Intercept activity executions.
-
-        Args:
-            next (ActivityInboundInterceptor): The next interceptor in the chain.
-
-        Returns:
-            ActivityInboundInterceptor: The activity interceptor.
-        """
-        return EventActivityInboundInterceptor(super().intercept_activity(next))
-
-    def workflow_interceptor_class(
-        self, input: WorkflowInterceptorClassInput
-    ) -> Optional[Type[WorkflowInboundInterceptor]]:
-        """Get the workflow interceptor class.
-
-        Args:
-            input (WorkflowInterceptorClassInput): The interceptor input.
-
-        Returns:
-            Optional[Type[WorkflowInboundInterceptor]]: The workflow interceptor class.
-        """
-        return EventWorkflowInboundInterceptor
 
 
 class TemporalWorkflowClient(WorkflowClient):
@@ -241,9 +89,7 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
-        self.deployment_config: Dict[str, Any] = (
-            SecretStoreInput.get_deployment_secret()
-        )
+        self.deployment_config: Dict[str, Any] = SecretStore.get_deployment_secret()
         self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
 
@@ -306,7 +152,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 await asyncio.sleep(refresh_interval)
 
                 # Get fresh token
-                token = await self.auth_manager.get_access_token()
+                token = await self.auth_manager.get_access_token(force_refresh=True)
                 if self.client:
                     self.client.api_key = token
                 logger.info("Updated client RPC metadata with fresh token")
@@ -398,7 +244,7 @@ class TemporalWorkflowClient(WorkflowClient):
         """
         if "credentials" in workflow_args:
             # remove credentials from workflow_args and add reference to credentials
-            workflow_args["credential_guid"] = await SecretStoreOutput.save_secret(
+            workflow_args["credential_guid"] = await SecretStore.save_secret(
                 workflow_args["credentials"]
             )
             del workflow_args["credentials"]
@@ -414,7 +260,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             )
 
-            await StateStoreOutput.save_state_object(
+            await StateStore.save_state_object(
                 id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
             logger.info(f"Created workflow config with ID: {workflow_id}")
@@ -513,11 +359,34 @@ class TemporalWorkflowClient(WorkflowClient):
                 f"Started token refresh loop with dynamic interval (initial: {self._token_refresh_interval}s)"
             )
 
+        # Start with provided activities and add system activities
+        final_activities = list(activities) + [publish_event, cleanup]
+
+        # Add lock management activities if needed
+        if not IS_LOCKING_DISABLED:
+            from application_sdk.activities.lock_management import (
+                acquire_distributed_lock,
+                release_distributed_lock,
+            )
+
+            final_activities.extend(
+                [
+                    acquire_distributed_lock,
+                    release_distributed_lock,
+                ]
+            )
+            logger.info(
+                "Auto-registered lock management activities for @needs_lock decorated activities"
+            )
+
+        # Create activities lookup dict for interceptors
+        activities_dict = {getattr(a, "__name__", str(a)): a for a in final_activities}
+
         return Worker(
             self.client,
             task_queue=self.worker_task_queue,
             workflows=workflow_classes,
-            activities=activities,
+            activities=final_activities,
             workflow_runner=SandboxedWorkflowRunner(
                 restrictions=SandboxRestrictions.default.with_passthrough_modules(
                     *passthrough_modules
@@ -525,7 +394,11 @@ class TemporalWorkflowClient(WorkflowClient):
             ),
             max_concurrent_activities=max_concurrent_activities,
             activity_executor=activity_executor,
-            interceptors=[EventInterceptor()],
+            interceptors=[
+                EventInterceptor(),
+                CleanupInterceptor(),
+                RedisLockInterceptor(activities_dict),
+            ],
         )
 
     async def get_workflow_run_status(

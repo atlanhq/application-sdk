@@ -450,8 +450,8 @@ Contains miscellaneous helper functions used throughout the SDK.
 *   **`prepare_query(query, workflow_args, temp_table_regex_sql)`**: Modifies a base SQL query string by formatting it with include/exclude filters, temporary table exclusion logic, and flags for excluding empty tables or views. Filters are sourced from `workflow_args["metadata"]`.
 *   **`prepare_filters(include_filter_str, exclude_filter_str)`**: Parses JSON string filters (include/exclude) and converts them into normalized regex patterns suitable for SQL `WHERE` clauses (e.g., `db1.schema1|db1.schema2`).
 *   **`normalize_filters(filter_dict, is_include)`**: Takes a dictionary defining filters (e.g., `{"db1": ["schema1", "schema2"], "db2": "*"}`) and converts it into a list of normalized regex strings.
-*   **`get_workflow_config(config_id)`**: Retrieves workflow configuration data stored via `StateStoreInput`.
-*   **`update_workflow_config(config_id, config)`**: Updates specific keys in a stored workflow configuration via `StateStoreOutput`.
+*   **`get_workflow_config(config_id)`**: Retrieves workflow configuration data using the `StateStore` service.
+*   **`update_workflow_config(config_id, config)`**: Updates specific keys in a stored workflow configuration using the `StateStore` service.
 *   **`read_sql_files(queries_prefix)`**: Recursively reads all `.sql` files from a specified directory (`queries_prefix`). Returns a dictionary mapping uppercase filenames (without `.sql`) to their string content. Useful for loading SQL queries used in activities.
 *   **`get_actual_cpu_count()`**: Attempts to determine the number of CPUs available to the current process, considering potential container limits (via `os.sched_getaffinity`), falling back to `os.cpu_count()`.
 *   **`get_safe_num_threads()`**: Calculates a reasonable number of threads for parallel processing, typically `get_actual_cpu_count() + 4`.
