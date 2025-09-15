@@ -1,11 +1,7 @@
-import glob
-import os
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, List, Optional, Union
 
-from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.inputs import Input
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.services.objectstore import ObjectStore
 
 logger = get_logger(__name__)
 
@@ -20,116 +16,139 @@ class ParquetInput(Input):
     Supports reading both single files and directories containing multiple parquet files.
     """
 
+    _EXTENSION = ".parquet"
+
     def __init__(
         self,
-        path: Optional[str] = None,
-        chunk_size: Optional[int] = 100000,
-        input_prefix: Optional[str] = None,
+        path: str,
+        chunk_size: int = 100000,
         file_names: Optional[List[str]] = None,
     ):
         """Initialize the Parquet input class.
 
         Args:
             path (str): Path to parquet file or directory containing parquet files.
-            chunk_size (Optional[int], optional): Number of rows per batch.
-                Defaults to 100000.
-            input_prefix (Optional[str], optional): Prefix for files when reading from object store.
-                If provided, files will be read from object store. Defaults to None.
-            file_names (Optional[List[str]], optional): List of file names to read.
-                Defaults to None.
+                It accepts both types of paths:
+                local path or object store path
+                Wildcards are not supported.
+            chunk_size (int): Number of rows per batch. Defaults to 100000.
+            file_names (Optional[List[str]]): List of file names to read. Defaults to None.
+
+        Raises:
+            ValueError: When path is not provided or when single file path is combined with file_names
         """
+
+        # Validate that single file path and file_names are not both specified
+        if path.endswith(self._EXTENSION) and file_names:
+            raise ValueError(
+                f"Cannot specify both a single file path ('{path}') and file_names filter. "
+                f"Either provide a directory path with file_names, or specify the exact file path without file_names."
+            )
+
         self.path = path
         self.chunk_size = chunk_size
-        self.buffer_size = 5000
-        self.input_prefix = input_prefix
         self.file_names = file_names
 
-    async def download_files(self, local_path: str) -> Optional[str]:
-        """Read a file from the object store.
-
-        Args:
-            local_path (str): Path to the local data in the temp directory.
-
-        Returns:
-            Optional[str]: Path to the downloaded local file.
-        """
-        # if the path is a directory, then check if the directory has any parquet files
-        parquet_files = []
-        if os.path.isdir(local_path):
-            parquet_files = glob.glob(os.path.join(local_path, "*.parquet"))
-        else:
-            parquet_files = glob.glob(local_path)
-        if not parquet_files:
-            if self.input_prefix:
-                logger.info(
-                    f"Reading file from object store: {local_path} from {self.input_prefix}"
-                )
-                if os.path.isdir(local_path):
-                    await ObjectStore.download_prefix(
-                        source=get_object_store_prefix(local_path),
-                        destination=local_path,
-                    )
-                else:
-                    await ObjectStore.download_file(
-                        source=get_object_store_prefix(local_path),
-                        destination=local_path,
-                    )
-            else:
-                raise ValueError(
-                    f"No parquet files found in {local_path} and no input prefix provided"
-                )
-
     async def get_dataframe(self) -> "pd.DataFrame":
-        """
-        Method to read the data from the parquet file(s)
-        and return as a single combined pandas dataframe.
+        """Read data from parquet file(s) and return as pandas DataFrame.
 
         Returns:
-            "pd.DataFrame": Combined dataframe from all parquet files.
+            pd.DataFrame: Combined dataframe from specified parquet files
+
+        Raises:
+            ValueError: When no valid path can be determined or no matching files found
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file3.parquet"]:
+        +-------+-------+-------+
+        | col1  | col2  | col3  |
+        +-------+-------+-------+
+        | val1  | val2  | val3  |  # from file1.parquet
+        | val7  | val8  | val9  |  # from file3.parquet
+        +-------+-------+-------+
+
+        Transformations:
+        - Only specified files are read and combined
+        - Column schemas must be compatible across files
+        - Only reads files in the specified directory
         """
         try:
             import pandas as pd
 
-            path = self.path
-            if self.input_prefix and self.path:
-                path = await self.download_files(self.path)
+            # Ensure files are available (local or downloaded)
+            parquet_files = await self.download_files()
+            logger.info(f"Reading {len(parquet_files)} parquet files")
 
-            if not path:
-                raise ValueError("No path specified for parquet input")
-
-            # Use pandas native read_parquet which can handle both single files and directories
-            return pd.read_parquet(path)
+            return pd.concat(
+                (pd.read_parquet(parquet_file) for parquet_file in parquet_files),
+                ignore_index=True,
+            )
         except Exception as e:
             logger.error(f"Error reading data from parquet file(s): {str(e)}")
-            # Re-raise to match IcebergInput behavior
             raise
 
     async def get_batched_dataframe(
         self,
     ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
-        """
-        Method to read the data from the parquet file(s) in batches
-        and return as an async iterator of pandas dataframes.
+        """Read data from parquet file(s) in batches as pandas DataFrames.
 
         Returns:
-            AsyncIterator["pd.DataFrame"]: Async iterator of pandas dataframes.
+            AsyncIterator[pd.DataFrame]: Async iterator of pandas dataframes
+
+        Raises:
+            ValueError: When no parquet files found locally or in object store
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file2.parquet"] and chunk_size=2:
+        Batch 1:
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val1  | val2  |  # from file1.parquet
+        | val3  | val4  |  # from file1.parquet
+        +-------+-------+
+
+        Batch 2:
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val5  | val6  |  # from file2.parquet
+        | val7  | val8  |  # from file2.parquet
+        +-------+-------+
+
+        Transformations:
+        - Only specified files are combined then split into chunks
+        - Each batch is a separate DataFrame
+        - Only reads files in the specified directory
         """
         try:
             import pandas as pd
 
-            path = self.path
-            if self.input_prefix and self.path:
-                path = await self.download_files(self.path)
+            # Ensure files are available (local or downloaded)
+            parquet_files = await self.download_files()
+            logger.info(f"Reading {len(parquet_files)} parquet files in batches")
 
-            if not path:
-                raise ValueError("No path specified for parquet input")
-
-            df = pd.read_parquet(path)
-            if self.chunk_size:
+            # Process each file individually to maintain memory efficiency
+            for parquet_file in parquet_files:
+                df = pd.read_parquet(parquet_file)
                 for i in range(0, len(df), self.chunk_size):
                     yield df.iloc[i : i + self.chunk_size]
-            else:
-                yield df
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) in batches: {str(e)}"
@@ -137,93 +156,105 @@ class ParquetInput(Input):
             raise
 
     async def get_daft_dataframe(self) -> "daft.DataFrame":  # noqa: F821
-        """
-        Method to read the data from the parquet file(s)
-        and return as a single combined daft dataframe.
+        """Read data from parquet file(s) and return as daft DataFrame.
 
         Returns:
-            daft.DataFrame: Combined daft dataframe from all parquet files.
+            daft.DataFrame: Combined daft dataframe from specified parquet files
+
+        Raises:
+            ValueError: When no parquet files found locally or in object store
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file3.parquet"]:
+        +-------+-------+-------+
+        | col1  | col2  | col3  |
+        +-------+-------+-------+
+        | val1  | val2  | val3  |  # from file1.parquet
+        | val7  | val8  | val9  |  # from file3.parquet
+        +-------+-------+-------+
+
+        Transformations:
+        - Only specified parquet files combined into single daft DataFrame
+        - Lazy evaluation for better performance
+        - Column schemas must be compatible across files
         """
         try:
             import daft  # type: ignore
 
-            if self.file_names:
-                path = f"{self.path}/{self.file_names[0].split('/')[0]}"
-            else:
-                path = self.path
-            if self.input_prefix and path:
-                await self.download_files(path)
+            # Ensure files are available (local or downloaded)
+            parquet_files = await self.download_files()
+            logger.info(f"Reading {len(parquet_files)} parquet files with daft")
 
-            return daft.read_parquet(f"{path}/*.parquet")
+            # Use the discovered/downloaded files directly
+            return daft.read_parquet(parquet_files)
         except Exception as e:
             logger.error(
                 f"Error reading data from parquet file(s) using daft: {str(e)}"
             )
-            # Re-raise to match IcebergInput behavior
             raise
 
-    async def get_batched_daft_dataframe(
-        self,
-    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:
-        """
-        Get batched daft dataframe with lazy loading for memory efficiency.
+    async def get_batched_daft_dataframe(self) -> AsyncIterator["daft.DataFrame"]:  # type: ignore
+        """Get batched daft dataframe from parquet file(s).
 
-        This method uses lazy loading to process chunks without loading the entire
-        dataframe into memory first, making it suitable for large datasets.
+        Returns:
+            AsyncIterator[daft.DataFrame]: An async iterator of daft DataFrames, each containing
+            a batch of data from individual parquet files
 
-        Yields:
-            daft.DataFrame: Individual chunks of the dataframe, each containing
-            up to buffer_size rows.
+        Raises:
+            ValueError: When no parquet files found locally or in object store
+            Exception: When reading parquet files fails
+
+        Example transformation:
+        Input files:
+        +------------------+
+        | file1.parquet    |
+        | file2.parquet    |
+        | file3.parquet    |
+        +------------------+
+
+        With file_names=["file1.parquet", "file3.parquet"]:
+        Batch 1 (file1.parquet):
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val1  | val2  |
+        | val3  | val4  |
+        +-------+-------+
+
+        Batch 2 (file3.parquet):
+        +-------+-------+
+        | col1  | col2  |
+        +-------+-------+
+        | val7  | val8  |
+        | val9  | val10 |
+        +-------+-------+
+
+        Transformations:
+        - Each specified file becomes a separate daft DataFrame batch
+        - Lazy evaluation for better performance
+        - Files processed individually for memory efficiency
         """
         try:
             import daft  # type: ignore
 
-            # Prepare the file path(s) for reading
-            file_paths = await self._prepare_file_paths()
+            # Ensure files are available (local or downloaded)
+            parquet_files = await self.download_files()
+            logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
 
-            # Create a lazy dataframe without loading data into memory
-            lazy_df = daft.read_parquet(file_paths)
+            # Yield each discovered file as separate batch
+            for parquet_file in parquet_files:
+                yield daft.read_parquet(parquet_file)
 
-            # Get total count efficiently
-            total_rows = lazy_df.count_rows()
-
-            # Yield chunks without loading everything into memory
-            for offset in range(0, total_rows, self.buffer_size):
-                chunk = lazy_df.offset(offset).limit(self.buffer_size)
-                yield chunk
-
-            del lazy_df
         except Exception as error:
             logger.error(
                 f"Error reading data from parquet file(s) in batches using daft: {error}"
             )
             raise
-
-    async def _prepare_file_paths(self) -> Union[str, List[str]]:
-        """
-        Helper method to prepare file paths for reading.
-
-        Handles both single files and multiple files, with optional object store downloads.
-
-        Returns:
-            Union[str, List[str]]: File path(s) ready for daft.read_parquet()
-
-        Raises:
-            ValueError: If no valid file paths can be prepared
-        """
-        if self.file_names:
-            all_files: List[str] = []
-            for file_name in self.file_names:
-                path = f"{self.path}/{file_name}"
-                if self.input_prefix:
-                    await self.download_files(path)
-                all_files.append(path)
-            return all_files
-        else:
-            if not self.path:
-                raise ValueError("No path specified for parquet input")
-
-            if self.input_prefix:
-                await self.download_files(self.path)
-
-            return f"{self.path}/*.parquet"
