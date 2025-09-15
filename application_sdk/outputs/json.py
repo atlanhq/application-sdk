@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 import orjson
 from temporalio import activity
 
+from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -218,19 +219,6 @@ class JsonOutput(Output):
             if self.current_buffer_size > 0:
                 await self.flush_daft_buffer(buffer, self.chunk_part)
 
-            # Finally upload the final file
-            if self.current_buffer_size_bytes > 0:
-                output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
-                if os.path.exists(output_file_name):
-                    await self._upload_file(output_file_name)
-                    self.chunk_part += 1
-
-            # If chunk_start is set we don't want to increment the chunk_count
-            # Since it should only increment the chunk_part in this case
-            if self.chunk_start is None:
-                self.chunk_count += 1
-            self.statistics.append(self.chunk_part)
-
             # Record metrics for successful write
             self.metrics.record_metric(
                 name="json_write_records",
@@ -281,3 +269,27 @@ class JsonOutput(Output):
         """
         mode = "w" if not os.path.exists(file_name) else "a"
         chunk.to_json(file_name, orient="records", lines=True, mode=mode)
+
+    async def get_statistics(
+        self, typename: Optional[str] = None
+    ) -> ActivityStatistics:
+        """Get the statistics of the JSON files.
+
+        This method returns the statistics of the JSON files.
+        """
+        # Finally upload the final file
+        if self.current_buffer_size_bytes > 0:
+            output_file_name = (
+                f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
+            )
+            if os.path.exists(output_file_name):
+                await self._upload_file(output_file_name)
+                self.chunk_part += 1
+
+        # If chunk_start is set we don't want to increment the chunk_count
+        # Since it should only increment the chunk_part in this case
+        if self.chunk_start is None:
+            self.chunk_count += 1
+        self.statistics.append(self.chunk_part)
+
+        return await super().get_statistics(typename)
