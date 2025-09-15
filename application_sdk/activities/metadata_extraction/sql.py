@@ -860,9 +860,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         raw_input = ParquetInput(
             path=os.path.join(output_path, "raw"),
-            input_prefix=output_prefix,
             file_names=workflow_args.get("file_names"),
-            chunk_size=None,
         )
         raw_input = raw_input.get_batched_daft_dataframe()
         transformed_output = JsonOutput(
