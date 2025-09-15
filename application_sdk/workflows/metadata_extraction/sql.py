@@ -108,11 +108,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         activity_statistics = ActivityStatistics.model_validate(raw_statistics)
         transform_activities: List[Any] = []
 
-        if (
-            activity_statistics is None
-            or activity_statistics.chunk_count == 0
-            or not activity_statistics.partitions
-        ):
+        if activity_statistics is None or activity_statistics.chunk_count == 0:
             # to handle the case where the fetch_fn returns None or no chunks
             return
 

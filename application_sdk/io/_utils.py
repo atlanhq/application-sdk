@@ -7,7 +7,16 @@ datetime conversion, null field processing, and DataFrame type detection.
 
 import inspect
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator, List, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncGenerator,
+    Generator,
+    List,
+    Optional,
+    Union,
+    cast,
+)
 
 if TYPE_CHECKING:
     import daft  # type: ignore
@@ -179,8 +188,10 @@ async def normalize_to_async_iterator(
     """
     if is_single_dataframe(data):
         # Single DataFrame -> yield once
-        if not is_empty_dataframe(data):
-            yield data
+        # Type narrowing: data is now Union["pd.DataFrame", "daft.DataFrame"]
+        dataframe = cast(Union["pd.DataFrame", "daft.DataFrame"], data)
+        if not is_empty_dataframe(dataframe):
+            yield dataframe
     elif inspect.isasyncgen(data):
         # Already async generator -> iterate through it
         async for dataframe in data:
@@ -193,33 +204,3 @@ async def normalize_to_async_iterator(
                 yield dataframe
     else:
         raise ValueError(f"Unsupported data type: {type(data)}")
-
-
-def estimate_json_size(dataframe: Union["pd.DataFrame", "daft.DataFrame"]) -> int:
-    """Estimate the JSON file size of a DataFrame by sampling records.
-
-    Args:
-        dataframe: DataFrame to estimate size for
-
-    Returns:
-        Estimated file size in bytes
-    """
-    if is_empty_dataframe(dataframe):
-        return 0
-
-    if is_pandas_dataframe(dataframe):
-        # Sample up to 10 records for pandas
-        sample_size = min(10, len(dataframe))
-        sample = dataframe.head(sample_size)
-        sample_json = sample.to_json(orient="records", lines=True)
-        if sample_json:
-            avg_record_size = len(sample_json.encode("utf-8")) / sample_size
-            return int(avg_record_size * len(dataframe))
-    elif is_daft_dataframe(dataframe):
-        # For daft, estimate based on row count (approximate)
-        # This is a rough estimate since we can't easily sample daft DataFrames
-        row_count = dataframe.count_rows()
-        estimated_bytes_per_row = 100  # Conservative estimate
-        return row_count * estimated_bytes_per_row
-
-    return 0

@@ -56,7 +56,6 @@ class Writer(ABC):
 
     Attributes:
         output_path (str): Local directory where files are written temporarily
-        output_suffix (str): Subdirectory under output_path for organization
         chunk_size (int): Maximum number of records per file
         total_record_count (int): Total records written across all files
         chunk_count (int): Number of files created
@@ -77,7 +76,6 @@ class Writer(ABC):
     def __init__(
         self,
         output_path: str,
-        output_suffix: str = "",
         chunk_size: int = 100000,
         buffer_size: int = 5000,
         **config: Any,
@@ -86,7 +84,6 @@ class Writer(ABC):
 
         Args:
             output_path: Local directory where files will be written temporarily
-            output_suffix: Optional subdirectory under output_path for organization
             chunk_size: Maximum number of records per file before splitting
             buffer_size: Number of records to buffer before flushing to disk
             **config: Additional configuration options:
@@ -102,7 +99,6 @@ class Writer(ABC):
 
         # Core configuration
         self.output_path = output_path
-        self.output_suffix = output_suffix
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
 
@@ -138,14 +134,8 @@ class Writer(ABC):
 
     def _setup_output_directory(self) -> None:
         """Create the output directory structure."""
-        full_output_path = os.path.join(self.output_path, self.output_suffix)
-
-        # Add typename to path if provided (like JsonOutput does)
-        if self.typename:
-            full_output_path = os.path.join(full_output_path, self.typename)
-
-        os.makedirs(full_output_path, exist_ok=True)
-        self.full_output_path = full_output_path
+        self.full_output_path = self.output_path
+        os.makedirs(self.full_output_path, exist_ok=True)
 
     def _generate_file_path(self, chunk_index: int, part_index: int = 0) -> str:
         """Generate a file path for a given chunk with optional part numbering.
@@ -397,23 +387,6 @@ class Writer(ABC):
             self._record_error_metrics("close_error", str(e))
             raise
 
-    async def get_statistics(
-        self, typename: Optional[str] = None
-    ) -> ActivityStatistics:
-        """Get current statistics without closing the writer.
-
-        Args:
-            typename: Optional type identifier for the statistics
-
-        Returns:
-            ActivityStatistics object with current processing results
-        """
-        stats_data = self._generate_statistics_data()
-        statistics = ActivityStatistics.model_validate(stats_data)
-        if typename:
-            statistics.typename = typename
-        return statistics
-
     async def _write_statistics_file(self) -> Dict[str, Any]:
         """Write statistics to a local JSON file.
 
@@ -447,6 +420,7 @@ class Writer(ABC):
             "total_file_size_bytes": sum(
                 chunk.get("file_size_bytes", 0) for chunk in self.chunks_info
             ),
+            "typename": self.typename,
         }
 
     async def _upload_all_files(self) -> None:
@@ -475,31 +449,43 @@ class Writer(ABC):
         except Exception as e:
             logger.warning(f"Failed to cleanup local files: {e}")
 
-    def _record_success_metrics(self, operation: str, record_count: int) -> None:
+    def _record_success_metrics(
+        self, operation: str, record_count: int, description: Optional[str] = None
+    ) -> None:
         """Record metrics for successful operations.
 
         Args:
             operation: Type of operation (e.g., "write", "chunk")
             record_count: Number of records processed
+            description: Optional custom description for the metric
         """
         format_name = self.__class__.__name__.lower().replace("writer", "")
+
+        default_description = f"Number of records written in {operation} operation"
+        metric_description = description or default_description
 
         self.metrics.record_metric(
             name="write_records",
             value=record_count,
             metric_type=MetricType.COUNTER,
             labels={"format": format_name, "operation": operation},
-            description=f"Number of records written in {operation} operation",
+            description=metric_description,
         )
 
-    def _record_error_metrics(self, error_type: str, error_message: str) -> None:
+    def _record_error_metrics(
+        self, error_type: str, error_message: str, description: Optional[str] = None
+    ) -> None:
         """Record metrics for error conditions.
 
         Args:
             error_type: Type of error (e.g., "write_error", "upload_error")
             error_message: Error message for context
+            description: Optional custom description for the metric
         """
         format_name = self.__class__.__name__.lower().replace("writer", "")
+
+        default_description = "Number of errors during write operations"
+        metric_description = description or default_description
 
         self.metrics.record_metric(
             name="write_errors",
@@ -510,7 +496,7 @@ class Writer(ABC):
                 "error_type": error_type,
                 "error": error_message[:100],  # Truncate long error messages
             },
-            description="Number of errors during write operations",
+            description=metric_description,
         )
 
     def _record_completion_metrics(self) -> None:
@@ -532,10 +518,3 @@ class Writer(ABC):
             labels={"format": format_name},
             description="Number of completed write operations",
         )
-
-
-# Import format-specific writers to make them available
-from application_sdk.io.json import JsonWriter  # noqa: E402
-from application_sdk.io.parquet import ParquetWriter, WriteMode  # noqa: E402
-
-__all__ = ["Writer", "JsonWriter", "ParquetWriter", "WriteMode"]
