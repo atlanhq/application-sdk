@@ -115,7 +115,7 @@ class BaseSQLClient(ClientInterface):
         if self.engine:
             self.engine.dispose()
             self.engine = None
-        self.connection = None  # Should already be None, but ensure cleanup
+        self.connection = None
 
     def get_iam_user_token(self):
         """Get an IAM user token for AWS RDS database authentication.
@@ -379,8 +379,10 @@ class BaseSQLClient(ClientInterface):
 
                         results = [dict(zip(column_names, row)) for row in rows]
                         yield results
+                    cursor.close()
                 except Exception as e:
                     logger.error("Error running query in batch: {error}", error=str(e))
+                    cursor.close()
                     raise e
             # Connection automatically closed by context manager
 
@@ -505,7 +507,6 @@ class AsyncBaseSQLClient(BaseSQLClient):
                     if not rows:
                         break
                     yield [dict(zip(column_names, row)) for row in rows]
-
             except Exception as e:
                 logger.error(f"Error executing query: {str(e)}")
                 raise
