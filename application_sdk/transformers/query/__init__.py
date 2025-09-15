@@ -415,7 +415,6 @@ class QueryBasedTransformer(TransformerInterface):
             )
 
             # run the SQL on the dataframe
-            # FIXME: need a cleaner way to do this, if every buffer is transformed, this shows up chunk/buffer count in the logs
             logger.debug(
                 f"Running transformer for asset [{typename}] with SQL:\n {entity_sql_template}"
             )
