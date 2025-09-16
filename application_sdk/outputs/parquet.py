@@ -38,23 +38,24 @@ class ParquetOutput(Output):
 
     Attributes:
         output_path (str): Base path where Parquet files will be written.
-        output_prefix (str): Prefix for files when uploading to object store.
         output_suffix (str): Suffix for output files.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks created.
         chunk_start (Optional[int]): Starting index for chunk numbering.
-        path_gen (Callable): Function to generate file paths.
         start_marker (Optional[str]): Start marker for query extraction.
         end_marker (Optional[str]): End marker for query extraction.
+        retain_local_copy (bool): Whether to retain the local copy of the files.
+        use_consolidation (bool): Whether to use consolidation.
     """
+
+    _EXTENSION = ".parquet"
 
     def __init__(
         self,
         output_path: str = "",
         output_suffix: str = "",
-        output_prefix: str = "",
         typename: Optional[str] = None,
         chunk_size: Optional[int] = 100000,
         buffer_size: int = 5000,
@@ -71,25 +72,23 @@ class ParquetOutput(Output):
         Args:
             output_path (str): Base path where Parquet files will be written.
             output_suffix (str): Suffix for output files.
-            output_prefix (str): Prefix for files when uploading to object store.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
             chunk_count (int, optional): Initial chunk count. Defaults to 0.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
-            path_gen (Callable, optional): Function to generate file paths.
-                Defaults to path_gen function.
             start_marker (Optional[str], optional): Start marker for query extraction.
                 Defaults to None.
             end_marker (Optional[str], optional): End marker for query extraction.
                 Defaults to None.
             retain_local_copy (bool, optional): Whether to retain the local copy of the files.
                 Defaults to False.
+            use_consolidation (bool, optional): Whether to use consolidation.
+                Defaults to False.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
-        self.output_prefix = output_prefix
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
@@ -105,7 +104,7 @@ class ParquetOutput(Output):
         self.chunk_part = 0
         self.start_marker = start_marker
         self.end_marker = end_marker
-        self.statistics = []
+        self.partitions = []
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
 
@@ -129,34 +128,6 @@ class ParquetOutput(Output):
         if self.typename:
             self.output_path = os.path.join(self.output_path, self.typename)
         os.makedirs(self.output_path, exist_ok=True)
-
-    def path_gen(
-        self,
-        chunk_start: Optional[int] = None,
-        chunk_count: int = 0,
-        start_marker: Optional[str] = None,
-        end_marker: Optional[str] = None,
-    ) -> str:
-        """Generate a file path for a chunk.
-
-        Args:
-            chunk_start (Optional[int]): Starting index of the chunk, or None for single chunk.
-            chunk_count (int): Total number of chunks.
-            start_marker (Optional[str]): Start marker for query extraction.
-            end_marker (Optional[str]): End marker for query extraction.
-
-        Returns:
-            str: Generated file path for the chunk.
-        """
-        # For Query Extraction - use start and end markers without chunk count
-        if start_marker and end_marker:
-            return f"{start_marker}_{end_marker}.parquet"
-
-        # For regular chunking - include chunk count
-        if chunk_start is None:
-            return f"{str(chunk_count)}.parquet"
-        else:
-            return f"chunk-{str(chunk_start)}-part{str(chunk_count)}.parquet"
 
     async def write_batched_dataframe(
         self,
@@ -335,11 +306,11 @@ class ParquetOutput(Output):
         temp_base_path = os.path.join(self.output_path, "temp_accumulation")
         return os.path.join(temp_base_path, f"folder-{folder_index}")
 
-    def _get_consolidated_file_path(self, folder_index: int, chunk_count: int) -> str:
+    def _get_consolidated_file_path(self, folder_index: int, chunk_part: int) -> str:
         """Generate final consolidated file path using existing path_gen logic."""
         return os.path.join(
             self.output_path,
-            self.path_gen(chunk_count=chunk_count, chunk_start=folder_index),
+            self.path_gen(chunk_count=folder_index, chunk_part=chunk_part),
         )
 
     async def _accumulate_dataframe(self, dataframe: "pd.DataFrame"):
@@ -425,7 +396,8 @@ class ParquetOutput(Output):
                 for i, file_path in enumerate(result_dict["path"]):
                     if file_path.endswith(".parquet"):
                         consolidated_file_path = self._get_consolidated_file_path(
-                            chunk_count=i, folder_index=self.chunk_count
+                            folder_index=self.chunk_count,
+                            chunk_part=i,
                         )
                         os.rename(file_path, consolidated_file_path)
 
@@ -441,7 +413,7 @@ class ParquetOutput(Output):
             # Update statistics
             self.chunk_count += 1
             self.total_record_count += self.current_folder_records
-            self.statistics.append(partitions)
+            self.partitions.append(partitions)
 
             # Record metrics
             self.metrics.record_metric(

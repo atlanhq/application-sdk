@@ -68,7 +68,7 @@ class Output(ABC):
     max_file_size_bytes: int
     current_buffer_size: int
     current_buffer_size_bytes: int
-    statistics: List[int]
+    partitions: List[int]
 
     def estimate_dataframe_file_size(self, dataframe: "pd.DataFrame") -> int:
         """Estimate File size of a DataFrame by sampling a few records."""
@@ -90,6 +90,34 @@ class Output(ABC):
             return int(avg_record_size * len(dataframe))
 
         return 0
+
+    def path_gen(
+        self,
+        chunk_count: Optional[int] = None,
+        chunk_part: int = 0,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
+    ) -> str:
+        """Generate a file path for a chunk.
+
+        Args:
+            chunk_start (Optional[int]): Starting index of the chunk, or None for single chunk.
+            chunk_count (int): Total number of chunks.
+            start_marker (Optional[str]): Start marker for query extraction.
+            end_marker (Optional[str]): End marker for query extraction.
+
+        Returns:
+            str: Generated file path for the chunk.
+        """
+        # For Query Extraction - use start and end markers without chunk count
+        if start_marker and end_marker:
+            return f"{start_marker}_{end_marker}{self._EXTENSION}"
+
+        # For regular chunking - include chunk count
+        if chunk_count is None:
+            return f"{str(chunk_part)}{self._EXTENSION}"
+        else:
+            return f"chunk-{str(chunk_count)}-part{str(chunk_part)}{self._EXTENSION}"
 
     def process_null_fields(
         self,
@@ -226,7 +254,7 @@ class Output(ABC):
             # Since it should only increment the chunk_part in this case
             if self.chunk_start is None:
                 self.chunk_count += 1
-            self.statistics.append(self.chunk_part)
+            self.partitions.append(self.chunk_part)
         except Exception as e:
             # Record metrics for failed write
             self.metrics.record_metric(
@@ -374,8 +402,8 @@ class Output(ABC):
             # prepare the statistics
             statistics = {
                 "total_record_count": self.total_record_count,
-                "chunk_count": self.chunk_count,
-                "partitions": self.statistics,
+                "chunk_count": len(self.partitions),
+                "partitions": self.partitions,
             }
 
             # Write the statistics to a json file

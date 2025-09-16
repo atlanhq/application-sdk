@@ -366,7 +366,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 "Output prefix and path must be specified in workflow_args."
             )
         return ParquetOutput(
-            output_prefix=output_prefix,
             output_path=output_path,
             output_suffix=output_suffix,
             use_consolidation=True,
@@ -552,7 +551,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 )
 
                 # Execute using helper method
-                success, batched_iter = await self._execute_single_db(
+                success, batched_iterator = await self._execute_single_db(
                     effective_sql_client.engine,
                     prepared_query,
                     parquet_output,
@@ -569,12 +568,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 logger.warning(
                     f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
                 )
-                success, batched_iter = False, None
+                success, batched_iterator = False, None
 
             if success:
                 successful_databases.append(database_name)
-                if not write_to_file and batched_iter:
-                    dataframe_list.append(batched_iter)
+                if not write_to_file and batched_iterator:
+                    dataframe_list.append(batched_iterator)
             else:
                 failed_databases.append(database_name)
 
@@ -617,7 +616,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             batched_iterator = await sql_input.get_batched_dataframe()
 
             if write_to_file and parquet_output:
-                # FIXME:
                 await parquet_output.write_batched_dataframe(batched_iterator)  # type: ignore
                 return True, None
 
@@ -842,7 +840,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
-            output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )
