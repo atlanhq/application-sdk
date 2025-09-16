@@ -31,6 +31,11 @@ class TestOutput:
             self.output_prefix = output_prefix
             self.total_record_count = 0
             self.chunk_count = 0
+            self.partitions = []  # Initialize partitions attribute
+            self.buffer_size = 5000
+            self.max_file_size_bytes = 1024 * 1024 * 10  # 10MB
+            self.current_buffer_size = 0
+            self.current_buffer_size_bytes = 0
 
         async def write_dataframe(self, dataframe: pd.DataFrame):
             """Implement abstract method."""
@@ -90,7 +95,9 @@ class TestOutput:
             raise Exception("Test error")
 
         with patch("application_sdk.outputs.logger.error") as mock_logger:
-            await self.output.write_batched_dataframe(generate_error())
+            # According to workspace rules, exceptions should be re-raised after logging
+            with pytest.raises(Exception, match="Test error"):
+                await self.output.write_batched_dataframe(generate_error())
             mock_logger.assert_called_once()
             assert "Error writing batched dataframe" in mock_logger.call_args[0][0]
 
@@ -107,7 +114,7 @@ class TestOutput:
         """Test write_statistics successful case."""
         self.output.total_record_count = 100
         self.output.chunk_count = 5
-        self.output.statistics = [1, 2, 1, 2, 1]
+        self.output.partitions = [1, 2, 1, 2, 1]
 
         # Mock the open function, orjson.dumps, and object store upload
         with patch("builtins.open", mock_open()) as mock_file, patch(
@@ -126,7 +133,7 @@ class TestOutput:
             # Assertions
             assert stats == {
                 "total_record_count": 100,
-                "chunk_count": 5,
+                "chunk_count": 5,  # This is len(self.partitions) which is 5
                 "partitions": [1, 2, 1, 2, 1],
             }
             mock_file.assert_called_once_with("/test/path/statistics.json.ignore", "w")

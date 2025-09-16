@@ -66,7 +66,6 @@ class TestParquetOutputInit:
         # The output path gets modified by adding suffix, so check it ends with the base path
         assert base_output_path in parquet_output.output_path
         assert parquet_output.output_suffix == ""
-        assert parquet_output.output_prefix == ""
         assert parquet_output.typename is None
 
         assert parquet_output.chunk_size == 100000
@@ -82,7 +81,6 @@ class TestParquetOutputInit:
         parquet_output = ParquetOutput(
             output_path=base_output_path,
             output_suffix="test_suffix",
-            output_prefix="test_prefix",
             typename="test_table",
             chunk_size=50000,
             total_record_count=100,
@@ -93,7 +91,6 @@ class TestParquetOutputInit:
         )
 
         assert parquet_output.output_suffix == "test_suffix"
-        assert parquet_output.output_prefix == "test_prefix"
         assert parquet_output.typename == "test_table"
 
         assert parquet_output.chunk_size == 50000
@@ -131,18 +128,18 @@ class TestParquetOutputPathGen:
         assert path == "start_123_end_456.parquet"
 
     def test_path_gen_without_chunk_start(self, base_output_path: str):
-        """Test path generation without chunk start."""
+        """Test path generation without chunk count."""
         parquet_output = ParquetOutput(output_path=base_output_path)
 
-        path = parquet_output.path_gen(chunk_count=5)
+        path = parquet_output.path_gen(chunk_part=5)
 
         assert path == "5.parquet"
 
-    def test_path_gen_with_chunk_start(self, base_output_path: str):
-        """Test path generation with chunk start."""
+    def test_path_gen_with_chunk_count(self, base_output_path: str):
+        """Test path generation with chunk count."""
         parquet_output = ParquetOutput(output_path=base_output_path)
 
-        path = parquet_output.path_gen(chunk_start=10, chunk_count=3)
+        path = parquet_output.path_gen(chunk_count=10, chunk_part=3)
 
         assert path == "chunk-10-part3.parquet"
 
@@ -493,7 +490,10 @@ class TestParquetOutputConsolidation:
     def test_consolidation_init_attributes(self, base_output_path: str):
         """Test that consolidation attributes are properly initialized."""
         parquet_output = ParquetOutput(
-            output_path=base_output_path, chunk_size=1000, buffer_size=200
+            output_path=base_output_path,
+            chunk_size=1000,
+            buffer_size=200,
+            use_consolidation=True,
         )
 
         # Check consolidation attributes
@@ -542,7 +542,7 @@ class TestParquetOutputConsolidation:
 
         # Test consolidated file path generation
         consolidated_path = parquet_output._get_consolidated_file_path(
-            folder_index=0, chunk_count=0
+            folder_index=0, chunk_part=0
         )
         expected_path = os.path.join(
             base_output_path, "test_suffix", "test_type", "chunk-0-part0.parquet"
@@ -663,8 +663,8 @@ class TestParquetOutputConsolidation:
                 # Check statistics were updated
                 assert parquet_output.chunk_count == 1
                 assert parquet_output.total_record_count == 500
-                # Statistics now track partition count, not record count
-                assert parquet_output.statistics == [1]  # 1 partition from mock result
+                # Partitions track partition count
+                assert parquet_output.partitions == [1]  # 1 partition from mock result
 
             finally:
                 # Cleanup
@@ -838,7 +838,9 @@ class TestParquetOutputConsolidation:
     @pytest.mark.asyncio
     async def test_consolidation_error_handling(self, base_output_path: str):
         """Test error handling in consolidation with cleanup."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetOutput(
+            output_path=base_output_path, use_consolidation=True
+        )
 
         def create_test_dataframes():
             df = pd.DataFrame({"id": [1, 2, 3], "value": ["a", "b", "c"]})
@@ -862,7 +864,9 @@ class TestParquetOutputConsolidation:
     @pytest.mark.asyncio
     async def test_async_generator_support(self, base_output_path: str):
         """Test that consolidation works with async generators."""
-        parquet_output = ParquetOutput(output_path=base_output_path)
+        parquet_output = ParquetOutput(
+            output_path=base_output_path, use_consolidation=True
+        )
 
         async def create_async_dataframes():
             for i in range(2):
@@ -887,3 +891,209 @@ class TestParquetOutputConsolidation:
             # Should have called accumulate for each DataFrame
             assert mock_accumulate.call_count == 2
             mock_cleanup.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_multiple_write_batched_calls_with_consolidation(
+        self, base_output_path: str
+    ):
+        """Test multiple calls to write_batched_dataframe with consolidation enabled.
+
+        This test verifies that:
+        1. Multiple calls to write_batched_dataframe work correctly
+        2. Each call generates separate consolidated files
+        3. Chunk counts accumulate across calls
+        4. Low thresholds trigger multiple consolidations within a single call
+        """
+        with patch("daft.read_parquet") as mock_read, patch(
+            "daft.execution_config_ctx"
+        ) as mock_ctx, patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch(
+            "application_sdk.outputs.parquet.get_object_store_prefix"
+        ) as mock_prefix:
+            # Setup mocks
+            mock_upload.return_value = AsyncMock()
+            mock_prefix.return_value = "test/output/path"
+            mock_ctx.return_value.__enter__ = MagicMock()
+            mock_ctx.return_value.__exit__ = MagicMock()
+
+            # Mock daft DataFrame with different file names for each consolidation
+            mock_df = MagicMock()
+            mock_read.return_value = mock_df
+
+            # Track consolidation calls and return different file names
+            consolidation_counter = [0]  # Use list to modify from inner function
+
+            def mock_write_parquet(*args, **kwargs):
+                consolidation_counter[0] += 1
+                result = MagicMock()
+                result.to_pydict.return_value = {
+                    "path": [f"consolidated_{consolidation_counter[0]}.parquet"]
+                }
+                return result
+
+            mock_df.write_parquet.side_effect = mock_write_parquet
+
+            # Create ParquetOutput with very low thresholds to trigger multiple consolidations
+            parquet_output = ParquetOutput(
+                output_path=base_output_path,
+                chunk_size=100,  # Very small consolidation threshold
+                buffer_size=50,  # Very small buffer size
+                use_consolidation=True,
+            )
+
+            # First call: 3 DataFrames of 80 records each = 240 total
+            # Should trigger 2 consolidations (160 records, then remaining 80)
+            def create_first_batch():
+                for i in range(3):
+                    df = pd.DataFrame(
+                        {
+                            "id": range(i * 80, (i + 1) * 80),
+                            "value": [f"batch1_value_{j}" for j in range(80)],
+                            "call": [1] * 80,
+                        }
+                    )
+                    yield df
+
+            # Create dummy files for os.rename
+            for i in range(1, 5):  # Create enough dummy files
+                with open(f"consolidated_{i}.parquet", "w") as f:
+                    f.write("dummy")
+
+            try:
+                # First call to write_batched_dataframe
+                await parquet_output.write_batched_dataframe(create_first_batch())
+
+                # Verify first call results
+                first_call_total = parquet_output.total_record_count
+                first_call_chunks = parquet_output.chunk_count
+                assert first_call_total == 240
+                assert (
+                    first_call_chunks >= 1
+                )  # Should have at least 1 consolidated chunk
+
+                # Second call: 2 DataFrames of 120 records each = 240 total
+                # Should trigger 2 more consolidations
+                def create_second_batch():
+                    for i in range(2):
+                        df = pd.DataFrame(
+                            {
+                                "id": range(
+                                    i * 120 + 1000, (i + 1) * 120 + 1000
+                                ),  # Different IDs
+                                "value": [f"batch2_value_{j}" for j in range(120)],
+                                "call": [2] * 120,
+                            }
+                        )
+                        yield df
+
+                # Second call to write_batched_dataframe on the same instance
+                await parquet_output.write_batched_dataframe(create_second_batch())
+
+                # Verify accumulated results across both calls
+                total_records = parquet_output.total_record_count
+                total_chunks = parquet_output.chunk_count
+
+                assert total_records == 480  # 240 + 240
+                assert total_chunks > first_call_chunks  # Should have more chunks now
+
+                # Verify that consolidation was called multiple times
+                # With chunk_size=100, we should get multiple consolidations:
+                # Call 1: 240 records -> at least 2 consolidations (100+100+remaining)
+                # Call 2: 240 records -> at least 2 more consolidations
+                assert mock_df.write_parquet.call_count >= 4
+
+                # Verify partitions tracking (should track each consolidated file)
+                assert len(parquet_output.partitions) >= 4
+
+                # Verify cleanup happened (temp folders should be clean)
+                temp_base = os.path.join(
+                    parquet_output.output_path, "temp_accumulation"
+                )
+                assert not os.path.exists(temp_base) or len(os.listdir(temp_base)) == 0
+
+            finally:
+                # Cleanup dummy files
+                for i in range(1, 5):
+                    if os.path.exists(f"consolidated_{i}.parquet"):
+                        os.remove(f"consolidated_{i}.parquet")
+
+    @pytest.mark.asyncio
+    async def test_consolidation_with_very_small_buffer_multiple_chunks(
+        self, base_output_path: str
+    ):
+        """Test consolidation behavior with very small buffer size generating multiple chunk files.
+
+        This test specifically targets the scenario where buffer_size is much smaller than
+        consolidation_threshold, leading to multiple small files being consolidated.
+        """
+        with patch("daft.read_parquet") as mock_read, patch(
+            "daft.execution_config_ctx"
+        ) as mock_ctx, patch(
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
+        ) as mock_upload, patch(
+            "application_sdk.outputs.parquet.get_object_store_prefix"
+        ) as mock_prefix:
+            # Setup mocks
+            mock_upload.return_value = AsyncMock()
+            mock_prefix.return_value = "test/output/path"
+            mock_ctx.return_value.__enter__ = MagicMock()
+            mock_ctx.return_value.__exit__ = MagicMock()
+
+            mock_df = MagicMock()
+            mock_read.return_value = mock_df
+            mock_result = MagicMock()
+            mock_result.to_pydict.return_value = {"path": ["multi_chunk_test.parquet"]}
+            mock_df.write_parquet.return_value = mock_result
+
+            # Extreme settings: buffer_size=10, consolidation_threshold=200
+            # This should create many small chunk files before consolidation
+            parquet_output = ParquetOutput(
+                output_path=base_output_path,
+                chunk_size=200,  # consolidation_threshold
+                buffer_size=10,  # Very small buffer - each dataframe chunk becomes a file
+                use_consolidation=True,
+            )
+
+            # Create a large dataframe that will be split into many buffer_size chunks
+            def create_large_batch():
+                # Single large DataFrame with 250 records
+                # With buffer_size=10, this creates 25 small chunk files
+                # With consolidation_threshold=200, first 20 files (200 records) get consolidated
+                # Then remaining 5 files (50 records) get consolidated at the end
+                df = pd.DataFrame(
+                    {
+                        "id": range(250),
+                        "value": [f"large_value_{i}" for i in range(250)],
+                        "chunk_test": ["multi"] * 250,
+                    }
+                )
+                yield df
+
+            # Create dummy file for os.rename
+            with open("multi_chunk_test.parquet", "w") as f:
+                f.write("dummy")
+
+            try:
+                await parquet_output.write_batched_dataframe(create_large_batch())
+
+                # Verify results
+                assert parquet_output.total_record_count == 250
+
+                # Should have triggered consolidation at least once
+                # (when current_folder_records + chunk_size > consolidation_threshold)
+                mock_df.write_parquet.assert_called()
+
+                # With 250 records, buffer_size=10, consolidation_threshold=200:
+                # - First 200 records (20 chunks) -> 1 consolidation
+                # - Remaining 50 records (5 chunks) -> 1 final consolidation
+                # So we expect 2 consolidations total
+                assert mock_df.write_parquet.call_count == 2
+
+                # Verify partitions tracking
+                assert len(parquet_output.partitions) == 2
+
+            finally:
+                # Cleanup
+                if os.path.exists("multi_chunk_test.parquet"):
+                    os.remove("multi_chunk_test.parquet")
