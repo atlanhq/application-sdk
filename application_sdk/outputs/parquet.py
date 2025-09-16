@@ -425,7 +425,7 @@ class ParquetOutput(Output):
                 for i, file_path in enumerate(result_dict["path"]):
                     if file_path.endswith(".parquet"):
                         consolidated_file_path = self._get_consolidated_file_path(
-                            chunk_count=i, folder_index=self.temp_folder_index
+                            chunk_count=i, folder_index=self.chunk_count
                         )
                         os.rename(file_path, consolidated_file_path)
 
