@@ -837,11 +837,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             file_names=workflow_args.get("file_names"),
         )
         raw_input = raw_input.get_batched_daft_dataframe()
+
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
+            chunk_size=os.getenv("EXP_CHUNK_SIZE", 50000),
         )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(

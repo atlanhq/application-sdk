@@ -210,7 +210,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             sql_input = await sql_input.get_dataframe()
 
             raw_output = ParquetOutput(
-                output_prefix=workflow_args["output_prefix"],
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
