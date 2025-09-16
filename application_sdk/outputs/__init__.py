@@ -70,7 +70,7 @@ class Output(ABC):
     current_buffer_size_bytes: int
     partitions: List[int]
 
-    def estimate_dataframe_file_size(self, dataframe: "pd.DataFrame") -> int:
+    def estimate_dataframe_record_size(self, dataframe: "pd.DataFrame") -> int:
         """Estimate File size of a DataFrame by sampling a few records."""
         if len(dataframe) == 0:
             return 0
@@ -87,7 +87,7 @@ class Output(ABC):
             compression_factor = 0.01
         if sample_file is not None:
             avg_record_size = len(sample_file) / sample_size * compression_factor
-            return int(avg_record_size * len(dataframe))
+            return int(avg_record_size)
 
         return 0
 
@@ -204,7 +204,7 @@ class Output(ABC):
             if len(dataframe) == 0:
                 return
 
-            chunk_size_bytes = self.estimate_dataframe_file_size(dataframe)
+            chunk_size_bytes = self.estimate_dataframe_record_size(dataframe)
 
             for i in range(0, len(dataframe), self.buffer_size):
                 chunk = dataframe[i : i + self.buffer_size]

@@ -843,7 +843,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             output_suffix="transformed",
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
-            chunk_size=os.getenv("EXP_CHUNK_SIZE", 50000),
         )
         if state.transformer:
             workflow_args["connection_name"] = workflow_args.get("connection", {}).get(
