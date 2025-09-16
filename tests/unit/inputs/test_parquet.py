@@ -339,7 +339,11 @@ async def test_get_daft_dataframe(monkeypatch) -> None:
     result = await parquet_input.get_daft_dataframe()
 
     expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
-    assert result == f"daft_df:{expected_files}"
+    # Since we have multiple files, the mock returns a MockDaftDataFrame object
+    assert hasattr(
+        result, "path"
+    ), "Result should be a MockDaftDataFrame with path attribute"
+    assert result.path == expected_files
     assert call_log == [{"path": expected_files}]
 
 
@@ -373,7 +377,11 @@ async def test_get_daft_dataframe_with_file_names(monkeypatch) -> None:
     result = await parquet_input.get_daft_dataframe()
 
     expected_files = ["/tmp/dir/file1.parquet", "/tmp/dir/file2.parquet"]
-    assert result == f"daft_df:{expected_files}"
+    # Since we have multiple files, the mock returns a MockDaftDataFrame object
+    assert hasattr(
+        result, "path"
+    ), "Result should be a MockDaftDataFrame with path attribute"
+    assert result.path == expected_files
     assert call_log == [{"path": expected_files}]
 
 
@@ -398,7 +406,11 @@ async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
     result = await parquet_input.get_daft_dataframe()
 
     expected_files = ["/tmp/data/file1.parquet", "/tmp/data/file2.parquet"]
-    assert result == f"daft_df:{expected_files}"
+    # Since we have multiple files, the mock returns a MockDaftDataFrame object
+    assert hasattr(
+        result, "path"
+    ), "Result should be a MockDaftDataFrame with path attribute"
+    assert result.path == expected_files
     assert call_log == [{"path": expected_files}]
 
 

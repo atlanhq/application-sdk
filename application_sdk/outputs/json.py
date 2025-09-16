@@ -86,7 +86,7 @@ class JsonOutput(Output):
         typename: Optional[str] = None,
         chunk_start: Optional[int] = None,
         buffer_size: int = 5000,
-        chunk_size: Optional[int] = 100000,
+        chunk_size: Optional[int] = 50000,
         total_record_count: int = 0,
         chunk_count: int = 0,
         path_gen: Callable[[int | None, int], str] = path_gen,
