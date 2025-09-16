@@ -114,14 +114,17 @@ class ObjectStore:
 
     @classmethod
     async def get_content(
-        cls, key: str, store_name: str = DEPLOYMENT_OBJECT_STORE_NAME
-    ) -> bytes:
+        cls,
+        key: str,
+        store_name: str = DEPLOYMENT_OBJECT_STORE_NAME,
+        suppress_error: bool = False,
+    ) -> bytes | None:
         """Get raw file content from the object store.
 
         Args:
             key: The path of the file in the object store.
             store_name: Name of the Dapr object store binding to use.
-
+            suppress_error: Whether to suppress the error and return None if the file does not exist.
         Returns:
             The raw file content as bytes.
 
@@ -138,14 +141,18 @@ class ObjectStore:
                 store_name=store_name,
             )
             if not response_data:
+                if suppress_error:
+                    return None
                 raise Exception(f"No data received for file: {key}")
 
             logger.debug(f"Successfully retrieved file content: {key}")
             return response_data
 
         except Exception as e:
+            if suppress_error:
+                return None
             logger.error(f"Error getting file content for {key}: {str(e)}")
-            raise e
+            raise
 
     @classmethod
     async def exists(
@@ -463,8 +470,7 @@ class ObjectStore:
                     binding_metadata=metadata,
                 )
                 return response.data
-        except Exception as e:
-            logger.error(f"Error in Dapr binding operation '{operation}': {str(e)}")
+        except Exception:
             raise
 
     @classmethod

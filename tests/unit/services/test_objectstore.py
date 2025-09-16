@@ -191,6 +191,116 @@ class TestObjectStore:
         ):
             await ObjectStore.delete_prefix(prefix="prefix/")
 
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_success(self, mock_dapr_client: MagicMock) -> None:
+        """Test successful file content retrieval."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = b"test file content"
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        result = await ObjectStore.get_content(key="test/file.txt")
+
+        assert result == b"test file content"
+        mock_client.invoke_binding.assert_called_once_with(
+            binding_name="objectstore",
+            operation="get",
+            data=b'{"key": "test/file.txt"}',
+            binding_metadata={
+                "key": "test/file.txt",
+                "fileName": "test/file.txt",
+                "blobName": "test/file.txt",
+            },
+        )
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_file_not_found_with_suppress_error_false(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test get_content raises exception when file not found and suppress_error=False."""
+        mock_client = MagicMock()
+        mock_client.invoke_binding.side_effect = Exception("File not found")
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        with pytest.raises(Exception, match="File not found"):
+            await ObjectStore.get_content(
+                key="nonexistent/file.txt", suppress_error=False
+            )
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_file_not_found_with_suppress_error_true(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test get_content returns None when file not found and suppress_error=True."""
+        mock_client = MagicMock()
+        mock_client.invoke_binding.side_effect = Exception("File not found")
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        result = await ObjectStore.get_content(
+            key="nonexistent/file.txt", suppress_error=True
+        )
+
+        assert result is None
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_no_data_with_suppress_error_false(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test get_content raises exception when no data returned and suppress_error=False."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = None
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        with pytest.raises(Exception, match="No data received for file: test/file.txt"):
+            await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_no_data_with_suppress_error_true(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test get_content returns None when no data returned and suppress_error=True."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = None
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
+
+        assert result is None
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_empty_data_with_suppress_error_false(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test get_content raises exception when empty data returned and suppress_error=False."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = b""
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        with pytest.raises(Exception, match="No data received for file: test/file.txt"):
+            await ObjectStore.get_content(key="test/file.txt", suppress_error=False)
+
+    @patch("application_sdk.services.objectstore.DaprClient")
+    async def test_get_content_empty_data_with_suppress_error_true(
+        self, mock_dapr_client: MagicMock
+    ) -> None:
+        """Test get_content returns None when empty data returned and suppress_error=True."""
+        mock_client = MagicMock()
+        mock_response = MagicMock()
+        mock_response.data = b""
+        mock_client.invoke_binding.return_value = mock_response
+        mock_dapr_client.return_value.__enter__.return_value = mock_client
+
+        result = await ObjectStore.get_content(key="test/file.txt", suppress_error=True)
+
+        assert result is None
+
     # @patch("application_sdk.services.objectstore.ObjectStore.list_files", new_callable=AsyncMock)
     # @patch("application_sdk.services.objectstore.ObjectStore._download_file", new_callable=AsyncMock)
     # async def test_download_directory_success(
