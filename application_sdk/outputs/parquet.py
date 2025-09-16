@@ -61,11 +61,10 @@ class ParquetOutput(Output):
         total_record_count: int = 0,
         chunk_count: int = 0,
         chunk_start: Optional[int] = None,
-        chunk_part: int = 0,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
-        use_consolidation: bool = True,
+        use_consolidation: bool = False,
     ):
         """Initialize the Parquet output handler.
 
@@ -103,7 +102,7 @@ class ParquetOutput(Output):
             DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.9
         )  # 90% of DAPR limit as safety buffer
         self.chunk_start = chunk_start
-        self.chunk_part = chunk_part
+        self.chunk_part = 0
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.statistics = []
@@ -430,14 +429,14 @@ class ParquetOutput(Output):
                         )
                         os.rename(file_path, consolidated_file_path)
 
+                        # Upload consolidated file to object store
+                        await ObjectStore.upload_file(
+                            source=consolidated_file_path,
+                            destination=get_object_store_prefix(consolidated_file_path),
+                        )
+
                 # Clean up temp consolidated dir
                 shutil.rmtree(temp_consolidated_dir, ignore_errors=True)
-
-            # Upload consolidated file to object store
-            await ObjectStore.upload_file(
-                source=consolidated_file_path,
-                destination=get_object_store_prefix(consolidated_file_path),
-            )
 
             # Update statistics
             self.chunk_count += 1

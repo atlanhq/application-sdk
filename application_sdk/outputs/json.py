@@ -92,7 +92,6 @@ class JsonOutput(Output):
         path_gen: Callable[[int | None, int], str] = path_gen,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
-        chunk_part: int = 0,
         retain_local_copy: bool = False,
         **kwargs: Dict[str, Any],
     ):
@@ -136,7 +135,7 @@ class JsonOutput(Output):
         self.start_marker = start_marker
         self.end_marker = end_marker
         self.statistics = []
-        self.chunk_part = chunk_part
+        self.chunk_part = 0
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
 
