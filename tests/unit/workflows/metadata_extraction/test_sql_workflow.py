@@ -76,8 +76,10 @@ def test_get_transform_batches():
     ]
 
     for case in test_cases:
+        # Create partitions list - assume 1 partition per chunk for simplicity
+        partitions = [1] * int(case["chunk_count"])
         batches, chunk_starts = workflow.get_transform_batches(
-            int(case["chunk_count"]), str(case["typename"])
+            int(case["chunk_count"]), str(case["typename"]), partitions
         )
 
         # Verify number of batches

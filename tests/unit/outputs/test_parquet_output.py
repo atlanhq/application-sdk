@@ -541,7 +541,9 @@ class TestParquetOutputConsolidation:
         )
 
         # Test consolidated file path generation
-        consolidated_path = parquet_output._get_consolidated_file_path(0)
+        consolidated_path = parquet_output._get_consolidated_file_path(
+            folder_index=0, chunk_count=0
+        )
         expected_path = os.path.join(
             base_output_path, "test_suffix", "test_type", "chunk-0-part0.parquet"
         )
@@ -661,7 +663,8 @@ class TestParquetOutputConsolidation:
                 # Check statistics were updated
                 assert parquet_output.chunk_count == 1
                 assert parquet_output.total_record_count == 500
-                assert parquet_output.statistics == [500]
+                # Statistics now track partition count, not record count
+                assert parquet_output.statistics == [1]  # 1 partition from mock result
 
             finally:
                 # Cleanup

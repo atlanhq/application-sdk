@@ -344,7 +344,13 @@ class TestBaseSQLMetadataExtractionActivities:
         # Patch get_dataframe to return a list with one mock dataframe
         mock_get_dataframe.return_value = [mock_dataframe]
         mock_download_files.return_value = ["/test/path/raw/file1.parquet"]
-        mock_read_parquet.return_value = mock_dataframe
+
+        # Create a proper mock for daft DataFrame with chunked behavior
+        mock_daft_df = Mock()
+        mock_daft_df.count_rows.return_value = 20  # Return integer for range()
+        mock_daft_df.offset.return_value = mock_daft_df  # Return self for chaining
+        mock_daft_df.limit.return_value = mock_daft_df  # Return self for chaining
+        mock_read_parquet.return_value = mock_daft_df
         mock_transform_metadata.return_value = {"transformed": "data"}
         mock_write_daft_dataframe.return_value = None
         mock_get_statistics_parquet.return_value = ActivityStatistics(

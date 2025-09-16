@@ -270,9 +270,46 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
     dummy_daft = types.ModuleType("daft")
     call_log: list[dict] = []
 
+    class MockDaftDataFrame:
+        def __init__(self, path):
+            self.path = path
+            # Simulate 100 rows total for chunking tests
+            self._total_rows = 100
+            self._offset = 0
+            self._limit = None
+
+        def count_rows(self):
+            return self._total_rows
+
+        def offset(self, offset_val):
+            new_df = MockDaftDataFrame(self.path)
+            new_df._total_rows = self._total_rows
+            new_df._offset = offset_val
+            new_df._limit = self._limit
+            return new_df
+
+        def limit(self, limit_val):
+            new_df = MockDaftDataFrame(self.path)
+            new_df._total_rows = self._total_rows
+            new_df._offset = self._offset
+            new_df._limit = limit_val
+            return new_df
+
+        def __str__(self):
+            if isinstance(self.path, list):
+                # For multiple files, return representation for first file
+                return f"daft_df:{self.path[0] if self.path else 'unknown'}"
+            return f"daft_df:{self.path}"
+
     def read_parquet(path, _chunk_size=None):  # noqa: D401, ANN001
         call_log.append({"path": path})
-        return f"daft_df:{path}"
+        if isinstance(path, list) and len(path) > 1:
+            # For get_batched_daft_dataframe tests that need MockDaftDataFrame
+            return MockDaftDataFrame(path)
+        elif isinstance(path, list):
+            # For get_daft_dataframe tests that expect simple string return
+            return f"daft_df:{path}"
+        return MockDaftDataFrame(path)
 
     dummy_daft.read_parquet = read_parquet  # type: ignore[attr-defined]
 
@@ -367,7 +404,7 @@ async def test_get_daft_dataframe_with_input_prefix(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe yields a frame per file when file_names provided."""
+    """Ensure get_batched_daft_dataframe yields chunks from combined files when file_names provided."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
@@ -392,24 +429,22 @@ async def test_get_batched_daft_dataframe_with_file_names(monkeypatch) -> None:
         "one.parquet",
         "two.parquet",
     ]
-    parquet_input = ParquetInput(path=path, file_names=file_names)
+    parquet_input = ParquetInput(path=path, file_names=file_names, buffer_size=50)
 
     frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-    expected_frames = ["daft_df:/data/one.parquet", "daft_df:/data/two.parquet"]
+    # With 100 total rows and buffer_size=50, expect 2 chunks
+    assert len(frames) == 2
 
-    assert frames == expected_frames
-
-    # Ensure a call was logged per file
+    # Ensure daft.read_parquet was called with the file list
     assert call_log == [
-        {"path": "/data/one.parquet"},
-        {"path": "/data/two.parquet"},
+        {"path": ["/data/one.parquet", "/data/two.parquet"]},
     ]
 
 
 @pytest.mark.asyncio
 async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe works with wildcard pattern when no file_names provided."""
+    """Ensure get_batched_daft_dataframe works with chunked processing when no file_names provided."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
@@ -423,24 +458,22 @@ async def test_get_batched_daft_dataframe_without_file_names(monkeypatch) -> Non
     monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
 
     path = "/data"
-    parquet_input = ParquetInput(path=path)
+    parquet_input = ParquetInput(path=path, buffer_size=50)
 
     frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-    expected_frames = ["daft_df:/data/file1.parquet", "daft_df:/data/file2.parquet"]
+    # With 100 total rows and buffer_size=50, expect 2 chunks
+    assert len(frames) == 2
 
-    assert frames == expected_frames
-
-    # Should have one call per file
+    # Should have one call with the file list
     assert call_log == [
-        {"path": "/data/file1.parquet"},
-        {"path": "/data/file2.parquet"},
+        {"path": ["/data/file1.parquet", "/data/file2.parquet"]},
     ]
 
 
 @pytest.mark.asyncio
 async def test_get_batched_daft_dataframe_no_input_prefix(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe works without input_prefix (no download)."""
+    """Ensure get_batched_daft_dataframe works with chunked processing without input_prefix."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
@@ -455,15 +488,13 @@ async def test_get_batched_daft_dataframe_no_input_prefix(monkeypatch) -> None:
 
     path = "/data"
 
-    parquet_input = ParquetInput(path=path)
+    parquet_input = ParquetInput(path=path, buffer_size=50)
 
     frames = [frame async for frame in parquet_input.get_batched_daft_dataframe()]
 
-    expected_frames = ["daft_df:/data/file1.parquet", "daft_df:/data/file2.parquet"]
-
-    assert frames == expected_frames
-    # Should have one call per file
+    # With 100 total rows and buffer_size=50, expect 2 chunks
+    assert len(frames) == 2
+    # Should have one call with the file list
     assert call_log == [
-        {"path": "/data/file1.parquet"},
-        {"path": "/data/file2.parquet"},
+        {"path": ["/data/file1.parquet", "/data/file2.parquet"]},
     ]
