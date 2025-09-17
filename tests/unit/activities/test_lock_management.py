@@ -3,13 +3,13 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from application_sdk.activities.lock_management import (
     acquire_distributed_lock,
     release_distributed_lock,
 )
 from application_sdk.clients.redis import LockReleaseResult
-from application_sdk.common.error_codes import ActivityError
 
 
 class TestAcquireDistributedLock:
@@ -27,6 +27,7 @@ class TestAcquireDistributedLock:
         result = await acquire_distributed_lock("test_resource", 5, 100, "owner1")
 
         # Verify
+        assert result["status"] is True
         assert "slot_id" in result
         assert "resource_id" in result
         assert "owner_id" in result
@@ -36,7 +37,7 @@ class TestAcquireDistributedLock:
     @patch("application_sdk.activities.lock_management.RedisClientAsync")
     async def test_acquire_lock_invalid_max_locks(self, mock_redis_client_class):
         """Test lock acquisition with invalid max_locks."""
-        with pytest.raises(ActivityError) as exc_info:
+        with pytest.raises(ApplicationError) as exc_info:
             await acquire_distributed_lock("test_resource", 0, 100, "owner1")
 
         assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)
@@ -51,7 +52,7 @@ class TestAcquireDistributedLock:
         mock_redis_client_class.return_value.__aenter__.return_value = mock_client
 
         # Execute and verify
-        with pytest.raises(ActivityError) as exc_info:
+        with pytest.raises(ApplicationError) as exc_info:
             await acquire_distributed_lock("test_resource", 5, 100, "owner1")
 
         assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)

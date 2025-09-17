@@ -22,6 +22,7 @@ from application_sdk.constants import (
     APPLICATION_NAME,
     IS_LOCKING_DISABLED,
     LOCK_METADATA_KEY,
+    LOCK_RETRY_INTERVAL,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -106,13 +107,17 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
         lock_result = None
 
         try:
-            # Step 1: Acquire lock via dedicated activity (can take >2s safely)
-            start_to_close_timeout = workflow.info().execution_timeout
-            lock_result = await workflow.execute_activity(
+            # Step 1: Acquire lock via dedicated activity with Temporal retry policy
+            schedule_to_close_timeout = workflow.info().execution_timeout
+            lock_result = await workflow.execute_local_activity(
                 "acquire_distributed_lock",
                 args=[lock_name, max_locks, ttl_seconds, owner_id],
-                start_to_close_timeout=start_to_close_timeout,
-                retry_policy=RetryPolicy(maximum_attempts=1),
+                start_to_close_timeout=timedelta(seconds=30),
+                retry_policy=RetryPolicy(
+                    initial_interval=timedelta(seconds=LOCK_RETRY_INTERVAL),
+                    backoff_coefficient=1.0,
+                ),
+                schedule_to_close_timeout=schedule_to_close_timeout,
             )
 
             logger.debug(f"Lock acquired: {lock_result}, executing {input.activity}")

@@ -5,15 +5,15 @@ allowing the workflow to orchestrate locking without hitting Temporal's
 deadlock timeout.
 """
 
-import asyncio
 import random
 from typing import Any, Dict
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
 from application_sdk.clients.redis import RedisClientAsync
 from application_sdk.common.error_codes import ActivityError
-from application_sdk.constants import APPLICATION_NAME, LOCK_RETRY_INTERVAL
+from application_sdk.constants import APPLICATION_NAME
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
@@ -45,40 +45,40 @@ async def acquire_distributed_lock(
     """
     # Input validation
     if max_locks <= 0:
-        raise ActivityError(
-            f"{ActivityError.LOCK_ACQUISITION_ERROR}: max_locks must be greater than 0, got {max_locks}"
+        raise ApplicationError(
+            f"{ActivityError.LOCK_ACQUISITION_ERROR}: max_locks must be greater than 0, got {max_locks}",
+            non_retryable=True,
         )
 
     async with RedisClientAsync() as redis_client:
-        while True:
-            slot = random.randint(0, max_locks - 1)
-            resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
+        slot = random.randint(0, max_locks - 1)
+        resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
 
-            try:
-                # Acquire lock - connection will stay open until context exits
-                acquired = await redis_client._acquire_lock(
-                    resource_id, owner_id, ttl_seconds
-                )
-                if acquired:
-                    logger.info(
-                        f"Lock acquired for slot {slot}, resource: {resource_id}"
-                    )
-                    return {
-                        "slot_id": slot,
-                        "resource_id": resource_id,
-                        "owner_id": owner_id,
-                    }
-                # If not acquired, continue retrying (lock held by another owner)
-
-            except Exception as e:
-                # Redis connection or operation failed - propagate as activity error
-                logger.error(f"Redis error during lock acquisition: {e}")
+        try:
+            # Acquire lock - connection will stay open until context exits
+            acquired = await redis_client._acquire_lock(
+                resource_id, owner_id, ttl_seconds
+            )
+            if acquired:
+                logger.info(f"Lock acquired for slot {slot}, resource: {resource_id}")
+                return {
+                    "status": True,
+                    "slot_id": slot,
+                    "resource_id": resource_id,
+                    "owner_id": owner_id,
+                }
+            else:
                 raise ActivityError(
-                    f"{ActivityError.LOCK_ACQUISITION_ERROR}: Redis error during lock acquisition for {resource_id}"
+                    f"{ActivityError.LOCK_ACQUISITION_ERROR}: Lock not acquired for {resource_id}, will retry after some time"
                 )
 
-            # Wait before retrying
-            await asyncio.sleep(LOCK_RETRY_INTERVAL)
+        except Exception as e:
+            # Redis connection or operation failed - propagate as activity error
+            logger.error(f"Redis error during lock acquisition: {e}")
+            raise ApplicationError(
+                f"{ActivityError.LOCK_ACQUISITION_ERROR}: Redis error during lock acquisition for {resource_id}",
+                non_retryable=True,
+            )
 
 
 @activity.defn
