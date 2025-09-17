@@ -219,7 +219,7 @@ class Output(ABC):
                         self.chunk_part += 1
 
                 self.current_buffer_size += len(chunk)
-                self.current_buffer_size_bytes += chunk_size_bytes
+                self.current_buffer_size_bytes += chunk_size_bytes * len(chunk)
                 await self._flush_buffer(chunk, self.chunk_part)
 
                 del chunk
