@@ -49,12 +49,11 @@ async def acquire_distributed_lock(
             f"{ActivityError.LOCK_ACQUISITION_ERROR}: max_locks must be greater than 0, got {max_locks}",
             non_retryable=True,
         )
+    slot = random.randint(0, max_locks - 1)
+    resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
 
-    async with RedisClientAsync() as redis_client:
-        slot = random.randint(0, max_locks - 1)
-        resource_id = f"{APPLICATION_NAME}:{lock_name}:{slot}"
-
-        try:
+    try:
+        async with RedisClientAsync() as redis_client:
             # Acquire lock - connection will stay open until context exits
             acquired = await redis_client._acquire_lock(
                 resource_id, owner_id, ttl_seconds
@@ -67,18 +66,20 @@ async def acquire_distributed_lock(
                     "resource_id": resource_id,
                     "owner_id": owner_id,
                 }
-            else:
-                raise ActivityError(
-                    f"{ActivityError.LOCK_ACQUISITION_ERROR}: Lock not acquired for {resource_id}, will retry after some time"
-                )
 
-        except Exception as e:
-            # Redis connection or operation failed - propagate as activity error
-            logger.error(f"Redis error during lock acquisition: {e}")
-            raise ApplicationError(
-                f"{ActivityError.LOCK_ACQUISITION_ERROR}: Redis error during lock acquisition for {resource_id}",
-                non_retryable=True,
+            raise ActivityError(
+                f"{ActivityError.LOCK_ACQUISITION_ERROR}: Lock not acquired for {resource_id}, will retry after some time"
             )
+    except Exception as e:
+        # Redis connection or operation failed - propagate as activity error
+        if isinstance(e, (ActivityError)):
+            raise e
+        logger.error(f"Redis error during lock acquisition: {e}")
+        raise ApplicationError(
+            f"Redis error during lock acquisition for {resource_id}, error: {e}",
+            non_retryable=True,
+            type=type(e).__name__,
+        )
 
 
 @activity.defn
@@ -94,8 +95,8 @@ async def release_distributed_lock(
     Returns:
         True if lock was released successfully, False otherwise
     """
-    async with RedisClientAsync() as redis_client:
-        try:
+    try:
+        async with RedisClientAsync() as redis_client:
             released, result = await redis_client._release_lock(resource_id, owner_id)
             if released:
                 logger.info(
@@ -103,8 +104,8 @@ async def release_distributed_lock(
                 )
             return released
 
-        except Exception as e:
-            logger.error(f"Redis error during lock release for {resource_id}: {e}")
-            # Don't raise exception for lock release failures - log and return False
-            # Lock release is best-effort and shouldn't fail the workflow
-            return False
+    except Exception as e:
+        logger.error(f"Redis error during lock release for {resource_id}: {e}")
+        # Don't raise exception for lock release failures - log and return False
+        # Lock release is best-effort and shouldn't fail the workflow
+        return False

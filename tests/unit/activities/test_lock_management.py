@@ -10,6 +10,7 @@ from application_sdk.activities.lock_management import (
     release_distributed_lock,
 )
 from application_sdk.clients.redis import LockReleaseResult
+from application_sdk.common.error_codes import ActivityError
 
 
 class TestAcquireDistributedLock:
@@ -55,8 +56,23 @@ class TestAcquireDistributedLock:
         with pytest.raises(ApplicationError) as exc_info:
             await acquire_distributed_lock("test_resource", 5, 100, "owner1")
 
-        assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)
         assert "Redis error during lock acquisition" in str(exc_info.value)
+        assert "Redis connection failed" in str(exc_info.value)
+
+    @patch("application_sdk.activities.lock_management.RedisClientAsync")
+    async def test_acquire_lock_not_available(self, mock_redis_client_class):
+        """Test lock acquisition when lock is not available."""
+        # Setup mock to return False (lock not acquired)
+        mock_client = AsyncMock()
+        mock_client._acquire_lock.return_value = False
+        mock_redis_client_class.return_value.__aenter__.return_value = mock_client
+
+        # Execute and verify
+        with pytest.raises(ActivityError) as exc_info:
+            await acquire_distributed_lock("test_resource", 5, 100, "owner1")
+
+        assert "ATLAN-ACTIVITY-503-01" in str(exc_info.value)
+        assert "Lock not acquired" in str(exc_info.value)
 
 
 class TestReleaseDistributedLock:
