@@ -114,7 +114,7 @@ class RedisLockOutboundInterceptor(WorkflowOutboundInterceptor):
                 args=[lock_name, max_locks, ttl_seconds, owner_id],
                 start_to_close_timeout=timedelta(seconds=30),
                 retry_policy=RetryPolicy(
-                    initial_interval=timedelta(seconds=LOCK_RETRY_INTERVAL),
+                    initial_interval=timedelta(seconds=int(LOCK_RETRY_INTERVAL)),
                     backoff_coefficient=1.0,
                 ),
                 schedule_to_close_timeout=schedule_to_close_timeout,
