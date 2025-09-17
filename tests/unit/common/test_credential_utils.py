@@ -21,11 +21,11 @@ class TestCredentialUtils:
 
     @given(
         secret_data=st.dictionaries(
-            keys=st.text(min_size=1), values=st.text(), min_size=1, max_size=10
+            keys=st.text(min_size=1), values=st.text(), min_size=2, max_size=10
         )
     )
     def test_process_secret_data_dict(self, secret_data: Dict[str, str]):
-        """Test processing secret data when it's already a dictionary."""
+        """Test processing secret data when it's already a dictionary with multiple keys."""
         result = SecretStore._process_secret_data(secret_data)
         assert result == secret_data
 
@@ -36,6 +36,23 @@ class TestCredentialUtils:
 
         result = SecretStore._process_secret_data(secret_data)
         assert result == nested_data
+
+    def test_process_secret_data_single_key_json_parsing(self):
+        """Test that single-key dictionaries with JSON string values are parsed."""
+        # Test case that was failing: single key with empty JSON object
+        secret_data = {"0": "{}"}
+        result = SecretStore._process_secret_data(secret_data)
+        assert result == {}
+
+        # Test case: single key with JSON object
+        secret_data = {"key": '{"username": "test", "password": "secret"}'}
+        result = SecretStore._process_secret_data(secret_data)
+        assert result == {"username": "test", "password": "secret"}
+
+        # Test case: single key with non-JSON string (should remain unchanged)
+        secret_data = {"key": "not json"}
+        result = SecretStore._process_secret_data(secret_data)
+        assert result == secret_data
 
     def test_process_secret_data_invalid_json(self):
         """Test processing secret data with invalid JSON."""

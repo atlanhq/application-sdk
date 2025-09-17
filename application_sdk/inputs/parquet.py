@@ -22,6 +22,7 @@ class ParquetInput(Input):
         self,
         path: str,
         chunk_size: int = 100000,
+        buffer_size: int = 5000,
         file_names: Optional[List[str]] = None,
     ):
         """Initialize the Parquet input class.
@@ -32,6 +33,7 @@ class ParquetInput(Input):
                 local path or object store path
                 Wildcards are not supported.
             chunk_size (int): Number of rows per batch. Defaults to 100000.
+            buffer_size (int): Number of rows per batch. Defaults to 5000.
             file_names (Optional[List[str]]): List of file names to read. Defaults to None.
 
         Raises:
@@ -47,6 +49,7 @@ class ParquetInput(Input):
 
         self.path = path
         self.chunk_size = chunk_size
+        self.buffer_size = buffer_size
         self.file_names = file_names
 
     async def get_dataframe(self) -> "pd.DataFrame":
@@ -249,9 +252,18 @@ class ParquetInput(Input):
             parquet_files = await self.download_files()
             logger.info(f"Reading {len(parquet_files)} parquet files as daft batches")
 
-            # Yield each discovered file as separate batch
-            for parquet_file in parquet_files:
-                yield daft.read_parquet(parquet_file)
+            # Create a lazy dataframe without loading data into memory
+            lazy_df = daft.read_parquet(parquet_files)
+
+            # Get total count efficiently
+            total_rows = lazy_df.count_rows()
+
+            # Yield chunks without loading everything into memory
+            for offset in range(0, total_rows, self.buffer_size):
+                chunk = lazy_df.offset(offset).limit(self.buffer_size)
+                yield chunk
+
+            del lazy_df
 
         except Exception as error:
             logger.error(

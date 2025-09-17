@@ -78,7 +78,10 @@ class TestInputDownloadFiles:
 
         with patch("os.path.isfile", return_value=False), patch(
             "os.path.isdir", return_value=False
-        ), patch("glob.glob", return_value=[]):
+        ), patch("glob.glob", return_value=[]), patch(
+            "application_sdk.services.objectstore.ObjectStore.download_prefix",
+            side_effect=Exception("Object store download failed"),
+        ):
             with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
                 await input_instance.download_files()
 

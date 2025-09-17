@@ -114,7 +114,6 @@ class CleanupWorkflowInboundInterceptor(WorkflowInboundInterceptor):
                     retry_policy=RetryPolicy(
                         maximum_attempts=3,
                     ),
-                    summary="This activity is used to cleanup the local artifacts and the activity state after the workflow is completed.",
                 )
 
                 logger.info("Cleanup completed successfully")
