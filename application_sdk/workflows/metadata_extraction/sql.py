@@ -10,6 +10,7 @@ from typing import Any, Callable, Coroutine, Dict, List, Sequence, Type
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+from typing_extensions import Tuple
 
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.activities.metadata_extraction.sql import (
@@ -152,15 +153,15 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
 
     def get_transform_batches(
         self, chunk_count: int, typename: str, partitions: List[int]
-    ):
+    ) -> Tuple[List[List[str]], List[int]]:  # noqa: F821
         """Get batches for parallel transformation processing.
 
         Args:
             chunk_count (int): Total number of chunks to process.
             typename (str): Type name for the chunks.
-
+            partitions (List[int]): List of partitions for each chunk.
         Returns:
-            Tuple[List[List[str]], List[int]]: A tuple containing:
+            Tuple[List[List[str]], List[int]]: A list of file paths.
                 - List of batches, where each batch is a list of file paths
                 - List of starting chunk numbers for each batch
         """
@@ -174,7 +175,7 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
             # Each batch contains exactly one chunk
             batches.append(
                 [
-                    f"{typename}/chunk-{i}-part{file+1}.parquet"
+                    f"{typename}/chunk-{i}-part{file}.parquet"
                     for file in range(partition)
                 ]
             )

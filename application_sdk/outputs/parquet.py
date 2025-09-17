@@ -1,10 +1,13 @@
+import inspect
 import os
+import shutil
 from enum import Enum
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, AsyncGenerator, Generator, List, Optional, Union, cast
 
 from temporalio import activity
 
 from application_sdk.activities.common.utils import get_object_store_prefix
+from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
@@ -35,57 +38,57 @@ class ParquetOutput(Output):
 
     Attributes:
         output_path (str): Base path where Parquet files will be written.
-        output_prefix (str): Prefix for files when uploading to object store.
         output_suffix (str): Suffix for output files.
         typename (Optional[str]): Type name of the entity e.g database, schema, table.
         chunk_size (int): Maximum number of records per chunk.
         total_record_count (int): Total number of records processed.
         chunk_count (int): Number of chunks created.
         chunk_start (Optional[int]): Starting index for chunk numbering.
-        path_gen (Callable): Function to generate file paths.
         start_marker (Optional[str]): Start marker for query extraction.
         end_marker (Optional[str]): End marker for query extraction.
+        retain_local_copy (bool): Whether to retain the local copy of the files.
+        use_consolidation (bool): Whether to use consolidation.
     """
+
+    _EXTENSION = ".parquet"
 
     def __init__(
         self,
         output_path: str = "",
         output_suffix: str = "",
-        output_prefix: str = "",
         typename: Optional[str] = None,
         chunk_size: Optional[int] = 100000,
-        buffer_size: Optional[int] = 100000,
+        buffer_size: int = 5000,
         total_record_count: int = 0,
         chunk_count: int = 0,
         chunk_start: Optional[int] = None,
         start_marker: Optional[str] = None,
         end_marker: Optional[str] = None,
         retain_local_copy: bool = False,
+        use_consolidation: bool = False,
     ):
         """Initialize the Parquet output handler.
 
         Args:
             output_path (str): Base path where Parquet files will be written.
             output_suffix (str): Suffix for output files.
-            output_prefix (str): Prefix for files when uploading to object store.
             typename (Optional[str], optional): Type name of the entity e.g database, schema, table.
             chunk_size (int, optional): Maximum records per chunk. Defaults to 100000.
             total_record_count (int, optional): Initial total record count. Defaults to 0.
             chunk_count (int, optional): Initial chunk count. Defaults to 0.
             chunk_start (Optional[int], optional): Starting index for chunk numbering.
                 Defaults to None.
-            path_gen (Callable, optional): Function to generate file paths.
-                Defaults to path_gen function.
             start_marker (Optional[str], optional): Start marker for query extraction.
                 Defaults to None.
             end_marker (Optional[str], optional): End marker for query extraction.
                 Defaults to None.
             retain_local_copy (bool, optional): Whether to retain the local copy of the files.
                 Defaults to False.
+            use_consolidation (bool, optional): Whether to use consolidation.
+                Defaults to False.
         """
         self.output_path = output_path
         self.output_suffix = output_suffix
-        self.output_prefix = output_prefix
         self.typename = typename
         self.chunk_size = chunk_size
         self.buffer_size = buffer_size
@@ -98,11 +101,27 @@ class ParquetOutput(Output):
             DAPR_MAX_GRPC_MESSAGE_LENGTH * 0.9
         )  # 90% of DAPR limit as safety buffer
         self.chunk_start = chunk_start
+        self.chunk_part = 0
         self.start_marker = start_marker
         self.end_marker = end_marker
-        self.statistics = []
+        self.partitions = []
         self.metrics = get_metrics()
         self.retain_local_copy = retain_local_copy
+
+        # Consolidation-specific attributes
+        # Use consolidation to efficiently write parquet files in buffered manner
+        # since there's no cleaner way to write parquet files incrementally
+        self.use_consolidation = use_consolidation
+        self.consolidation_threshold = (
+            chunk_size or 100000
+        )  # Use chunk_size as threshold
+        self.current_folder_records = 0  # Track records in current temp folder
+        self.temp_folder_index = 0  # Current temp folder index
+        self.temp_folders_created: List[int] = []  # Track temp folders for cleanup
+        self.current_temp_folder_path: Optional[str] = None  # Current temp folder path
+
+        if self.chunk_start:
+            self.chunk_count = self.chunk_start + self.chunk_count
 
         # Create output directory
         self.output_path = os.path.join(self.output_path, self.output_suffix)
@@ -110,116 +129,56 @@ class ParquetOutput(Output):
             self.output_path = os.path.join(self.output_path, self.typename)
         os.makedirs(self.output_path, exist_ok=True)
 
-    def path_gen(
+    async def write_batched_dataframe(
         self,
-        chunk_start: Optional[int] = None,
-        chunk_count: int = 0,
-        start_marker: Optional[str] = None,
-        end_marker: Optional[str] = None,
-    ) -> str:
-        """Generate a file path for a chunk.
+        batched_dataframe: Union[
+            AsyncGenerator["pd.DataFrame", None], Generator["pd.DataFrame", None, None]
+        ],
+    ):
+        """Write a batched pandas DataFrame to Parquet files with consolidation support.
+
+        This method implements a consolidation strategy to efficiently write parquet files
+        in a buffered manner, since there's no cleaner way to write parquet files incrementally.
+
+        The process:
+        1. Accumulate DataFrames into temp folders (buffer_size chunks each)
+        2. When consolidation_threshold is reached, use Daft to merge into optimized files
+        3. Clean up temporary files after consolidation
 
         Args:
-            chunk_start (Optional[int]): Starting index of the chunk, or None for single chunk.
-            chunk_count (int): Total number of chunks.
-            start_marker (Optional[str]): Start marker for query extraction.
-            end_marker (Optional[str]): End marker for query extraction.
-
-        Returns:
-            str: Generated file path for the chunk.
+            batched_dataframe: AsyncGenerator or Generator of pandas DataFrames to write.
         """
-        # For Query Extraction - use start and end markers without chunk count
-        if start_marker and end_marker:
-            return f"{start_marker}_{end_marker}.parquet"
+        if not self.use_consolidation:
+            # Fallback to base class implementation
+            await super().write_batched_dataframe(batched_dataframe)
+            return
 
-        # For regular chunking - include chunk count
-        if chunk_start is None:
-            return f"{str(chunk_count)}.parquet"
-        else:
-            return f"chunk-{str(chunk_start)}-part{str(chunk_count)}.parquet"
-
-    async def write_dataframe(self, dataframe: "pd.DataFrame"):
-        """Write a pandas DataFrame to Parquet files and upload to object store.
-
-        Args:
-            dataframe (pd.DataFrame): The DataFrame to write.
-        """
         try:
-            chunk_part = 0
-            if len(dataframe) == 0:
-                return
+            # Phase 1: Accumulate DataFrames into temp folders
+            if inspect.isasyncgen(batched_dataframe):
+                async for dataframe in batched_dataframe:
+                    if not is_empty_dataframe(dataframe):
+                        await self._accumulate_dataframe(dataframe)
+            else:
+                sync_generator = cast(
+                    Generator["pd.DataFrame", None, None], batched_dataframe
+                )
+                for dataframe in sync_generator:
+                    if not is_empty_dataframe(dataframe):
+                        await self._accumulate_dataframe(dataframe)
 
-            # Split the DataFrame into chunks
-            partition = (
-                self.chunk_size
-                if self.chunk_start is None
-                else min(self.chunk_size, self.buffer_size)
-            )
-            chunks = [
-                dataframe[i : i + partition]  # type: ignore
-                for i in range(0, len(dataframe), partition)
-            ]
+            # Phase 2: Consolidate any remaining temp folder
+            if self.current_folder_records > 0:
+                await self._consolidate_current_folder()
 
-            for chunk in chunks:
-                # Estimate size of this chunk
-                chunk_size_bytes = self.estimate_dataframe_file_size(chunk, "parquet")
+            # Phase 3: Cleanup temp folders
+            await self._cleanup_temp_folders()
 
-                # Check if adding this chunk would exceed size limit
-                if (
-                    self.current_buffer_size_bytes + chunk_size_bytes
-                    > self.max_file_size_bytes
-                    and self.current_buffer_size > 0
-                ):
-                    # Flush current buffer before adding this chunk
-                    chunk_part += 1
-                    await self._flush_buffer(chunk_part)
-
-                self.buffer.append(chunk)
-                self.current_buffer_size += len(chunk)
-                self.current_buffer_size_bytes += chunk_size_bytes
-
-                if self.current_buffer_size >= partition:  # type: ignore
-                    chunk_part += 1
-                    await self._flush_buffer(chunk_part)
-
-            if self.buffer and self.current_buffer_size > 0:
-                chunk_part += 1
-                await self._flush_buffer(chunk_part)
-
-            # Record metrics for successful write
-            self.metrics.record_metric(
-                name="parquet_write_records",
-                value=len(dataframe),
-                metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
-                description="Number of records written to Parquet files from pandas DataFrame",
-            )
-
-            # Record chunk metrics
-            self.metrics.record_metric(
-                name="parquet_chunks_written",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "mode": WriteMode.APPEND.value},
-                description="Number of chunks written to Parquet files",
-            )
-
-            self.chunk_count += 1
-            self.statistics.append(chunk_part)
         except Exception as e:
-            # Record metrics for failed write
-            self.metrics.record_metric(
-                name="parquet_write_errors",
-                value=1,
-                metric_type=MetricType.COUNTER,
-                labels={
-                    "type": "pandas",
-                    "mode": WriteMode.APPEND.value,
-                    "error": str(e),
-                },
-                description="Number of errors while writing to Parquet files",
+            logger.error(
+                f"Error in batched dataframe writing with consolidation: {str(e)}"
             )
-            logger.error(f"Error writing pandas dataframe to parquet: {str(e)}")
+            await self._cleanup_temp_folders()  # Cleanup on error
             raise
 
     async def write_daft_dataframe(
@@ -320,7 +279,13 @@ class ParquetOutput(Output):
                 name="parquet_write_errors",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "daft", "mode": write_mode, "error": str(e)},
+                labels={
+                    "type": "daft",
+                    "mode": write_mode.value
+                    if isinstance(write_mode, WriteMode)
+                    else write_mode,
+                    "error": str(e),
+                },
                 description="Number of errors while writing to Parquet files",
             )
             logger.error(f"Error writing daft dataframe to parquet: {str(e)}")
@@ -334,67 +299,171 @@ class ParquetOutput(Output):
         """
         return self.output_path
 
-    async def _flush_buffer(self, chunk_part: int):
-        """Flush the current buffer to a Parquet file.
+    # Consolidation helper methods
 
-        This method combines all DataFrames in the buffer, writes them to a Parquet file,
-        and uploads the file to the object store.
+    def _get_temp_folder_path(self, folder_index: int) -> str:
+        """Generate temp folder path consistent with existing structure."""
+        temp_base_path = os.path.join(self.output_path, "temp_accumulation")
+        return os.path.join(temp_base_path, f"folder-{folder_index}")
 
-        Note:
-            If the buffer is empty or has no records, the method returns without writing.
-        """
-        import pandas as pd
+    def _get_consolidated_file_path(self, folder_index: int, chunk_part: int) -> str:
+        """Generate final consolidated file path using existing path_gen logic."""
+        return os.path.join(
+            self.output_path,
+            self.path_gen(chunk_count=folder_index, chunk_part=chunk_part),
+        )
 
-        if not self.buffer or not self.current_buffer_size:
+    async def _accumulate_dataframe(self, dataframe: "pd.DataFrame"):
+        """Accumulate DataFrame into temp folders, writing in buffer_size chunks."""
+
+        # Process dataframe in buffer_size chunks
+        for i in range(0, len(dataframe), self.buffer_size):
+            chunk = dataframe[i : i + self.buffer_size]
+
+            # Check if we need to consolidate current folder before adding this chunk
+            if (
+                self.current_folder_records + len(chunk)
+            ) > self.consolidation_threshold:
+                if self.current_folder_records > 0:
+                    await self._consolidate_current_folder()
+                    self._start_new_temp_folder()
+
+            # Ensure we have a temp folder ready
+            if self.current_temp_folder_path is None:
+                self._start_new_temp_folder()
+
+            # Write chunk to current temp folder
+            await self._write_chunk_to_temp_folder(cast("pd.DataFrame", chunk))
+            self.current_folder_records += len(chunk)
+
+    def _start_new_temp_folder(self):
+        """Start a new temp folder for accumulation and create the directory."""
+        if self.current_temp_folder_path is not None:
+            self.temp_folders_created.append(self.temp_folder_index)
+            self.temp_folder_index += 1
+
+        self.current_folder_records = 0
+        self.current_temp_folder_path = self._get_temp_folder_path(
+            self.temp_folder_index
+        )
+
+        # Create the directory
+        os.makedirs(self.current_temp_folder_path, exist_ok=True)
+
+    async def _write_chunk_to_temp_folder(self, chunk: "pd.DataFrame"):
+        """Write a chunk to the current temp folder."""
+        if self.current_temp_folder_path is None:
+            raise ValueError("No temp folder path available")
+
+        # Generate file name for this chunk within the temp folder
+        existing_files = len(
+            [
+                f
+                for f in os.listdir(self.current_temp_folder_path)
+                if f.endswith(".parquet")
+            ]
+        )
+        chunk_file_name = f"chunk-{existing_files}.parquet"
+        chunk_file_path = os.path.join(self.current_temp_folder_path, chunk_file_name)
+
+        # Write chunk using existing write_chunk method
+        await self.write_chunk(chunk, chunk_file_path)
+
+    async def _consolidate_current_folder(self):
+        """Consolidate current temp folder using Daft."""
+        if self.current_folder_records == 0 or self.current_temp_folder_path is None:
             return
 
-        if not all(isinstance(df, pd.DataFrame) for df in self.buffer):
-            raise TypeError(
-                "_flush_buffer encountered non-DataFrame elements in buffer. This should not happen."
-            )
-
         try:
-            # Now it's safe to cast for pd.concat
-            pd_buffer: List[pd.DataFrame] = self.buffer  # type: ignore
-            combined_dataframe = pd.concat(pd_buffer)
+            import daft
 
-            # Write DataFrame to Parquet file
-            if not combined_dataframe.empty:
-                self.total_record_count += len(combined_dataframe)
-                output_file_name = (
-                    f"{self.output_path}/{self.path_gen(self.chunk_count, chunk_part)}"
-                )
-                combined_dataframe.to_parquet(
-                    output_file_name, index=False, compression="snappy"
-                )
+            # Read all parquet files in temp folder
+            pattern = os.path.join(self.current_temp_folder_path, "*.parquet")
+            daft_df = daft.read_parquet(pattern)
+            partitions = 0
 
-                # Record chunk metrics
-                self.metrics.record_metric(
-                    name="parquet_chunks_written",
-                    value=1,
-                    metric_type=MetricType.COUNTER,
-                    labels={"type": "pandas"},
-                    description="Number of chunks written to Parquet files",
-                )
+            # Write consolidated file using Daft with size management
+            with daft.execution_config_ctx(
+                parquet_target_filesize=self.max_file_size_bytes
+            ):
+                # Write to a temp location first
+                temp_consolidated_dir = f"{self.current_temp_folder_path}_temp"
+                result = daft_df.write_parquet(root_dir=temp_consolidated_dir)
 
-                # Push the file to the object store
-                await ObjectStore.upload_file(
-                    source=output_file_name,
-                    destination=get_object_store_prefix(output_file_name),
-                )
+                # Get the generated file path and rename to final location
+                result_dict = result.to_pydict()
+                partitions = len(result_dict["path"])
+                for i, file_path in enumerate(result_dict["path"]):
+                    if file_path.endswith(".parquet"):
+                        consolidated_file_path = self._get_consolidated_file_path(
+                            folder_index=self.chunk_count,
+                            chunk_part=i,
+                        )
+                        os.rename(file_path, consolidated_file_path)
 
-            self.buffer.clear()
-            self.current_buffer_size = 0
-            self.current_buffer_size_bytes = 0
+                        # Upload consolidated file to object store
+                        await ObjectStore.upload_file(
+                            source=consolidated_file_path,
+                            destination=get_object_store_prefix(consolidated_file_path),
+                        )
 
-        except Exception as e:
-            # Record metrics for failed write
+                # Clean up temp consolidated dir
+                shutil.rmtree(temp_consolidated_dir, ignore_errors=True)
+
+            # Update statistics
+            self.chunk_count += 1
+            self.total_record_count += self.current_folder_records
+            self.partitions.append(partitions)
+
+            # Record metrics
             self.metrics.record_metric(
-                name="parquet_write_errors",
+                name="consolidated_files",
                 value=1,
                 metric_type=MetricType.COUNTER,
-                labels={"type": "pandas", "error": str(e)},
-                description="Number of errors while writing to Parquet files",
+                labels={"type": "daft_consolidation"},
+                description="Number of consolidated parquet files created",
             )
-            logger.error(f"Error flushing buffer to parquet: {str(e)}")
-            raise e
+
+            logger.info(
+                f"Consolidated folder {self.temp_folder_index} with {self.current_folder_records} records"
+            )
+
+        except Exception as e:
+            logger.error(
+                f"Error consolidating folder {self.temp_folder_index}: {str(e)}"
+            )
+            raise
+
+    async def _cleanup_temp_folders(self):
+        """Clean up all temp folders after consolidation."""
+        try:
+            # Add current folder to cleanup list if it exists
+            if self.current_temp_folder_path is not None:
+                self.temp_folders_created.append(self.temp_folder_index)
+
+            # Clean up all temp folders
+            for folder_index in self.temp_folders_created:
+                temp_folder = self._get_temp_folder_path(folder_index)
+                if os.path.exists(temp_folder):
+                    shutil.rmtree(temp_folder, ignore_errors=True)
+
+            # Clean up base temp directory if it exists and is empty
+            temp_base_path = os.path.join(self.output_path, "temp_accumulation")
+            if os.path.exists(temp_base_path) and not os.listdir(temp_base_path):
+                os.rmdir(temp_base_path)
+
+            # Reset state
+            self.temp_folders_created.clear()
+            self.current_temp_folder_path = None
+            self.temp_folder_index = 0
+            self.current_folder_records = 0
+
+        except Exception as e:
+            logger.warning(f"Error cleaning up temp folders: {str(e)}")
+
+    async def write_chunk(self, chunk: "pd.DataFrame", file_name: str):
+        """Write a chunk to a Parquet file.
+
+        This method writes a chunk to a Parquet file and uploads the file to the object store.
+        """
+        chunk.to_parquet(file_name, index=False, compression="snappy")

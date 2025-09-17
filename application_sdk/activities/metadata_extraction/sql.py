@@ -2,10 +2,8 @@ import os
 from typing import (
     TYPE_CHECKING,
     Any,
-    AsyncGenerator,
     AsyncIterator,
     Dict,
-    Generator,
     Iterator,
     List,
     Optional,
@@ -368,9 +366,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 "Output prefix and path must be specified in workflow_args."
             )
         return ParquetOutput(
-            output_prefix=output_prefix,
             output_path=output_path,
             output_suffix=output_suffix,
+            use_consolidation=True,
         )
 
     def _get_temp_table_regex_sql(self, typename: str) -> str:
@@ -553,7 +551,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 )
 
                 # Execute using helper method
-                success, batched_iter = await self._execute_single_db(
+                success, batched_iterator = await self._execute_single_db(
                     effective_sql_client.engine,
                     prepared_query,
                     parquet_output,
@@ -570,12 +568,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 logger.warning(
                     f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
                 )
-                success, batched_iter = False, None
+                success, batched_iterator = False, None
 
             if success:
                 successful_databases.append(database_name)
-                if not write_to_file and batched_iter:
-                    dataframe_list.append(batched_iter)
+                if not write_to_file and batched_iterator:
+                    dataframe_list.append(batched_iterator)
             else:
                 failed_databases.append(database_name)
 
@@ -615,37 +613,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         try:
             sql_input = SQLQueryInput(engine=sql_engine, query=prepared_query)
-            batched_iter = await sql_input.get_batched_dataframe()
+            batched_iterator = await sql_input.get_batched_dataframe()
 
             if write_to_file and parquet_output:
-                # Wrap iterator into a proper (async)generator for type safety
-                if hasattr(batched_iter, "__anext__"):
-
-                    async def _to_async_gen(
-                        it: AsyncIterator["pd.DataFrame"],
-                    ) -> AsyncGenerator["pd.DataFrame", None]:
-                        async for item in it:
-                            yield item
-
-                    wrapped: AsyncGenerator["pd.DataFrame", None] = _to_async_gen(  # type: ignore
-                        batched_iter  # type: ignore
-                    )
-                    await parquet_output.write_batched_dataframe(wrapped)
-                else:
-
-                    def _to_gen(
-                        it: Iterator["pd.DataFrame"],
-                    ) -> Generator["pd.DataFrame", None, None]:
-                        for item in it:
-                            yield item
-
-                    wrapped_sync: Generator["pd.DataFrame", None, None] = _to_gen(  # type: ignore
-                        batched_iter  # type: ignore
-                    )
-                    await parquet_output.write_batched_dataframe(wrapped_sync)
+                await parquet_output.write_batched_dataframe(batched_iterator)  # type: ignore
                 return True, None
 
-            return True, batched_iter
+            return True, batched_iterator
         except Exception as e:
             logger.error(
                 f"Error during query execution or output writing: {e}", exc_info=True
@@ -863,10 +837,10 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             file_names=workflow_args.get("file_names"),
         )
         raw_input = raw_input.get_batched_daft_dataframe()
+
         transformed_output = JsonOutput(
             output_path=output_path,
             output_suffix="transformed",
-            output_prefix=output_prefix,
             typename=typename,
             chunk_start=workflow_args.get("chunk_start"),
         )
