@@ -75,7 +75,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 **Endpoint:** `POST /workflows/v1/{custom_endpoint}`
 **Description:** Start a workflow via HTTP trigger. The endpoint path is configurable based on registered workflow triggers (default: `/start`).
 
-**Request Body:** (RootModel - accepts any JSON object)
+**Request Body:** (RootModel)
 ```json
 {
   "workflow_id": "optional-custom-id",
@@ -106,6 +106,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 - `argo_workflow_name` (string, *optional*): Used as workflow_id if workflow_id not provided
 - `cron_schedule` (string, *optional*): Cron expression for scheduled workflows
 - `credentials` (object, *optional*): Database credentials (stored separately as credential_guid)
+  - **Supports `extra` field**: Additional sensitive parameters (see [Credential Field Format](#credential-field-format))
 - All other fields are workflow-specific configuration
 
 **Field Requirements:**
@@ -218,7 +219,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 **Endpoint:** `POST /workflows/v1/auth`
 **Description:** Test database authentication credentials.
 
-**Request Body:** (RootModel - accepts any JSON object)
+**Request Body:** (RootModel)
 ```json
 {
   "authType": "basic",
@@ -232,6 +233,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 
 **Field Requirements:**
 - **Required:** Root JSON object containing database credentials (flexible structure)
+- **Supports `extra` field**: Additional sensitive parameters (see [Credential Field Format](#credential-field-format))
 - **Note:** The payload is passed to `handler.load(body.model_dump())` then `handler.test_auth()` is called
 
 **Response:**
@@ -246,7 +248,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 **Endpoint:** `POST /workflows/v1/metadata`
 **Description:** Fetch database metadata (databases, schemas, tables, etc.).
 
-**Request Body:** (RootModel - accepts any JSON object)
+**Request Body:** (RootModel)
 ```json
 {
   "type": "all",
@@ -261,6 +263,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 
 **Field Requirements:**
 - **Required:** Root JSON object containing metadata request and credentials (flexible structure)
+- **Supports `extra` field**: Additional sensitive parameters in credentials (see [Credential Field Format](#credential-field-format))
 - **Data Flow:**
   1. `metadata_type = body.root.get("type", "all")` - extracts type with default
   2. `database = body.root.get("database", "")` - extracts database parameter
@@ -313,6 +316,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 
 **Field Requirements:**
 - `credentials` (object, **required**): Database credentials object
+  - **Supports `extra` field**: Additional sensitive parameters (see [Credential Field Format](#credential-field-format))
 - `metadata` (object, **required**): Form data for filtering and configuration
 
 **Response:**
@@ -371,7 +375,7 @@ This document provides comprehensive documentation for all APIs exposed by the A
 **Query Parameters:**
 - `type` (string, *optional*): Configuration type - **enum values:** `"workflows"`, `"credentials"` (default: `"workflows"`)
 
-**Request Body:** (RootModel - accepts any JSON object)
+**Request Body:** (RootModel)
 ```json
 {
   "credential_guid": "credential_test-uuid",
@@ -494,7 +498,7 @@ All API endpoints use a standardized error response format:
 - **Enum fields** show all possible values with `**enum values:**` followed by the allowed values
 
 ### Common Field Types
-- **RootModel fields**: Accept any JSON object structure (flexible schema)
+- **RootModel fields**: Accept a defined JSON object structure (flexible schema)
 - **Typed fields**: Have specific data types (string, boolean, object, array)
 - **Aliased fields**: Use different names in JSON (e.g., `alias="data"`)
 
@@ -506,7 +510,7 @@ All API endpoints use a standardized error response format:
 
 ### Pydantic Model Patterns
 - **BaseModel**: Structured models with typed fields
-- **RootModel**: Flexible models accepting any JSON structure
+- **RootModel**: Flexible models accepting a defined JSON object structure
 - **Field aliases**: JSON field names may differ from model field names
 - **Default values**: Optional fields often have sensible defaults
 
@@ -515,5 +519,45 @@ All API endpoints use a standardized error response format:
   - `endpoint` (string, *optional*): Default `"/start"`
   - `methods` (List[string], *optional*): Default `["POST"]`
   - `workflow_class` (Type[WorkflowInterface], *optional*): Set during registration
+
+### Credential Field Format
+
+The Application SDK uses a standardized credential structure with support for an `extra` field for additional sensitive parameters:
+
+**Required Fields**: Credentials requirements are defined by each database client's `DB_CONFIG.required` list. Common patterns include:
+- `username` (string, **required**): Database username
+- `password` (string, **required**): Database password (resolved via `get_auth_token()` based on `authType`)
+- Database-specific fields: `host`, `port`, `database`, `account_id`, etc. (as defined in `DB_CONFIG.required`)
+
+**Extra Field**: `extra` (object, *optional*) - Contains additional sensitive parameters
+- **Purpose**: Store sensitive data beyond standard credentials such as SSL certificates, API keys, OAuth tokens, private keys, and custom authentication parameters
+- **Format**: Can be provided as JSON string or object (parsed automatically using `parse_credentials_extra()` utility)
+- **Validation**: Fields in `extra` can satisfy `DB_CONFIG.required` parameters if not found in root credentials
+- **Secret Resolution**: Both root-level credential fields and `extra` fields support secret reference substitution via the `apply_secret_values()` method
+
+**Validation Logic**:
+```python
+# For each required parameter in DB_CONFIG.required:
+value = credentials.get(param) or extra.get(param)
+if value is None:
+    raise ValueError(f"{param} is required")
+```
+
+**Example**:
+```json
+{
+  "username": "user",
+  "password": "password",
+  "host": "localhost",
+  "port": 5432,
+  "database": "mydb",
+  "extra": {
+    "ssl_cert": "-----BEGIN CERTIFICATE-----...",
+    "api_key": "sk-1234567890abcdef",
+    "oauth_token": "bearer_token_123",
+    "ssl_mode": "require"
+  }
+}
+```
 
 This documentation covers all the APIs currently exposed by the Application SDK server. Each endpoint includes comprehensive request/response examples, field requirements (required/optional), enum values, and describes the expected behavior and error conditions.
