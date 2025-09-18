@@ -293,6 +293,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 last_marker = new_marker
 
                 if record_count >= chunk_size:
+                    logger.info(f"Creating chunked query for {record_count} records")
                     self._create_chunked_query(
                         query=query,
                         start_marker=chunk_start_marker,
@@ -309,6 +310,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                     chunk_end_marker = None
 
         if record_count > 0:
+            logger.info("Creating chunked query for remaining records")
             self._create_chunked_query(
                 query=query,
                 start_marker=chunk_start_marker,
@@ -365,6 +367,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 ranged_sql_end_key, end_marker
             ),
         )
+        logger.info(f"Chunked SQL: {chunked_sql}")
 
         logger.info(
             f"Processed {record_count} records in chunk {len(parallel_markers)}, "
