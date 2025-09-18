@@ -266,15 +266,32 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         parallel_markers: List[Dict[str, Any]] = []
 
         marked_sql = query.replace(ranged_sql_start_key, current_marker)
-        logger.info("Marked SQL: %s", marked_sql)
+        logger.info(f"Marked SQL is :  {marked_sql}")
         rewritten_query = f"WITH T AS ({marked_sql}) SELECT {timestamp_column} FROM T ORDER BY {timestamp_column} ASC"
-        logger.info("Rewritten query: %s", rewritten_query)
+        logger.info(f"Rewritten query is :  {rewritten_query}")
         logger.info(f"Executing query: {rewritten_query}")
 
         chunk_start_marker = None
         chunk_end_marker = None
         record_count = 0
         last_marker = None
+
+        logger.info("SQL Input - pandas ")
+        sql_input = SQLQueryInput(
+            engine=sql_client.engine,
+            query=rewritten_query,
+            chunk_size=None,
+        )
+        sql_input = await sql_input.get_dataframe()
+        try:
+            preview = (
+                sql_input.head(10).to_string()
+                if hasattr(sql_input, "head")
+                else str(sql_input)
+            )
+            logger.info(f"SQL Input (first 10 rows) preview is :  {preview}")
+        except Exception:
+            logger.info("SQL preview failed")
 
         async for result_batch in sql_client.run_query(rewritten_query):
             for row in result_batch:
@@ -491,10 +508,10 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         sql_client = state.sql_client
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
-        logger.info("Miner args: %s", miner_args)
+        logger.info(f"Miner args are :  {miner_args}")
 
         current_marker = await self.read_marker(workflow_args)
-        logger.info("Current marker: %s", current_marker)
+        logger.info(f"Current marker is :  {current_marker}")
         if current_marker:
             miner_args.current_marker = current_marker
 
@@ -503,7 +520,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             schema_name_cleaned=miner_args.schema_name_cleaned,
             miner_start_time_epoch=miner_args.miner_start_time_epoch,
         )
-        logger.info("Queries SQL query: %s", queries_sql_query)
+        logger.info(f"Queries SQL query is :  {queries_sql_query}")
 
         try:
             parallel_markers = await self.parallelize_query(
@@ -517,8 +534,8 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 ranged_sql_end_key=miner_args.ranged_sql_end_key,
                 sql_client=sql_client,
             )
-            logger.info("Parallelized queries into %s chunks", len(parallel_markers))
-            logger.info("Parallelized queries: %s", parallel_markers)
+            logger.info(f"Parallelized queries into {len(parallel_markers)} chunks")
+            logger.info(f"Parallelized queries are :  {parallel_markers}")
         except Exception as e:
             logger.error(f"Failed to parallelize queries: {e}")
             raise e
