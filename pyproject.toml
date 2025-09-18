@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc44"
+version = "0.1.1rc45"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
@@ -99,6 +99,9 @@ test = [
 examples = [
     "snowflake-sqlalchemy>=1.7.0",
     "psycopg[binary]>=3.2.7",
+]
+mcp = [
+    "fastmcp>=2.12.3",
 ]
 
 [tool.poe.tasks]

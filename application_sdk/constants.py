@@ -255,3 +255,9 @@ REDIS_SENTINEL_HOSTS = os.getenv("REDIS_SENTINEL_HOSTS", "")
 IS_LOCKING_DISABLED = os.getenv("IS_LOCKING_DISABLED", "true").lower() == "true"
 #: Retry interval for lock acquisition
 LOCK_RETRY_INTERVAL = int(os.getenv("LOCK_RETRY_INTERVAL", "5"))
+
+# MCP Configuration
+#: Flag to indicate if MCP should be enabled or not. Turning this to true will setup an MCP server along
+#: with the application.
+ENABLE_MCP = os.getenv("ENABLE_MCP", "false").lower() == "true"
+MCP_METADATA_KEY = "__atlan_application_sdk_mcp_metadata"
