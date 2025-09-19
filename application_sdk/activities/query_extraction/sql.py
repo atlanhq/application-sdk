@@ -276,14 +276,6 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         record_count = 0
         last_marker = None
 
-        logger.info(f"SQL client is :  str({sql_client})")
-        logger.info(f"connection is :  str({sql_client.connection})")
-        logger.info(f"engine is :  str({sql_client.engine})")
-        password = sql_client.credentials["password"]
-        sql_client.credentials["password"] = "******"
-        logger.info(f"Credentials is :  str({sql_client.credentials})")
-        sql_client.credentials["password"] = password
-
         logger.info("running permissions query from here ")
         query = "SELECT current_user, current_database(), has_table_privilege('stl_connection_log', 'SELECT');"
         async for result_batch in sql_client.run_query(query):
@@ -520,9 +512,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         state: BaseSQLQueryExtractionActivitiesState = await self._get_state(
             workflow_args
         )
-        logger.info(f"State is :  str({state})")
         sql_client = state.sql_client
-        logger.info(f"SQL client is :  str({sql_client})")
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
         logger.info(f"Miner args are :  {miner_args}")

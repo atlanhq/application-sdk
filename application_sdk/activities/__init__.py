@@ -237,6 +237,14 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
         try:
             state: ActivitiesStateType = await self._get_state(workflow_args)
             handler = state.handler
+            client = state.sql_client
+
+            logger.info("running permissions query from here ")
+            query = "SELECT current_user, current_database(), has_table_privilege('stl_connection_log', 'SELECT');"
+            async for result_batch in client.run_query(query):
+                for row in result_batch:
+                    logger.info(f"Result is :  str({row})")
+            logger.info("permissions query completed")
 
             if not handler:
                 raise ValueError("Preflight check handler not found")

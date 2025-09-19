@@ -207,14 +207,23 @@ class BaseSQLMetadataExtractionWorkflow(MetadataExtractionWorkflow):
         workflow_success = False
 
         try:
-            # Let the base workflow handle the hybrid approach and preflight check
-            await super().run(workflow_config)
-
-            # StateStore approach - retrieve workflow configuration from state store
+            # Get the workflow configuration from the state store
             workflow_args: Dict[str, Any] = await workflow.execute_activity_method(
                 self.activities_cls.get_workflow_args,
                 workflow_config,
                 retry_policy=RetryPolicy(maximum_attempts=3, backoff_coefficient=2),
+                start_to_close_timeout=self.default_start_to_close_timeout,
+                heartbeat_timeout=self.default_heartbeat_timeout,
+            )
+
+            logger.info("Starting workflow execution")
+
+            retry_policy = RetryPolicy(maximum_attempts=2, backoff_coefficient=2)
+
+            await workflow.execute_activity_method(
+                self.activities_cls.preflight_check,
+                args=[workflow_args],
+                retry_policy=retry_policy,
                 start_to_close_timeout=self.default_start_to_close_timeout,
                 heartbeat_timeout=self.default_heartbeat_timeout,
             )
