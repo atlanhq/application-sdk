@@ -286,7 +286,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         logger.info("running permissions query from here ")
         query = "SELECT current_user, current_database(), has_table_privilege('stl_connection_log', 'SELECT');"
-        for result_batch in sql_client.run_query(query):
+        async for result_batch in sql_client.run_query(query):
             for row in result_batch:
                 logger.info(f"Result is :  str({row})")
         logger.info("permissions query completed")
