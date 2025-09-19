@@ -94,9 +94,8 @@ async def test_run_success(monkeypatch: pytest.MonkeyPatch):
     # ---------------------------------------------------------------------
     # Assertions – verify that the expected Temporal primitives were invoked
     # ---------------------------------------------------------------------
-    # Two calls to get_workflow_args (once in super().run + once again),
-    # one to preflight_check and one to get_query_batches ==> 4 calls total
-    assert mock_exec_activity_method.call_count == 4
+    # One call to get_workflow_args, one to preflight_check and one to get_query_batches ==> 3 calls total
+    assert mock_exec_activity_method.call_count == 3
     # Number of fetch_queries invocations must match the number of batches
     assert mock_exec_activity.call_count == len(query_batches)
 
