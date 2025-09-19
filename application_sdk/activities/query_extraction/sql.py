@@ -1,6 +1,5 @@
 import json
 import os
-from copy import deepcopy
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional, Type
 
@@ -278,11 +277,12 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         last_marker = None
 
         logger.info(f"SQL client is :  str({sql_client})")
-        temp_sql_client = deepcopy(sql_client)
-        temp_sql_client.credentials["password"] = "******"
-        logger.info(f"Temp SQL client is :  str({temp_sql_client.credentials})")
-        logger.info(f"connection is :  str({temp_sql_client.connection})")
-        logger.info(f"engine is :  str({temp_sql_client.engine})")
+        logger.info(f"connection is :  str({sql_client.connection})")
+        logger.info(f"engine is :  str({sql_client.engine})")
+        password = sql_client.credentials["password"]
+        sql_client.credentials["password"] = "******"
+        logger.info(f"Credentials is :  str({sql_client.credentials})")
+        sql_client.credentials["password"] = password
 
         logger.info("running permissions query from here ")
         query = "SELECT current_user, current_database(), has_table_privilege('stl_connection_log', 'SELECT');"
