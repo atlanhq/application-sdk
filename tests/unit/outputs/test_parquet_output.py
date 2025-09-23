@@ -300,7 +300,7 @@ class TestParquetOutputWriteDaftDataframe:
     async def test_write_daft_dataframe_success(self, base_output_path: str):
         """Test successful daft DataFrame writing."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
-            "application_sdk.services.objectstore.ObjectStore.upload_prefix"
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.outputs.parquet.get_object_store_prefix"
         ) as mock_prefix:
@@ -312,7 +312,11 @@ class TestParquetOutputWriteDaftDataframe:
             # Mock daft DataFrame
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 1000
-            mock_df.write_parquet = MagicMock()
+            mock_result = MagicMock()
+            mock_result.select.return_value.to_pydict.return_value = {
+                "path": ["test.parquet"]
+            }
+            mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
                 output_path=base_output_path,
@@ -339,7 +343,7 @@ class TestParquetOutputWriteDaftDataframe:
     ):
         """Test daft DataFrame writing with parameter overrides."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
-            "application_sdk.services.objectstore.ObjectStore.upload_prefix"
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.services.objectstore.ObjectStore.delete_prefix"
         ) as mock_delete, patch(
@@ -354,7 +358,11 @@ class TestParquetOutputWriteDaftDataframe:
             # Mock daft DataFrame
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 500
-            mock_df.write_parquet = MagicMock()
+            mock_result = MagicMock()
+            mock_result.select.return_value.to_pydict.return_value = {
+                "path": ["test.parquet"]
+            }
+            mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
                 output_path=base_output_path,
@@ -381,7 +389,7 @@ class TestParquetOutputWriteDaftDataframe:
     ):
         """Test daft DataFrame writing with default parameters (uses method default write_mode='append')."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
-            "application_sdk.services.objectstore.ObjectStore.upload_prefix"
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.outputs.parquet.get_object_store_prefix"
         ) as mock_prefix:
@@ -393,7 +401,11 @@ class TestParquetOutputWriteDaftDataframe:
             # Mock daft DataFrame
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 500
-            mock_df.write_parquet = MagicMock()
+            mock_result = MagicMock()
+            mock_result.select.return_value.to_pydict.return_value = {
+                "path": ["test.parquet"]
+            }
+            mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
                 output_path=base_output_path,
@@ -415,7 +427,7 @@ class TestParquetOutputWriteDaftDataframe:
     ):
         """Test that DAPR limit is properly configured."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
-            "application_sdk.services.objectstore.ObjectStore.upload_prefix"
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.outputs.parquet.get_object_store_prefix"
         ) as mock_prefix:
@@ -427,7 +439,11 @@ class TestParquetOutputWriteDaftDataframe:
             # Mock daft DataFrame
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 1000
-            mock_df.write_parquet = MagicMock()
+            mock_result = MagicMock()
+            mock_result.select.return_value.to_pydict.return_value = {
+                "path": ["test.parquet"]
+            }
+            mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(output_path=base_output_path)
 
@@ -488,7 +504,7 @@ class TestParquetOutputMetrics:
     async def test_daft_write_metrics(self, base_output_path: str):
         """Test that metrics are recorded for daft DataFrame writes."""
         with patch("daft.execution_config_ctx") as mock_ctx, patch(
-            "application_sdk.services.objectstore.ObjectStore.upload_prefix"
+            "application_sdk.services.objectstore.ObjectStore.upload_file"
         ) as mock_upload, patch(
             "application_sdk.outputs.parquet.get_metrics"
         ) as mock_get_metrics, patch(
@@ -504,7 +520,11 @@ class TestParquetOutputMetrics:
             # Mock daft DataFrame
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 1000
-            mock_df.write_parquet = MagicMock()
+            mock_result = MagicMock()
+            mock_result.select.return_value.to_pydict.return_value = {
+                "path": ["test.parquet"]
+            }
+            mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(output_path=base_output_path)
 
