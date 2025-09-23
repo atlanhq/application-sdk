@@ -486,7 +486,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
         )
         sql_client = state.sql_client
 
-        credentials = SecretStore.get_credentials(
+        credentials = await SecretStore.get_credentials(
             credential_guid=workflow_args["credential_guid"]
         )
         extra = parse_credentials_extra(credentials)
