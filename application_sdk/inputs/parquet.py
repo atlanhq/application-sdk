@@ -89,11 +89,10 @@ class ParquetInput(Input):
         try:
             import pandas as pd
 
-            path = self.path
             if self.input_prefix and self.path:
-                path = await self.download_files(self.path)
+                await self.download_files(self.path)
             # Use pandas native read_parquet which can handle both single files and directories
-            return pd.read_parquet(path)
+            return pd.read_parquet(self.path)
         except Exception as e:
             logger.error(f"Error reading data from parquet file(s): {str(e)}")
             # Re-raise to match IcebergInput behavior
