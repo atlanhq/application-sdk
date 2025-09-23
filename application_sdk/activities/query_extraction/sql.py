@@ -13,6 +13,7 @@ from application_sdk.activities.common.utils import (
     get_workflow_id,
 )
 from application_sdk.clients.sql import BaseSQLClient
+from application_sdk.common.utils import parse_credentials_extra
 from application_sdk.constants import UPSTREAM_OBJECT_STORE_NAME
 from application_sdk.handlers import HandlerInterface
 from application_sdk.handlers.sql import BaseSQLHandler
@@ -484,6 +485,13 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             workflow_args
         )
         sql_client = state.sql_client
+
+        credentials = SecretStore.get_credentials(
+            credential_guid=workflow_args["credential_guid"]
+        )
+        extra = parse_credentials_extra(credentials)
+        sql_client.credentials["database_name"] = extra.get("database_name", "")
+        await sql_client.load(sql_client.credentials)
 
         miner_args = MinerArgs(**workflow_args.get("miner_args", {}))
 
