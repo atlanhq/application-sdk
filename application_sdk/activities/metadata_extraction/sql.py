@@ -417,10 +417,12 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
         database_name: str,
     ) -> None:
         """Setup connection for a specific database."""
-        extra = parse_credentials_extra(sql_client.credentials)
+        # Clone credentials to avoid mutating the original client state
+        cloned_credentials = sql_client.credentials.copy()
+        extra = parse_credentials_extra(cloned_credentials)
         extra["database"] = database_name
-        sql_client.credentials["extra"] = extra
-        await sql_client.load(sql_client.credentials)
+        cloned_credentials["extra"] = extra
+        await sql_client.load(cloned_credentials)
 
     # NOTE: Consolidated: per-database processing is now inlined in the multi-DB loop
 
