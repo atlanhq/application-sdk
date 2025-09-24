@@ -231,7 +231,7 @@ class ParquetOutput(Output):
                 result = dataframe.write_parquet(
                     root_dir=self.output_path,
                     write_mode=write_mode.value,
-                    partition_cols=partition_cols if partition_cols else [],
+                    partition_cols=partition_cols,
                 )
                 file_paths = result.to_pydict().get("path", [])
 

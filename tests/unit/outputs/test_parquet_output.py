@@ -329,7 +329,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.write_parquet.assert_called_once_with(
                 root_dir=parquet_output.output_path,
                 write_mode="append",  # Uses method default value "append"
-                partition_cols=[],  # Default empty list
+                partition_cols=None,
             )
 
             # Check that upload_prefix was called
@@ -412,7 +412,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df.write_parquet.assert_called_once_with(
                 root_dir=parquet_output.output_path,
                 write_mode="append",  # Uses method default value "append"
-                partition_cols=[],  # None converted to empty list
+                partition_cols=None,
             )
 
     @pytest.mark.asyncio
