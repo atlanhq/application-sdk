@@ -1,6 +1,6 @@
 [project]
 name = "atlan-application-sdk"
-version = "0.1.1rc46"
+version = "0.1.1rc47"
 description = "Atlan Application SDK is a Python library for developing applications on the Atlan Platform"
 license = "Apache-2.0"
 authors = [
