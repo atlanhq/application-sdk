@@ -23,7 +23,7 @@ runs:
       uses: docker/build-push-action@v6
       with:
         context: .
-        file: ./install/Dockerfile
+        file: ./Dockerfile
         push: false
         secrets: |
           "PRIVATE_REPO_ACCESS_TOKEN=${{ inputs.github-token }}"
