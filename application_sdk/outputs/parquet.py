@@ -221,17 +221,19 @@ class ParquetOutput(Output):
             if row_count == 0:
                 return
 
+            file_paths = []
             # Use Daft's execution context for temporary configuration
             with daft.execution_config_ctx(
                 parquet_target_filesize=self.max_file_size_bytes,
                 default_morsel_size=morsel_size,
             ):
                 # Daft automatically handles file splitting and naming
-                dataframe.write_parquet(
+                result = dataframe.write_parquet(
                     root_dir=self.output_path,
                     write_mode=write_mode.value,
                     partition_cols=partition_cols if partition_cols else [],
                 )
+                file_paths = result.to_pydict().get("path", [])
 
             # Update counters
             self.chunk_count += 1
@@ -266,12 +268,12 @@ class ParquetOutput(Output):
                     logger.info(
                         f"No files found under prefix {get_object_store_prefix(self.output_path)}: {str(e)}"
                     )
-
-            await ObjectStore.upload_prefix(
-                source=self.output_path,
-                destination=get_object_store_prefix(self.output_path),
-                retain_local_copy=self.retain_local_copy,
-            )
+            for path in file_paths:
+                await ObjectStore.upload_file(
+                    source=path,
+                    destination=get_object_store_prefix(path),
+                    retain_local_copy=self.retain_local_copy,
+                )
 
         except Exception as e:
             # Record metrics for failed write
