@@ -233,7 +233,7 @@ class ParquetOutput(Output):
                     write_mode=write_mode.value,
                     partition_cols=partition_cols if partition_cols else [],
                 )
-                file_paths = result.select("path").to_pydict()["path"]
+                file_paths = result.to_pydict().get("path", [])
 
             # Update counters
             self.chunk_count += 1
