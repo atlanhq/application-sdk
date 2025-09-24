@@ -313,9 +313,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 1000
             mock_result = MagicMock()
-            mock_result.select.return_value.to_pydict.return_value = {
-                "path": ["test.parquet"]
-            }
+            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
@@ -359,9 +357,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 500
             mock_result = MagicMock()
-            mock_result.select.return_value.to_pydict.return_value = {
-                "path": ["test.parquet"]
-            }
+            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
@@ -402,9 +398,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 500
             mock_result = MagicMock()
-            mock_result.select.return_value.to_pydict.return_value = {
-                "path": ["test.parquet"]
-            }
+            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(
@@ -440,9 +434,7 @@ class TestParquetOutputWriteDaftDataframe:
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 1000
             mock_result = MagicMock()
-            mock_result.select.return_value.to_pydict.return_value = {
-                "path": ["test.parquet"]
-            }
+            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(output_path=base_output_path)
@@ -521,9 +513,7 @@ class TestParquetOutputMetrics:
             mock_df = MagicMock()
             mock_df.count_rows.return_value = 1000
             mock_result = MagicMock()
-            mock_result.select.return_value.to_pydict.return_value = {
-                "path": ["test.parquet"]
-            }
+            mock_result.to_pydict.return_value = {"path": ["test.parquet"]}
             mock_df.write_parquet.return_value = mock_result
 
             parquet_output = ParquetOutput(output_path=base_output_path)
