@@ -565,10 +565,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                         f"Failed to execute query for database: {database_name}"
                     )
             except Exception as e:  # noqa: BLE001
-                logger.warning(
-                    f"Failed to process database '{database_name}': {str(e)}. Skipping to next database."
+                logger.error(
+                    f"Failed to process database '{database_name}': {str(e)}. Failing the workflow."
                 )
                 success, batched_iterator = False, None
+                break
 
             if success:
                 successful_databases.append(database_name)
