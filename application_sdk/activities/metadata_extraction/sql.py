@@ -560,16 +560,13 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
                 if success:
                     logger.info(f"Successfully processed database: {database_name}")
-                else:
-                    logger.warning(
-                        f"Failed to execute query for database: {database_name}"
-                    )
+            
             except Exception as e:  # noqa: BLE001
                 logger.error(
-                    f"Failed to process database '{database_name}': {str(e)}. Failing the workflow."
+                    f"Failed to process database '{database_name}': {str(e)}. Failing the workflow.",
+                    exc_info=True,
                 )
-                success, batched_iterator = False, None
-                break
+                raise
 
             if success:
                 successful_databases.append(database_name)
