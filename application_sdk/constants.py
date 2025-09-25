@@ -114,11 +114,13 @@ DEPLOYMENT_NAME_KEY = "deployment_name"
 # Workflow Constants
 #: Timeout duration for activity heartbeats
 HEARTBEAT_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT", 300))  # 5 minutes
+    seconds=int(os.getenv("ATLAN_HEARTBEAT_TIMEOUT_SECONDS", 300))  # 5 minutes
 )
 #: Maximum duration an activity can run before timing out
 START_TO_CLOSE_TIMEOUT = timedelta(
-    seconds=int(os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT", 2 * 60 * 60))  # 2 hours
+    seconds=int(
+        os.getenv("ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS", 2 * 60 * 60)
+    )  # 2 hours
 )
 
 # SQL Client Constants
