@@ -11,10 +11,10 @@ from dapr.clients import DaprClient
 from application_sdk.common.dapr_utils import is_component_registered
 from application_sdk.common.error_codes import CommonError
 from application_sdk.constants import (
-    DEPLOYMENT_NAME,
     DEPLOYMENT_SECRET_PATH,
     DEPLOYMENT_SECRET_STORE_NAME,
     LOCAL_ENVIRONMENT,
+    SECRET_ENVIRONMENT,
     SECRET_STORE_NAME,
 )
 from application_sdk.observability.logger_adaptor import get_logger
@@ -206,7 +206,10 @@ class SecretStore:
             ...     component_name="external-secrets"
             ... )
         """
-        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+        if (
+            SECRET_ENVIRONMENT == LOCAL_ENVIRONMENT
+            and component_name != DEPLOYMENT_SECRET_STORE_NAME
+        ):
             return {}
 
         try:
@@ -332,7 +335,7 @@ class SecretStore:
             >>> # Later retrieve these credentials
             >>> retrieved = await SecretStore.get_credentials(guid)
         """
-        if DEPLOYMENT_NAME == LOCAL_ENVIRONMENT:
+        if SECRET_ENVIRONMENT == LOCAL_ENVIRONMENT:
             # NOTE: (development) temporary solution to store the credentials in the state store.
             # In production, dapr doesn't support creating secrets.
             credential_guid = str(uuid.uuid4())

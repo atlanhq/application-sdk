@@ -50,6 +50,9 @@ SQL_SERVER_MIN_VERSION = os.getenv("ATLAN_SQL_SERVER_MIN_VERSION")
 #: Path to the SQL queries directory
 SQL_QUERIES_PATH = os.getenv("ATLAN_SQL_QUERIES_PATH", "app/sql")
 
+# Secret Store Constants
+SECRET_ENVIRONMENT = os.getenv("ATLAN_SECRET_ENVIRONMENT", DEPLOYMENT_NAME)
+
 # Output Path Constants
 #: Output path format for workflows (example: objectstore://bucket/artifacts/apps/{application_name}/workflows/{workflow_id}/{workflow_run_id})
 WORKFLOW_OUTPUT_PATH_TEMPLATE = (
