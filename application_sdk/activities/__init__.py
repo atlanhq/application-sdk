@@ -191,6 +191,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             # This already handles the Dapr call internally
             from application_sdk.services.statestore import StateStore, StateType
 
+            #TODO why is this activity needed? why is it not retriving args from temporal state store?
+            #TODO what are workflow args? are they different from workflow config?
+
             workflow_args = await StateStore.get_state(workflow_id, StateType.WORKFLOWS)
             workflow_args["output_prefix"] = workflow_args.get(
                 "output_prefix", TEMPORARY_PATH
