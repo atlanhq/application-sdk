@@ -10,7 +10,7 @@ The Atlan Python Application SDK requires the following components regardless of
 1. Python 3.11.10
 2. uv 0.7.3
 3. Temporal CLI
-4. DAPR CLI 1.14.1
+4. DAPR CLI 1.16.0
 5. Project dependencies
 
 ## OS-Specific Setup Guides
