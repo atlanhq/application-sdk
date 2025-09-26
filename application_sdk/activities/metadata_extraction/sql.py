@@ -528,7 +528,6 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             raise ValueError("SQL client engine not initialized")
 
         successful_databases: List[str] = []
-        failed_databases: List[str] = []
         dataframe_list: List[
             Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]
         ] = []
@@ -572,17 +571,11 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 successful_databases.append(database_name)
                 if not write_to_file and batched_iterator:
                     dataframe_list.append(batched_iterator)
-            else:
-                failed_databases.append(database_name)
 
         # Log results
         logger.info(
             f"Successfully processed {len(successful_databases)} databases: {successful_databases}"
         )
-        if failed_databases:
-            logger.warning(
-                f"Failed to process {len(failed_databases)} databases: {failed_databases}"
-            )
 
         # Finalize results
         return await self._finalize_multidb_results(
