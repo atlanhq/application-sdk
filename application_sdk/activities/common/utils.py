@@ -10,6 +10,7 @@ import os
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Awaitable, Callable, List, Optional, TypeVar, cast
+import re
 
 from temporalio import activity
 
@@ -71,9 +72,15 @@ def build_output_path() -> str:
         >>> build_output_path()
         "artifacts/apps/appName/workflows/wf-123/run-456"
     """
+    # Sanitize workflow_id to remove any schedule/timestamp suffix
+    raw_workflow_id = get_workflow_id()
+    
+    # If workflow_id contains a timestamp (e.g., '-YYYY-MM-DDTHH:MM:SSZ'), remove it
+    sanitized_workflow_id = re.sub(r'-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$', '', raw_workflow_id)
+    
     return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
         application_name=APPLICATION_NAME,
-        workflow_id=get_workflow_id(),
+        workflow_id=sanitized_workflow_id,
         run_id=get_workflow_run_id(),
     )
 
