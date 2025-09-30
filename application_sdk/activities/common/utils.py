@@ -7,10 +7,10 @@ including workflow ID retrieval, automatic heartbeating, and periodic heartbeat 
 import asyncio
 import glob
 import os
+import re
 from datetime import timedelta
 from functools import wraps
 from typing import Any, Awaitable, Callable, List, Optional, TypeVar, cast
-import re
 
 from temporalio import activity
 
@@ -22,6 +22,9 @@ from application_sdk.constants import (
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# Compiled regex pattern for removing timestamp suffix from workflow IDs
+TIMESTAMP_PATTERN = re.compile(r"-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 F = TypeVar("F", bound=Callable[..., Awaitable[Any]])
@@ -64,6 +67,7 @@ def build_output_path() -> str:
     """Build a standardized output path for workflow artifacts.
 
     This method creates a consistent output path format across all workflows using the WORKFLOW_OUTPUT_PATH_TEMPLATE constant.
+    For scheduled workflows, it removes any timestamp suffix from the workflow_id to ensure consistent output paths.
 
     Returns:
         str: The standardized output path.
@@ -74,10 +78,14 @@ def build_output_path() -> str:
     """
     # Sanitize workflow_id to remove any schedule/timestamp suffix
     raw_workflow_id = get_workflow_id()
-    
-    # If workflow_id contains a timestamp (e.g., '-YYYY-MM-DDTHH:MM:SSZ'), remove it
-    sanitized_workflow_id = re.sub(r'-\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$', '', raw_workflow_id)
-    
+
+    # Remove timestamp suffix (e.g., '-YYYY-MM-DDTHH:MM:SSZ') if present
+    sanitized_workflow_id = TIMESTAMP_PATTERN.sub("", raw_workflow_id)
+
+    # Fallback to raw workflow_id if sanitization results in empty string
+    if not sanitized_workflow_id:
+        sanitized_workflow_id = raw_workflow_id
+
     return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
         application_name=APPLICATION_NAME,
         workflow_id=sanitized_workflow_id,
