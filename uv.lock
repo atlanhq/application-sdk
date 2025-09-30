@@ -140,7 +140,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "0.1.1rc49"
+version = "0.1.1rc50"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
@@ -224,7 +224,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0" },
     { name = "boto3", marker = "extra == 'iam-auth'", specifier = ">=1.38.6" },
     { name = "daft", marker = "extra == 'daft'", specifier = ">=0.4.12" },
-    { name = "dapr", marker = "extra == 'workflows'", specifier = ">=1.14.0" },
+    { name = "dapr", marker = "extra == 'workflows'", specifier = "==1.16.0" },
     { name = "duckdb", specifier = ">=1.1.3" },
     { name = "duckdb-engine", specifier = ">=0.17.0" },
     { name = "faker", marker = "extra == 'scale-data-generator'", specifier = ">=37.1.0" },
@@ -727,7 +727,7 @@ wheels = [
 
 [[package]]
 name = "dapr"
-version = "1.15.0"
+version = "1.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -737,9 +737,9 @@ dependencies = [
     { name = "python-dateutil" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c6/55/ce908bb140a7ec3f32d2194b6a50b9f7a7fd88fca8c78701d60d3f7c16e3/dapr-1.15.0.tar.gz", hash = "sha256:6b2373084143f164cb00702758b17a14fc4442314a1f3e2be36ee008d486c47a", size = 99424, upload-time = "2025-02-27T18:53:55.782Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a4/b1/d39ba15d453b67b93d53ec56de7eb9324cb8bbf0599afcb2c0ade990b7ae/dapr-1.16.0.tar.gz", hash = "sha256:c7e3d005552a598d07608d0d502b2bc432e86678f94b2beccc13a096b9198684", size = 122467, upload-time = "2025-09-17T10:59:57.138Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/97/ad/6923177cfcd2a98f08dbd1c4a580e9fbac93b05798ded77314e848d6eef2/dapr-1.15.0-py3-none-any.whl", hash = "sha256:0093bf6df5eb9a14fbab60191a619438e0b6b336f60a7994e184276bcc35d5fb", size = 141392, upload-time = "2025-02-27T18:53:53.805Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/3e/de39e18e14d07882fcff028227c2dbe7fa202f09413127d4de32b03e0884/dapr-1.16.0-py3-none-any.whl", hash = "sha256:076dd559a0b450eae24b1c2ae779c9299ed3e06a05c1f72719a6613af8d19ced", size = 166710, upload-time = "2025-09-17T10:59:55.473Z" },
 ]
 
 [[package]]
