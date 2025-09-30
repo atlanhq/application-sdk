@@ -5,7 +5,7 @@
 apiVersion: dapr.io/v1alpha1
 kind: Configuration
 metadata:
-  name: hotreload-config
+  name: configuration
 spec:
   features:
     - name: HotReload
