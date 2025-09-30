@@ -28,8 +28,8 @@ The Application SDK uses environment variables for configuration. These can be s
 | `ATLAN_WORKFLOW_UI_PORT` | Port number for the Temporal UI | `8233` | Port for Temporal Web UI |
 | `ATLAN_WORKFLOW_MAX_TIMEOUT_HOURS` | Maximum timeout duration for workflows (in hours) | `1` | Prevents runaway workflows from consuming resources |
 | `ATLAN_MAX_CONCURRENT_ACTIVITIES` | Maximum number of activities that can run concurrently | `5` | Controls resource usage and prevents overwhelming target systems |
-| `ATLAN_HEARTBEAT_TIMEOUT` | Timeout duration for activity heartbeats (in seconds) | `300` | Detects stuck activities and enables recovery |
-| `ATLAN_START_TO_CLOSE_TIMEOUT` | Maximum duration an activity can run before timing out (in seconds) | `7200` | Prevents activities from running indefinitely |
+| `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` | Timeout duration for activity heartbeats (in seconds) | `300` | Detects stuck activities and enables recovery |
+| `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` | Maximum duration an activity can run before timing out (in seconds) | `7200` | Prevents activities from running indefinitely |
 | `ATLAN_WORKFLOW_AUTH_ENABLED` | Whether to enable authentication for Temporal workflows | `false` | Used in production deployments with secure Temporal clusters |
 | `ATLAN_DEPLOYMENT_SECRET_PATH` | Path to deployment secrets in secret store | `ATLAN_DEPLOYMENT_SECRETS` | Contains authentication credentials for production |
 
@@ -139,7 +139,7 @@ For production deployments, consider these essential configurations:
 - `ATLAN_MAX_CONCURRENT_ACTIVITIES`: Adjust based on target system capacity
 - `DAPR_MAX_GRPC_MESSAGE_LENGTH`: Increase for large data processing
 - Batch sizes: Adjust `*_BATCH_SIZE` variables based on memory and performance requirements
-- Timeout values: Adjust `ATLAN_HEARTBEAT_TIMEOUT` and `ATLAN_START_TO_CLOSE_TIMEOUT` based on workload characteristics
+- Timeout values: Adjust `ATLAN_HEARTBEAT_TIMEOUT_SECONDS` and `ATLAN_START_TO_CLOSE_TIMEOUT_SECONDS` based on workload characteristics
 
 ### Observability Setup
 - Enable telemetry: Set `ATLAN_ENABLE_OTLP_*` variables to `true`
