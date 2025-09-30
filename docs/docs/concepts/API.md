@@ -50,6 +50,8 @@ This document provides comprehensive documentation for all APIs exposed by the A
 ```
 
 ### Shutdown
+
+Why do we need a shutdown API? If there is a need for it then should it be kept protected in some way?
 **Endpoint:** `POST /server/shutdown`
 **Description:** Gracefully shutdown the application server.
 
@@ -75,6 +77,9 @@ This document provides comprehensive documentation for all APIs exposed by the A
 **Endpoint:** `POST /workflows/v1/{custom_endpoint}`
 **Description:** Start a workflow via HTTP trigger. The endpoint path is configurable based on registered workflow triggers (default: `/start`).
 
+We are passing password in request. What if there is request logging done - either by us or by customer? 
+I feel ideally the API for cred management needs to be separate from workflow APIs. Only cred guid should be passed as part of workflow APIs. This way we ensure that secrets are not accidentally leaked when debugging.
+Question to answer first - is this level of secure handled in the env where we are operating?
 **Request Body:** (RootModel)
 ```json
 {

@@ -89,6 +89,8 @@ class TemporalWorkflowClient(WorkflowClient):
         self.port = port if port else WORKFLOW_PORT
         self.namespace = namespace if namespace else WORKFLOW_NAMESPACE
 
+        # Q: Given we are distributing python code, there is a chance secret can be accessed by a malicious actor?
+        #    Or is this not a concern for us even in secure agents environment (read non-Atlan infra)?
         self.deployment_config: Dict[str, Any] = SecretStore.get_deployment_secret()
         self.worker_task_queue = self.get_worker_task_queue()
         self.auth_manager = AtlanAuthClient()
@@ -260,6 +262,8 @@ class TemporalWorkflowClient(WorkflowClient):
                 }
             )
 
+            # TODO why is saving to state store outside of temporal? should we not save it inside the workflow?
+            # Is this for idempotency reasons - if temporal submit fails/needs to be retried?
             await StateStore.save_state_object(
                 id=workflow_id, value=workflow_args, type=StateType.WORKFLOWS
             )
