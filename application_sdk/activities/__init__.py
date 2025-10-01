@@ -195,6 +195,9 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             workflow_args["output_prefix"] = workflow_args.get(
                 "output_prefix", TEMPORARY_PATH
             )
+            
+            workflow_args["parent_run_id"] = workflow_args.get("workflow_run_id", None)
+
             workflow_args["output_path"] = os.path.join(
                 workflow_args["output_prefix"], build_output_path()
             )
