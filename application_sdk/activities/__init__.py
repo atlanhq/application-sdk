@@ -241,6 +241,16 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             if not handler:
                 raise ValueError("Preflight check handler not found")
 
+            # Verify handler and client are properly initialized
+            if hasattr(handler, "sql_client") and handler.sql_client:
+                if not handler.sql_client.engine:
+                    logger.error("SQL client engine is not initialized")
+                    raise ValueError(
+                        "Preflight check failed: SQL client engine not initialized. "
+                        "This may indicate credentials were not loaded properly."
+                    )
+                logger.info("SQL client engine verified as initialized")
+
             result = await handler.preflight_check(
                 {"metadata": workflow_args["metadata"]}
             )
