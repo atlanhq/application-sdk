@@ -213,7 +213,7 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
                 chunk_size=workflow_args["miner_args"].get("chunk_size", 100000),
-                start_marker=workflow_args["start_marker"],
+                start_marker=str(workflow_args["start_marker"]),
                 end_marker=workflow_args["end_marker"],
             )
             await raw_output.write_dataframe(sql_input)
