@@ -441,9 +441,7 @@ class TemporalWorkflowClient(WorkflowClient):
                 "execution_duration_seconds": execution_info.execution_duration.ToSeconds(),
             }
             if include_last_executed_run_id:
-                workflow_info["last_executed_run_id"] = (
-                    execution_info.root_execution.run_id
-                )
+                workflow_info["last_executed_run_id"] = execution_info.execution.run_id
             return workflow_info
         except Exception as e:
             if (
