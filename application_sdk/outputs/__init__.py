@@ -109,9 +109,11 @@ class Output(ABC):
         Returns:
             str: Generated file path for the chunk.
         """
-        # For Query Extraction - use start and end markers without chunk count
-        if start_marker and end_marker:
-            return f"{start_marker}_{end_marker}{self._EXTENSION}"
+        # For Query Extraction - use start marker
+        if chunk_count is None:
+            return f"atlan_raw_mined_{str(start_marker)}_{str(chunk_part)}{self._EXTENSION}"
+        else:
+            return f"atlan_raw_mined_{str(start_marker)}_{str(chunk_count)}_{str(chunk_part)}{self._EXTENSION}"
 
         # For regular chunking - include chunk count
         if chunk_count is None:
@@ -213,7 +215,7 @@ class Output(ABC):
                     self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
                 ):
-                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part)}"
+                    output_file_name = f"{self.output_path}/{self.path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
