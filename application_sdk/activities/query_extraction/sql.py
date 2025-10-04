@@ -209,6 +209,12 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
             )
             sql_input = await sql_input.get_dataframe()
 
+            parent_run_id = workflow_args.get("parent_run_id", None)
+            if parent_run_id:
+                workflow_args["output_path"] = os.path.join(
+                    os.path.dirname(workflow_args["output_path"]), parent_run_id
+                )
+
             raw_output = ParquetOutput(
                 output_path=workflow_args["output_path"],
                 output_suffix="raw/query",
