@@ -8,6 +8,7 @@ import pytest
 
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
+    build_output_path,
     get_object_store_prefix,
     get_workflow_id,
     send_periodic_heartbeat,
@@ -34,6 +35,37 @@ class TestGetWorkflowId:
 
         with pytest.raises(Exception, match="Failed to get workflow id"):
             get_workflow_id()
+
+
+class TestBuildOutputPath:
+    """Test cases for build_output_path function."""
+
+    @patch("application_sdk.constants.APPLICATION_NAME", "test-app")
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_build_output_path_standard(self, mock_activity):
+        """Standard case: typical workflow and run IDs."""
+        mock_activity.info.return_value.workflow_id = "wf-123"
+        mock_activity.info.return_value.workflow_run_id = "run-456"
+        result = build_output_path()
+        assert result == "artifacts/apps/test-app/workflows/wf-123/run-456"
+
+    @patch("application_sdk.constants.APPLICATION_NAME", "test-app")
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_build_output_path_scheduled(self, mock_activity):
+        """Scheduled run: workflow ID with timestamp suffix."""
+        mock_activity.info.return_value.workflow_id = "wf-123-2025-09-30T12:34:56Z"
+        mock_activity.info.return_value.workflow_run_id = "run-456"
+        result = build_output_path()
+        assert result == "artifacts/apps/test-app/workflows/wf-123/run-456"
+
+    @patch("application_sdk.constants.APPLICATION_NAME", "test-app")
+    @patch("application_sdk.activities.common.utils.activity")
+    def test_build_output_path_empty_workflow_id(self, mock_activity):
+        """Defensive: workflow ID is empty string."""
+        mock_activity.info.return_value.workflow_id = ""
+        mock_activity.info.return_value.workflow_run_id = "run-000"
+        result = build_output_path()
+        assert result == "artifacts/apps/test-app/workflows//run-000"
 
 
 class TestGetObjectStorePrefix:
