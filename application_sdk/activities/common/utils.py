@@ -84,7 +84,7 @@ def build_output_path() -> str:
 
     # Fallback to raw workflow_id if sanitization results in empty string
     if not sanitized_workflow_id:
-        sanitized_workflow_id = raw_workflow_id
+        sanitized_workflow_id = "unknown-workflow"
 
     return WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
         application_name=APPLICATION_NAME,
