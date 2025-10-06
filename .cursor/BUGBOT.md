@@ -65,6 +65,14 @@ Review for critical issues first - these take priority over everything else.
 - Missing finally blocks for resource cleanup
 - Direct prop mutation in reactive frameworks
 
+**Exception for Dapr Component Configuration:**
+
+- **Do NOT flag `ignoreErrors: true` in Dapr component YAML files** when used for development/production environment differences
+- Dapr components are often configured differently between local development and production environments
+- The `ignoreErrors: true` setting allows applications to start in development even when certain components (like external secret stores or state stores) are not available
+- This is a conscious architectural decision for environment-specific component mounting
+- Only flag `ignoreErrors: true` if there's evidence it's being used inappropriately (e.g., in production-only configurations or without proper environment context)
+
 ---
 
 ### Phase 2: Code Quality Foundation
@@ -584,6 +592,13 @@ def good_validation(max_value: int) -> int:
 - Connection pooling required for all database operations
 - Transaction boundaries must be explicit
 - Database migrations must be reversible
+
+**Dapr Component Configuration:**
+
+- `ignoreErrors: true` in Dapr component YAML files is acceptable for development/production environment differences
+- Components may be configured differently between local development and production environments
+- This allows applications to start in development even when certain external services are unavailable
+- Only flag if used inappropriately without proper environment context
 
 ### Zone 4: Team and Process Specific Rules
 
