@@ -6,7 +6,7 @@ Follow this systematic review process that mirrors how experienced developers th
 
 ### Phase 1: Immediate Safety Assessment
 
-**Mental Question: "Could this cause immediate harm?"**
+**Mental Question: "Could this cause immediate harm?"**  
 Review for critical issues first - these take priority over everything else.
 
 #### Security Vulnerabilities
@@ -27,7 +27,7 @@ Review for critical issues first - these take priority over everything else.
 - Unencrypted credential storage in configuration
 - API keys or database passwords in plaintext
 
-**Example Educational Feedback:**
+**Example Educational Feedback:**  
 "String concatenation in SQL queries creates SQL injection vulnerabilities. In our SDK handling enterprise data, this could expose sensitive customer information. Always use parameterized queries with the SQL client's execute method, which automatically escapes user input. This follows the principle of defense in depth for data security."
 
 #### Performance Disasters
@@ -625,23 +625,42 @@ When flagging any issue, always provide educational context:
 
 ### Include These Elements:
 
-1. **Specific Issue**: Exactly what pattern or problem was detected
-2. **Impact**: Why this matters for maintainability, performance, security, or team productivity
-3. **Better Approach**: Specific alternative that follows established patterns
-4. **Principle**: Which coding principle or architectural pattern this relates to
-5. **Context**: How this relates to enterprise SDK scale and requirements
+1. **Specific Issue**: Exactly what pattern or problem was detected  
+2. **Impact**: Why this matters for maintainability, performance, security, or team productivity  
+3. **Better Approach**: Specific alternative that follows established patterns  
+4. **Principle**: Which coding principle or architectural pattern this relates to  
+5. **Context**: How this relates to enterprise SDK scale and requirements  
 
 ### Example Educational Feedback:
 
-Instead of: "Don't use string concatenation in loops"
+Instead of: "Don't use string concatenation in loops"  
 Provide: "String concatenation in loops creates O(n²) complexity because strings are immutable - each concatenation creates a new string object. In our enterprise SDK processing millions of metadata records, this could cause significant performance degradation and memory issues. Use join() patterns instead, which maintain O(n) complexity. This follows the principle of choosing appropriate data structures for the access pattern and becomes critical when handling large-scale enterprise datasets."
 
 ### Focus on Growth and Learning:
 
-- Help developers understand the reasoning behind patterns
-- Connect specific rules to broader architectural principles
-- Explain how choices affect future maintainability and team productivity
-- Build intuition for making good decisions independently
-- Reference Python best practices and async programming patterns
-- Connect to performance implications at enterprise scale
-- Relate to data integrity and security considerations
+- Help developers understand the reasoning behind patterns  
+- Connect specific rules to broader architectural principles  
+- Explain how choices affect future maintainability and team productivity  
+- Build intuition for making good decisions independently  
+- Reference Python best practices and async programming patterns  
+- Connect to performance implications at enterprise scale  
+- Relate to data integrity and security considerations  
+
+---
+
+### False Positives to Fix
+
+#### Exception for `ignoreErrors: true` in Dapr Components
+
+**Proposed Fix:**  
+Add an exception for cases where `ignoreErrors: true` is explicitly justified due to differing production configurations. Require a comment in the code explaining the rationale.  
+
+**Example:**  
+```yaml
+# ✅ ALLOWED: Justified use of ignoreErrors
+# Production environments mount components differently, and errors are expected during local development.
+components:
+  - name: my-secret-store
+    type: secretstores.azure.keyvault
+    ignoreErrors: true  # Justified: Production-specific configuration
+```
