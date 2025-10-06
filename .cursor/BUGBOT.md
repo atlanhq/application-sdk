@@ -65,6 +65,28 @@ Review for critical issues first - these take priority over everything else.
 - Missing finally blocks for resource cleanup
 - Direct prop mutation in reactive frameworks
 
+#### Infrastructure and Configuration Context
+
+**Context-aware configuration review:**
+
+- **Dapr Component Configuration**: `ignoreErrors: true` in Dapr component YAML files may be intentional for development/production environment differences. Before flagging as critical, consider:
+  - Is this in a development configuration file?
+  - Does the component have different mounting/availability in production?
+  - Is there evidence this is a conscious architectural decision?
+  - Are there comments or documentation explaining the rationale?
+
+**When to flag Dapr ignoreErrors:**
+- In production-only configuration files without clear justification
+- When combined with other reliability anti-patterns
+- If there's no evidence of intentional design decision
+- When it affects truly critical components without fallback mechanisms
+
+**When NOT to flag Dapr ignoreErrors:**
+- In development/local configuration files
+- When there's clear indication of intentional design (comments, PR context)
+- For components that have different behavior in different environments
+- When part of a documented deployment strategy
+
 ---
 
 ### Phase 2: Code Quality Foundation
