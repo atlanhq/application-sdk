@@ -3,8 +3,9 @@ kind: Component
 metadata:
   name: statestore
 spec:
-  type: state.sqlite
   version: v1
+  type: state.sqlite
+  ignoreErrors: true
   metadata:
     # Connection string
     - name: connectionString
