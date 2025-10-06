@@ -457,3 +457,23 @@ When reviewing test code, emphasize:
 ## Test Command Reference
 
 Run tests using: `uv run coverage run -m pytest --import-mode=importlib --capture=no --log-cli-level=INFO tests/ -v --full-trace --hypothesis-show-statistics`
+
+---
+
+## False Positives to Fix
+
+### Bug: Critical Dapr Components Fail Silently
+
+Adding `ignoreErrors: true` to critical Dapr components is consciously kept that way. Components are mounted differently in production.
+
+**File:** `components/statestore.yaml`
+
+**Code Context:**
+```yaml
+spec:
+  version: v1
+  type: state.sqlite
+  ignoreErrors: true
+```
+
+**Proposed Fix:** Add a comment explaining why `ignoreErrors: true` is necessary for production.
