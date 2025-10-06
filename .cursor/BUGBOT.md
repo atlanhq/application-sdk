@@ -65,6 +65,10 @@ Review for critical issues first - these take priority over everything else.
 - Missing finally blocks for resource cleanup
 - Direct prop mutation in reactive frameworks
 
+**Infrastructure Configuration Exceptions:**
+
+- **Dapr Component Configuration**: Do NOT flag `ignoreErrors: true` in Dapr component YAML files (components/*.yaml) as this is intentional configuration for handling development vs production environment differences. Components are mounted differently in production and this setting allows graceful degradation in development environments.
+
 ---
 
 ### Phase 2: Code Quality Foundation
