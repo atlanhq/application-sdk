@@ -65,6 +65,42 @@ Review for critical issues first - these take priority over everything else.
 - Missing finally blocks for resource cleanup
 - Direct prop mutation in reactive frameworks
 
+#### Infrastructure and Configuration Issues
+
+**Critical configuration patterns:**
+
+- **Dapr Component Configuration**: `ignoreErrors: true` in Dapr component YAML files should be flagged as potentially dangerous UNLESS there is clear context indicating this is intentional for development environment compatibility (e.g., comments about "components are mounted differently in production" or similar development/production environment differences)
+- Missing required environment variables for production deployment
+- Hardcoded URLs or endpoints that should be configurable
+- Database connection strings without proper credential management
+- Missing timeout configurations for external service calls
+
+**Dapr-specific patterns:**
+
+```yaml
+# ❌ FLAG: Potentially dangerous silent error ignoring
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: critical-store
+spec:
+  type: state.redis
+  ignoreErrors: true  # Could hide critical failures
+
+# ✅ ACCEPTABLE: When explicitly documented for dev/prod differences
+apiVersion: dapr.io/v1alpha1
+kind: Component
+metadata:
+  name: dev-statestore
+  # Components are mounted differently in production
+spec:
+  type: state.sqlite
+  ignoreErrors: true  # Intentional for development environment
+```
+
+**Educational context for Dapr configurations:**
+"The `ignoreErrors: true` setting in Dapr components can mask critical initialization failures, causing applications to start in a broken state. However, this setting is sometimes necessary in development environments where components may not be fully configured or available. Always ensure production deployments have proper component configuration and avoid ignoring errors unless there's explicit documentation about environment-specific mounting differences."
+
 ---
 
 ### Phase 2: Code Quality Foundation
