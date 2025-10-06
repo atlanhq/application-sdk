@@ -65,7 +65,7 @@ class TestBuildOutputPath:
         mock_activity.info.return_value.workflow_id = ""
         mock_activity.info.return_value.workflow_run_id = "run-000"
         result = build_output_path()
-        assert result == "artifacts/apps/test-app/workflows//run-000"
+        assert result == "artifacts/apps/test-app/workflows/unknown-workflow/run-000"
 
 
 class TestGetObjectStorePrefix:
