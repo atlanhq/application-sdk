@@ -6,7 +6,7 @@ Follow this systematic review process that mirrors how experienced developers th
 
 ### Phase 1: Immediate Safety Assessment
 
-**Mental Question: "Could this cause immediate harm?"**
+**Mental Question: "Could this cause immediate harm?"**  
 Review for critical issues first - these take priority over everything else.
 
 #### Security Vulnerabilities
@@ -27,7 +27,7 @@ Review for critical issues first - these take priority over everything else.
 - Unencrypted credential storage in configuration
 - API keys or database passwords in plaintext
 
-**Example Educational Feedback:**
+**Example Educational Feedback:**  
 "String concatenation in SQL queries creates SQL injection vulnerabilities. In our SDK handling enterprise data, this could expose sensitive customer information. Always use parameterized queries with the SQL client's execute method, which automatically escapes user input. This follows the principle of defense in depth for data security."
 
 #### Performance Disasters
@@ -156,6 +156,11 @@ application_sdk/decorators/observability_decorator.py  # All observability decor
 - **Configuration validation**: All environment variables must be validated on application startup
 - **Parameter inference**: Values that can be inferred (like application name, run ID) should not require explicit passing
 
+**Configuration Validation**
+
+- **ALLOW**: Intentional differences in production configurations must be documented with comments.
+- **VIOLATIONS**: Flag undocumented or ambiguous configuration differences.
+
 ```python
 # ❌ REJECT: Poor configuration management
 max_locks = os.getenv("MAX_LOCKS")  # No validation, no defaults
@@ -268,6 +273,11 @@ def create_distributed_lock(
 - **Error context**: Error messages must include debugging context (operation, parameters, state)
 - **Resource cleanup**: Failed operations must be logged with appropriate detail
 - **Non-critical operations**: May swallow exceptions to prevent cascading failures
+
+**Error Handling in SQL Clients**
+
+- **REQUIRED**: All exceptions must include detailed context and be re-raised.
+- **VIOLATIONS**: Flag silent exception swallowing or generic error messages.
 
 ```python
 # ✅ DO: Proper error handling with SDK exceptions
@@ -633,7 +643,7 @@ When flagging any issue, always provide educational context:
 
 ### Example Educational Feedback:
 
-Instead of: "Don't use string concatenation in loops"
+Instead of: "Don't use string concatenation in loops"  
 Provide: "String concatenation in loops creates O(n²) complexity because strings are immutable - each concatenation creates a new string object. In our enterprise SDK processing millions of metadata records, this could cause significant performance degradation and memory issues. Use join() patterns instead, which maintain O(n) complexity. This follows the principle of choosing appropriate data structures for the access pattern and becomes critical when handling large-scale enterprise datasets."
 
 ### Focus on Growth and Learning:
