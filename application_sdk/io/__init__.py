@@ -205,7 +205,7 @@ class Writer(ABC):
                     self.current_buffer_size_bytes + chunk_size_bytes
                     > self.max_file_size_bytes
                 ):
-                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, self.extension)}"
+                    output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                     if os.path.exists(output_file_name):
                         await self._upload_file(output_file_name)
                         self.chunk_part += 1
@@ -219,7 +219,7 @@ class Writer(ABC):
 
             if self.current_buffer_size_bytes > 0:
                 # Finally upload the final file to the object store
-                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, self.start_marker, self.end_marker, self.extension)}"
+                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, self.chunk_part, extension=self.extension)}"
                 if os.path.exists(output_file_name):
                     await self._upload_file(output_file_name)
                     self.chunk_part += 1
@@ -353,7 +353,7 @@ class Writer(ABC):
         try:
             if not is_empty_dataframe(chunk):
                 self.total_record_count += len(chunk)
-                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, self.start_marker, self.end_marker, self.extension)}"
+                output_file_name = f"{self.output_path}/{path_gen(self.chunk_count, chunk_part, extension=self.extension)}"
                 await self._write_chunk(chunk, output_file_name)
 
                 self.current_buffer_size = 0

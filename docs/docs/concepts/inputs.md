@@ -44,12 +44,14 @@ async def fetch_tables(self, workflow_args: Dict[str, Any]):
     state: BaseSQLMetadataExtractionActivitiesState = await self._get_state(workflow_args)
     prepared_query = prepare_query(self.fetch_table_sql, workflow_args, ...) # Prepare query string
 
-    if not prepared_query or not state.sql_client or not state.sql_client.engine:
-        logger.warning("Missing SQL client engine or query for fetching tables.")
+    if not prepared_query or not state.sql_client:
+        logger.warning("Missing SQL client or query for fetching tables.")
         return None
 
     # Instantiate SQLQueryInput with the client's engine and the specific query
-    sql_input = SQLQueryInput(engine=state.sql_client.engine, query=prepared_query)
+    sql_input = SQLQueryInput(
+        engine=state.sql_client.engine, query=prepared_query, chunk_size=None
+    )
 
     # Get results as a Daft DataFrame
     try:

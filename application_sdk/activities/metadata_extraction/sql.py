@@ -642,9 +642,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_schema_sql, workflow_args=workflow_args
@@ -677,9 +677,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_table_sql,
@@ -714,9 +714,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_column_sql,
@@ -751,9 +751,9 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             BaseSQLMetadataExtractionActivitiesState,
             await self._get_state(workflow_args),
         )
-        if not state.sql_client or not state.sql_client.engine:
-            logger.error("SQL client or engine not initialized")
-            raise ValueError("SQL client or engine not initialized")
+        if not state.sql_client:
+            logger.error("SQL client not initialized")
+            raise ValueError("SQL client not initialized")
 
         prepared_query = prepare_query(
             query=self.fetch_procedure_sql, workflow_args=workflow_args

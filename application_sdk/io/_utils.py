@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
+from application_sdk.io.json import JSON_FILE_EXTENSION
+from application_sdk.io.parquet import PARQUET_FILE_EXTENSION
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
 
@@ -150,8 +152,18 @@ async def download_files(
         )
 
 
-def estimate_dataframe_record_size(dataframe: "pd.DataFrame", file_type: str) -> int:
-    """Estimate File size of a DataFrame by sampling a few records."""
+def estimate_dataframe_record_size(
+    dataframe: "pd.DataFrame", file_extension: str
+) -> int:
+    """Estimate File size of a DataFrame by sampling a few records.
+
+    Args:
+        dataframe (pd.DataFrame): The DataFrame to estimate the size of.
+        file_extension (str): The extension of the file to estimate the size of.
+
+    Returns:
+        int: The estimated size of the DataFrame in bytes.
+    """
     if len(dataframe) == 0:
         return 0
 
@@ -159,11 +171,14 @@ def estimate_dataframe_record_size(dataframe: "pd.DataFrame", file_type: str) ->
     sample_size = min(10, len(dataframe))
     sample = dataframe.head(sample_size)
     compression_factor = 1
-    if file_type == "json":
+    if file_extension == JSON_FILE_EXTENSION:
         sample_file = sample.to_json(orient="records", lines=True)
-    else:
+    elif file_extension == PARQUET_FILE_EXTENSION:
         sample_file = sample.to_parquet(index=False, compression="snappy")
         compression_factor = 0.01
+    else:
+        raise ValueError(f"Unsupported file extension: {file_extension}")
+
     if sample_file is not None:
         avg_record_size = len(sample_file) / sample_size * compression_factor
         return int(avg_record_size)
