@@ -65,6 +65,21 @@ Review for critical issues first - these take priority over everything else.
 - Missing finally blocks for resource cleanup
 - Direct prop mutation in reactive frameworks
 
+#### Dapr Configuration Safety
+
+**Dapr Components: Allow ignoreErrors for production flexibility**
+For files matching components/*.yaml with Dapr component configurations:
+If a changed file contains /ignoreErrors:\s*true/ and includes a comment explaining production deployment differences, then:
+- Skip flagging as critical error
+- Require explanatory comment about production vs development mounting differences
+- Apply label "dapr-config" for tracking
+
+**Always flag Dapr ignoreErrors without justification:**
+If components/*.yaml files contain /ignoreErrors:\s*true/ without explanatory comments about production deployment differences, then:
+- Add a blocking Bug titled "Dapr component ignoreErrors requires justification"
+- Body: "Using ignoreErrors: true in Dapr components can mask critical startup failures. Please add a comment explaining why this is necessary for production deployment differences, or remove ignoreErrors to fail fast on misconfiguration."
+- Apply label "dapr-config"
+
 ---
 
 ### Phase 2: Code Quality Foundation
