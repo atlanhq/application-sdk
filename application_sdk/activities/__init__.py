@@ -28,7 +28,7 @@ from application_sdk.activities.common.utils import (
     get_workflow_run_id,
 )
 from application_sdk.common.error_codes import OrchestratorError
-from application_sdk.common.file_converter import FileType, convert_files
+from application_sdk.common.file_converter import FileType, convert_data_files
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
@@ -272,17 +272,24 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
             raise
 
     @activity.defn
-    def convert_files(self, convert_args: Dict[str, Any]) -> ActivityResult:
+    @auto_heartbeater
+    async def convert_files(self, workflow_args: Dict[str, Any]) -> ActivityResult:
         """
         Convert the input files to the specified output type.
         """
         converted_files = []
-        if convert_args["input_files"]:
-            converted_files = convert_files(
-                convert_args["input_files"], FileType(convert_args["output_file_type"])
+        if workflow_args.get("input_files") and workflow_args.get("output_file_type"):
+            converted_files = await convert_data_files(
+                workflow_args["input_files"],
+                FileType(workflow_args["output_file_type"]),
+            )
+            return ActivityResult(
+                status="success",
+                message=f"Successfully converted files to {workflow_args['output_file_type']}",
+                metadata={"input_files": converted_files},
             )
         return ActivityResult(
-            status="success",
-            message=f"Successfully converted files to {convert_args['output_file_type']}",
+            status="error",
+            message="Failed to convert files",
             metadata={"input_files": converted_files},
         )
