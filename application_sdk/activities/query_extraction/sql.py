@@ -202,12 +202,15 @@ class SQLQueryExtractionActivities(ActivitiesInterface):
 
         try:
             state = await self._get_state(workflow_args)
+
             sql_input = SQLQueryInput(
                 engine=state.sql_client.engine,
                 query=self.get_formatted_query(self.fetch_queries_sql, workflow_args),
                 chunk_size=None,
             )
             sql_input = await sql_input.get_dataframe()
+
+            sql_input.columns = [str(c).upper() for c in sql_input.columns]
 
             raw_output = ParquetOutput(
                 output_path=workflow_args["output_path"],
