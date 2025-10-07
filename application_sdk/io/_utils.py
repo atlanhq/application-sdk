@@ -6,10 +6,11 @@ from typing import TYPE_CHECKING, Any, List, Optional
 from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.error_codes import IOError
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.io.json import JSON_FILE_EXTENSION
-from application_sdk.io.parquet import PARQUET_FILE_EXTENSION
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.services.objectstore import ObjectStore
+
+JSON_FILE_EXTENSION = ".json"
+PARQUET_FILE_EXTENSION = ".parquet"
 
 if TYPE_CHECKING:
     import pandas as pd

@@ -1,14 +1,5 @@
 import os
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncIterator,
-    Dict,
-    Iterator,
-    List,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Union
 
 import orjson
 from temporalio import activity
@@ -16,8 +7,8 @@ from temporalio import activity
 from application_sdk.activities.common.models import ActivityStatistics
 from application_sdk.common.types import DFType
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
-from application_sdk.io import Reader, Writer
 from application_sdk.io._utils import (
+    JSON_FILE_EXTENSION,
     convert_datetime_to_epoch,
     download_files,
     path_gen,
@@ -30,11 +21,10 @@ if TYPE_CHECKING:
     import daft
     import pandas as pd
 
+from application_sdk.io import Reader, Writer
+
 logger = get_logger(__name__)
 activity.logger = logger
-
-
-JSON_FILE_EXTENSION = ".json"
 
 
 class JsonReader(Reader):
@@ -89,28 +79,26 @@ class JsonReader(Reader):
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
 
-    async def read_batches(
+    def read_batches(
         self,
     ) -> Union[
         AsyncIterator["pd.DataFrame"],
-        Iterator["pd.DataFrame"],
         AsyncIterator["daft.DataFrame"],
-        Iterator["daft.DataFrame"],
     ]:
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
         """
         if self.df_type == DFType.pandas:
-            return await self._get_batched_dataframe()
+            return self._get_batched_dataframe()
         elif self.df_type == DFType.daft:
-            return await self._get_batched_daft_dataframe()
+            return self._get_batched_daft_dataframe()
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
 
     async def _get_batched_dataframe(
         self,
-    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
+    ) -> AsyncIterator["pd.DataFrame"]:
         """
         Method to read the data from the json files in the path
         and return as a batched pandas dataframe
@@ -161,7 +149,7 @@ class JsonReader(Reader):
 
     async def _get_batched_daft_dataframe(
         self,
-    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:  # noqa: F821
+    ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         """
         Method to read the data from the json files in the path
         and return as a batched daft dataframe
@@ -311,6 +299,7 @@ class JsonWriter(Writer):
             "attributes",
             "customAttributes",
         ],
+        **kwargs,
     ):  # noqa: F821
         """Write a daft DataFrame to JSON files.
 

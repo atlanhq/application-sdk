@@ -49,7 +49,7 @@ class Reader(ABC):
     """
 
     @abstractmethod
-    async def read_batches(
+    def read_batches(
         self,
     ) -> Union[
         Iterator["pd.DataFrame"],
@@ -120,14 +120,14 @@ class Writer(ABC):
     extension: str
     df_type: DFType
 
-    async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"]):
+    async def write(self, dataframe: Union["pd.DataFrame", "daft.DataFrame"], **kwargs):
         """
         Method to write the pandas dataframe to an iceberg table
         """
         if self.df_type == DFType.pandas:
-            await self._write_dataframe(dataframe)
+            await self._write_dataframe(dataframe, **kwargs)
         elif self.df_type == DFType.daft:
-            await self._write_daft_dataframe(dataframe)
+            await self._write_daft_dataframe(dataframe, **kwargs)
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
 
@@ -184,11 +184,12 @@ class Writer(ABC):
             logger.error(f"Error writing batched dataframe: {str(e)}")
             raise
 
-    async def _write_dataframe(self, dataframe: "pd.DataFrame"):
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """Write a pandas DataFrame to Parquet files and upload to object store.
 
         Args:
             dataframe (pd.DataFrame): The DataFrame to write.
+            **kwargs: Additional parameters (currently unused for pandas DataFrames).
         """
         try:
             if self.chunk_start is None:
@@ -298,11 +299,12 @@ class Writer(ABC):
             logger.error(f"Error writing batched daft dataframe: {str(e)}")
 
     @abstractmethod
-    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
         """Write a daft DataFrame to the output destination.
 
         Args:
             dataframe (daft.DataFrame): The DataFrame to write.
+            **kwargs: Additional parameters passed through from write().
         """
         pass
 

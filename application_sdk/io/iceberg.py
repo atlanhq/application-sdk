@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
+from typing import TYPE_CHECKING, AsyncIterator, Optional, Union
 
 from pyiceberg.catalog import Catalog
 from pyiceberg.table import Table
@@ -57,9 +57,9 @@ class IcebergReader(Reader):
             logger.error(f"Error reading data from Iceberg table using daft: {str(e)}")
             raise
 
-    async def read_batches(
+    def read_batches(
         self,
-    ) -> Union[AsyncIterator["daft.DataFrame"], Iterator["daft.DataFrame"]]:  # noqa: F821
+    ) -> AsyncIterator["daft.DataFrame"]:  # noqa: F821
         # We are not implementing this method as we have to partition the daft dataframe
         # using dataframe.into_partitions() method. This method does all the partitions in memory
         # and using that can cause out of memory issues.
@@ -105,7 +105,7 @@ class IcebergWriter(Writer):
         self.retain_local_copy = retain_local_copy
         self.df_type = df_type
 
-    async def _write_dataframe(self, dataframe: "pd.DataFrame"):
+    async def _write_dataframe(self, dataframe: "pd.DataFrame", **kwargs):
         """
         Method to write the pandas dataframe to an iceberg table
         """
@@ -138,7 +138,7 @@ class IcebergWriter(Writer):
             logger.error(f"Error writing pandas dataframe to iceberg table: {str(e)}")
             raise e
 
-    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame"):  # noqa: F821
+    async def _write_daft_dataframe(self, dataframe: "daft.DataFrame", **kwargs):  # noqa: F821
         """
         Method to write the daft dataframe to an iceberg table
         """

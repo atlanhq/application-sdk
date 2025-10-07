@@ -6,7 +6,9 @@ from unittest.mock import call, patch
 import pytest
 from hypothesis import HealthCheck, given, settings
 
-from application_sdk.inputs.json import JsonInput
+from application_sdk.common.types import DFType
+from application_sdk.io._utils import download_files
+from application_sdk.io.json import JsonReader
 from application_sdk.test_utils.hypothesis.strategies.inputs.json_input import (
     json_input_config_strategy,
 )
@@ -20,7 +22,7 @@ settings.load_profile("json_input_tests")
 
 @given(config=json_input_config_strategy)
 def test_init(config: Dict[str, Any]) -> None:
-    json_input = JsonInput(
+    json_input = JsonReader(
         path=config["path"],
         file_names=config["file_names"],
     )
@@ -30,9 +32,9 @@ def test_init(config: Dict[str, Any]) -> None:
 
 
 def test_init_single_file_with_file_names_raises_error() -> None:
-    """Test that JsonInput raises ValueError when single file path is combined with file_names."""
+    """Test that JsonReader raises ValueError when single file path is combined with file_names."""
     with pytest.raises(ValueError, match="Cannot specify both a single file path"):
-        JsonInput(path="/data/test.json", file_names=["other.json"])
+        JsonReader(path="/data/test.json", file_names=["other.json"])
 
 
 @pytest.mark.asyncio
@@ -46,9 +48,9 @@ async def test_not_download_file_that_exists() -> None:
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
-        json_input = JsonInput(path=path)  # No file_names
+        json_input = JsonReader(path=path)  # No file_names
 
-        result = await json_input.download_files()
+        result = await download_files(json_input.path, ".json", json_input.file_names)
         mock_download.assert_not_called()
         assert result == [path]  # Should return the local file
 
@@ -68,14 +70,14 @@ async def test_download_file_invoked_for_missing_files() -> None:
     with patch("os.path.isfile", side_effect=mock_isfile), patch(
         "os.path.isdir", return_value=True
     ), patch("glob.glob", side_effect=[[]]), patch(  # Only for initial local check
-        "application_sdk.inputs.get_object_store_prefix",
+        "application_sdk.activities.common.utils.get_object_store_prefix",
         side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
-        json_input = JsonInput(path=path, file_names=file_names)
+        json_input = JsonReader(path=path, file_names=file_names, df_type=DFType.daft)
 
-        result = await json_input.download_files()
+        result = await download_files(json_input.path, ".json", json_input.file_names)
 
         # Each file should be attempted to be downloaded - using correct signature (with destination)
         expected_calls = [
@@ -97,9 +99,9 @@ async def test_download_file_not_invoked_when_file_present() -> None:
     ), patch("glob.glob", return_value=["/local/exists.json"]), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file"
     ) as mock_download:
-        json_input = JsonInput(path=path, file_names=file_names)
+        json_input = JsonReader(path=path, file_names=file_names, df_type=DFType.daft)
 
-        result = await json_input.download_files()
+        result = await download_files(json_input.path, ".json", json_input.file_names)
 
         mock_download.assert_not_called()
         assert result == ["/local/exists.json"]
@@ -117,16 +119,16 @@ async def test_download_file_error_propagation() -> None:
     with patch("os.path.isfile", return_value=False), patch(
         "os.path.isdir", return_value=True
     ), patch("glob.glob", return_value=[]), patch(
-        "application_sdk.inputs.get_object_store_prefix",
+        "application_sdk.activities.common.utils.get_object_store_prefix",
         side_effect=lambda p: p.lstrip("/").replace("\\", "/"),
     ), patch(
         "application_sdk.services.objectstore.ObjectStore.download_file",
         side_effect=Exception("Download failed"),
     ):
-        json_input = JsonInput(path=path, file_names=file_names)
+        json_input = JsonReader(path=path, file_names=file_names, df_type=DFType.daft)
 
         with pytest.raises(SDKIOError, match="ATLAN-IO-503-00"):
-            await json_input.download_files()
+            await download_files(json_input.path, ".json", json_input.file_names)
 
 
 # ---------------------------------------------------------------------------
@@ -161,8 +163,8 @@ def _install_dummy_pandas(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
-    """Verify that get_batched_dataframe streams chunks and respects chunk_size."""
+async def test_read_batches_with_mocked_pandas(monkeypatch) -> None:
+    """Verify that read_batches streams chunks and respects chunk_size."""
 
     file_names = ["abc.json"]
     path = "/data"
@@ -170,23 +172,23 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
     expected_chunksize = 5
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return (
-            [os.path.join(self.path, fn) for fn in self.file_names]
-            if hasattr(self, "file_names") and self.file_names
-            else []
-        )
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
-    # Mock the base Input class method since JsonInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
-
-    json_input = JsonInput(
-        path=path, file_names=file_names, chunk_size=expected_chunksize
+    # Mock the base Input class method since JsonReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.json.download_files", dummy_download, raising=False
     )
 
-    chunks = [chunk async for chunk in json_input.get_batched_dataframe()]
+    json_input = JsonReader(
+        path=path,
+        file_names=file_names,
+        chunk_size=expected_chunksize,
+        df_type=DFType.pandas,
+    )
+
+    batches = json_input.read_batches()
+    chunks = [chunk async for chunk in batches]
 
     # Two chunks per file as defined in dummy pandas implementation
     assert chunks == ["chunk1-abc.json", "chunk2-abc.json"]
@@ -202,22 +204,23 @@ async def test_get_batched_dataframe_with_mocked_pandas(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_batched_dataframe_empty_file_list(monkeypatch) -> None:
+async def test_read_batches_empty_file_list(monkeypatch) -> None:
     """An empty file list should result in no yielded batches."""
 
     call_log = _install_dummy_pandas(monkeypatch)
 
-    async def dummy_download(self):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return []
 
-    # Mock the base Input class method since JsonInput calls super().download_files()
-    from application_sdk.inputs import Input
+    # Mock the base Input class method since JsonReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.json.download_files", dummy_download, raising=False
+    )
 
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    json_input = JsonReader(path="/data", file_names=[], df_type=DFType.pandas)
 
-    json_input = JsonInput(path="/data", file_names=[])
-
-    batches = [chunk async for chunk in json_input.get_batched_dataframe()]
+    batches_result = json_input.read_batches()
+    batches = [chunk async for chunk in batches_result]
 
     assert batches == []
     # No pandas.read_json calls should have been made
@@ -248,32 +251,29 @@ def _install_dummy_daft(monkeypatch):  # noqa: D401, ANN001
 
 
 @pytest.mark.asyncio
-async def test_get_daft_dataframe(monkeypatch) -> None:
-    """Verify that get_daft_dataframe merges path correctly and delegates to daft.read_json."""
+async def test_read(monkeypatch) -> None:
+    """Verify that read merges path correctly and delegates to daft.read_json."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(self):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return (
-            [
-                os.path.join(self.path, fn).replace(os.path.sep, "/")
-                for fn in self.file_names
-            ]
-            if hasattr(self, "file_names") and self.file_names
+            [os.path.join(path, fn).replace(os.path.sep, "/") for fn in file_names]
+            if file_names
             else []
         )
 
-    # Mock the base Input class method since JsonInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since JsonReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.json.download_files", dummy_download, raising=False
+    )
 
     path = "/tmp"
     file_names = ["dir/file1.json", "dir/file2.json"]
 
-    json_input = JsonInput(path=path, file_names=file_names)
+    json_input = JsonReader(path=path, file_names=file_names, df_type=DFType.daft)
 
-    result = await json_input.get_daft_dataframe()
+    result = await json_input.read()
 
     expected_files = ["/tmp/dir/file1.json", "/tmp/dir/file2.json"]
 
@@ -282,22 +282,22 @@ async def test_get_daft_dataframe(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_daft_dataframe_no_files(monkeypatch) -> None:
-    """Calling get_daft_dataframe without files should return empty result."""
+async def test_read_no_files(monkeypatch) -> None:
+    """Calling read without files should return empty result."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(self):  # noqa: D401, ANN001
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
         return []  # Return empty list when no files found
 
-    # Mock the base Input class method since JsonInput calls super().download_files()
-    from application_sdk.inputs import Input
+    # Mock the base Input class method since JsonReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.json.download_files", dummy_download, raising=False
+    )
 
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    json_input = JsonReader(path="/tmp", file_names=[], df_type=DFType.daft)
 
-    json_input = JsonInput(path="/tmp", file_names=[])
-
-    result = await json_input.get_daft_dataframe()
+    result = await json_input.read()
 
     # Should return empty daft result
     assert result == "daft_df:[]"
@@ -305,29 +305,28 @@ async def test_get_daft_dataframe_no_files(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_batched_daft_dataframe(monkeypatch) -> None:
-    """Ensure get_batched_daft_dataframe yields a frame per file and passes chunk size."""
+async def test_read_batches(monkeypatch) -> None:
+    """Ensure read_batches yields a frame per file and passes chunk size."""
 
     call_log = _install_dummy_daft(monkeypatch)
 
-    async def dummy_download(self):  # noqa: D401, ANN001
-        return (
-            [os.path.join(self.path, fn) for fn in self.file_names]
-            if hasattr(self, "file_names") and self.file_names
-            else []
-        )
+    async def dummy_download(path, file_extension, file_names=None):  # noqa: D401, ANN001
+        return [os.path.join(path, fn) for fn in file_names] if file_names else []
 
-    # Mock the base Input class method since JsonInput calls super().download_files()
-    from application_sdk.inputs import Input
-
-    monkeypatch.setattr(Input, "download_files", dummy_download, raising=False)
+    # Mock the base Input class method since JsonReader calls super().download_files()
+    monkeypatch.setattr(
+        "application_sdk.io.json.download_files", dummy_download, raising=False
+    )
 
     path = "/data"
     file_names = ["one.json", "two.json"]
 
-    json_input = JsonInput(path=path, file_names=file_names, chunk_size=123)
+    json_input = JsonReader(
+        path=path, file_names=file_names, chunk_size=123, df_type=DFType.daft
+    )
 
-    frames = [frame async for frame in json_input.get_batched_daft_dataframe()]
+    batches = json_input.read_batches()
+    frames = [frame async for frame in batches]
 
     expected_frames = [f"daft_df:{os.path.join(path, fn)}" for fn in file_names]
 

@@ -6,7 +6,6 @@ from typing import (
     AsyncGenerator,
     AsyncIterator,
     Generator,
-    Iterator,
     List,
     Optional,
     Union,
@@ -19,7 +18,7 @@ from application_sdk.activities.common.utils import get_object_store_prefix
 from application_sdk.common.dataframe_utils import is_empty_dataframe
 from application_sdk.constants import DAPR_MAX_GRPC_MESSAGE_LENGTH
 from application_sdk.io import DFType, Reader, WriteMode, Writer
-from application_sdk.io._utils import download_files, path_gen
+from application_sdk.io._utils import PARQUET_FILE_EXTENSION, download_files, path_gen
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.metrics_adaptor import MetricType, get_metrics
 from application_sdk.services.objectstore import ObjectStore
@@ -30,8 +29,6 @@ activity.logger = logger
 if TYPE_CHECKING:
     import daft  # type: ignore
     import pandas as pd
-
-PARQUET_FILE_EXTENSION = ".parquet"
 
 
 class ParquetReader(Reader):
@@ -88,22 +85,20 @@ class ParquetReader(Reader):
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
 
-    async def read_batches(
+    def read_batches(
         self,
     ) -> Union[
         AsyncIterator["pd.DataFrame"],
-        Iterator["pd.DataFrame"],
         AsyncIterator["daft.DataFrame"],
-        Iterator["daft.DataFrame"],
     ]:
         """
         Method to read the data from the parquet files in the path
         and return as a batched pandas dataframe
         """
         if self.df_type == DFType.pandas:
-            return await self._get_batched_dataframe()
+            return self._get_batched_dataframe()
         elif self.df_type == DFType.daft:
-            return await self._get_batched_daft_dataframe()
+            return self._get_batched_daft_dataframe()
         else:
             raise ValueError(f"Unsupported df_type: {self.df_type}")
 
@@ -157,7 +152,7 @@ class ParquetReader(Reader):
 
     async def _get_batched_dataframe(
         self,
-    ) -> Union[AsyncIterator["pd.DataFrame"], Iterator["pd.DataFrame"]]:
+    ) -> AsyncIterator["pd.DataFrame"]:
         """Read data from parquet file(s) in batches as pandas DataFrames.
 
         Returns:
@@ -494,6 +489,7 @@ class ParquetWriter(Writer):
         partition_cols: Optional[List] = None,
         write_mode: Union[WriteMode, str] = WriteMode.APPEND.value,
         morsel_size: int = 100_000,
+        **kwargs,
     ):
         """Write a daft DataFrame to Parquet files and upload to object store.
 

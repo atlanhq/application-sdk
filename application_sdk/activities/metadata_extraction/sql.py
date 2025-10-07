@@ -441,12 +441,27 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 for df_generator in dataframe_list:
                     if df_generator is None:
                         continue
-                    for dataframe in df_generator:  # type: ignore[assignment]
-                        if dataframe is None:
-                            continue
-                        if hasattr(dataframe, "empty") and getattr(dataframe, "empty"):
-                            continue
-                        valid_dataframes.append(dataframe)
+                    # Handle both async and sync iterators
+                    if hasattr(df_generator, "__aiter__"):
+                        # Async iterator
+                        async for dataframe in df_generator:  # type: ignore[assignment]
+                            if dataframe is None:
+                                continue
+                            if hasattr(dataframe, "empty") and getattr(
+                                dataframe, "empty"
+                            ):
+                                continue
+                            valid_dataframes.append(dataframe)
+                    else:
+                        # Sync iterator
+                        for dataframe in df_generator:  # type: ignore[assignment]
+                            if dataframe is None:
+                                continue
+                            if hasattr(dataframe, "empty") and getattr(
+                                dataframe, "empty"
+                            ):
+                                continue
+                            valid_dataframes.append(dataframe)
 
                 if not valid_dataframes:
                     logger.warning(
