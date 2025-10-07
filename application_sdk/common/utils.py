@@ -3,6 +3,7 @@ import glob
 import json
 import os
 import re
+from collections import namedtuple
 from concurrent.futures import ThreadPoolExecutor
 from typing import (
     Any,
@@ -568,3 +569,20 @@ def run_sync(func):
             return await loop.run_in_executor(pool, func, *args, **kwargs)
 
     return wrapper
+
+
+def enum_register():
+    """
+    Helps us register custom function for enum values
+    """
+    registry = {}
+
+    def add(name: str):
+        def inner(fn):
+            registry[name] = fn
+            return fn
+
+        return inner
+
+    Register = namedtuple("Register", ["add", "registry"])
+    return Register(add, registry)
