@@ -404,7 +404,7 @@ class BaseSQLClient(ClientInterface):
         logger.info("Query execution completed")
 
     def _execute_pandas_query(
-        self, conn, query
+        self, conn, query, chunksize: Optional[int]
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Helper function to execute SQL query using pandas.
            The function is responsible for using import_optional_dependency method of the pandas library to import sqlalchemy
@@ -424,13 +424,13 @@ class BaseSQLClient(ClientInterface):
         from sqlalchemy import text
 
         if import_optional_dependency("sqlalchemy", errors="ignore"):
-            return pd.read_sql_query(text(query), conn, chunksize=self.chunk_size)
+            return pd.read_sql_query(text(query), conn, chunksize=chunksize)
         else:
             dbapi_conn = getattr(conn, "connection", None)
-            return pd.read_sql_query(query, dbapi_conn, chunksize=self.chunk_size)
+            return pd.read_sql_query(query, dbapi_conn, chunksize=chunksize)
 
     def _read_sql_query(
-        self, session: "Session", query: str
+        self, session: "Session", query: str, chunksize: Optional[int]
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided session.
 
@@ -442,10 +442,10 @@ class BaseSQLClient(ClientInterface):
                 or iterator of DataFrames if chunked.
         """
         conn = session.connection()
-        return self._execute_pandas_query(conn, query)
+        return self._execute_pandas_query(conn, query, chunksize=chunksize)
 
     def _execute_query_daft(
-        self, query: str
+        self, query: str, chunksize: Optional[int]
     ) -> Union["daft.DataFrame", Iterator["daft.DataFrame"]]:
         """Execute SQL query using the provided engine and daft.
 
@@ -462,15 +462,11 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         if isinstance(self.engine, str):
-            return daft.read_sql(
-                query, self.engine, infer_schema_length=self.chunk_size
-            )
-        return daft.read_sql(
-            query, self.engine.connect, infer_schema_length=self.chunk_size
-        )
+            return daft.read_sql(query, self.engine, infer_schema_length=chunksize)
+        return daft.read_sql(query, self.engine.connect, infer_schema_length=chunksize)
 
     def _execute_query(
-        self, query: str
+        self, query: str, chunksize: Optional[int]
     ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
         """Execute SQL query using the provided engine and pandas.
 
@@ -482,7 +478,7 @@ class BaseSQLClient(ClientInterface):
             raise ValueError("Engine is not initialized. Call load() first.")
 
         with self.engine.connect() as conn:
-            return self._execute_pandas_query(conn, query)
+            return self._execute_pandas_query(conn, query, chunksize)
 
     async def get_batched_results(
         self,
@@ -513,12 +509,14 @@ class BaseSQLClient(ClientInterface):
 
             if async_session:
                 async with async_session() as session:
-                    return await session.run_sync(self._read_sql_query, query)
+                    return await session.run_sync(
+                        self._read_sql_query, query, chunksize=self.chunk_size
+                    )
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     return await asyncio.get_event_loop().run_in_executor(  # type: ignore
-                        executor, self._execute_query, query
+                        executor, self._execute_query, query, self.chunk_size
                     )
         except Exception as e:
             logger.error(f"Error reading batched data(pandas) from SQL: {str(e)}")
@@ -549,12 +547,14 @@ class BaseSQLClient(ClientInterface):
 
             if async_session:
                 async with async_session() as session:
-                    return await session.run_sync(self._read_sql_query, query)
+                    return await session.run_sync(
+                        self._read_sql_query, query, chunksize=None
+                    )
             else:
                 # Run the blocking operation in a thread pool
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     result = await asyncio.get_event_loop().run_in_executor(
-                        executor, self._execute_query, query
+                        executor, self._execute_query, query, None
                     )
                     import pandas as pd
 

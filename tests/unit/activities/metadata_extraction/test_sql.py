@@ -1,5 +1,6 @@
 """Unit tests for SQL metadata extraction activities (context-free)."""
 
+import os
 from typing import Any, Dict
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -370,7 +371,9 @@ class TestBaseSQLMetadataExtractionActivities:
         assert result is not None
         assert isinstance(result, ActivityStatistics)
         assert result.total_record_count == 20
-        mock_download_files.assert_called_once_with("/test/path/raw", ".parquet", None)
+        # Normalize path for cross-platform compatibility
+        expected_path = os.path.join("/test/path", "raw")
+        mock_download_files.assert_called_once_with(expected_path, ".parquet", None)
         mock_transform_metadata.assert_called_once()
         mock_write_daft_dataframe.assert_called_once()
 

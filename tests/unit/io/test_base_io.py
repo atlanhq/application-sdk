@@ -231,17 +231,20 @@ class TestReaderDownloadFiles:
         file_names = ["file1.parquet", "file2.parquet"]
         input_instance = MockReader(path, file_names)
         # Expected files will be in temporary directory after download
+        # Normalize paths for cross-platform compatibility
         expected_files = [
-            "./local/tmp/data/file1.parquet",
-            "./local/tmp/data/file2.parquet",
+            os.path.join("./local/tmp/data", "file1.parquet"),
+            os.path.join("./local/tmp/data", "file2.parquet"),
         ]
 
         def mock_isfile(path):
             # Return False for initial local check, True for downloaded files
-            if path in [
-                "./local/tmp/data/file1.parquet",
-                "./local/tmp/data/file2.parquet",
-            ]:
+            # Normalize paths for cross-platform comparison
+            expected_paths = [
+                os.path.join("./local/tmp/data", "file1.parquet"),
+                os.path.join("./local/tmp/data", "file2.parquet"),
+            ]
+            if path in expected_paths:
                 return True
             return False
 
@@ -262,14 +265,15 @@ class TestReaderDownloadFiles:
             )
 
             # Should download each specific file
+            # Normalize paths for cross-platform compatibility
             assert mock_download.call_count == 2
             mock_download.assert_any_call(
-                source="data/file1.parquet",
-                destination="./local/tmp/data/file1.parquet",
+                source=os.path.join("data", "file1.parquet"),
+                destination=os.path.join("./local/tmp/data", "file1.parquet"),
             )
             mock_download.assert_any_call(
-                source="data/file2.parquet",
-                destination="./local/tmp/data/file2.parquet",
+                source=os.path.join("data", "file2.parquet"),
+                destination=os.path.join("./local/tmp/data", "file2.parquet"),
             )
             assert result == expected_files
 

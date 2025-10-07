@@ -63,7 +63,12 @@ async def test_download_file_invoked_for_missing_files() -> None:
 
     def mock_isfile(path):
         # Return False for initial local check, True for downloaded files
-        if path in ["./local/tmp/local/a.json", "./local/tmp/local/b.json"]:
+        # Normalize paths for cross-platform comparison
+        expected_paths = [
+            os.path.join("./local/tmp/local", "a.json"),
+            os.path.join("./local/tmp/local", "b.json"),
+        ]
+        if path in expected_paths:
             return True
         return False
 
@@ -80,12 +85,24 @@ async def test_download_file_invoked_for_missing_files() -> None:
         result = await download_files(json_input.path, ".json", json_input.file_names)
 
         # Each file should be attempted to be downloaded - using correct signature (with destination)
+        # Normalize paths for cross-platform compatibility
         expected_calls = [
-            call(source="local/a.json", destination="./local/tmp/local/a.json"),
-            call(source="local/b.json", destination="./local/tmp/local/b.json"),
+            call(
+                source=os.path.join("local", "a.json"),
+                destination=os.path.join("./local/tmp/local", "a.json"),
+            ),
+            call(
+                source=os.path.join("local", "b.json"),
+                destination=os.path.join("./local/tmp/local", "b.json"),
+            ),
         ]
         mock_download.assert_has_calls(expected_calls, any_order=True)
-        assert result == ["./local/tmp/local/a.json", "./local/tmp/local/b.json"]
+        # Normalize result paths for comparison
+        expected_result = [
+            os.path.join("./local/tmp/local", "a.json"),
+            os.path.join("./local/tmp/local", "b.json"),
+        ]
+        assert result == expected_result
 
 
 @pytest.mark.asyncio
