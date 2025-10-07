@@ -20,6 +20,7 @@ from typing import Any, Dict, Generic, Optional, TypeVar
 from pydantic import BaseModel
 from temporalio import activity
 
+from application_sdk.activities.common.models import ActivityResult
 from application_sdk.activities.common.utils import (
     auto_heartbeater,
     build_output_path,
@@ -27,6 +28,7 @@ from application_sdk.activities.common.utils import (
     get_workflow_run_id,
 )
 from application_sdk.common.error_codes import OrchestratorError
+from application_sdk.common.file_converter import FileType, convert_files
 from application_sdk.constants import TEMPORARY_PATH
 from application_sdk.handlers import HandlerInterface
 from application_sdk.observability.logger_adaptor import get_logger
@@ -268,3 +270,19 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 exc_info=e,
             )
             raise
+
+    @activity.defn
+    def convert_files(self, convert_args: Dict[str, Any]) -> ActivityResult:
+        """
+        Convert the input files to the specified output type.
+        """
+        converted_files = []
+        if convert_args["input_files"]:
+            converted_files = convert_files(
+                convert_args["input_files"], FileType(convert_args["output_file_type"])
+            )
+        return ActivityResult(
+            status="success",
+            message=f"Successfully converted files to {convert_args['output_file_type']}",
+            metadata={"input_files": converted_files},
+        )
