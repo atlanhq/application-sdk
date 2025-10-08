@@ -1,12 +1,30 @@
+from collections import namedtuple
 from enum import Enum
 from typing import List, Optional
 
 import pandas as pd
 
-from application_sdk.common.utils import enum_register
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def enum_register():
+    """
+    Helps us register custom function for enum values
+    """
+    registry = {}
+
+    def add(name: str):
+        def inner(fn):
+            registry[name] = fn
+            return fn
+
+        return inner
+
+    Register = namedtuple("Register", ["add", "registry"])
+    return Register(add, registry)
+
 
 file_converter_registry = enum_register()
 

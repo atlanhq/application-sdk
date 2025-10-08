@@ -289,7 +289,7 @@ class ActivitiesInterface(ABC, Generic[ActivitiesStateType]):
                 metadata={"input_files": converted_files},
             )
         return ActivityResult(
-            status="error",
-            message="Failed to convert files",
+            status="warning",
+            message="Unable to get input files or output file type",
             metadata={"input_files": converted_files},
         )
