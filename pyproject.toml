@@ -77,6 +77,10 @@ distributed_lock = [
     "redis[hiredis]>=5.2.0",
 ]
 
+mcp = [
+    "fastmcp>=2.12.3",
+]
+
 # Development dependencies - Install using: uv sync --group dev
 [dependency-groups]
 dev = [
@@ -99,9 +103,6 @@ test = [
 examples = [
     "snowflake-sqlalchemy>=1.7.0",
     "psycopg[binary]>=3.2.7",
-]
-mcp = [
-    "fastmcp>=2.12.3",
 ]
 
 [tool.poe.tasks]
