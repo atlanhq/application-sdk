@@ -165,16 +165,17 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
 
         sql_client = self.sql_client_class()
 
-        handler = self.handler_class(sql_client)
-        self._state[workflow_id].handler = handler
-
+        # Load credentials BEFORE creating handler to avoid race condition
         if "credential_guid" in workflow_args:
             credentials = await SecretStore.get_credentials(
                 workflow_args["credential_guid"]
             )
             await sql_client.load(credentials)
 
+        # Assign sql_client and handler to state AFTER credentials are loaded
         self._state[workflow_id].sql_client = sql_client
+        handler = self.handler_class(sql_client)
+        self._state[workflow_id].handler = handler
 
         # Create transformer with required parameters from ApplicationConstants
         transformer_params = {
