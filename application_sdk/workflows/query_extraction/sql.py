@@ -62,7 +62,9 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
         """
         return [
             activities.get_query_batches,
+            activities.load_query_batches,
             activities.fetch_queries,
+            activities.write_final_marker,
             activities.preflight_check,
             activities.get_workflow_args,
         ]
@@ -97,8 +99,18 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             backoff_coefficient=2,
         )
 
-        results: List[Dict[str, Any]] = await workflow.execute_activity_method(
+        # Generate and persist batch markers (activity returns only a small handle)
+        await workflow.execute_activity_method(
             self.activities_cls.get_query_batches,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+        )
+
+        # Load the actual batches from StateStore to avoid oversized activity results
+        results: List[Dict[str, Any]] = await workflow.execute_activity_method(
+            self.activities_cls.load_query_batches,
             workflow_args,
             retry_policy=retry_policy,
             start_to_close_timeout=self.default_start_to_close_timeout,
@@ -125,5 +137,14 @@ class SQLQueryExtractionWorkflow(QueryExtractionWorkflow):
             )
 
         await asyncio.gather(*miner_activities)
+
+        # Write marker only after all fetches complete
+        await workflow.execute_activity_method(
+            self.activities_cls.write_final_marker,
+            workflow_args,
+            retry_policy=retry_policy,
+            start_to_close_timeout=self.default_start_to_close_timeout,
+            heartbeat_timeout=self.default_heartbeat_timeout,
+        )
 
         logger.info(f"Miner workflow completed for {workflow_id}")
