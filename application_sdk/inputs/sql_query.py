@@ -2,6 +2,7 @@ import asyncio
 import concurrent
 from typing import TYPE_CHECKING, AsyncIterator, Iterator, Optional, Union
 
+from application_sdk.constants import USE_SERVER_SIDE_CURSOR
 from application_sdk.inputs import Input
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -120,6 +121,8 @@ class SQLQueryInput(Input):
                 or iterator of DataFrames if chunked.
         """
         with self.engine.connect() as conn:
+            if USE_SERVER_SIDE_CURSOR:
+                conn = conn.execution_options(yield_per=100000)
             return self._execute_pandas_query(conn)
 
     async def get_batched_dataframe(
