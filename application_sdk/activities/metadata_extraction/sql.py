@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -852,6 +853,41 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
                 await transformed_output.write_daft_dataframe(transform_metadata)
         return await transformed_output.get_statistics()
 
+    async def _upload_recent_logs(self, workflow_args: Dict[str, Any]) -> ActivityStatistics:
+        """Upload logs for current day and previous day."""
+        application_name = APPLICATION_NAME
+        current_date = datetime.now()
+        previous_date = current_date - timedelta(days=1)
+        
+        dates_to_upload = [current_date, previous_date]
+        total_files = 0
+        total_records = 0
+        
+        for date in dates_to_upload:
+            year = date.strftime("%Y")
+            month = date.strftime("%m")
+            day = date.strftime("%d")
+            
+            log_prefix = f"artifacts/apps/{application_name}/observability/logs/year={year}/month={month}/day={day}/"
+            
+            try:
+                log_upload_stats = await AtlanStorage.migrate_from_objectstore_to_atlan(
+                    prefix=log_prefix
+                )
+                total_files += log_upload_stats.migrated_files
+                total_records += log_upload_stats.total_files
+                
+                logger.info(f"Uploaded logs for {year}-{month}-{day}: {log_upload_stats.migrated_files} files")
+                
+            except Exception as e:
+                logger.warning(f"Failed to upload logs for {year}-{month}-{day}: {e}")
+        
+        return ActivityStatistics(
+            total_record_count=total_records,
+            chunk_count=total_files,
+            typename="logs-upload-completed",
+        )
+
     @activity.defn
     @auto_heartbeater
     async def upload_to_atlan(
@@ -884,10 +920,17 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             prefix=migration_prefix
         )
 
+        # Upload logs for current day and previous day
+        log_upload_stats = await self._upload_recent_logs(workflow_args)
+
         # Log upload statistics
         logger.info(
             f"Atlan upload completed: {upload_stats.migrated_files} files uploaded, "
             f"{upload_stats.failed_migrations} failed"
+        )
+        logger.info(
+            f"Log upload completed: {log_upload_stats.chunk_count} files uploaded, "
+            f"{log_upload_stats.total_record_count} total records"
         )
 
         if upload_stats.failures:
@@ -903,7 +946,7 @@ class BaseSQLMetadataExtractionActivities(ActivitiesInterface):
             )
 
         return ActivityStatistics(
-            total_record_count=upload_stats.migrated_files,
-            chunk_count=upload_stats.total_files,
+            total_record_count=upload_stats.migrated_files + log_upload_stats.chunk_count,
+            chunk_count=upload_stats.total_files + log_upload_stats.total_record_count,
             typename="atlan-upload-completed",
         )
